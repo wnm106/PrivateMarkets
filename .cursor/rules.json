@@ -1,0 +1,34 @@
+{
+  "model": "claude-3.5-sonnet",
+  "pauseCodeExecution": false,
+  "rules": [
+    "00-overview.md",
+    "01-architecture-monorepo.md",
+    "02-api-cloudflare-workers.md",
+    "03-web-nextjs.md",
+    "04-graphql-schema.md",
+    "05-resolvers.md",
+    "06-database-schema-core.md",
+    "07-database-schema-extended.md",
+    "08-database-queries.md",
+    "09-generic-entity-model.md",
+    "10-golden-record.md",
+    "11-data-quality.md",
+    "12-intersection-framework.md",
+    "13-testing.md",
+    "14-deployment.md",
+    "15-auto-evolution.md",
+    "99-cursor-integration.md",
+    "patterns-catalog.md",
+    "pr-guidelines.md",
+    "test-registry.md"
+  ],
+  "reminders": [
+    "Always follow the Golden Record pattern for attribute values",
+    "Use Generic Entity Model for all entity creation",
+    "Check intersection framework for composite entities",
+    "Run tests before committing",
+    "Follow existing code patterns",
+    "Update graphql-reference.md when schema changes"
+  ]
+}

@@ -1,0 +1,106 @@
+# Security Domain Types
+
+type Security {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  description: String
+  isActive: Boolean!
+  templateId: ID
+  
+  # Core Attributes
+  isin: String
+  cusip: String
+  sedol: String
+  ticker: String
+  securityType: String
+  assetClass: String
+  currency: String
+  exchange: String
+  country: String
+  sector: String
+  industry: String
+  price: Float
+  priceDate: Date
+  priceCurrency: String
+  parValue: Float
+  maturityDate: Date
+  couponRate: Float
+  dividendYield: Float
+  peRatio: Float
+  pbRatio: Float
+  
+  # Relationships
+  issuer: Issuer
+  issuerId: ID
+  
+  # Source Tracking
+  priceSource: String
+  lastUpdated: DateTime
+  
+  # Lineage
+  lineage: [FieldLineage!]
+  
+  # Metadata
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+  updatedBy: String
+}
+
+type SecurityConnection {
+  edges: [SecurityEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type SecurityEdge {
+  node: Security!
+  cursor: String!
+}
+
+input SecurityFilter {
+  entityCode: StringFilter
+  entityName: StringFilter
+  isin: StringFilter
+  cusip: StringFilter
+  ticker: StringFilter
+  securityType: StringFilter
+  assetClass: StringFilter
+  currency: StringFilter
+  exchange: StringFilter
+  country: StringFilter
+  sector: StringFilter
+  priceRange: FloatRangeFilter
+  priceDateRange: DateRangeFilter
+  isActive: Boolean
+}
+
+input CreateSecurityInput {
+  entityCode: String!
+  entityName: String!
+  description: String
+  templateId: ID
+  issuerId: ID
+  attributes: [AttributeInput!]
+}
+
+input UpdateSecurityInput {
+  id: ID!
+  entityName: String
+  description: String
+  isActive: Boolean
+  issuerId: ID
+  attributes: [AttributeInput!]
+}
+
+type CreateSecurityResult {
+  security: Security
+  errors: [MutationError!]!
+}
+
+type UpdateSecurityResult {
+  security: Security
+  errors: [MutationError!]!
+}

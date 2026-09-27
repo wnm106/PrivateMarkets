@@ -1,0 +1,31 @@
+{
+  "name": "@meridian-mdm/graphql",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "dev": "tsc --watch",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest",
+    "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@graphql-tools/schema": "^10.0.0",
+    "@graphql-tools/utils": "^10.0.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "graphql": "^16.8.0",
+    "graphql-yoga": "^5.1.0",
+    "graphql-scalars": "^1.22.0",
+    "graphql-relay": "^0.10.0",
+    "dataloader": "^2.2.2",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^1.0.0"
+  }
+}

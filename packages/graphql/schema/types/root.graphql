@@ -1,0 +1,298 @@
+# Root Query Type
+
+type Query {
+  # Generic entity queries
+  entities(
+    filter: EntityFilter
+    pagination: PaginationInput
+    asOfDate: Date
+  ): EntityConnection!
+  
+  entity(id: ID, entityCode: String, asOfDate: Date): Entity
+  
+  # Domain-specific queries (for convenience, but use generic entity under the hood)
+  funds(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  issuers(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  securities(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  deals(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  investors(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  positions(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  
+  # Metadata queries
+  domainTypes: [DomainTypeRecord!]!
+  attributeRegister(domainCode: String): [AttributeDefinition!]!
+  domainTemplates(domainCode: String): [Template!]!
+  # Entity Management queries
+  entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
+  relationshipTypes: [RelationshipType!]!
+  
+  # Lineage and temporal queries
+  fieldLineage(entityId: ID!, asOfDate: Date): [FieldLineage!]!
+  temporalHistory(entityId: ID!, attributeCode: String!, fromDate: Date!, toDate: Date!): [TemporalValue!]!
+  
+  # DQ queries
+  dqRule(id: ID!): DQRule
+  dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
+  dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
+  
+  # Source queries
+  dataSources(type: String, isActive: Boolean): [DataSource!]!
+  dataSource(id: ID, code: String): DataSource
+  dataSourceStats(sourceId: ID): DataSourceStats
+  
+  # Data Connection queries
+  dataConnections(type: String, isActive: Boolean): [DataConnection!]!
+  dataConnection(id: ID, code: String): DataConnection
+  dataLoaders(connectionId: ID, isActive: Boolean): [DataLoader!]!
+  dataLoader(id: ID, code: String): DataLoader
+  
+  # Import Map queries
+  importMaps: [ImportMap!]!
+  importMap(id: ID!): ImportMap
+
+  # Intersection queries
+  intersectionTypes: [IntersectionType!]!
+  intersectionType(id: ID, intersectionCode: String): IntersectionType
+  intersections(filter: IntersectionFilter, pagination: PaginationInput, asOfDate: Date): IntersectionConnection!
+  intersection(id: ID, intersectionCode: String, asOfDate: Date): Intersection
+}
+
+type Mutation {
+  # Generic entity mutations
+  createEntity(input: CreateEntityInput!): CreateEntityResult!
+  updateEntity(input: UpdateEntityInput!): UpdateEntityResult!
+  
+  # Relationship mutations
+  createRelationship(input: EntityRelationshipInput!): CreateRelationshipResult!
+  updateRelationship(input: UpdateRelationshipInput!): UpdateRelationshipResult!
+  deleteRelationship(id: ID!): DeleteRelationshipResult!
+  
+  # Attribute mutations
+  updateAttribute(input: UpdateAttributeInput!): UpdateAttributeResult!
+  splitValidTime(input: SplitValidTimeInput!): SplitValidTimeResult!
+  submitManualOverride(input: ManualOverrideInput!): ManualOverrideResult!
+  
+  # Metadata mutations
+  createDomainType(input: CreateDomainTypeInput!): CreateDomainTypeResult!
+  updateDomainType(input: UpdateDomainTypeInput!): UpdateDomainTypeResult!
+  deleteDomainType(id: ID!): DeleteDomainTypeResult!
+  createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
+  updateAttributeDefinition(input: UpdateAttributeDefinitionInput!): UpdateAttributeDefinitionResult!
+  createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
+  assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
+  
+  # DQ mutations
+  createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
+  resolveDQException(input: ResolveDQExceptionInput!): ResolveDQExceptionResult!
+  
+  # Intersection mutations
+  createIntersectionType(input: CreateIntersectionTypeInput!): CreateIntersectionTypeResult!
+  updateIntersectionType(input: UpdateIntersectionTypeInput!): UpdateIntersectionTypeResult!
+  deleteIntersectionType(id: ID!): DeleteIntersectionTypeResult!
+  createIntersection(input: CreateIntersectionInput!): CreateIntersectionResult!
+  updateIntersection(input: UpdateIntersectionInput!): UpdateIntersectionResult!
+  deleteIntersection(id: ID!): DeleteIntersectionResult!
+}
+
+# Root Subscription Type
+
+type Subscription {
+  # Entity Updates
+  entityUpdated(entityId: ID): Entity!
+  
+  # DQ Events
+  dqExceptionCreated: DQException!
+  dqExceptionUpdated(exceptionId: ID): DQException!
+}
+
+# Additional Types for Attribute Mutations
+
+input UpdateAttributeInput {
+  entityId: ID!
+  attributeCode: String!
+  value: String!
+  validFrom: Date!
+  sourceId: ID!
+  isOverride: Boolean
+  overrideReason: String
+}
+
+input SplitValidTimeInput {
+  eavId: ID!
+  splitDate: Date!
+  newValue: String!
+  sourceId: ID!
+  overrideReason: String
+}
+
+input ManualOverrideInput {
+  entityId: ID!
+  attributeCode: String!
+  value: String!
+  validFrom: Date!
+  overrideReason: String!
+}
+
+type UpdateAttributeResult {
+  success: Boolean!
+  goldenValueId: ID
+  errors: [MutationError!]!
+}
+
+type SplitValidTimeResult {
+  success: Boolean!
+  newEavId: ID
+  errors: [MutationError!]!
+}
+
+type ManualOverrideResult {
+  success: Boolean!
+  goldenValueId: ID
+  errors: [MutationError!]!
+}
+
+# Metadata Types
+type AttributeDefinition {
+  id: ID!
+  attributeCode: String!
+  attributeName: String!
+  dataType: String!
+  description: String
+  unitOfMeasure: String
+  isRequired: Boolean!
+  isMultiValued: Boolean!
+  referenceDomainCode: String
+  defaultPrecedenceRank: Int!
+  aggregationType: String
+  weightAttributeCode: String
+  numericPrecision: Int
+}
+
+input UpdateAttributeDefinitionInput {
+  id: ID!
+  displayFormat: String
+  listValues: [String!]
+  validationRules: JSON
+  defaultValue: String
+  displaySection: String
+  displayGroup: Int
+  isEditable: Boolean
+  isVisible: Boolean
+  aggregationType: String
+  weightAttributeCode: String
+  numericPrecision: Int
+}
+
+type UpdateAttributeDefinitionResult {
+  success: Boolean!
+  attribute: AttributeDefinition
+  errors: [MutationError!]!
+}
+
+type Template {
+  id: ID!
+  templateCode: String!
+  domainCode: String!
+  templateName: String!
+  description: String
+  isActive: Boolean!
+  attributes: [TemplateAttribute!]!
+}
+
+type TemplateAttribute {
+  attributeId: ID!
+  attribute: AttributeDefinition!
+  isRequired: Boolean!
+  precedenceRank: Int!
+  displayOrder: Int!
+  displayLabel: String
+}
+
+# Entity Identifier Definition Type
+type EntityIdentifierDefinition {
+  id: ID!
+  identifierCode: String!
+  identifierName: String!
+  domainCode: String!
+  domainName: String!
+  attributeCodes: [String!]!
+  isPrimary: Boolean!
+  description: String
+  isActive: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Data Source Types
+type DataSource {
+  id: ID!
+  sourceCode: String!
+  sourceName: String!
+  sourceType: String!
+  vendorName: String
+  feedFormat: String
+  feedFrequency: String
+  connectionConfig: JSON
+  precedenceRank: Int!
+  isActive: Boolean!
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type DataSourceStats {
+  totalSources: Int!
+  sourceBreakdown: [SourceBreakdown!]!
+}
+
+type SourceBreakdown {
+  sourceId: ID!
+  recordCount: Int!
+}
+
+# Data Connection Types
+type DataConnection {
+  id: ID!
+  connectionCode: String!
+  connectionName: String!
+  sourceType: String!
+  vendorName: String
+  endpointUrl: String
+  endpointMethod: String
+  endpointHeaders: JSON
+  requestTimeout: Int
+  authType: String
+  authConfig: JSON
+  connectionStatus: String
+  lastTestedAt: DateTime
+  lastTestResult: JSON
+  precedenceRank: Int!
+  isActive: Boolean!
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type DataLoader {
+  id: ID!
+  loaderCode: String!
+  loaderName: String!
+  connectionId: ID!
+  connection: DataConnection
+  domainCode: String!
+  attributeCodes: [String!]!
+  loadFrequency: String
+  cronExpression: String
+  loadWindow: String
+  batchSize: Int
+  transformMapping: JSON
+  fieldMapping: JSON
+  loaderStatus: String
+  lastRunAt: DateTime
+  lastRunResult: JSON
+  nextRunAt: DateTime
+  isActive: Boolean!
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}

@@ -1,0 +1,32 @@
+{
+  "name": "@meridian-mdm/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "tsc",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest",
+    "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@meridian-mdm/graphql": "*",
+    "graphql-yoga": "^5.1.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "graphql": "^16.8.0",
+    "xlsx": "^0.18.5",
+    "csv-parse": "^5.5.0",
+    "cheerio": "^1.0.0",
+    "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^3.22.0",
+    "vitest": "^1.0.0",
+    "@types/cheerio": "^0.22.31",
+    "@types/xml2js": "^0.4.14"
+  }
+}

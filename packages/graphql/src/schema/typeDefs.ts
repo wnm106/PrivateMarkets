@@ -1,0 +1,1833 @@
+// Auto-generated inlined schema for edge runtime compatibility
+export const typeDefs = `
+# File: common.graphql
+# Scalar Types
+scalar Date
+scalar DateTime
+scalar JSON
+scalar UUID
+
+# Enums
+enum DomainType {
+  FUND
+  ISSUER
+  DEAL
+  SECURITY
+  PRICE
+  POSITION
+}
+
+enum SourceType {
+  VENDOR
+  INTERNAL
+  MANUAL
+  CALCULATED
+}
+
+enum PositionType {
+  EQUITY
+  DEBT
+  FUND_INTEREST
+  DERIVATIVE
+  OTHER
+}
+
+enum DQRuleType {
+  COMPLETENESS
+  VALIDITY
+  CONSISTENCY
+  TIMELINESS
+  UNIQUENESS
+}
+
+enum DQSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum DQExceptionStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  WAIVED
+  FALSE_POSITIVE
+}
+
+# Common Types
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+input PaginationInput {
+  first: Int
+  after: String
+  last: Int
+  before: String
+}
+
+type MutationError {
+  field: String
+  message: String!
+  code: String!
+}
+
+# Temporal Types
+type TemporalValue {
+  value: String
+  validFrom: Date!
+  validTo: Date!
+  systemFrom: DateTime!
+  systemTo: DateTime!
+  source: String!
+  isOverride: Boolean!
+}
+
+type SourceValue {
+  source: String!
+  sourceName: String!
+  value: String
+  precedenceRank: Int!
+  validFrom: Date!
+  validTo: Date!
+  confidenceScore: Float
+  receivedAt: DateTime
+}
+
+type FieldLineage {
+  attributeCode: String!
+  attributeName: String!
+  currentValue: String
+  competingValues: [SourceValue!]!
+  resolutionRule: String
+  lastUpdated: DateTime!
+}
+
+# Attribute Definition with Derived Attribute Support
+type AttributeDefinition {
+  id: ID!
+  attributeCode: String!
+  attributeName: String!
+  dataType: String!
+  description: String
+  unitOfMeasure: String
+  isRequired: Boolean!
+  isMultiValued: Boolean!
+  referenceDomainCode: String
+  defaultPrecedenceRank: Int!
+  
+  # Derived attribute fields
+  isDerived: Boolean!
+  derivationType: String
+  derivationFormula: String
+  derivationDependencies: [String!]
+  formulaLanguage: String
+  
+  # Time dimension fields
+  isTimeVarying: Boolean!
+  timeDimension: TimeDimension
+  
+  # Display and validation metadata
+  displayFormat: String
+  listValues: [String!]
+  validationRules: JSON
+  defaultValue: String
+  displaySection: String
+  displayGroup: Int
+  isEditable: Boolean!
+  isVisible: Boolean!
+  
+  # Aggregation and precision
+  aggregationType: String
+  weightAttributeCode: String
+  numericPrecision: Int
+}
+
+# Time dimension enum for attributes
+enum TimeDimension {
+  NONE
+  VALID_TIME
+  TRANSACTION_TIME
+  BITEMPORAL
+}
+
+# Derivation evaluation result
+type DerivationResult {
+  attributeCode: String!
+  value: JSON
+  derivationType: String!
+  dependencies: [String!]!
+  evaluatedAt: DateTime!
+}
+
+# File: dataquality.graphql
+# Data Quality Types
+
+type DQRule {
+  id: ID!
+  ruleCode: String!
+  ruleName: String!
+  domainCode: DomainType
+  attributeCode: String
+  ruleType: DQRuleType!
+  severity: DQSeverity!
+  ruleExpression: String!
+  ruleDescription: String
+  thresholdValue: Float
+  isActive: Boolean!
+  autoRemediate: Boolean!
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type DQException {
+  id: ID!
+  ruleId: ID!
+  rule: DQRule!
+  entityId: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: DomainType!
+  attributeId: ID
+  attributeCode: String
+  attributeName: String
+  
+  # Exception Details
+  exceptionType: String!
+  exceptionMessage: String!
+  expectedValue: String
+  actualValue: String
+  severity: DQSeverity!
+  
+  # Status
+  status: DQExceptionStatus!
+  assignedTo: String
+  assignedToUser: String
+  resolvedAt: DateTime
+  resolvedBy: String
+  resolutionNotes: String
+  
+  # Temporal
+  detectedAt: DateTime!
+  validFrom: Date!
+  validTo: Date!
+  
+  # Metadata
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type DQExceptionConnection {
+  edges: [DQExceptionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type DQExceptionEdge {
+  node: DQException!
+  cursor: String!
+}
+
+input DQRuleFilter {
+  ruleCode: StringFilter
+  ruleName: StringFilter
+  domainCode: DomainType
+  ruleType: DQRuleType
+  severity: DQSeverity
+  isActive: Boolean
+}
+
+input DQExceptionFilter {
+  ruleId: IDFilter
+  entityId: IDFilter
+  entityCode: StringFilter
+  domainCode: DomainType
+  attributeCode: StringFilter
+  exceptionType: StringFilter
+  severity: DQSeverity
+  status: DQExceptionStatus
+  assignedTo: StringFilter
+  detectedAtRange: DateRangeFilter
+}
+
+input CreateDQRuleInput {
+  ruleCode: String!
+  ruleName: String!
+  domainCode: DomainType
+  attributeCode: String
+  ruleType: DQRuleType!
+  severity: DQSeverity!
+  ruleExpression: String!
+  ruleDescription: String
+  thresholdValue: Float
+  autoRemediate: Boolean
+}
+
+input UpdateDQRuleInput {
+  id: ID!
+  ruleName: String
+  ruleExpression: String
+  ruleDescription: String
+  thresholdValue: Float
+  isActive: Boolean
+  autoRemediate: Boolean
+}
+
+input ResolveDQExceptionInput {
+  exceptionId: ID!
+  status: DQExceptionStatus!
+  resolutionNotes: String
+}
+
+type CreateDQRuleResult {
+  rule: DQRule
+  errors: [MutationError!]!
+}
+
+type UpdateDQRuleResult {
+  rule: DQRule
+  errors: [MutationError!]!
+}
+
+type ResolveDQExceptionResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# File: deal.graphql
+# Deal Domain Types
+
+type Deal {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  description: String
+  isActive: Boolean!
+  templateId: ID
+  
+  # Core Attributes
+  dealDate: Date
+  dealType: String
+  dealSubType: String
+  dealValue: Float
+  dealValueCurrency: String
+  enterpriseValue: Float
+  equityValue: Float
+  debtValue: Float
+  status: String
+  closingDate: Date
+  announcementDate: Date
+  transactionStatus: String
+  dealRole: String
+  feePercentage: Float
+  feeAmount: Float
+  
+  # Relationships
+  issuer: Issuer
+  issuerId: ID
+  fund: Fund
+  fundId: ID
+  
+  # Source Tracking
+  lastUpdated: DateTime
+  
+  # Lineage
+  lineage: [FieldLineage!]
+  
+  # Metadata
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+  updatedBy: String
+}
+
+type DealConnection {
+  edges: [DealEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type DealEdge {
+  node: Deal!
+  cursor: String!
+}
+
+input DealFilter {
+  entityCode: StringFilter
+  entityName: StringFilter
+  dealType: StringFilter
+  dealSubType: StringFilter
+  status: StringFilter
+  transactionStatus: StringFilter
+  dealValueRange: FloatRangeFilter
+  dealDateRange: DateRangeFilter
+  closingDateRange: DateRangeFilter
+  issuerId: IDFilter
+  fundId: IDFilter
+  isActive: Boolean
+}
+
+input CreateDealInput {
+  entityCode: String!
+  entityName: String!
+  description: String
+  templateId: ID
+  issuerId: ID
+  fundId: ID
+  attributes: [AttributeInput!]
+}
+
+input UpdateDealInput {
+  id: ID!
+  entityName: String
+  description: String
+  isActive: Boolean
+  issuerId: ID
+  fundId: ID
+  attributes: [AttributeInput!]
+}
+
+type CreateDealResult {
+  deal: Deal
+  errors: [MutationError!]!
+}
+
+type UpdateDealResult {
+  deal: Deal
+  errors: [MutationError!]!
+}
+
+# File: entity.graphql
+# Generic Entity Type
+type Entity {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  domainName: String!
+  templateCode: String
+  templateName: String
+  description: String
+  isActive: Boolean!
+  
+  # Dynamic attributes from template
+  attributes: JSONObject!
+  
+  # Relationships
+  parentRelationships: [EntityRelationship!]!
+  childRelationships: [EntityRelationship!]!
+  
+  # Lineage
+  lineage: [FieldLineage!]
+  
+  # Metadata
+  metadata: JSONObject
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type EntityRelationship {
+  parentEntityId: ID!
+  parentEntityCode: String!
+  parentEntityName: String!
+  parentDomainCode: String!
+  childEntityId: ID!
+  childEntityCode: String!
+  childEntityName: String!
+  childDomainCode: String!
+  relationshipType: String!
+  relationshipCode: String!
+  isPrimary: Boolean!
+}
+
+type EntityConnection {
+  edges: [EntityEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type EntityEdge {
+  node: Entity!
+  cursor: String!
+}
+
+input EntityFilter {
+  domainCode: String
+  templateCode: String
+  entityCode: String
+  entityName: String
+  isActive: Boolean
+  # Attribute-based filters
+  attributes: JSONObject
+  # Relationship filters
+  hasParent: EntityRelationshipFilter
+  hasChild: EntityRelationshipFilter
+}
+
+input EntityRelationshipFilter {
+  entityCode: String
+  domainCode: String
+  relationshipType: String
+}
+
+input CreateEntityInput {
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  templateCode: String
+  description: String
+  attributes: JSONObject!
+  parentRelationships: [EntityRelationshipInput!]
+  childRelationships: [EntityRelationshipInput!]
+}
+
+input UpdateEntityInput {
+  id: ID!
+  entityName: String
+  description: String
+  isActive: Boolean
+  attributes: JSONObject
+  parentRelationships: [EntityRelationshipInput!]
+  childRelationships: [EntityRelationshipInput!]
+}
+
+input EntityRelationshipInput {
+  parentEntityId: ID!
+  childEntityId: ID!
+  relationshipType: String!
+  relationshipCode: String!
+  isPrimary: Boolean
+  validFrom: Date!
+}
+
+type CreateEntityResult {
+  entity: Entity
+  errors: [MutationError!]!
+}
+
+type UpdateEntityResult {
+  entity: Entity
+  errors: [MutationError!]!
+}
+
+# Relationship Type Metadata
+enum RelationshipCardinality {
+  ONE_TO_ONE
+  ONE_TO_MANY
+  MANY_TO_ONE
+  COMPOSITE
+}
+
+type RelationshipType {
+  id: ID!
+  relationshipCode: String!
+  relationshipName: String!
+  parentDomainCode: String
+  childDomainCode: String
+  cardinality: RelationshipCardinality
+  compositeKey: [String!]
+  description: String
+  isActive: Boolean!
+}
+
+type CreateRelationshipResult {
+  relationship: EntityRelationship
+  errors: [MutationError!]!
+}
+
+type UpdateRelationshipResult {
+  relationship: EntityRelationship
+  errors: [MutationError!]!
+}
+
+type DeleteRelationshipResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+input UpdateRelationshipInput {
+  id: ID!
+  isPrimary: Boolean
+  validFrom: Date
+  validTo: Date
+}
+
+# Metadata creation inputs
+input CreateDomainTypeInput {
+  domainCode: String!
+  domainName: String!
+  description: String
+}
+
+type CreateDomainTypeResult {
+  domainType: DomainTypeRecord
+  errors: [MutationError!]!
+}
+
+input CreateAttributeInput {
+  attributeCode: String!
+  attributeName: String!
+  dataType: String!
+  description: String
+  unitOfMeasure: String
+  validationRegex: String
+  isRequired: Boolean
+  isMultiValued: Boolean
+  referenceDomainCode: String
+}
+
+type CreateAttributeResult {
+  attribute: AttributeDefinition
+  errors: [MutationError!]!
+}
+
+type DeleteAttributeResult {
+  success: Boolean!
+  deletedId: ID
+  errors: [MutationError!]!
+}
+
+input UpdateAttributeDefinitionInput {
+  id: ID!
+  attributeName: String
+  description: String
+  dataType: String
+  unitOfMeasure: String
+  isRequired: Boolean
+  isMultiValued: Boolean
+  referenceDomainCode: String
+  defaultPrecedenceRank: Int
+  isDerived: Boolean
+  derivationType: String
+  derivationFormula: String
+  derivationDependencies: [String!]
+  formulaLanguage: String
+  displayFormat: String
+  listValues: [String!]
+  validationRules: JSON
+  defaultValue: String
+  displaySection: String
+  displayGroup: Int
+  isEditable: Boolean
+  isVisible: Boolean
+  aggregationType: String
+  weightAttributeCode: String
+  numericPrecision: Int
+}
+
+type UpdateAttributeDefinitionResult {
+  success: Boolean!
+  attribute: AttributeDefinition
+  errors: [MutationError!]!
+}
+
+input CreateTemplateInput {
+  templateCode: String!
+  domainCode: String!
+  templateName: String!
+  description: String
+}
+
+type CreateTemplateResult {
+  template: Template
+  errors: [MutationError!]!
+}
+
+type UpdateTemplateResult {
+  template: Template
+  errors: [MutationError!]!
+}
+
+type DeleteTemplateResult {
+  success: Boolean!
+  deletedId: ID
+  errors: [MutationError!]!
+}
+
+input UpdateTemplateInput {
+  templateId: ID!
+  templateName: String
+  description: String
+}
+
+input AssignAttributeInput {
+  templateId: ID!
+  attributeId: ID!
+  isRequired: Boolean
+  precedenceRank: Int
+  displayOrder: Int
+  displayLabel: String
+}
+
+type AssignAttributeResult {
+  assignment: TemplateAttribute
+  errors: [MutationError!]!
+}
+
+# Scalar for JSON objects
+scalar JSONObject
+
+# Domain Type Record (distinct from DomainType enum, used for managing domain types)
+type DomainTypeRecord {
+  id: ID!
+  domainCode: String!
+  domainName: String!
+  description: String
+  isActive: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Domain Type mutation inputs and results
+input UpdateDomainTypeInput {
+  id: ID!
+  domainName: String
+  description: String
+  isActive: Boolean
+}
+
+type UpdateDomainTypeResult {
+  domainType: DomainTypeRecord
+  errors: [MutationError!]!
+}
+
+type DeleteDomainTypeResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# File: filters.graphql
+# Filter Input Types
+
+input StringFilter {
+  equals: String
+  contains: String
+  startsWith: String
+  endsWith: String
+  in: [String!]
+  notIn: [String!]
+}
+
+input FloatRangeFilter {
+  equals: Float
+  gt: Float
+  gte: Float
+  lt: Float
+  lte: Float
+  between: [Float!]
+}
+
+input IntRangeFilter {
+  equals: Int
+  gt: Int
+  gte: Int
+  lt: Int
+  lte: Int
+  between: [Int!]
+}
+
+input DateRangeFilter {
+  equals: Date
+  gt: Date
+  gte: Date
+  lt: Date
+  lte: Date
+  between: [Date!]
+}
+
+input DateTimeRangeFilter {
+  equals: DateTime
+  gt: DateTime
+  gte: DateTime
+  lt: DateTime
+  lte: DateTime
+  between: [DateTime!]
+}
+
+input IDFilter {
+  equals: ID
+  in: [ID!]
+  notIn: [ID!]
+}
+
+input BooleanFilter {
+  equals: Boolean
+}
+
+# Common Attribute Input
+input AttributeInput {
+  attributeCode: String!
+  value: String
+  valueNumeric: Float
+  valueDate: Date
+  valueTimestamp: DateTime
+  valueBoolean: Boolean
+  validFrom: Date
+  sourceId: ID
+  confidenceScore: Float
+}
+
+# File: fund.graphql
+# Fund Domain Types
+
+type Fund {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  description: String
+  isActive: Boolean!
+  templateId: ID
+  
+  # Core Attributes
+  nav: Float
+  navCurrency: String
+  navDate: Date
+  inceptionDate: Date
+  fundStatus: String
+  fundType: String
+  manager: String
+  aum: Float
+  expenseRatio: Float
+  domicile: String
+  legalStructure: String
+  
+  # Source Tracking
+  navSource: String
+  lastUpdated: DateTime
+  
+  # Lineage
+  lineage: [FieldLineage!]
+  
+  # Metadata
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+  updatedBy: String
+}
+
+type FundConnection {
+  edges: [FundEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type FundEdge {
+  node: Fund!
+  cursor: String!
+}
+
+input FundFilter {
+  entityCode: StringFilter
+  entityName: StringFilter
+  fundStatus: StringFilter
+  fundType: StringFilter
+  manager: StringFilter
+  domicile: StringFilter
+  navRange: FloatRangeFilter
+  aumRange: FloatRangeFilter
+  navDateRange: DateRangeFilter
+  inceptionDateRange: DateRangeFilter
+  isActive: Boolean
+}
+
+input CreateFundInput {
+  entityCode: String!
+  entityName: String!
+  description: String
+  templateId: ID
+  attributes: [AttributeInput!]
+}
+
+input UpdateFundInput {
+  id: ID!
+  entityName: String
+  description: String
+  isActive: Boolean
+  attributes: [AttributeInput!]
+}
+
+type CreateFundResult {
+  fund: Fund
+  errors: [MutationError!]!
+}
+
+type UpdateFundResult {
+  fund: Fund
+  errors: [MutationError!]!
+}
+
+# File: issuer.graphql
+# Issuer Domain Types
+
+type Issuer {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  description: String
+  isActive: Boolean!
+  templateId: ID
+  
+  # Core Attributes
+  lei: String
+  country: String
+  sector: String
+  industry: String
+  subIndustry: String
+  marketCap: Float
+  marketCapCurrency: String
+  creditRating: String
+  ratingAgency: String
+  employeeCount: Int
+  website: String
+  foundedDate: Date
+  isPublic: Boolean
+  tickerSymbol: String
+  exchange: String
+  
+  # Source Tracking
+  lastUpdated: DateTime
+  
+  # Relationships
+  securities: SecurityConnection
+  
+  # Lineage
+  lineage: [FieldLineage!]
+  
+  # Metadata
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+  updatedBy: String
+}
+
+type IssuerConnection {
+  edges: [IssuerEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type IssuerEdge {
+  node: Issuer!
+  cursor: String!
+}
+
+input IssuerFilter {
+  entityCode: StringFilter
+  entityName: StringFilter
+  country: StringFilter
+  sector: StringFilter
+  industry: StringFilter
+  creditRating: StringFilter
+  marketCapRange: FloatRangeFilter
+  isPublic: Boolean
+  isActive: Boolean
+}
+
+input CreateIssuerInput {
+  entityCode: String!
+  entityName: String!
+  description: String
+  templateId: ID
+  attributes: [AttributeInput!]
+}
+
+input UpdateIssuerInput {
+  id: ID!
+  entityName: String
+  description: String
+  isActive: Boolean
+  attributes: [AttributeInput!]
+}
+
+type CreateIssuerResult {
+  issuer: Issuer
+  errors: [MutationError!]!
+}
+
+type UpdateIssuerResult {
+  issuer: Issuer
+  errors: [MutationError!]!
+}
+
+# File: position.graphql
+# Position Domain Types
+
+type Position {
+  id: ID!
+  intersectionCode: String!
+  positionType: PositionType!
+  quantity: Float
+  currency: String!
+  isActive: Boolean!
+  
+  # Relationships
+  fund: Fund
+  fundId: ID
+  issuer: Issuer
+  issuerId: ID
+  deal: Deal
+  dealId: ID
+  security: Security
+  securityId: ID
+  
+  # Metrics
+  marketValue: Float
+  costBasis: Float
+  unrealizedGainLoss: Float
+  realizedGainLoss: Float
+  dailyReturn: Float
+  mtdReturn: Float
+  ytdReturn: Float
+  sinceInceptionReturn: Float
+  beta: Float
+  volatility: Float
+  var95: Float
+  metricsDate: Date
+  
+  # Temporal
+  validFrom: Date!
+  validTo: Date!
+  
+  # Metadata
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+}
+
+type PositionConnection {
+  edges: [PositionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type PositionEdge {
+  node: Position!
+  cursor: String!
+}
+
+input PositionFilter {
+  intersectionCode: StringFilter
+  positionType: StringFilter
+  currency: StringFilter
+  fundId: IDFilter
+  issuerId: IDFilter
+  dealId: IDFilter
+  securityId: IDFilter
+  marketValueRange: FloatRangeFilter
+  validFromRange: DateRangeFilter
+  isActive: Boolean
+}
+
+input CreatePositionInput {
+  intersectionCode: String!
+  positionType: PositionType!
+  fundId: ID
+  issuerId: ID
+  dealId: ID
+  securityId: ID
+  quantity: Float
+  currency: String!
+  validFrom: Date!
+  metadata: JSON
+}
+
+input UpdatePositionInput {
+  id: ID!
+  quantity: Float
+  metadata: JSON
+}
+
+type CreatePositionResult {
+  position: Position
+  errors: [MutationError!]!
+}
+
+type UpdatePositionResult {
+  position: Position
+  errors: [MutationError!]!
+}
+
+# File: price.graphql
+# Price Domain Types
+
+type Price {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  description: String
+  isActive: Boolean!
+  templateId: ID
+  
+  # Core Attributes
+  price: Float!
+  priceDate: Date!
+  priceTime: DateTime
+  priceType: String
+  currency: String!
+  exchange: String
+  bidPrice: Float
+  askPrice: Float
+  midPrice: Float
+  lastTradePrice: Float
+  openPrice: Float
+  highPrice: Float
+  lowPrice: Float
+  volume: Float
+  adjustedClosePrice: Float
+  
+  # Relationships
+  security: Security
+  securityId: ID
+  
+  # Source Tracking
+  source: String
+  confidenceScore: Float
+  
+  # Lineage
+  lineage: [FieldLineage!]
+  
+  # Metadata
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+  updatedBy: String
+}
+
+type PriceConnection {
+  edges: [PriceEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type PriceEdge {
+  node: Price!
+  cursor: String!
+}
+
+input PriceFilter {
+  entityCode: StringFilter
+  priceRange: FloatRangeFilter
+  priceDateRange: DateRangeFilter
+  priceType: StringFilter
+  currency: StringFilter
+  exchange: StringFilter
+  securityId: IDFilter
+  source: StringFilter
+  isActive: Boolean
+}
+
+input CreatePriceInput {
+  entityCode: String!
+  entityName: String!
+  securityId: ID!
+  price: Float!
+  priceDate: Date!
+  currency: String!
+  priceType: String
+  attributes: [AttributeInput!]
+}
+
+input UpdatePriceInput {
+  id: ID!
+  price: Float
+  priceDate: Date
+  attributes: [AttributeInput!]
+}
+
+type CreatePriceResult {
+  price: Price
+  errors: [MutationError!]!
+}
+
+type UpdatePriceResult {
+  price: Price
+  errors: [MutationError!]!
+}
+
+# File: root.graphql
+# Root Query Type
+
+type Query {
+  # Generic entity queries
+  entities(
+    filter: EntityFilter
+    pagination: PaginationInput
+    asOfDate: Date
+  ): EntityConnection!
+  
+  entity(id: ID, entityCode: String, asOfDate: Date): Entity
+  
+  # Domain-specific queries (for convenience, but use generic entity under the hood)
+  funds(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  issuers(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  securities(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  deals(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  investors(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  positions(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
+  
+  # Metadata queries
+  domainTypes: [DomainTypeRecord!]!
+  attributeRegister(domainCode: String): [AttributeDefinition!]!
+  domainTemplates(domainCode: String): [Template!]!
+  # Entity Management queries
+  entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
+  relationshipTypes: [RelationshipType!]!
+  
+  # Lineage and temporal queries
+  fieldLineage(entityId: ID!, asOfDate: Date): [FieldLineage!]!
+  temporalHistory(entityId: ID!, attributeCode: String!, fromDate: Date!, toDate: Date!): [TemporalValue!]!
+  
+  # DQ queries
+  dqRule(id: ID!): DQRule
+  dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
+  dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
+  
+  # Source queries
+  dataSources(type: String, isActive: Boolean): [DataSource!]!
+  dataSource(id: ID, code: String): DataSource
+  dataSourceStats(sourceId: ID): DataSourceStats
+  
+  # Data Connection queries
+  dataConnections(type: String, isActive: Boolean): [DataConnection!]!
+  dataConnection(id: ID, code: String): DataConnection
+  dataLoaders(connectionId: ID, isActive: Boolean): [DataLoader!]!
+  dataLoader(id: ID, code: String): DataLoader
+  
+  # Import Map queries
+  importMaps: [ImportMap!]!
+  importMap(id: ID!): ImportMap
+  identifierSuggestions(domainCode: String!): IdentifierSuggestionsResult!
+
+  # Intersection queries
+  intersectionTypes: [IntersectionType!]!
+  intersectionType(id: ID, intersectionCode: String): IntersectionType
+  intersections(filter: IntersectionFilter, pagination: PaginationInput, asOfDate: Date): IntersectionConnection!
+  intersection(id: ID, intersectionCode: String, asOfDate: Date): Intersection
+}
+
+type Mutation {
+  # Generic entity mutations
+  createEntity(input: CreateEntityInput!): CreateEntityResult!
+  updateEntity(input: UpdateEntityInput!): UpdateEntityResult!
+  
+  # Relationship mutations
+  createRelationship(input: EntityRelationshipInput!): CreateRelationshipResult!
+  updateRelationship(input: UpdateRelationshipInput!): UpdateRelationshipResult!
+  deleteRelationship(id: ID!): DeleteRelationshipResult!
+  
+  # Attribute mutations
+  updateAttribute(input: UpdateAttributeInput!): UpdateAttributeResult!
+  splitValidTime(input: SplitValidTimeInput!): SplitValidTimeResult!
+  submitManualOverride(input: ManualOverrideInput!): ManualOverrideResult!
+  
+  # Metadata mutations
+  createDomainType(input: CreateDomainTypeInput!): CreateDomainTypeResult!
+  updateDomainType(input: UpdateDomainTypeInput!): UpdateDomainTypeResult!
+  deleteDomainType(id: ID!): DeleteDomainTypeResult!
+  createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
+  updateAttributeDefinition(input: UpdateAttributeDefinitionInput!): UpdateAttributeDefinitionResult!
+  deleteAttribute(id: ID!): DeleteAttributeResult!
+  createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
+  updateTemplate(input: UpdateTemplateInput!): UpdateTemplateResult!
+  deleteTemplate(id: ID!): DeleteTemplateResult!
+  assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
+  
+  # DQ mutations
+  createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
+  resolveDQException(input: ResolveDQExceptionInput!): ResolveDQExceptionResult!
+  
+  # Intersection mutations
+  createIntersectionType(input: CreateIntersectionTypeInput!): CreateIntersectionTypeResult!
+  updateIntersectionType(input: UpdateIntersectionTypeInput!): UpdateIntersectionTypeResult!
+  deleteIntersectionType(id: ID!): DeleteIntersectionTypeResult!
+  createIntersection(input: CreateIntersectionInput!): CreateIntersectionResult!
+  updateIntersection(input: UpdateIntersectionInput!): UpdateIntersectionResult!
+  deleteIntersection(id: ID!): DeleteIntersectionResult!
+  
+  # Relationship type (dimension) mutations
+  createRelationshipType(input: CreateRelationshipTypeInput!): CreateRelationshipTypeResult!
+  updateRelationshipType(input: UpdateRelationshipTypeInput!): UpdateRelationshipTypeResult!
+  deleteRelationshipType(id: ID!): DeleteRelationshipTypeResult!
+  
+  # Entity identifier (match key) mutations
+  createEntityIdentifier(input: CreateEntityIdentifierInput!): CreateEntityIdentifierResult!
+  updateEntityIdentifier(input: UpdateEntityIdentifierInput!): UpdateEntityIdentifierResult!
+  deleteEntityIdentifier(id: ID!): DeleteEntityIdentifierResult!
+}
+
+# Root Subscription Type
+
+type Subscription {
+  # Entity Updates
+  entityUpdated(entityId: ID): Entity!
+  
+  # DQ Events
+  dqExceptionCreated: DQException!
+  dqExceptionUpdated(exceptionId: ID): DQException!
+}
+
+# Additional Types for Attribute Mutations
+
+input UpdateAttributeInput {
+  entityId: ID!
+  attributeCode: String!
+  value: String!
+  validFrom: Date!
+  sourceId: ID!
+  isOverride: Boolean
+  overrideReason: String
+}
+
+input SplitValidTimeInput {
+  eavId: ID!
+  splitDate: Date!
+  newValue: String!
+  sourceId: ID!
+  overrideReason: String
+}
+
+input ManualOverrideInput {
+  entityId: ID!
+  attributeCode: String!
+  value: String!
+  validFrom: Date!
+  overrideReason: String!
+}
+
+type UpdateAttributeResult {
+  success: Boolean!
+  goldenValueId: ID
+  errors: [MutationError!]!
+}
+
+type SplitValidTimeResult {
+  success: Boolean!
+  newEavId: ID
+  errors: [MutationError!]!
+}
+
+type ManualOverrideResult {
+  success: Boolean!
+  goldenValueId: ID
+  errors: [MutationError!]!
+}
+
+# Relationship Type management types
+input CreateRelationshipTypeInput {
+  relationshipCode: String!
+  relationshipName: String!
+  parentDomainCode: String
+  childDomainCode: String
+  cardinality: RelationshipCardinality
+  compositeKey: [String!]
+  description: String
+}
+
+type CreateRelationshipTypeResult {
+  relationshipType: RelationshipType
+  errors: [MutationError!]!
+}
+
+input UpdateRelationshipTypeInput {
+  id: ID!
+  relationshipName: String
+  description: String
+  parentDomainCode: String
+  childDomainCode: String
+  cardinality: RelationshipCardinality
+  compositeKey: [String!]
+  isActive: Boolean
+}
+
+type UpdateRelationshipTypeResult {
+  relationshipType: RelationshipType
+  errors: [MutationError!]!
+}
+
+type DeleteRelationshipTypeResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# Entity Identifier (match key) management types
+input CreateEntityIdentifierInput {
+  domainCode: String!
+  identifierCode: String!
+  identifierName: String!
+  attributeCodes: [String!]!
+  isPrimary: Boolean
+  description: String
+}
+
+type CreateEntityIdentifierResult {
+  identifier: EntityIdentifierDefinition
+  errors: [MutationError!]!
+}
+
+input UpdateEntityIdentifierInput {
+  id: ID!
+  identifierName: String
+  attributeCodes: [String!]
+  isPrimary: Boolean
+  description: String
+  isActive: Boolean
+}
+
+type UpdateEntityIdentifierResult {
+  identifier: EntityIdentifierDefinition
+  errors: [MutationError!]!
+}
+
+type DeleteEntityIdentifierResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# Metadata Types
+type AttributeDefinition {
+  id: ID!
+  attributeCode: String!
+  attributeName: String!
+  dataType: String!
+  description: String
+  unitOfMeasure: String
+  isRequired: Boolean!
+  isMultiValued: Boolean!
+  referenceDomainCode: String
+  defaultPrecedenceRank: Int!
+  aggregationType: String
+  weightAttributeCode: String
+  numericPrecision: Int
+}
+
+type Template {
+  id: ID!
+  templateCode: String!
+  domainCode: String!
+  templateName: String!
+  description: String
+  isActive: Boolean!
+  attributes: [TemplateAttribute!]!
+}
+
+type TemplateAttribute {
+  attributeId: ID!
+  attribute: AttributeDefinition!
+  isRequired: Boolean!
+  precedenceRank: Int!
+  displayOrder: Int!
+  displayLabel: String
+}
+
+# Entity Identifier Definition Type
+type EntityIdentifierDefinition {
+  id: ID!
+  identifierCode: String!
+  identifierName: String!
+  domainCode: String!
+  domainName: String!
+  attributeCodes: [String!]!
+  isPrimary: Boolean!
+  description: String
+  isActive: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# File: security.graphql
+# Security Domain Types
+
+type Security {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  description: String
+  isActive: Boolean!
+  templateId: ID
+  
+  # Core Attributes
+  isin: String
+  cusip: String
+  sedol: String
+  ticker: String
+  securityType: String
+  assetClass: String
+  currency: String
+  exchange: String
+  country: String
+  sector: String
+  industry: String
+  price: Float
+  priceDate: Date
+  priceCurrency: String
+  parValue: Float
+  maturityDate: Date
+  couponRate: Float
+  dividendYield: Float
+  peRatio: Float
+  pbRatio: Float
+  
+  # Relationships
+  issuer: Issuer
+  issuerId: ID
+  
+  # Source Tracking
+  priceSource: String
+  lastUpdated: DateTime
+  
+  # Lineage
+  lineage: [FieldLineage!]
+  
+  # Metadata
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+  updatedBy: String
+}
+
+type SecurityConnection {
+  edges: [SecurityEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type SecurityEdge {
+  node: Security!
+  cursor: String!
+}
+
+input SecurityFilter {
+  entityCode: StringFilter
+  entityName: StringFilter
+  isin: StringFilter
+  cusip: StringFilter
+  ticker: StringFilter
+  securityType: StringFilter
+  assetClass: StringFilter
+  currency: StringFilter
+  exchange: StringFilter
+  country: StringFilter
+  sector: StringFilter
+  priceRange: FloatRangeFilter
+  priceDateRange: DateRangeFilter
+  isActive: Boolean
+}
+
+input CreateSecurityInput {
+  entityCode: String!
+  entityName: String!
+  description: String
+  templateId: ID
+  issuerId: ID
+  attributes: [AttributeInput!]
+}
+
+input UpdateSecurityInput {
+  id: ID!
+  entityName: String
+  description: String
+  isActive: Boolean
+  issuerId: ID
+  attributes: [AttributeInput!]
+}
+
+type CreateSecurityResult {
+  security: Security
+  errors: [MutationError!]!
+}
+
+type UpdateSecurityResult {
+  security: Security
+  errors: [MutationError!]!
+}
+
+# File: intersection.graphql
+# Intersection Types: Generic composite entity framework
+
+# Intersection Type Definition (metadata)
+type IntersectionType {
+  id: ID!
+  intersectionCode: String!
+  intersectionName: String!
+  description: String
+  isActive: Boolean!
+  members: [IntersectionTypeMember!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Intersection Type Member (defines which entity domains compose this intersection)
+type IntersectionTypeMember {
+  id: ID!
+  intersectionTypeId: ID!
+  domainCode: String!
+  memberRole: String!
+  isRequired: Boolean!
+  displayOrder: Int!
+}
+
+# Intersection Instance (actual intersection record)
+type Intersection {
+  id: ID!
+  intersectionCode: String!
+  intersectionTypeCode: String!
+  intersectionTypeName: String!
+  
+  # Members (constituent entities)
+  members: [IntersectionMember!]!
+  
+  # Attributes (intersection-specific data)
+  attributes: JSONObject!
+  
+  # Temporal
+  validFrom: Date!
+  validTo: Date!
+  
+  # Metadata
+  metadata: JSONObject
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Intersection Member (links intersection to constituent entity)
+type IntersectionMember {
+  memberRole: String!
+  entityId: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+}
+
+type IntersectionConnection {
+  edges: [IntersectionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type IntersectionEdge {
+  node: Intersection!
+  cursor: String!
+}
+
+input IntersectionFilter {
+  intersectionTypeCode: String
+  intersectionCode: String
+  memberEntityId: ID
+  memberRole: String
+  isActive: Boolean
+}
+
+input CreateIntersectionTypeInput {
+  intersectionCode: String!
+  intersectionName: String!
+  description: String
+  members: [IntersectionTypeMemberInput!]!
+}
+
+input IntersectionTypeMemberInput {
+  domainCode: String!
+  memberRole: String!
+  isRequired: Boolean
+  displayOrder: Int
+}
+
+type CreateIntersectionTypeResult {
+  intersectionType: IntersectionType
+  errors: [MutationError!]!
+}
+
+input UpdateIntersectionTypeInput {
+  id: ID!
+  intersectionName: String
+  description: String
+  isActive: Boolean
+}
+
+type UpdateIntersectionTypeResult {
+  intersectionType: IntersectionType
+  errors: [MutationError!]!
+}
+
+type DeleteIntersectionTypeResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+input CreateIntersectionInput {
+  intersectionCode: String!
+  intersectionTypeCode: String!
+  members: [IntersectionMemberInput!]!
+  attributes: JSONObject
+  validFrom: Date!
+  metadata: JSONObject
+}
+
+input IntersectionMemberInput {
+  entityId: ID!
+  memberRole: String!
+}
+
+type CreateIntersectionResult {
+  intersection: Intersection
+  errors: [MutationError!]!
+}
+
+input UpdateIntersectionInput {
+  id: ID!
+  members: [IntersectionMemberInput!]
+  attributes: JSONObject
+  metadata: JSONObject
+}
+
+type UpdateIntersectionResult {
+  intersection: Intersection
+  errors: [MutationError!]!
+}
+
+type DeleteIntersectionResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# Data Source Types
+type DataSource {
+  id: ID!
+  sourceCode: String!
+  sourceName: String!
+  sourceType: String!
+  vendorName: String
+  feedFormat: String
+  feedFrequency: String
+  connectionConfig: JSONObject
+  precedenceRank: Int!
+  isActive: Boolean!
+  metadata: JSONObject
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type DataSourceStats {
+  totalSources: Int!
+  sourceBreakdown: [SourceBreakdown!]!
+}
+
+type SourceBreakdown {
+  sourceId: ID!
+  recordCount: Int!
+}
+
+# Data Connection Types
+type DataConnection {
+  id: ID!
+  connectionCode: String!
+  connectionName: String!
+  sourceType: String!
+  vendorName: String
+  endpointUrl: String
+  endpointMethod: String
+  endpointHeaders: JSONObject
+  requestTimeout: Int
+  authType: String
+  authConfig: JSONObject
+  connectionStatus: String
+  lastTestedAt: DateTime
+  lastTestResult: JSONObject
+  precedenceRank: Int!
+  isActive: Boolean!
+  metadata: JSONObject
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type DataLoader {
+  id: ID!
+  loaderCode: String!
+  loaderName: String!
+  connectionId: ID!
+  connection: DataConnection
+  domainCode: String!
+  attributeCodes: [String!]!
+  loadFrequency: String
+  cronExpression: String
+  loadWindow: String
+  batchSize: Int
+  transformMapping: JSONObject
+  fieldMapping: JSONObject
+  loaderStatus: String
+  lastRunAt: DateTime
+  lastRunResult: JSONObject
+  nextRunAt: DateTime
+  isActive: Boolean!
+  metadata: JSONObject
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Import Map Types
+type ImportMap {
+  id: ID!
+  name: String!
+  description: String
+  sourceFormat: String!
+  sourceData: String!
+  domainMappings: [DomainImportMapping!]!
+  options: JSONObject
+  status: String!
+  executedBy: String
+  executedAt: DateTime
+  resultSummary: JSONObject
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type DomainImportMapping {
+  domainCode: String!
+  templateCode: String
+  fieldMappings: [FieldMapping!]!
+  relationshipMappings: [RelationshipMapping!]!
+}
+
+type FieldMapping {
+  sourceField: String!
+  targetAttribute: String!
+  confidence: Float
+  isAutoRecommended: Boolean
+}
+
+type RelationshipMapping {
+  relationshipCode: String!
+  parentDomainCode: String!
+  childDomainCode: String!
+  parentKeyField: String!
+  childKeyField: String!
+}
+
+# Additional resolver types (not in schema.graphql but used by resolvers)
+# Identifier Suggestions Result
+type IdentifierSuggestionsResult {
+  identifiers: [IdentifierDefinition!]!
+  recommendations: [String!]!
+}
+
+type IdentifierDefinition {
+  identifierCode: String!
+  identifierName: String!
+  attributeCodes: [String!]!
+  isPrimary: Boolean!
+  description: String
+}
+
+
+`;

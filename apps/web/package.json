@@ -1,0 +1,41 @@
+{
+  "name": "@meridian-mdm/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf .next .turbo node_modules"
+  },
+  "dependencies": {
+    "@graphql-typed-document-node/core": "^3.2.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "@urql/core": "^5.0.0",
+    "clsx": "^2.1.0",
+    "date-fns": "^3.0.0",
+    "dotenv": "^16.4.0",
+    "graphql": "^16.8.0",
+    "graphql-yoga": "^5.24.1",
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^2.2.0",
+    "urql": "^4.0.0",
+    "zod": "^3.22.0",
+    "zustand": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "^16.0.0",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.7.0"
+  }
+}

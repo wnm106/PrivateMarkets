@@ -1,0 +1,231 @@
+# Generic Entity Type
+type Entity {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  domainName: String!
+  templateCode: String
+  templateName: String
+  description: String
+  isActive: Boolean!
+  
+  # Dynamic attributes from template
+  attributes: JSONObject!
+  
+  # Relationships
+  parentRelationships: [EntityRelationship!]!
+  childRelationships: [EntityRelationship!]!
+  
+  # Lineage
+  lineage: [FieldLineage!]
+  
+  # Metadata
+  metadata: JSONObject
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type EntityRelationship {
+  parentEntityId: ID!
+  parentEntityCode: String!
+  parentEntityName: String!
+  parentDomainCode: String!
+  childEntityId: ID!
+  childEntityCode: String!
+  childEntityName: String!
+  childDomainCode: String!
+  relationshipType: String!
+  relationshipCode: String!
+  isPrimary: Boolean!
+}
+
+type EntityConnection {
+  edges: [EntityEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type EntityEdge {
+  node: Entity!
+  cursor: String!
+}
+
+input EntityFilter {
+  domainCode: String
+  templateCode: String
+  entityCode: String
+  entityName: String
+  isActive: Boolean
+  # Attribute-based filters
+  attributes: JSONObject
+  # Relationship filters
+  hasParent: EntityRelationshipFilter
+  hasChild: EntityRelationshipFilter
+}
+
+input EntityRelationshipFilter {
+  entityCode: String
+  domainCode: String
+  relationshipType: String
+}
+
+input CreateEntityInput {
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  templateCode: String
+  description: String
+  attributes: JSONObject!
+  parentRelationships: [EntityRelationshipInput!]
+  childRelationships: [EntityRelationshipInput!]
+}
+
+input UpdateEntityInput {
+  id: ID!
+  entityName: String
+  description: String
+  isActive: Boolean
+  attributes: JSONObject
+  parentRelationships: [EntityRelationshipInput!]
+  childRelationships: [EntityRelationshipInput!]
+}
+
+input EntityRelationshipInput {
+  parentEntityId: ID!
+  childEntityId: ID!
+  relationshipType: String!
+  relationshipCode: String!
+  isPrimary: Boolean
+  validFrom: Date!
+}
+
+type CreateEntityResult {
+  entity: Entity
+  errors: [MutationError!]!
+}
+
+type UpdateEntityResult {
+  entity: Entity
+  errors: [MutationError!]!
+}
+
+# Relationship Type Metadata
+type RelationshipType {
+  id: ID!
+  relationshipCode: String!
+  relationshipName: String!
+  parentDomainCode: String
+  childDomainCode: String
+  description: String
+  isActive: Boolean!
+}
+
+type CreateRelationshipResult {
+  relationship: EntityRelationship
+  errors: [MutationError!]!
+}
+
+type UpdateRelationshipResult {
+  relationship: EntityRelationship
+  errors: [MutationError!]!
+}
+
+type DeleteRelationshipResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+input UpdateRelationshipInput {
+  id: ID!
+  isPrimary: Boolean
+  validFrom: Date
+  validTo: Date
+}
+
+# Metadata creation inputs
+input CreateDomainTypeInput {
+  domainCode: String!
+  domainName: String!
+  description: String
+}
+
+type CreateDomainTypeResult {
+  domainType: DomainTypeRecord
+  errors: [MutationError!]!
+}
+
+input CreateAttributeInput {
+  attributeCode: String!
+  attributeName: String!
+  dataType: String!
+  description: String
+  unitOfMeasure: String
+  validationRegex: String
+  isRequired: Boolean
+  isMultiValued: Boolean
+  referenceDomainCode: String
+}
+
+type CreateAttributeResult {
+  attribute: AttributeDefinition
+  errors: [MutationError!]!
+}
+
+input CreateTemplateInput {
+  templateCode: String!
+  domainCode: String!
+  templateName: String!
+  description: String
+}
+
+type CreateTemplateResult {
+  template: Template
+  errors: [MutationError!]!
+}
+
+input AssignAttributeInput {
+  templateId: ID!
+  attributeId: ID!
+  isRequired: Boolean
+  precedenceRank: Int
+  displayOrder: Int
+  displayLabel: String
+}
+
+type AssignAttributeResult {
+  assignment: TemplateAttribute
+  errors: [MutationError!]!
+}
+
+# Scalar for JSON objects
+scalar JSONObject
+
+# Domain Type Record (distinct from DomainType enum, used for managing domain types)
+type DomainTypeRecord {
+  id: ID!
+  domainCode: String!
+  domainName: String!
+  description: String
+  isActive: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Domain Type mutation inputs and results
+input UpdateDomainTypeInput {
+  id: ID!
+  domainName: String
+  description: String
+  isActive: Boolean
+}
+
+type UpdateDomainTypeResult {
+  domainType: DomainTypeRecord
+  errors: [MutationError!]!
+}
+
+type DeleteDomainTypeResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}

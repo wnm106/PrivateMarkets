@@ -1,0 +1,34 @@
+# Cursor AI Rules - Ignore File
+
+# Node modules (too large, not needed)
+node_modules/
+
+# Build artifacts
+.next/
+.turbo/
+wrangler/
+
+# Generated files
+packages/graphql/src/schema/typeDefs.ts
+
+# IDE specific
+.vscode/
+.idea/
+
+# Large log files
+*.log
+
+# Test snapshots
+__snapshots__/
+.snapshots/
+
+# Coverage reports
+coverage/
+
+# Dist/build folders
+dist/
+build/
+
+# Docker files
+Dockerfile
+docker-compose.yml

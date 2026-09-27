@@ -1,0 +1,97 @@
+# Position Domain Types
+
+type Position {
+  id: ID!
+  intersectionCode: String!
+  positionType: PositionType!
+  quantity: Float
+  currency: String!
+  isActive: Boolean!
+  
+  # Relationships
+  fund: Fund
+  fundId: ID
+  issuer: Issuer
+  issuerId: ID
+  deal: Deal
+  dealId: ID
+  security: Security
+  securityId: ID
+  
+  # Metrics
+  marketValue: Float
+  costBasis: Float
+  unrealizedGainLoss: Float
+  realizedGainLoss: Float
+  dailyReturn: Float
+  mtdReturn: Float
+  ytdReturn: Float
+  sinceInceptionReturn: Float
+  beta: Float
+  volatility: Float
+  var95: Float
+  metricsDate: Date
+  
+  # Temporal
+  validFrom: Date!
+  validTo: Date!
+  
+  # Metadata
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+}
+
+type PositionConnection {
+  edges: [PositionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type PositionEdge {
+  node: Position!
+  cursor: String!
+}
+
+input PositionFilter {
+  intersectionCode: StringFilter
+  positionType: StringFilter
+  currency: StringFilter
+  fundId: IDFilter
+  issuerId: IDFilter
+  dealId: IDFilter
+  securityId: IDFilter
+  marketValueRange: FloatRangeFilter
+  validFromRange: DateRangeFilter
+  isActive: Boolean
+}
+
+input CreatePositionInput {
+  intersectionCode: String!
+  positionType: PositionType!
+  fundId: ID
+  issuerId: ID
+  dealId: ID
+  securityId: ID
+  quantity: Float
+  currency: String!
+  validFrom: Date!
+  metadata: JSON
+}
+
+input UpdatePositionInput {
+  id: ID!
+  quantity: Float
+  metadata: JSON
+}
+
+type CreatePositionResult {
+  position: Position
+  errors: [MutationError!]!
+}
+
+type UpdatePositionResult {
+  position: Position
+  errors: [MutationError!]!
+}

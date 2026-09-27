@@ -1,0 +1,134 @@
+# Data Quality Types
+
+type DQRule {
+  id: ID!
+  ruleCode: String!
+  ruleName: String!
+  domainCode: DomainType
+  attributeCode: String
+  ruleType: DQRuleType!
+  severity: DQSeverity!
+  ruleExpression: String!
+  ruleDescription: String
+  thresholdValue: Float
+  isActive: Boolean!
+  autoRemediate: Boolean!
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type DQException {
+  id: ID!
+  ruleId: ID!
+  rule: DQRule!
+  entityId: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: DomainType!
+  attributeId: ID
+  attributeCode: String
+  attributeName: String
+  
+  # Exception Details
+  exceptionType: String!
+  exceptionMessage: String!
+  expectedValue: String
+  actualValue: String
+  severity: DQSeverity!
+  
+  # Status
+  status: DQExceptionStatus!
+  assignedTo: String
+  assignedToUser: String
+  resolvedAt: DateTime
+  resolvedBy: String
+  resolutionNotes: String
+  
+  # Temporal
+  detectedAt: DateTime!
+  validFrom: Date!
+  validTo: Date!
+  
+  # Metadata
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type DQExceptionConnection {
+  edges: [DQExceptionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type DQExceptionEdge {
+  node: DQException!
+  cursor: String!
+}
+
+input DQRuleFilter {
+  ruleCode: StringFilter
+  ruleName: StringFilter
+  domainCode: DomainType
+  ruleType: DQRuleType
+  severity: DQSeverity
+  isActive: Boolean
+}
+
+input DQExceptionFilter {
+  ruleId: IDFilter
+  entityId: IDFilter
+  entityCode: StringFilter
+  domainCode: DomainType
+  attributeCode: StringFilter
+  exceptionType: StringFilter
+  severity: DQSeverity
+  status: DQExceptionStatus
+  assignedTo: StringFilter
+  detectedAtRange: DateRangeFilter
+}
+
+input CreateDQRuleInput {
+  ruleCode: String!
+  ruleName: String!
+  domainCode: DomainType
+  attributeCode: String
+  ruleType: DQRuleType!
+  severity: DQSeverity!
+  ruleExpression: String!
+  ruleDescription: String
+  thresholdValue: Float
+  autoRemediate: Boolean
+}
+
+input UpdateDQRuleInput {
+  id: ID!
+  ruleName: String
+  ruleExpression: String
+  ruleDescription: String
+  thresholdValue: Float
+  isActive: Boolean
+  autoRemediate: Boolean
+}
+
+input ResolveDQExceptionInput {
+  exceptionId: ID!
+  status: DQExceptionStatus!
+  resolutionNotes: String
+}
+
+type CreateDQRuleResult {
+  rule: DQRule
+  errors: [MutationError!]!
+}
+
+type UpdateDQRuleResult {
+  rule: DQRule
+  errors: [MutationError!]!
+}
+
+type ResolveDQExceptionResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}

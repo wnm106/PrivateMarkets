@@ -1,0 +1,69 @@
+# Filter Input Types
+
+input StringFilter {
+  equals: String
+  contains: String
+  startsWith: String
+  endsWith: String
+  in: [String!]
+  notIn: [String!]
+}
+
+input FloatRangeFilter {
+  equals: Float
+  gt: Float
+  gte: Float
+  lt: Float
+  lte: Float
+  between: [Float!]
+}
+
+input IntRangeFilter {
+  equals: Int
+  gt: Int
+  gte: Int
+  lt: Int
+  lte: Int
+  between: [Int!]
+}
+
+input DateRangeFilter {
+  equals: Date
+  gt: Date
+  gte: Date
+  lt: Date
+  lte: Date
+  between: [Date!]
+}
+
+input DateTimeRangeFilter {
+  equals: DateTime
+  gt: DateTime
+  gte: DateTime
+  lt: DateTime
+  lte: DateTime
+  between: [DateTime!]
+}
+
+input IDFilter {
+  equals: ID
+  in: [ID!]
+  notIn: [ID!]
+}
+
+input BooleanFilter {
+  equals: Boolean
+}
+
+# Common Attribute Input
+input AttributeInput {
+  attributeCode: String!
+  value: String
+  valueNumeric: Float
+  valueDate: Date
+  valueTimestamp: DateTime
+  valueBoolean: Boolean
+  validFrom: Date
+  sourceId: ID
+  confidenceScore: Float
+}

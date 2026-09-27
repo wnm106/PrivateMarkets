@@ -1,0 +1,146 @@
+# Intersection Types: Generic composite entity framework
+
+# Intersection Type Definition (metadata)
+type IntersectionType {
+  id: ID!
+  intersectionCode: String!
+  intersectionName: String!
+  description: String
+  isActive: Boolean!
+  members: [IntersectionTypeMember!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Intersection Type Member (defines which entity domains compose this intersection)
+type IntersectionTypeMember {
+  id: ID!
+  intersectionTypeId: ID!
+  domainCode: String!
+  memberRole: String!
+  isRequired: Boolean!
+  displayOrder: Int!
+}
+
+# Intersection Instance (actual intersection record)
+type Intersection {
+  id: ID!
+  intersectionCode: String!
+  intersectionTypeCode: String!
+  intersectionTypeName: String!
+  
+  # Members (constituent entities)
+  members: [IntersectionMember!]!
+  
+  # Attributes (intersection-specific data)
+  attributes: JSONObject!
+  
+  # Temporal
+  validFrom: Date!
+  validTo: Date!
+  
+  # Metadata
+  metadata: JSONObject
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Intersection Member (links intersection to constituent entity)
+type IntersectionMember {
+  memberRole: String!
+  entityId: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+}
+
+type IntersectionConnection {
+  edges: [IntersectionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type IntersectionEdge {
+  node: Intersection!
+  cursor: String!
+}
+
+input IntersectionFilter {
+  intersectionTypeCode: String
+  intersectionCode: String
+  memberEntityId: ID
+  memberRole: String
+  isActive: Boolean
+}
+
+input CreateIntersectionTypeInput {
+  intersectionCode: String!
+  intersectionName: String!
+  description: String
+  members: [IntersectionTypeMemberInput!]!
+}
+
+input IntersectionTypeMemberInput {
+  domainCode: String!
+  memberRole: String!
+  isRequired: Boolean
+  displayOrder: Int
+}
+
+type CreateIntersectionTypeResult {
+  intersectionType: IntersectionType
+  errors: [MutationError!]!
+}
+
+input UpdateIntersectionTypeInput {
+  id: ID!
+  intersectionName: String
+  description: String
+  isActive: Boolean
+}
+
+type UpdateIntersectionTypeResult {
+  intersectionType: IntersectionType
+  errors: [MutationError!]!
+}
+
+type DeleteIntersectionTypeResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+input CreateIntersectionInput {
+  intersectionCode: String!
+  intersectionTypeCode: String!
+  members: [IntersectionMemberInput!]!
+  attributes: JSONObject
+  validFrom: Date!
+  metadata: JSONObject
+}
+
+input IntersectionMemberInput {
+  entityId: ID!
+  memberRole: String!
+}
+
+type CreateIntersectionResult {
+  intersection: Intersection
+  errors: [MutationError!]!
+}
+
+input UpdateIntersectionInput {
+  id: ID!
+  members: [IntersectionMemberInput!]
+  attributes: JSONObject
+  metadata: JSONObject
+}
+
+type UpdateIntersectionResult {
+  intersection: Intersection
+  errors: [MutationError!]!
+}
+
+type DeleteIntersectionResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}

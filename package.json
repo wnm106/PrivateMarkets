@@ -1,0 +1,36 @@
+{
+  "name": "meridian-mdm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bi-temporal financial Master Data Management platform for private markets investments",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "db:migrate": "supabase db push",
+    "db:seed": "supabase db seed",
+    "db:reset": "supabase db reset",
+    "db:studio": "supabase studio",
+    "generate:graphql": "graphql-codegen --config codegen.ts",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "packageManager": "npm@10.9.0",
+  "dependencies": {
+    "pg": "^8.23.0"
+  }
+}

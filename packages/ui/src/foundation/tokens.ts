@@ -1,0 +1,118 @@
+export const colors = {
+  blue: {
+    10: '#edf5ff',
+    20: '#d0e2ff',
+    30: '#a6c8ff',
+    40: '#78a9ff',
+    50: '#4589ff',
+    60: '#0f62fe',
+    70: '#0043ce',
+    80: '#002d9c',
+    90: '#001d6c',
+    100: '#001141',
+  },
+  gray: {
+    10: '#f4f4f4',
+    20: '#e0e0e0',
+    30: '#c6c6c6',
+    40: '#a8a8a8',
+    50: '#8d8d8d',
+    60: '#6f6f6f',
+    70: '#525252',
+    80: '#393939',
+    90: '#262626',
+    100: '#161616',
+  },
+  green: {
+    10: '#defbe6',
+    20: '#a7f0ba',
+    30: '#6fdc8c',
+    40: '#42be65',
+    50: '#24a148',
+    60: '#198038',
+    70: '#0e6027',
+    80: '#044317',
+    90: '#022d0d',
+  },
+  red: {
+    10: '#fff1f1',
+    20: '#ffd7d9',
+    30: '#ffb3b8',
+    40: '#ff8389',
+    50: '#fa4d56',
+    60: '#da1e28',
+    70: '#a2191f',
+    80: '#750e13',
+    90: '#520408',
+  },
+  yellow: {
+    10: '#fcf4d6',
+    20: '#fddc69',
+    30: '#f1c21b',
+    40: '#d2a106',
+    50: '#b28600',
+    60: '#927100',
+    70: '#735a00',
+    80: '#564300',
+    90: '#3b2e00',
+  },
+} as const;
+
+export const spacing = {
+  0: '0',
+  1: '0.25rem',
+  2: '0.5rem',
+  3: '0.75rem',
+  4: '1rem',
+  5: '1.25rem',
+  6: '1.5rem',
+  8: '2rem',
+  10: '2.5rem',
+  12: '3rem',
+  16: '4rem',
+  20: '5rem',
+  24: '6rem',
+  32: '8rem',
+} as const;
+
+export const typography = {
+  fontFamily: {
+    sans: 'IBM Plex Sans, system-ui, sans-serif',
+    serif: 'IBM Plex Serif, Georgia, serif',
+    mono: 'IBM Plex Mono, Menlo, Monaco, monospace',
+  },
+  fontSize: {
+    xs: '0.75rem',
+    sm: '0.875rem',
+    base: '1rem',
+    lg: '1.125rem',
+    xl: '1.25rem',
+    '2xl': '1.5rem',
+    '3xl': '1.875rem',
+    '4xl': '2.25rem',
+    '5xl': '3rem',
+  },
+  fontWeight: {
+    light: '300',
+    normal: '400',
+    medium: '500',
+    semibold: '600',
+    bold: '700',
+  },
+} as const;
+
+export const shadows = {
+  sm: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
+  md: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+  lg: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
+  xl: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+} as const;
+
+export const borderRadius = {
+  none: '0',
+  sm: '0.125rem',
+  md: '0.375rem',
+  lg: '0.5rem',
+  xl: '0.75rem',
+  full: '9999px',
+} as const;

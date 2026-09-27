@@ -1,0 +1,150 @@
+# Scalar Types
+scalar Date
+scalar DateTime
+scalar JSON
+scalar UUID
+
+# Enums
+enum DomainType {
+  FUND
+  ISSUER
+  DEAL
+  SECURITY
+  PRICE
+  POSITION
+}
+
+enum SourceType {
+  VENDOR
+  INTERNAL
+  MANUAL
+  CALCULATED
+}
+
+enum PositionType {
+  EQUITY
+  DEBT
+  FUND_INTEREST
+  DERIVATIVE
+  OTHER
+}
+
+enum DQRuleType {
+  COMPLETENESS
+  VALIDITY
+  CONSISTENCY
+  TIMELINESS
+  UNIQUENESS
+}
+
+enum DQSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum DQExceptionStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  WAIVED
+  FALSE_POSITIVE
+}
+
+# Common Types
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+input PaginationInput {
+  first: Int
+  after: String
+  last: Int
+  before: String
+}
+
+type MutationError {
+  field: String
+  message: String!
+  code: String!
+}
+
+# Temporal Types
+type TemporalValue {
+  value: String
+  validFrom: Date!
+  validTo: Date!
+  systemFrom: DateTime!
+  systemTo: DateTime!
+  source: String!
+  isOverride: Boolean!
+}
+
+type SourceValue {
+  source: String!
+  sourceName: String!
+  value: String
+  precedenceRank: Int!
+  validFrom: Date!
+  validTo: Date!
+  confidenceScore: Float
+  receivedAt: DateTime
+}
+
+type FieldLineage {
+  attributeCode: String!
+  attributeName: String!
+  currentValue: String
+  competingValues: [SourceValue!]!
+  resolutionRule: String
+  lastUpdated: DateTime!
+}
+
+# Attribute Definition with Derived Attribute Support
+type AttributeDefinition {
+  id: ID!
+  attributeCode: String!
+  attributeName: String!
+  dataType: String!
+  description: String
+  unitOfMeasure: String
+  isRequired: Boolean!
+  isMultiValued: Boolean!
+  referenceDomainCode: String
+  defaultPrecedenceRank: Int!
+  
+  # Derived attribute fields
+  isDerived: Boolean!
+  derivationType: String
+  derivationFormula: String
+  derivationDependencies: [String!]
+  formulaLanguage: String
+  
+  # Display and validation metadata
+  displayFormat: String
+  listValues: [String!]
+  validationRules: JSON
+  defaultValue: String
+  displaySection: String
+  displayGroup: Int
+  isEditable: Boolean!
+  isVisible: Boolean!
+  
+  # Aggregation and precision
+  aggregationType: String
+  weightAttributeCode: String
+  numericPrecision: Int
+}
+
+# Derivation evaluation result
+type DerivationResult {
+  attributeCode: String!
+  value: JSON
+  derivationType: String!
+  dependencies: [String!]!
+  evaluatedAt: DateTime!
+}
