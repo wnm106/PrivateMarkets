@@ -664,9 +664,21 @@ input AssignAttributeInput {
   precedenceRank: Int
   displayOrder: Int
   displayLabel: String
+  defaultPrecedenceChain: [String!]
 }
 
 type AssignAttributeResult {
+  assignment: TemplateAttribute
+  errors: [MutationError!]!
+}
+
+input UpdateTemplateSourcePreferenceInput {
+  templateId: ID!
+  attributeId: ID!
+  defaultPrecedenceChain: [String!]!
+}
+
+type UpdateTemplateSourcePreferenceResult {
   assignment: TemplateAttribute
   errors: [MutationError!]!
 }
@@ -1242,6 +1254,7 @@ type Mutation {
   updateTemplate(input: UpdateTemplateInput!): UpdateTemplateResult!
   deleteTemplate(id: ID!): DeleteTemplateResult!
   assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
+  updateTemplateSourcePreference(input: UpdateTemplateSourcePreferenceInput!): UpdateTemplateSourcePreferenceResult!
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
@@ -1428,6 +1441,7 @@ type TemplateAttribute {
   precedenceRank: Int!
   displayOrder: Int!
   displayLabel: String
+  defaultPrecedenceChain: [String!]!
 }
 
 # Entity Identifier Definition Type

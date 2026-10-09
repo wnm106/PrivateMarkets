@@ -12,6 +12,7 @@ import {
   DELETE_DOMAIN_TYPE_MUTATION,
   CREATE_ATTRIBUTE_MUTATION,
   CREATE_TEMPLATE_MUTATION,
+  UPDATE_TEMPLATE_SOURCE_PREFERENCE_MUTATION,
   RELATIONSHIP_TYPES_QUERY,
   CREATE_RELATIONSHIP_TYPE_MUTATION,
   DELETE_RELATIONSHIP_TYPE_MUTATION,
@@ -42,6 +43,20 @@ interface Attribute {
   referenceDomainCode?: string;
 }
 
+interface TemplateAttributeAssignment {
+  attributeId: string;
+  attribute: {
+    attributeCode: string;
+    attributeName: string;
+    dataType: string;
+  };
+  isRequired: boolean;
+  precedenceRank: number;
+  displayOrder: number;
+  displayLabel?: string;
+  defaultPrecedenceChain?: string[];
+}
+
 interface Template {
   id: string;
   templateCode: string;
@@ -49,6 +64,7 @@ interface Template {
   domainCode: string;
   description?: string;
   isActive: boolean;
+  attributes?: TemplateAttributeAssignment[];
 }
 
 interface RelationshipType {
@@ -94,6 +110,7 @@ export default function EntityTypeDetailPage() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showCreateAttributeModal, setShowCreateAttributeModal] = useState(false);
   const [showCreateTemplateModal, setShowCreateTemplateModal] = useState(false);
+  const [preferenceTemplate, setPreferenceTemplate] = useState<Template | null>(null);
   const [showCreateRelationshipModal, setShowCreateRelationshipModal] = useState(false);
   const [showCreateIdentifierModal, setShowCreateIdentifierModal] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -453,7 +470,17 @@ export default function EntityTypeDetailPage() {
                       <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginTop: '2px' }}>{template.description}</div>
                     )}
                   </div>
-                  <span className="mono" style={{ fontSize: '11px', color: 'var(--ink-3)' }}>{template.templateCode}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span className="mono" style={{ fontSize: '11px', color: 'var(--ink-3)' }}>{template.templateCode}</span>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{ fontSize: '12px', padding: '4px 10px' }}
+                      onClick={() => setPreferenceTemplate(template)}
+                    >
+                      Source preference
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -565,6 +592,17 @@ export default function EntityTypeDetailPage() {
           domainTypes={allDomainTypes}
           onClose={() => setShowCreateAttributeModal(false)}
           onSubmit={handleCreateAttribute}
+        />
+      )}
+
+      {preferenceTemplate && (
+        <SourcePreferenceModal
+          template={preferenceTemplate}
+          onClose={() => setPreferenceTemplate(null)}
+          onSaved={async () => {
+            setPreferenceTemplate(null);
+            await loadData();
+          }}
         />
       )}
 
@@ -1032,6 +1070,225 @@ function CreateAttributeModal({
             <button type="submit" className="btn btn-primary">Create</button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+const SOURCE_PREFERENCE_OPTIONS = [
+  { code: 'BLOOMBERG', name: 'Bloomberg' },
+  { code: 'WSO', name: 'WSO' },
+  { code: 'DEALCLOUD', name: 'DealCloud' },
+  { code: 'ALLVUE', name: 'Allvue' },
+  { code: 'SP_CAPITAL_IQ', name: 'S&P Capital IQ' },
+  { code: 'INTERNAL', name: 'Internal' },
+  { code: 'MANUAL', name: 'Manual' },
+  { code: 'CALCULATED', name: 'Calculated' },
+];
+
+function sourceLabel(code: string) {
+  return SOURCE_PREFERENCE_OPTIONS.find(option => option.code === code)?.name || code;
+}
+
+// Ordered source list saved on template_attribute_assignments.default_precedence_chain.
+// Earlier entries win when a golden value is resolved for that attribute.
+function SourcePreferenceModal({
+  template,
+  onClose,
+  onSaved,
+}: {
+  template: Template;
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+}) {
+  const attributes = [...(template.attributes || [])].sort(
+    (a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0)
+  );
+  const [chains, setChains] = useState<Record<string, string[]>>(() => {
+    const initial: Record<string, string[]> = {};
+    for (const attribute of attributes) {
+      initial[attribute.attributeId] = [...(attribute.defaultPrecedenceChain || [])];
+    }
+    return initial;
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const move = (attributeId: string, index: number, direction: -1 | 1) => {
+    setChains(prev => {
+      const chain = [...(prev[attributeId] || [])];
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= chain.length) return prev;
+      const [item] = chain.splice(index, 1);
+      chain.splice(nextIndex, 0, item);
+      return { ...prev, [attributeId]: chain };
+    });
+  };
+
+  const remove = (attributeId: string, code: string) => {
+    setChains(prev => ({
+      ...prev,
+      [attributeId]: (prev[attributeId] || []).filter(entry => entry !== code),
+    }));
+  };
+
+  const add = (attributeId: string, code: string) => {
+    if (!code) return;
+    setChains(prev => {
+      const chain = prev[attributeId] || [];
+      if (chain.includes(code)) return prev;
+      return { ...prev, [attributeId]: [...chain, code] };
+    });
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      for (const attribute of attributes) {
+        const result = await graphqlClient.mutation(UPDATE_TEMPLATE_SOURCE_PREFERENCE_MUTATION, {
+          input: {
+            templateId: template.id,
+            attributeId: attribute.attributeId,
+            defaultPrecedenceChain: chains[attribute.attributeId] || [],
+          },
+        }).toPromise();
+
+        const mutationError = result.data?.updateTemplateSourcePreference?.errors?.[0];
+        if (mutationError) {
+          setError(mutationError.message);
+          return;
+        }
+        if (result.error) {
+          setError(result.error.message);
+          return;
+        }
+      }
+      await onSaved();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save source preference');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="overlay"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        background: 'rgba(0,0,0,0.5)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--bg)',
+          borderRadius: '12px',
+          width: '100%',
+          maxWidth: '680px',
+          maxHeight: '90vh',
+          overflow: 'auto',
+          border: '1px solid var(--line)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--line)' }}>
+          <div style={{ fontSize: '18px', fontWeight: 600 }}>Source preference</div>
+          <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginTop: '4px' }}>
+            {template.templateName} — earlier sources win for each attribute
+          </div>
+        </div>
+
+        <div style={{ padding: '24px', display: 'grid', gap: '16px' }}>
+          {error && (
+            <div style={{
+              padding: '10px 12px',
+              background: '#fdecec',
+              border: '1px solid var(--red)',
+              color: 'var(--red)',
+              fontSize: '13px',
+              borderRadius: '6px',
+            }}>
+              Failed: {error}
+            </div>
+          )}
+
+          {attributes.length === 0 && (
+            <div style={{ fontSize: '13px', color: 'var(--ink-3)' }}>
+              This template has no attributes yet. Assign attributes before setting a source preference.
+            </div>
+          )}
+
+          {attributes.map(attribute => {
+            const chain = chains[attribute.attributeId] || [];
+            const remaining = SOURCE_PREFERENCE_OPTIONS.filter(option => !chain.includes(option.code));
+            return (
+              <div key={attribute.attributeId} style={{
+                border: '1px solid var(--line)',
+                borderRadius: '8px',
+                padding: '12px 14px',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '14px', fontWeight: 500 }}>{attribute.attribute.attributeName}</div>
+                    <div className="mono" style={{ fontSize: '11px', color: 'var(--ink-3)' }}>{attribute.attribute.attributeCode}</div>
+                  </div>
+                </div>
+                {chain.length === 0 ? (
+                  <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginBottom: '8px' }}>
+                    No source preference. The attribute default rank is used.
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: '6px', marginBottom: '8px' }}>
+                    {chain.map((code, index) => (
+                      <div key={code} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className="mono" style={{ width: '18px', fontSize: '11px', color: 'var(--ink-3)' }}>{index + 1}</span>
+                        <span style={{ flex: 1, fontSize: '13px' }}>{sourceLabel(code)}</span>
+                        <button type="button" className="btn" style={{ fontSize: '12px', padding: '2px 8px' }} onClick={() => move(attribute.attributeId, index, -1)} disabled={index === 0}>Up</button>
+                        <button type="button" className="btn" style={{ fontSize: '12px', padding: '2px 8px' }} onClick={() => move(attribute.attributeId, index, 1)} disabled={index === chain.length - 1}>Down</button>
+                        <button type="button" className="btn" style={{ fontSize: '12px', padding: '2px 8px', color: 'var(--red)' }} onClick={() => remove(attribute.attributeId, code)}>Remove</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <select
+                  className="select"
+                  value=""
+                  aria-label={`Add source for ${attribute.attribute.attributeName}`}
+                  onChange={e => add(attribute.attributeId, e.target.value)}
+                >
+                  <option value="">Add source…</option>
+                  {remaining.map(option => (
+                    <option key={option.code} value={option.code}>{option.name}</option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{
+          padding: '16px 24px',
+          borderTop: '1px solid var(--line)',
+          display: 'flex',
+          justifyContent: 'flex-end',
+          gap: '8px',
+        }}>
+          <button type="button" className="btn" onClick={onClose} disabled={saving}>Cancel</button>
+          <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving || attributes.length === 0}>
+            {saving ? 'Saving…' : 'Save source preference'}
+          </button>
+        </div>
       </div>
     </div>
   );

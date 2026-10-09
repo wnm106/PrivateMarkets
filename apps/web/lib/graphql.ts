@@ -223,6 +223,7 @@ export const DOMAIN_TEMPLATES_QUERY = `
         precedenceRank
         displayOrder
         displayLabel
+        defaultPrecedenceChain
       }
     }
   }
@@ -619,6 +620,22 @@ export const UPDATE_ATTRIBUTE_MUTATION = `
         isMultiValued
         referenceDomainCode
         defaultPrecedenceRank
+      }
+      errors {
+        field
+        message
+        code
+      }
+    }
+  }
+`;
+
+export const UPDATE_TEMPLATE_SOURCE_PREFERENCE_MUTATION = `
+  mutation UpdateTemplateSourcePreference($input: UpdateTemplateSourcePreferenceInput!) {
+    updateTemplateSourcePreference(input: $input) {
+      assignment {
+        attributeId
+        defaultPrecedenceChain
       }
       errors {
         field

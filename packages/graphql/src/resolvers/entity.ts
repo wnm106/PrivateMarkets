@@ -1,5 +1,10 @@
 import { Context } from '../context';
 
+function normalizePrecedenceChain(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+}
+
 export const entityResolvers = {
   Query: {
     entities: async (
@@ -788,16 +793,21 @@ export const entityResolvers = {
       const { input } = args;
       
       try {
+        const insertRow: Record<string, unknown> = {
+          template_id: input.templateId,
+          attribute_id: input.attributeId,
+          is_required: input.isRequired ?? false,
+          precedence_rank: input.precedenceRank ?? 100,
+          display_order: input.displayOrder ?? 0,
+          display_label: input.displayLabel,
+        };
+        if (input.defaultPrecedenceChain !== undefined) {
+          insertRow.default_precedence_chain = input.defaultPrecedenceChain ?? [];
+        }
+
         const { data, error } = await context.supabase
           .from('template_attribute_assignments')
-          .insert({
-            template_id: input.templateId,
-            attribute_id: input.attributeId,
-            is_required: input.isRequired ?? false,
-            precedence_rank: input.precedenceRank ?? 100,
-            display_order: input.displayOrder ?? 0,
-            display_label: input.displayLabel,
-          })
+          .insert(insertRow)
           .select()
           .single();
         
@@ -829,6 +839,7 @@ export const entityResolvers = {
             precedenceRank: data.precedence_rank,
             displayOrder: data.display_order,
             displayLabel: data.display_label,
+            defaultPrecedenceChain: normalizePrecedenceChain(data.default_precedence_chain),
           },
           errors: [],
         };
@@ -836,6 +847,74 @@ export const entityResolvers = {
         return {
           assignment: null,
           errors: [{ field: '', message: error.message, code: 'ASSIGN_FAILED' }],
+        };
+      }
+    },
+
+    updateTemplateSourcePreference: async (
+      _: any,
+      args: { input: { templateId: string; attributeId: string; defaultPrecedenceChain: string[] } },
+      context: Context
+    ) => {
+      const { input } = args;
+      const chain = normalizePrecedenceChain(input.defaultPrecedenceChain);
+
+      try {
+        const { data, error } = await context.supabase
+          .from('template_attribute_assignments')
+          .update({ default_precedence_chain: chain })
+          .eq('template_id', input.templateId)
+          .eq('attribute_id', input.attributeId)
+          .select()
+          .maybeSingle();
+
+        if (error) throw error;
+        if (!data) {
+          return {
+            assignment: null,
+            errors: [{
+              field: 'attributeId',
+              message: 'That attribute is not assigned to this template',
+              code: 'NOT_FOUND',
+            }],
+          };
+        }
+
+        const { data: attr, error: attrError } = await context.supabase
+          .from('attribute_register')
+          .select('*')
+          .eq('id', input.attributeId)
+          .single();
+
+        if (attrError) throw attrError;
+
+        return {
+          assignment: {
+            attributeId: data.attribute_id,
+            attribute: {
+              id: attr.id,
+              attributeCode: attr.attribute_code,
+              attributeName: attr.attribute_name,
+              dataType: attr.data_type,
+              description: attr.description,
+              unitOfMeasure: attr.unit_of_measure,
+              isRequired: attr.is_required,
+              isMultiValued: attr.is_multi_valued,
+              referenceDomainCode: attr.reference_domain_code,
+              defaultPrecedenceRank: attr.default_precedence_rank,
+            },
+            isRequired: data.is_required,
+            precedenceRank: data.precedence_rank,
+            displayOrder: data.display_order,
+            displayLabel: data.display_label,
+            defaultPrecedenceChain: normalizePrecedenceChain(data.default_precedence_chain),
+          },
+          errors: [],
+        };
+      } catch (error: any) {
+        return {
+          assignment: null,
+          errors: [{ field: 'defaultPrecedenceChain', message: error.message, code: 'UPDATE_FAILED' }],
         };
       }
     },

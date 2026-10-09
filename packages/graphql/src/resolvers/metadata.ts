@@ -88,6 +88,7 @@ export const metadataResolvers = {
           precedenceRank: a.precedence_rank,
           displayOrder: a.display_order,
           displayLabel: a.display_label,
+          defaultPrecedenceChain: Array.isArray(a.default_precedence_chain) ? a.default_precedence_chain : [],
         })),
       }));
     },
