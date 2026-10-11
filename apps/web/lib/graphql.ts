@@ -224,6 +224,7 @@ export const DOMAIN_TEMPLATES_QUERY = `
         displayOrder
         displayLabel
         defaultPrecedenceChain
+        chainVersion
       }
     }
   }
@@ -636,6 +637,7 @@ export const UPDATE_TEMPLATE_SOURCE_PREFERENCE_MUTATION = `
       assignment {
         attributeId
         defaultPrecedenceChain
+        chainVersion
       }
       errors {
         field

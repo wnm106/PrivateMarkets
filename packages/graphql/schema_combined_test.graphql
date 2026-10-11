@@ -1192,6 +1192,7 @@ type TemplateAttribute {
   displayOrder: Int!
   displayLabel: String
   defaultPrecedenceChain: [String!]!
+  chainVersion: Int!
 }
 
 # File: security.graphql

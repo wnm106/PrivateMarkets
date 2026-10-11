@@ -5,6 +5,11 @@ function normalizePrecedenceChain(value: unknown): string[] {
   return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
 }
 
+function normalizeChainVersion(value: unknown): number {
+  const version = Number(value);
+  return Number.isFinite(version) && version > 0 ? Math.trunc(version) : 1;
+}
+
 export const entityResolvers = {
   Query: {
     entities: async (
@@ -840,6 +845,7 @@ export const entityResolvers = {
             displayOrder: data.display_order,
             displayLabel: data.display_label,
             defaultPrecedenceChain: normalizePrecedenceChain(data.default_precedence_chain),
+            chainVersion: normalizeChainVersion(data.chain_version),
           },
           errors: [],
         };
@@ -908,6 +914,7 @@ export const entityResolvers = {
             displayOrder: data.display_order,
             displayLabel: data.display_label,
             defaultPrecedenceChain: normalizePrecedenceChain(data.default_precedence_chain),
+            chainVersion: normalizeChainVersion(data.chain_version),
           },
           errors: [],
         };

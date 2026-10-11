@@ -1442,6 +1442,7 @@ type TemplateAttribute {
   displayOrder: Int!
   displayLabel: String
   defaultPrecedenceChain: [String!]!
+  chainVersion: Int!
 }
 
 # Entity Identifier Definition Type
