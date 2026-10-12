@@ -41,7 +41,8 @@ export const metadataResolvers = {
           throw new Error('Failed to fetch attributes');
         }
 
-        let attributes = (fallbackData || []).map(mapAttributeDefinition);
+        const withChains = await attachPrecedenceMetadata(supabase, fallbackData || []);
+        let attributes = withChains.map(mapAttributeDefinition);
         
         // If domainCode is specified, filter to show:
         // 1. Attributes with matching domain_code, OR
@@ -144,7 +145,8 @@ export const metadataResolvers = {
       }
 
       console.log('[attributeRegister] Returning filtered count:', filtered.length);
-      return filtered.map(mapAttributeDefinition);
+      const withChains = await attachPrecedenceMetadata(supabase, filtered);
+      return withChains.map(mapAttributeDefinition);
     },
 
     domainTemplates: async (_: any, args: { domainCode?: string }, { supabase }: { supabase: SupabaseClient }) => {
@@ -557,7 +559,28 @@ function mapAttributeDefinition(row: any) {
     aggregationType: row.aggregation_type || 'NONE',
     weightAttributeCode: row.weight_attribute_code,
     numericPrecision: row.numeric_precision,
+    defaultPrecedenceChain: precedenceChainFromRow(row),
   };
+}
+
+function precedenceChainFromRow(row: any): string[] {
+  const column = Array.isArray(row.default_precedence_chain) ? row.default_precedence_chain : [];
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata.defaultPrecedenceChain : [];
+  const raw = column.length > 0 ? column : (Array.isArray(metadata) ? metadata : []);
+  return raw.filter((code: unknown) => typeof code === 'string' && code.length > 0 && code !== 'MANUAL');
+}
+
+async function attachPrecedenceMetadata(supabase: SupabaseClient, rows: any[]): Promise<any[]> {
+  const missing = rows.filter((row) => row?.id && row.metadata == null);
+  if (missing.length === 0) return rows;
+  const { data } = await supabase
+    .from('attribute_register')
+    .select('id, metadata')
+    .in('id', missing.map((row) => row.id));
+  const byId = new Map((data || []).map((row: any) => [row.id, row.metadata]));
+  return rows.map((row) => (
+    row.metadata == null ? { ...row, metadata: byId.get(row.id) || {} } : row
+  ));
 }
 
 /**

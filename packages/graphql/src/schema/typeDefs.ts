@@ -151,6 +151,9 @@ type AttributeDefinition {
   # Reference list linkage
   referenceListCode: String
   referenceList: ReferenceListSummary
+
+  # Global source sequence. Templates override this only when they set their own chain.
+  defaultPrecedenceChain: [String!]!
 }
 
 # Derivation evaluation result

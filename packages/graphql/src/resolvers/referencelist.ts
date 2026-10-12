@@ -274,6 +274,7 @@ function mapAttributeDefinition(row: any) {
     displayGroup: row.display_group || 0,
     isEditable: row.is_editable !== false,
     isVisible: row.is_visible !== false,
+    defaultPrecedenceChain: [],
   };
 }
 

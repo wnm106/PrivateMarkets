@@ -297,33 +297,39 @@ export const precedenceResolvers = {
     ) => {
       try {
         const { attributeCode, chain } = args;
+        const sources = (chain || []).filter((code) => code && code !== 'MANUAL');
 
-        // Find the template_attribute_assignment for this attribute
-        const { data: assignment, error: findError } = await context.supabase
-          .from('template_attribute_assignments')
-          .select('id')
-          .eq('attribute_id', attributeCode)
-          .limit(1)
-          .single();
+        const { data: attribute, error: findError } = await context.supabase
+          .from('attribute_register')
+          .select('id, metadata')
+          .eq('attribute_code', attributeCode)
+          .maybeSingle();
 
-        if (findError && findError.code !== 'PGRST116') {
-          throw findError;
-        }
-
-        if (!assignment) {
+        if (findError) throw findError;
+        if (!attribute) {
           return {
             success: false,
-            errors: [{ field: 'attributeCode', message: 'Attribute not found in any template', code: 'NOT_FOUND' }],
+            errors: [{ field: 'attributeCode', message: 'Attribute not found', code: 'NOT_FOUND' }],
           };
         }
 
-        // Update the default_precedence_chain
-        const { error: updateError } = await context.supabase
-          .from('template_attribute_assignments')
-          .update({ default_precedence_chain: chain })
-          .eq('id', assignment.id);
+        const metadata = {
+          ...(attribute.metadata && typeof attribute.metadata === 'object' ? attribute.metadata : {}),
+          defaultPrecedenceChain: sources,
+        };
 
-        if (updateError) throw updateError;
+        const withColumn = await context.supabase
+          .from('attribute_register')
+          .update({ metadata, default_precedence_chain: sources })
+          .eq('id', attribute.id);
+
+        if (withColumn.error) {
+          const metadataOnly = await context.supabase
+            .from('attribute_register')
+            .update({ metadata })
+            .eq('id', attribute.id);
+          if (metadataOnly.error) throw metadataOnly.error;
+        }
 
         return { success: true, errors: [] };
       } catch (error: any) {

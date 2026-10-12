@@ -232,6 +232,7 @@ export const ATTRIBUTE_REGISTER_QUERY = `
       weightAttributeCode
       numericPrecision
       referenceListCode
+      defaultPrecedenceChain
     }
   }
 `;
@@ -750,6 +751,15 @@ export const CREATE_ATTRIBUTE_MUTATION = `
         message
         code
       }
+    }
+  }
+`;
+
+export const UPDATE_ATTRIBUTE_PRECEDENCE_MUTATION = `
+  mutation UpdateAttributePrecedence($attributeCode: String!, $chain: [String!]!) {
+    updateAttributeDefaultPrecedence(attributeCode: $attributeCode, chain: $chain) {
+      success
+      errors { field message code }
     }
   }
 `;
