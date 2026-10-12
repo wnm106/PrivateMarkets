@@ -1,47 +1,19 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, useCallback } from 'react';
-import { graphqlQuery, graphqlMutation, ISSUERS_QUERY, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
+import { useState } from 'react';
+import { graphqlMutation, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
 import { EntityForm } from '@/components/forms/EntityForm';
+import { EntityAttributeTable } from '@/components/entities/EntityAttributeTable';
 import { useTemporalStore } from '@/lib/store';
 import { DomainKey } from '@/lib/mock-data';
 
-interface EntityNode {
-  id: string;
-  entityCode: string;
-  entityName: string;
-  attributes: Record<string, any>;
-  parentRelationships: Array<{
-    parentEntityCode: string;
-    parentEntityName: string;
-    relationshipType: string;
-  }>;
-}
-
 export default function IssuersPage() {
   const domain: DomainKey = 'issuers';
-  const [entities, setEntities] = useState<EntityNode[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const asOfDate = useTemporalStore(state => state.asOfDate);
-
-  const fetchIssuers = useCallback(async () => {
-    const { data } = await graphqlQuery<{ issuers: { edges: { node: EntityNode }[]; totalCount: number } }>(
-      ISSUERS_QUERY,
-      { asOfDate }
-    );
-    if (data?.issuers) {
-      setEntities(data.issuers.edges.map(e => e.node));
-      setTotalCount(data.issuers.totalCount);
-    }
-    setLoading(false);
-  }, [asOfDate]);
-
-  useEffect(() => {
-    fetchIssuers();
-  }, [fetchIssuers]);
 
   const handleCreate = async (formData: any) => {
     const { data, error } = await graphqlMutation<{ createEntity: { entity: any; errors: any[] } }>(
@@ -61,7 +33,7 @@ export default function IssuersPage() {
     );
     if (data?.createEntity?.entity) {
       setShowCreateModal(false);
-      await fetchIssuers();
+      setRefreshKey((k) => k + 1);
     }
   };
 
@@ -88,61 +60,14 @@ export default function IssuersPage() {
         </div>
       </div>
 
-      <div className="filter-bar">
-        <div className="filter-label">Filter</div>
-        <div className="filter-pill">
-          Industry: All <span style={{ color: 'var(--ink-4)' }}>▾</span>
-        </div>
-        <div className="filter-pill">
-          Country: All <span style={{ color: 'var(--ink-4)' }}>▾</span>
-        </div>
-        <div className="filter-count">
-          Showing <strong>{entities.length}</strong> of {totalCount}
-        </div>
-      </div>
-
-      <div className="data-table">
-        <div className="tbl-head">
-          <div>ID</div>
-          <div>Name</div>
-          <div>Attributes</div>
-          <div>Relationships</div>
-          <div style={{ textAlign: 'center' }}>Status</div>
-        </div>
-        {loading ? (
-          <div className="tbl-row"><div>Loading...</div></div>
-        ) : entities.length === 0 ? (
-          <div className="tbl-row"><div>No issuers found. Add issuers via the generic entity API.</div></div>
-        ) : (
-          entities.map((entity) => {
-            return (
-              <Link key={entity.id} href={`/${domain}/${entity.id}`}>
-                <div className="tbl-row" style={{ cursor: 'pointer' }}>
-                  <div className="row-id">{entity.entityCode}</div>
-                  <div className="row-name">{entity.entityName}</div>
-                  <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
-                    {Object.keys(entity.attributes || {}).slice(0, 3).map(k => (
-                      <span key={k} style={{ marginRight: '8px' }}>
-                        {k}: {String(entity.attributes[k]?.value ?? '').slice(0, 20)}
-                      </span>
-                    ))}
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
-                    {entity.parentRelationships?.map((r, i) => (
-                      <span key={i} style={{ marginRight: '8px' }}>
-                        ← {r.parentEntityName} ({r.relationshipType})
-                      </span>
-                    ))}
-                  </div>
-                  <div style={{ textAlign: 'center' }}>
-                    <span className="status-chip active">Active</span>
-                  </div>
-                </div>
-              </Link>
-            );
-          })
-        )}
-      </div>
+      <EntityAttributeTable
+        domainCode="ISSUER"
+        domainKey={domain}
+        asOfDate={asOfDate}
+        refreshKey={refreshKey}
+        emptyMessage="No issuers found. Add issuers via the generic entity API."
+        onTotalChange={setTotalCount}
+      />
 
       {showCreateModal && (
         <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>

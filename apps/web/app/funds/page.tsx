@@ -1,47 +1,19 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, useCallback } from 'react';
-import { graphqlQuery, graphqlMutation, FUNDS_QUERY, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
+import { useState } from 'react';
+import { graphqlMutation, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
 import { EntityForm } from '@/components/forms/EntityForm';
+import { EntityAttributeTable } from '@/components/entities/EntityAttributeTable';
 import { useTemporalStore } from '@/lib/store';
 import { DomainKey } from '@/lib/mock-data';
 
-interface EntityNode {
-  id: string;
-  entityCode: string;
-  entityName: string;
-  attributes: Record<string, any>;
-  parentRelationships: Array<{
-    parentEntityCode: string;
-    parentEntityName: string;
-    relationshipType: string;
-  }>;
-}
-
 export default function FundsPage() {
   const domain: DomainKey = 'funds';
-  const [entities, setEntities] = useState<EntityNode[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const asOfDate = useTemporalStore(state => state.asOfDate);
-
-  const fetchFunds = useCallback(async () => {
-    const { data } = await graphqlQuery<{ funds: { edges: { node: EntityNode }[]; totalCount: number } }>(
-      FUNDS_QUERY,
-      { asOfDate }
-    );
-    if (data?.funds) {
-      setEntities(data.funds.edges.map(e => e.node));
-      setTotalCount(data.funds.totalCount);
-    }
-    setLoading(false);
-  }, [asOfDate]);
-
-  useEffect(() => {
-    fetchFunds();
-  }, [fetchFunds]);
 
   const handleCreate = async (formData: any) => {
     const { data, error } = await graphqlMutation<{ createEntity: { entity: any; errors: any[] } }>(
@@ -61,7 +33,7 @@ export default function FundsPage() {
     );
     if (data?.createEntity?.entity) {
       setShowCreateModal(false);
-      await fetchFunds();
+      setRefreshKey((k) => k + 1);
     }
   };
 
@@ -88,59 +60,14 @@ export default function FundsPage() {
         </div>
       </div>
 
-      <div className="filter-bar">
-        <div className="filter-label">Filter</div>
-        <div className="filter-pill">
-          Fund Type: All <span style={{ color: 'var(--ink-4)' }}>▾</span>
-        </div>
-        <div className="filter-pill">
-          Status: All <span style={{ color: 'var(--ink-4)' }}>▾</span>
-        </div>
-        <div className="filter-count">
-          Showing <strong>{entities.length}</strong> of {totalCount}
-        </div>
-      </div>
-
-      <div className="data-table">
-        <div className="tbl-head">
-          <div>ID</div>
-          <div>Name</div>
-          <div>Attributes</div>
-          <div>Relationships</div>
-          <div style={{ textAlign: 'center' }}>Status</div>
-        </div>
-        {loading ? (
-          <div className="tbl-row"><div>Loading...</div></div>
-        ) : entities.length === 0 ? (
-          <div className="tbl-row"><div>No funds found. Add funds via the generic entity API.</div></div>
-        ) : (
-          entities.map((entity) => (
-            <Link key={entity.id} href={`/${domain}/${entity.id}`}>
-              <div className="tbl-row" style={{ cursor: 'pointer' }}>
-                <div className="row-id">{entity.entityCode}</div>
-                <div className="row-name">{entity.entityName}</div>
-                <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
-                  {Object.keys(entity.attributes || {}).slice(0, 3).map(k => (
-                    <span key={k} style={{ marginRight: '8px' }}>
-                      {k}: {String(entity.attributes[k]?.value ?? '').slice(0, 20)}
-                    </span>
-                  ))}
-                </div>
-                <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
-                  {entity.parentRelationships?.map((r, i) => (
-                    <span key={i} style={{ marginRight: '8px' }}>
-                      ← {r.parentEntityName} ({r.relationshipType})
-                    </span>
-                  ))}
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <span className="status-chip active">Active</span>
-                </div>
-              </div>
-            </Link>
-          ))
-        )}
-      </div>
+      <EntityAttributeTable
+        domainCode="FUND"
+        domainKey={domain}
+        asOfDate={asOfDate}
+        refreshKey={refreshKey}
+        emptyMessage="No funds found. Add funds via the generic entity API."
+        onTotalChange={setTotalCount}
+      />
 
       {showCreateModal && (
         <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
