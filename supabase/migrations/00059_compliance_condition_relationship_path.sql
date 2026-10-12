@@ -12,16 +12,55 @@ CREATE OR REPLACE FUNCTION compliance.condition_subject_ids(
     p_as_of_date DATE,
     p_knowledge_date TIMESTAMPTZ
 ) RETURNS UUID[] LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_current UUID[] := ARRAY[p_entity_id];
+    v_hop JSONB;
+    v_next UUID[];
+    v_direction VARCHAR;
 BEGIN
     IF p_path IS NULL OR jsonb_typeof(p_path) IS DISTINCT FROM 'array' OR jsonb_array_length(p_path) = 0 THEN
         RETURN ARRAY[p_entity_id];
     END IF;
-    RETURN compliance.walk_path(ARRAY[p_entity_id], p_path, p_as_of_date, p_knowledge_date);
+
+    FOR v_hop IN SELECT * FROM jsonb_array_elements(p_path) LOOP
+        v_direction := COALESCE(v_hop ->> 'direction', 'UP');
+        SELECT array_agg(DISTINCT w.entity_id) INTO v_next
+        FROM compliance.walk_relationship(
+            v_current,
+            v_hop ->> 'relationship_code',
+            v_direction,
+            COALESCE((v_hop ->> 'recursive')::BOOLEAN, FALSE),
+            p_as_of_date,
+            p_knowledge_date
+        ) w;
+
+        -- Relationship-type parent/child domains are not always how the rows were stored
+        -- (SECURITY_ISSUER keeps the issuer in parent_entity_id). Use the other direction
+        -- when the declared one reaches nobody.
+        IF v_next IS NULL OR array_length(v_next, 1) IS NULL THEN
+            SELECT array_agg(DISTINCT w.entity_id) INTO v_next
+            FROM compliance.walk_relationship(
+                v_current,
+                v_hop ->> 'relationship_code',
+                CASE WHEN v_direction = 'UP' THEN 'DOWN' ELSE 'UP' END,
+                COALESCE((v_hop ->> 'recursive')::BOOLEAN, FALSE),
+                p_as_of_date,
+                p_knowledge_date
+            ) w;
+        END IF;
+
+        v_current := COALESCE(v_next, '{}'::UUID[]);
+        IF array_length(v_current, 1) IS NULL THEN
+            RETURN '{}'::UUID[];
+        END IF;
+    END LOOP;
+
+    RETURN v_current;
 END;
 $$;
 
 COMMENT ON FUNCTION compliance.condition_subject_ids IS
-    'Entity ids a compliance condition reads. Empty relationship_path returns the entity itself; otherwise the ids at the end of the path (possibly none).';
+    'Entity ids a compliance condition reads. Empty relationship_path returns the entity itself; otherwise the ids at the end of the path (possibly none). A hop whose declared direction finds nobody is retried in the opposite direction.';
 
 CREATE OR REPLACE FUNCTION compliance.entity_matches_conditions(
     p_entity_id UUID,

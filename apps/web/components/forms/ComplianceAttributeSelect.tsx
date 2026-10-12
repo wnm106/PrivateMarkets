@@ -54,7 +54,9 @@ function edgeScore(rel: RelationshipTypeOpt, from: string, to: string): number {
   const code = rel.relationshipCode || '';
   let score = 0;
   if (code.includes(from) && code.includes(to)) score += 4;
-  if (code.startsWith(from) || code.endsWith(to) || code.startsWith(to)) score += 1;
+  // Prefer the relationship named from this entity (SECURITY_ISSUER from a security)
+  // over the reverse type (ISSUER_SECURITY), which may not be the one rows are stored under.
+  if (code.startsWith(from + '_') || code.startsWith(from)) score += 3;
   return score;
 }
 

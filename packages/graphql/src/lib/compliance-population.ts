@@ -193,7 +193,12 @@ function conditionMatches(
   return ok;
 }
 
-/** Walk hop maps (from-id -> to-ids) along a path. Recursive hops repeat up to 8 times. */
+/**
+ * Walk hop maps (from-id -> to-ids) along a path. Recursive hops repeat up to 8 times.
+ * If the declared direction finds nobody, the opposite direction is used. Relationship
+ * type metadata and the stored parent/child rows do not always agree (security → issuer
+ * is stored with the issuer as the parent).
+ */
 export function targetsAlongPath(
   startId: string,
   path: RelationshipHopRef[],
@@ -201,23 +206,38 @@ export function targetsAlongPath(
 ): string[] {
   let current = [startId];
   for (const hop of path) {
-    const map = hopMaps.get(hopKey(hop));
-    if (!map) return [];
-    const next = oneHop(current, map);
-    if (!hop.recursive) {
-      current = next;
-    } else {
-      const seen = new Set(next);
-      let frontier = next;
-      for (let depth = 0; depth < 8 && frontier.length; depth++) {
-        frontier = oneHop(frontier, map).filter((id) => !seen.has(id));
-        frontier.forEach((id) => seen.add(id));
-      }
-      current = [...seen];
-    }
+    const next = hopTargets(current, hop, hopMaps);
+    current = next;
     if (current.length === 0) return [];
   }
   return current;
+}
+
+function hopTargets(
+  current: string[],
+  hop: RelationshipHopRef,
+  hopMaps: Map<string, Map<string, string[]>>,
+): string[] {
+  const direct = expandHop(current, hopMaps.get(hopKey(hop)), !!hop.recursive);
+  if (direct.length) return direct;
+  const flipped: RelationshipHopRef = {
+    ...hop,
+    direction: (hop.direction || 'UP').toUpperCase() === 'UP' ? 'DOWN' : 'UP',
+  };
+  return expandHop(current, hopMaps.get(hopKey(flipped)), !!hop.recursive);
+}
+
+function expandHop(current: string[], map: Map<string, string[]> | undefined, recursive: boolean): string[] {
+  if (!map) return [];
+  const next = oneHop(current, map);
+  if (!recursive) return next;
+  const seen = new Set(next);
+  let frontier = next;
+  for (let depth = 0; depth < 8 && frontier.length; depth++) {
+    frontier = oneHop(frontier, map).filter((id) => !seen.has(id));
+    frontier.forEach((id) => seen.add(id));
+  }
+  return [...seen];
 }
 
 function oneHop(ids: string[], map: Map<string, string[]>): string[] {

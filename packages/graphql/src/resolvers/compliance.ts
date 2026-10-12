@@ -559,7 +559,7 @@ function mapResult(row: any) {
   };
 }
 
-const POPULATION_CAP = 5000;
+const POPULATION_CAP = 20000;
 
 function hopsFromDimension(dim: any): RelationshipHopRef[] {
   const raw = dim?.relationshipPath || [];
@@ -598,17 +598,20 @@ async function previewPopulation(context: Context, input: any) {
   const hopMaps = await loadRelationshipMaps(context.supabase, conditions, asOf, now);
 
   const attributes = new Map<string, any>();
-  for (const row of rows) attributes.set(row.entity_id, row.attributes || {});
-
   const needed = new Set<string>();
   for (const row of rows) {
     for (const cond of conditions) {
-      for (const id of targetsAlongPath(row.entity_id, cond.attributePath || [], hopMaps)) needed.add(id);
-      for (const id of targetsAlongPath(row.entity_id, cond.comparePath || [], hopMaps)) needed.add(id);
+      const attributeHops = cond.attributePath || [];
+      const compareHops = cond.comparePath || [];
+      const attributeIds = attributeHops.length ? targetsAlongPath(row.entity_id, attributeHops, hopMaps) : [row.entity_id];
+      const compareIds = cond.compareAttributeCode
+        ? (compareHops.length ? targetsAlongPath(row.entity_id, compareHops, hopMaps) : [row.entity_id])
+        : [];
+      for (const id of [...attributeIds, ...compareIds]) needed.add(id);
     }
   }
-  for (const row of rows) needed.delete(row.entity_id);
-  await fetchAttributeBlobs(context.supabase, [...needed], attributes);
+  const attributeCodes = [...new Set(conditions.flatMap((cond) => [cond.attributeCode, cond.compareAttributeCode].filter((code): code is string => !!code)))];
+  await fetchAttributeValues(context.supabase, [...needed], attributeCodes, attributes, asOf, now);
 
   const matches: Array<{ entityId: string; entityCode: string; entityName: string | null; values: Record<string, string | null> }> = [];
   for (const row of rows) {
@@ -638,16 +641,17 @@ async function previewPopulation(context: Context, input: any) {
 
 async function fetchDomainEntities(supabase: Context['supabase'], domainCode: string) {
   const pageSize = 1000;
-  const rows: Array<{ entity_id: string; entity_code: string; entity_name: string | null; attributes: any }> = [];
+  const rows: Array<{ entity_id: string; entity_code: string; entity_name: string | null }> = [];
   for (let from = 0; rows.length < POPULATION_CAP; from += pageSize) {
     const { data, error } = await supabase
-      .from('entity_master')
-      .select('entity_id, entity_code, entity_name, attributes')
+      .schema('entity_instances')
+      .from('master_entities')
+      .select('id, entity_code, entity_name')
       .eq('domain_code', domainCode)
       .order('entity_code', { ascending: true })
       .range(from, from + pageSize - 1);
     if (error) throw new Error(`Failed to load ${domainCode} records: ${error.message}`);
-    rows.push(...(data || []));
+    rows.push(...(data || []).map((row: any) => ({ entity_id: row.id, entity_code: row.entity_code, entity_name: row.entity_name })));
     if (!data || data.length < pageSize) return { rows, truncated: false };
   }
   return { rows: rows.slice(0, POPULATION_CAP), truncated: true };
@@ -666,50 +670,90 @@ async function loadRelationshipMaps(
     }
   }
   const maps = new Map<string, Map<string, string[]>>();
-  for (const [key, hop] of hops) {
-    maps.set(key, await loadOneHop(supabase, hop, asOf, now));
+  const seenCodes = new Set<string>();
+  for (const hop of hops.values()) {
+    if (seenCodes.has(hop.relationshipCode)) continue;
+    seenCodes.add(hop.relationshipCode);
+    const { up, down } = await loadBothDirections(supabase, hop.relationshipCode, asOf, now);
+    maps.set(`UP:${hop.relationshipCode}`, up);
+    maps.set(`DOWN:${hop.relationshipCode}`, down);
   }
   return maps;
 }
 
-async function loadOneHop(supabase: Context['supabase'], hop: RelationshipHopRef, asOf: string, now: string) {
-  const fromCol = hop.direction === 'DOWN' ? 'parent_entity_id' : 'child_entity_id';
-  const toCol = hop.direction === 'DOWN' ? 'child_entity_id' : 'parent_entity_id';
-  const map = new Map<string, string[]>();
+async function loadBothDirections(supabase: Context['supabase'], relationshipCode: string, asOf: string, now: string) {
+  const up = new Map<string, string[]>();
+  const down = new Map<string, string[]>();
   const pageSize = 1000;
   for (let from = 0; from < 200000; from += pageSize) {
+    // public.entity_relationships keeps the caller's JWT. Switching schema with
+    // supabase-js drops that header and RLS then hides every row.
     const { data, error } = await supabase
-      .schema('entity_instances')
       .from('entity_relationships')
       .select('parent_entity_id, child_entity_id')
-      .eq('relationship_code', hop.relationshipCode)
+      .eq('relationship_code', relationshipCode)
       .lte('valid_from', asOf)
       .gte('valid_to', asOf)
       .lte('system_from', now)
       .gte('system_to', now)
+      .order('id', { ascending: true })
       .range(from, from + pageSize - 1);
-    if (error) throw new Error(`Failed to walk ${hop.relationshipCode}: ${error.message}`);
+    if (error) throw new Error(`Failed to walk ${relationshipCode}: ${error.message}`);
     for (const row of data || []) {
-      const start = row[fromCol] as string;
-      const target = row[toCol] as string;
-      const list = map.get(start) || [];
-      list.push(target);
-      map.set(start, list);
+      const parents = up.get(row.child_entity_id) || [];
+      parents.push(row.parent_entity_id);
+      up.set(row.child_entity_id, parents);
+      const children = down.get(row.parent_entity_id) || [];
+      children.push(row.child_entity_id);
+      down.set(row.parent_entity_id, children);
     }
     if (!data || data.length < pageSize) break;
   }
-  return map;
+  return { up, down };
 }
 
-async function fetchAttributeBlobs(supabase: Context['supabase'], ids: string[], into: Map<string, any>) {
-  const chunk = 150;
+async function fetchAttributeValues(
+  supabase: Context['supabase'],
+  ids: string[],
+  codes: string[],
+  into: Map<string, any>,
+  asOf: string,
+  now: string,
+) {
+  if (!ids.length || !codes.length) return;
+  const { data: definitions, error: defError } = await supabase
+    .schema('metadata_register')
+    .from('attribute_register')
+    .select('id, attribute_code')
+    .in('attribute_code', codes);
+  if (defError) throw new Error(`Failed to resolve attributes: ${defError.message}`);
+  const codeById = new Map((definitions || []).map((row: any) => [row.id, row.attribute_code]));
+  const attributeIds = [...codeById.keys()];
+  if (!attributeIds.length) return;
+
+  const chunk = 200;
   for (let i = 0; i < ids.length; i += chunk) {
     const slice = ids.slice(i, i + chunk);
     const { data, error } = await supabase
-      .from('entity_master')
-      .select('entity_id, attributes')
-      .in('entity_id', slice);
-    if (error) throw new Error(`Failed to load related attributes: ${error.message}`);
-    for (const row of data || []) into.set(row.entity_id, row.attributes || {});
+      .schema('golden_master')
+      .from('entity_attribute_values')
+      .select('entity_id, attribute_id, golden_value, precedence_rank')
+      .in('entity_id', slice)
+      .in('attribute_id', attributeIds)
+      .lte('valid_from', asOf)
+      .gte('valid_to', asOf)
+      .lte('system_from', now)
+      .gte('system_to', now);
+    if (error) throw new Error(`Failed to load attribute values: ${error.message}`);
+    for (const row of data || []) {
+      const code = codeById.get(row.attribute_id);
+      if (!code) continue;
+      const bag = into.get(row.entity_id) || {};
+      const current = bag[code];
+      if (!current || row.precedence_rank < current.rank) {
+        bag[code] = { value: row.golden_value, rank: row.precedence_rank };
+      }
+      into.set(row.entity_id, bag);
+    }
   }
 }

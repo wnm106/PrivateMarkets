@@ -7,6 +7,17 @@ import {
   type RelationshipHopRef,
 } from './compliance-population';
 
+describe('targetsAlongPath', () => {
+  it('follows the opposite direction when the declared direction has no links', () => {
+    const hopMaps = new Map<string, Map<string, string[]>>([
+      ['UP:SECURITY_ISSUER', new Map([['sec1', ['iss1']]])],
+    ]);
+    expect(
+      targetsAlongPath('sec1', [{ relationshipCode: 'SECURITY_ISSUER', direction: 'DOWN' }], hopMaps),
+    ).toEqual(['iss1']);
+  });
+});
+
 const securityHop: RelationshipHopRef = { relationshipCode: 'POSITION_SECURITY', direction: 'UP' };
 const issuerHop: RelationshipHopRef = { relationshipCode: 'SECURITY_ISSUER', direction: 'UP' };
 const cashflowHop: RelationshipHopRef = { relationshipCode: 'POSITION_CASHFLOW', direction: 'DOWN' };
