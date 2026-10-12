@@ -3,7 +3,7 @@
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { graphqlQuery, graphqlMutation, INTERSECTION_QUERY, FIELD_LINEAGE_QUERY, ATTRIBUTE_REGISTER_QUERY, ADD_COMPETING_SOURCE_MUTATION } from '@/lib/graphql';
+import { graphqlQuery, graphqlMutation, INTERSECTION_QUERY, ENTITY_QUERY, FIELD_LINEAGE_QUERY, ATTRIBUTE_REGISTER_QUERY, ADD_COMPETING_SOURCE_MUTATION } from '@/lib/graphql';
 import { GoldenRecordHeader } from '@/components/detail/GoldenRecordHeader';
 import { GoldenRecordSections, type TemplateAttribute, type LineageData } from '@/components/detail/GoldenRecordSections';
 import { SourceContributionPanel } from '@/components/detail/SourceContributionPanel';
@@ -96,8 +96,36 @@ export default function PositionDetailPage() {
       graphqlQuery<{ attributeRegister: Array<{ attributeCode: string; attributeName: string; isRequired: boolean; displaySection: string; displayGroup: number }> }, { domainCode: string }>(ATTRIBUTE_REGISTER_QUERY, { domainCode: 'POSITION' }),
     ]).then(async ([ixResult, attrResult]) => {
       if (cancelled) return;
+      if (!ixResult.data?.intersection) {
+        const entityResult = await graphqlQuery<any, { id: string; asOfDate: string }>(
+          ENTITY_QUERY,
+          { id, asOfDate },
+          'network-only'
+        );
+        if (cancelled) return;
+        const loaded = entityResult.data?.entity;
+        if (!loaded || loaded.domainCode !== 'POSITION') {
+          setError(ixResult.error?.message || entityResult.error?.message || 'Position not found');
+          setLoading(false);
+          return;
+        }
+        setEntity(loaded);
+        if (attrResult.data?.attributeRegister) {
+          const mappedAttributes: TemplateAttribute[] = attrResult.data.attributeRegister
+            .filter((a: any) => a.isVisible !== false)
+            .map((a: any) => ({
+              attributeCode: a.attributeCode,
+              attributeName: a.attributeName,
+              required: a.isRequired || false,
+              displaySection: a.displaySection || 'Position',
+              sortOrder: a.displayGroup || 0,
+            }));
+          setTemplateAttributes(mappedAttributes);
+        }
+        setLoading(false);
+        return;
+      }
       if (ixResult.error) { setError(ixResult.error.message || 'Failed to load position'); setLoading(false); return; }
-      if (!ixResult.data?.intersection) { setError('Position not found'); setLoading(false); return; }
       const ix = ixResult.data.intersection;
       setEntity({
         id: ix.id, entityCode: ix.intersectionCode, entityName: ix.intersectionCode,

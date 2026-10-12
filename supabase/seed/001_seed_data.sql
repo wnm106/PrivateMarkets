@@ -37,7 +37,8 @@ INSERT INTO metadata_register.attribute_register (attribute_code, attribute_name
     ('DEAL_DATE', 'Deal Date', 'DATE', 'Date of deal', FALSE, 100),
     ('DEAL_TYPE', 'Deal Type', 'STRING', 'Type of deal', FALSE, 100),
     ('DEAL_VALUE', 'Deal Value', 'NUMBER', 'Total deal value', FALSE, 100),
-    ('STATUS', 'Status', 'STRING', 'Deal status', FALSE, 100);
+    ('STATUS', 'Status', 'STRING', 'Deal status', FALSE, 100)
+ON CONFLICT (attribute_code) DO NOTHING;
 
 -- Seed: Source Registry
 -- Already inserted in migration 00003
@@ -47,7 +48,8 @@ INSERT INTO metadata_register.domain_templates (template_code, domain_code, temp
     ('FUND_STANDARD', 'FUND', 'Standard Fund', 'Standard template for investment funds'),
     ('ISSUER_STANDARD', 'ISSUER', 'Standard Issuer', 'Standard template for issuers'),
     ('SECURITY_STANDARD', 'SECURITY', 'Standard Security', 'Standard template for securities'),
-    ('DEAL_STANDARD', 'DEAL', 'Standard Deal', 'Standard template for deals');
+    ('DEAL_STANDARD', 'DEAL', 'Standard Deal', 'Standard template for deals')
+ON CONFLICT (template_code) DO NOTHING;
 
 -- Seed: Template-Attribute Assignments
 -- Fund Standard Template

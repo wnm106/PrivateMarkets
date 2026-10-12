@@ -47,6 +47,7 @@ yarn-error.log*
 
 # Cloudflare
 .wrangler/
+.dev.vars
 
 # Local scratch scripts — several contain hardcoded Supabase keys/connection
 # strings with embedded passwords. Never commit these; use env vars instead.

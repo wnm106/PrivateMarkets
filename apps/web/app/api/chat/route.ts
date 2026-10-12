@@ -6,6 +6,7 @@ import { registerLineageTools } from '@tapestrai/mcp-server/src/tools/lineage-to
 import { registerOverrideTools } from '@tapestrai/mcp-server/src/tools/override-tools';
 import { registerDQTools } from '@tapestrai/mcp-server/src/tools/dq-tools';
 import { registerImportMapTools } from '@tapestrai/mcp-server/src/tools/import-map-tools';
+import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/position-file-tools';
 import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/compliance-tools';
 import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
 import { getContextProfile } from '@tapestrai/mcp-server/src/lib/context-profiles';
@@ -27,6 +28,7 @@ registerLineageTools(toolRegistry);
 registerOverrideTools(toolRegistry);
 registerDQTools(toolRegistry);
 registerImportMapTools(toolRegistry);
+registerPositionFileTools(toolRegistry);
 registerComplianceTools(toolRegistry);
 registerReportingTools(toolRegistry);
 

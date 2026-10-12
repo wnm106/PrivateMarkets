@@ -439,7 +439,13 @@ ALTER TABLE metadata_register.attribute_register DISABLE TRIGGER trg_validate_de
 INSERT INTO metadata_register.attribute_register (attribute_code, attribute_name, data_type, description, is_required, default_precedence_rank)
 VALUES
 ('ANNUAL_INTEREST', 'Annual Interest', 'CURRENCY', 'Annual interest payment amount', FALSE, 100),
-('CURRENT_PRICE', 'Current Price', 'CURRENCY', 'Current market price', FALSE, 100)
+('CURRENT_PRICE', 'Current Price', 'CURRENCY', 'Current market price', FALSE, 100),
+('POSITION.MARKET_VALUE', 'Position Market Value', 'CURRENCY', 'Market value of a position', FALSE, 100),
+('ISSUER.CREDIT_RATING', 'Issuer Credit Rating', 'STRING', 'Credit rating of the parent issuer', FALSE, 100),
+('CASH_FLOWS', 'Cash Flows', 'JSON', 'Bond cash flow schedule', FALSE, 100),
+('YIELD_CURVE', 'Yield Curve', 'JSON', 'Yield curve used for duration', FALSE, 100),
+('COST_BASIS', 'Cost Basis', 'CURRENCY', 'Position cost basis', FALSE, 100),
+('QUANTITY', 'Quantity', 'NUMBER', 'Position quantity', FALSE, 100)
 ON CONFLICT (attribute_code) DO NOTHING;
 
 -- Simple calculation: Current Yield = Annual Interest / Current Price * 100

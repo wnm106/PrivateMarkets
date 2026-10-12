@@ -14,6 +14,10 @@ port = 54322
 shadow_port = 54320
 major_version = 17
 
+[db.seed]
+enabled = true
+sql_paths = ["./seed/001_seed_data.sql"]
+
 [studio]
 enabled = true
 port = 54323
@@ -66,3 +70,8 @@ policy = "per_worker"
 enabled = false
 port = 54327
 backend = "postgres"
+
+# Native/process runtime for machines without Docker, including Cloud Agent VMs.
+# SUPABASE_EXPERIMENTAL_STACK=0 forces the Docker backend.
+[experimental]
+stack = true

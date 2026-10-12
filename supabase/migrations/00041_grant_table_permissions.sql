@@ -31,12 +31,30 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON metadata_register.relationship_types TO 
 GRANT SELECT, INSERT, UPDATE, DELETE ON metadata_register.intersection_types TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON metadata_register.intersection_type_members TO authenticated;
 
--- Grant permissions on read_projections schema views (including entity_master)
-GRANT SELECT ON read_projections.entity_master TO authenticated;
-GRANT SELECT ON read_projections.entity_attribute_values TO authenticated;
-GRANT SELECT ON read_projections.entity_relationships TO authenticated;
-GRANT SELECT ON read_projections.intersection_master TO authenticated;
-GRANT SELECT ON read_projections.intersection_members TO authenticated;
+-- Grant permissions on read_projections schema views that this migration can see.
+-- Some projection names are created by later migrations, so skip any that are absent.
+DO $$
+DECLARE
+  view_name text;
+BEGIN
+  FOREACH view_name IN ARRAY ARRAY[
+    'entity_master',
+    'entity_attribute_values',
+    'entity_relationships',
+    'intersection_master',
+    'intersection_members'
+  ]
+  LOOP
+    IF EXISTS (
+      SELECT 1
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'read_projections' AND c.relname = view_name
+    ) THEN
+      EXECUTE format('GRANT SELECT ON read_projections.%I TO authenticated', view_name);
+    END IF;
+  END LOOP;
+END $$;
 
 -- Grant permissions on read_projections schema views
 GRANT SELECT ON ALL TABLES IN SCHEMA read_projections TO authenticated;
