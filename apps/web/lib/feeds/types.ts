@@ -25,6 +25,14 @@ export interface FeedDomainSpec {
  * `parents` list. Load order is derived from those edges; relationship
  * catalog direction is only used when writing the relationship row.
  */
+export type TransformKind = 'none' | 'trim' | 'number' | 'percent' | 'date' | 'uppercase' | 'lowercase' | 'list' | 'replace';
+
+export interface ColumnTransform {
+  kind: TransformKind;
+  find?: string;
+  replaceWith?: string;
+}
+
 export interface FeedMap {
   mapCode: string;
   sourceCode: string;
@@ -33,6 +41,8 @@ export interface FeedMap {
   asOfHintColumn?: string;
   rowFilter?: { column: string; equals: string };
   domains: FeedDomainSpec[];
+  /** Per source column. Absent means the loader applies its built-in coercions. */
+  transforms?: Record<string, ColumnTransform>;
 }
 
 export interface ParsedTable {

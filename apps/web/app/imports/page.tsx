@@ -2,129 +2,172 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { dependencyLoadWaves } from '@/lib/feeds/load-order';
+import {
+  TRANSFORM_OPTIONS,
+  applyTarget,
+  feedMapFromAssignments,
+  previewTransform,
+  targetKey,
+  type ColumnAssignment,
+  type MappingTarget,
+} from '@/lib/feeds/suggest';
 
-interface MapDomain {
-  domainCode: string;
-  templateCode: string;
-  identityColumn: string;
-  nameColumn: string;
-  attributes: { column: string; attributeCode: string }[];
-  parents: { column: string; parentDomainCode: string }[];
+interface InstanceSummary {
+  id: string;
+  fileName: string;
+  rowCount: number;
+  status: string;
+  receivedAt: string;
+  completedAt: string | null;
+  asOfDate: string | null;
+  errorMessage: string | null;
+  runs: { startedAt: string; completedAt: string; asOfDate: string; status: string; created: number; matched: number; failed: number }[];
+  resultSummary: {
+    created: number;
+    matched: number;
+    failed: number;
+    attributesCreated: number;
+    attributesUpdated: number;
+    attributesUnchanged: number;
+    relationshipsMatched: number;
+  } | null;
 }
 
-interface FeedMapInfo {
-  mapCode: string;
+interface InstanceDetail extends InstanceSummary {
+  columnMappings: ColumnAssignment[];
+  loadWaves: string[][];
+}
+
+interface QueueResponse {
   sourceCode: string;
   name: string;
   description: string;
-  loadWaves: string[][];
-  domains: MapDomain[];
-}
-
-interface NormalizationHit {
-  attributeCode: string;
-  listCode: string;
-  input: string;
-  canonicalCode: string | null;
-  canonicalLabel: string | null;
-  matchType: string;
-}
-
-interface Preview {
-  rowCount: number;
-  fileName: string;
-  loadWaves: string[][];
-  domains: {
-    domainCode: string;
-    distinctEntities: number;
-    parentColumns: { column: string; parentDomainCode: string; relationshipCode: string | null }[];
-  }[];
-  unmappedColumns: string[];
-  contextColumns: { column: string; purpose: string }[];
-  suggestedAsOfDate: string | null;
-  normalizations: NormalizationHit[];
-  warnings: string[];
-}
-
-interface LoadResult {
-  asOfDate: string;
-  rowCount: number;
-  loadWaves: string[][];
-  domains: { domainCode: string; distinctEntities: number; created: number; matched: number; failed: number; errors: string[] }[];
-  relationships: { created: number; matched: number; failed: number };
-  attributes: { created: number; updated: number; unchanged: number };
-  warnings: string[];
-  errors: string[];
+  targets: MappingTarget[];
+  instances: InstanceSummary[];
 }
 
 function todayIso() {
   const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${now.getFullYear()}-${month}-${day}`;
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
-const DOMAIN_LABEL: Record<string, string> = {
-  ISSUER: 'Issuer',
-  FUND: 'Fund',
-  SECURITY: 'Security',
-  POSITION: 'Position',
-};
+function formatWhen(value: string | null) {
+  if (!value) return '—';
+  return new Date(value).toLocaleString();
+}
+
+function resultText(instance: InstanceSummary) {
+  if (!instance.resultSummary) return instance.status === 'READY' ? 'Stored, not processed' : instance.status;
+  const summary = instance.resultSummary;
+  const entities = summary.created === 0 && summary.failed === 0
+    ? `${summary.matched} matched`
+    : `${summary.created} created · ${summary.matched} matched${summary.failed ? ` · ${summary.failed} failed` : ''}`;
+  const attributes = summary.attributesUpdated
+    ? `attributes updated ${summary.attributesUpdated}`
+    : summary.attributesCreated
+      ? `attributes created ${summary.attributesCreated}`
+      : `attributes unchanged ${summary.attributesUnchanged}`;
+  return `${entities} · ${attributes}`;
+}
+
+const GRID = '180px 1.1fr 1.4fr 180px 1fr';
 
 export default function PositionFilePage() {
-  const [mapInfo, setMapInfo] = useState<FeedMapInfo | null>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<Preview | null>(null);
-  const [result, setResult] = useState<LoadResult | null>(null);
+  const [queue, setQueue] = useState<QueueResponse | null>(null);
+  const [detail, setDetail] = useState<InstanceDetail | null>(null);
   const [asOfMode, setAsOfMode] = useState<'today' | 'specific'>('specific');
   const [asOfDate, setAsOfDate] = useState(todayIso());
-  const [busy, setBusy] = useState<'preview' | 'load' | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const loadWaves = useMemo(() => {
+    if (!detail) return [];
+    try {
+      const map = feedMapFromAssignments(detail.columnMappings);
+      return map.domains.length > 0 ? dependencyLoadWaves(map.domains) : [];
+    } catch {
+      return [];
+    }
+  }, [detail]);
+
+  const targetsByGroup = useMemo(() => {
+    const groups = new Map<string, MappingTarget[]>();
+    for (const target of queue?.targets || []) {
+      const list = groups.get(target.group) || [];
+      list.push(target);
+      groups.set(target.group, list);
+    }
+    return [...groups.entries()];
+  }, [queue]);
+
+  async function refreshQueue() {
+    const response = await fetch('/api/feeds/position-file');
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'The import queue is unavailable');
+    setQueue(body);
+    return body as QueueResponse;
+  }
+
   useEffect(() => {
-    fetch('/api/feeds/position-file')
-      .then(async (response) => {
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.error || 'The position file map is unavailable');
-        setMapInfo(body);
-      })
-      .catch((err) => setError(err.message));
+    refreshQueue().catch((err) => setError(err.message));
   }, []);
 
-  const chosenDate = asOfMode === 'today' ? todayIso() : asOfDate;
-
-  const createdTotal = useMemo(
-    () => result?.domains.reduce((sum, domain) => sum + domain.created, 0) ?? 0,
-    [result]
-  );
-  const matchedTotal = useMemo(
-    () => result?.domains.reduce((sum, domain) => sum + domain.matched, 0) ?? 0,
-    [result]
-  );
-
-  async function send(mode: 'preview' | 'load', selected: File) {
-    setBusy(mode);
+  function openDetail(instance: InstanceDetail) {
+    setDetail(instance);
     setError(null);
-    if (mode === 'load') setResult(null);
-    const form = new FormData();
-    form.set('file', selected);
-    form.set('mode', mode);
-    form.set('asOfDate', chosenDate);
+    if (instance.asOfDate) {
+      setAsOfDate(instance.asOfDate);
+      setAsOfMode('specific');
+    }
+  }
+
+  async function selectInstance(id: string) {
+    setBusy('open');
+    setError(null);
     try {
-      const response = await fetch('/api/feeds/position-file', { method: 'POST', body: form });
+      const response = await fetch(`/api/feeds/position-file/${id}`);
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || 'The file could not be loaded');
-      if (mode === 'preview') {
-        setPreview(body);
-        if (body.suggestedAsOfDate) {
-          setAsOfDate(body.suggestedAsOfDate);
-          setAsOfMode('specific');
-        }
-      } else {
-        setResult(body);
-      }
+      if (!response.ok) throw new Error(body.error || 'The instance could not be opened');
+      openDetail(body);
     } catch (err: any) {
-      setError(err.message || 'The file could not be loaded');
+      setError(err.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function chosenDate() {
+    return asOfMode === 'today' ? todayIso() : asOfDate;
+  }
+
+  function updateAssignment(index: number, next: ColumnAssignment) {
+    setDetail((current) => {
+      if (!current) return current;
+      const columnMappings = current.columnMappings.slice();
+      columnMappings[index] = next;
+      return { ...current, columnMappings };
+    });
+  }
+
+  async function processInstance(instanceId: string, mappings?: ColumnAssignment[]) {
+    setBusy(instanceId);
+    setError(null);
+    try {
+      const response = await fetch(`/api/feeds/position-file/${instanceId}/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          columnMappings: mappings,
+          asOfDate: mappings ? chosenDate() : undefined,
+        }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'Process failed');
+      openDetail(body);
+      await refreshQueue();
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setBusy(null);
     }
@@ -143,222 +186,196 @@ export default function PositionFilePage() {
           <div style={{ width: '4px', height: '48px', background: '#1b3a4b' }} />
           <div>
             <div className="page-title">Position file load</div>
-            <div className="page-meta">
-              {mapInfo ? `${mapInfo.name} · source ${mapInfo.sourceCode}` : 'Source map'}
-            </div>
+            <div className="page-meta">{queue ? `${queue.name} · source ${queue.sourceCode}` : 'Import source'}</div>
           </div>
         </div>
-      </div>
-
-      <p className="hero-sub" style={{ maxWidth: 760, marginTop: 0 }}>
-        {mapInfo?.description || 'Upload a flat position file. Each column is mapped to one entity, list values are normalized, and parents load before the records that reference them.'}
-      </p>
-
-      {error && (
-        <div className="filter-bar" style={{ borderColor: 'var(--red, #b42318)', color: 'var(--red, #b42318)' }}>
-          {error}
-        </div>
-      )}
-
-      <div className="section-title">
-        <h2>Load order</h2>
-        <span className="hint">Computed from the parent columns on this source map</span>
-      </div>
-      <div className="nav-row">
-        {(preview?.loadWaves || mapInfo?.loadWaves || []).map((wave, index) => (
-          <div key={wave.join('-')} className="nav-card" style={{ cursor: 'default' }}>
-            <div className="nav-icon">{index + 1}</div>
-            <div>
-              <div className="nav-title">{wave.map((code) => DOMAIN_LABEL[code] || code).join(' and ')}</div>
-              <div className="nav-desc">
-                {index === 0 ? 'No parents in this file' : `After ${ (preview?.loadWaves || mapInfo?.loadWaves || []).slice(0, index).flat().map((code) => DOMAIN_LABEL[code] || code).join(', ') }`}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="section-title">
-        <h2>Column map</h2>
-        <span className="hint">Specific to {mapInfo?.sourceCode || 'POSITION_FILE'}</span>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14, marginBottom: 22 }}>
-        {(mapInfo?.domains || []).map((domain) => (
-          <div key={domain.domainCode} className="nav-card" style={{ cursor: 'default', alignItems: 'flex-start' }}>
-            <div>
-              <div className="nav-title">{DOMAIN_LABEL[domain.domainCode] || domain.domainCode}</div>
-              <div className="nav-desc" style={{ marginBottom: 8 }}>
-                Identity <strong>{domain.identityColumn}</strong>
-                {domain.parents.length > 0 && (
-                  <> · depends on {domain.parents.map((parent) => parent.parentDomainCode).join(', ')}</>
-                )}
-              </div>
-              {domain.attributes.map((attribute) => (
-                <div key={attribute.column} style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.6 }}>
-                  {attribute.column} → {attribute.attributeCode}
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="section-title">
-        <h2>File and as-of date</h2>
-      </div>
-      <div className="filter-bar" style={{ flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
-        <label className="btn">
-          {file ? file.name : 'Choose CSV or Excel'}
+        <label className="btn btn-primary">
+          {busy === 'upload' ? 'Storing file…' : 'Upload file'}
           <input
             type="file"
             accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             style={{ display: 'none' }}
-            onChange={(event) => {
-              const selected = event.target.files?.[0] || null;
-              setFile(selected);
-              setPreview(null);
-              setResult(null);
-              if (selected) send('preview', selected);
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (!file) return;
+              setBusy('upload');
+              setError(null);
+              const form = new FormData();
+              form.set('file', file);
+              try {
+                const response = await fetch('/api/feeds/position-file', { method: 'POST', body: form });
+                const body = await response.json();
+                if (!response.ok) throw new Error(body.error || 'The file could not be stored');
+                openDetail(body);
+                await refreshQueue();
+              } catch (err: any) {
+                setError(err.message);
+              } finally {
+                setBusy(null);
+              }
             }}
           />
         </label>
-        <label className="filter-pill" style={{ cursor: 'pointer' }}>
-          <input
-            type="radio"
-            name="asof"
-            checked={asOfMode === 'today'}
-            onChange={() => setAsOfMode('today')}
-          />{' '}
-          Today ({todayIso()})
-        </label>
-        <label className="filter-pill" style={{ cursor: 'pointer' }}>
-          <input
-            type="radio"
-            name="asof"
-            checked={asOfMode === 'specific'}
-            onChange={() => setAsOfMode('specific')}
-          />{' '}
-          Specific date
-        </label>
-        {asOfMode === 'specific' && (
-          <input
-            type="date"
-            value={asOfDate}
-            onChange={(event) => setAsOfDate(event.target.value)}
-            style={{ border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '6px 8px' }}
-          />
-        )}
-        <button
-          className="btn btn-primary"
-          disabled={!file || busy !== null || !chosenDate}
-          onClick={() => file && send('load', file)}
-        >
-          {busy === 'load' ? 'Loading…' : `Load as of ${chosenDate}`}
-        </button>
-        {busy === 'preview' && <span className="nav-desc">Reading the file…</span>}
       </div>
 
-      {preview && (
+      <p className="hero-sub" style={{ maxWidth: 820, marginTop: 0 }}>
+        Each upload is an instance on the {queue?.sourceCode || 'POSITION_FILE'} source. The original file is kept, so you can change the column mapping and reprocess without losing the source values.
+      </p>
+      {error && <div className="filter-bar" style={{ color: '#b42318' }}>{error}</div>}
+
+      <div className="section-title">
+        <h2>Instance queue</h2>
+        <span className="hint">Load time, result, and reprocess</span>
+      </div>
+      <div className="data-table" style={{ marginBottom: 22 }}>
+        <div className="tbl-head" style={{ gridTemplateColumns: '190px 1.3fr 70px 110px 1.2fr 120px' }}>
+          <div>Received</div>
+          <div>File</div>
+          <div>Rows</div>
+          <div>Status</div>
+          <div>Result</div>
+          <div></div>
+        </div>
+        {(queue?.instances || []).length === 0 ? (
+          <div className="tbl-row" style={{ gridTemplateColumns: '1fr' }}><div>No files stored yet. Upload a CSV or Excel file to add an instance.</div></div>
+        ) : (
+          queue?.instances.map((instance) => (
+            <div key={instance.id} className="tbl-row" style={{ gridTemplateColumns: '190px 1.3fr 70px 110px 1.2fr 120px' }}>
+              <div>{formatWhen(instance.receivedAt)}</div>
+              <button className="btn" style={{ textAlign: 'left' }} onClick={() => selectInstance(instance.id)}>{instance.fileName}</button>
+              <div>{instance.rowCount}</div>
+              <div>{instance.status}</div>
+              <div>{resultText(instance)}</div>
+              <button
+                className="btn"
+                disabled={busy !== null || instance.status === 'PROCESSING'}
+                onClick={() => processInstance(instance.id, detail?.id === instance.id ? detail.columnMappings : undefined)}
+              >
+                {busy === instance.id ? 'Working…' : 'Reprocess'}
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      {detail && (
         <>
           <div className="section-title">
-            <h2>Preview</h2>
-            <span className="hint">{preview.fileName} · {preview.rowCount} rows</span>
+            <h2>{detail.fileName}</h2>
+            <span className="hint">{detail.rowCount} stored rows · {detail.columnMappings.length} source columns</span>
           </div>
-          <div className="nav-row">
-            {preview.domains.map((domain) => (
-              <div key={domain.domainCode} className="nav-card" style={{ cursor: 'default' }}>
-                <div>
-                  <div className="nav-title">{domain.distinctEntities}</div>
-                  <div className="nav-desc">
-                    {DOMAIN_LABEL[domain.domainCode] || domain.domainCode}
-                    {domain.parentColumns.length > 0 && (
-                      <> · {domain.parentColumns.map((parent) => parent.relationshipCode || parent.parentDomainCode).join(', ')}</>
+          <div className="filter-bar" style={{ flexWrap: 'wrap', gap: 12 }}>
+            <label className="filter-pill">
+              <input type="radio" name="asof" checked={asOfMode === 'today'} onChange={() => setAsOfMode('today')} /> Today ({todayIso()})
+            </label>
+            <label className="filter-pill">
+              <input type="radio" name="asof" checked={asOfMode === 'specific'} onChange={() => setAsOfMode('specific')} /> Specific date
+            </label>
+            {asOfMode === 'specific' && (
+              <input type="date" value={asOfDate} onChange={(event) => setAsOfDate(event.target.value)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '6px 8px' }} />
+            )}
+            <button className="btn btn-primary" disabled={busy !== null} onClick={() => processInstance(detail.id, detail.columnMappings)}>
+              {busy === detail.id ? 'Processing…' : `Process as of ${chosenDate()}`}
+            </button>
+            {loadWaves.length > 0 && (
+              <span className="nav-desc">Load order {loadWaves.map((wave) => wave.join(' + ')).join(' → ')}</span>
+            )}
+          </div>
+          {detail.resultSummary && (
+            <div className="page-meta" style={{ margin: '8px 0 14px' }}>
+              Last result {formatWhen(detail.completedAt)}: {resultText(detail)}.
+              {detail.runs.length > 1 && ` ${detail.runs.length} attempts stored.`}
+              {detail.errorMessage ? ` ${detail.errorMessage}` : ''}
+            </div>
+          )}
+
+          <div className="data-table" style={{ overflowX: 'auto' }}>
+            <div className="tbl-head" style={{ gridTemplateColumns: GRID, position: 'sticky', top: 0, zIndex: 1, minWidth: 980 }}>
+              <div>Source column</div>
+              <div>Source values</div>
+              <div>Entity attribute</div>
+              <div>Transform</div>
+              <div>Suggestion</div>
+            </div>
+            {detail.columnMappings.map((assignment, index) => {
+              const sample = assignment.samples[0] || '';
+              const transformed = sample ? previewTransform(sample, assignment.transform) : '';
+              const selectedKey = targetKey(assignment);
+              const selectedKnown = (queue?.targets || []).some((target) => target.key === selectedKey);
+              return (
+                <div key={assignment.sourceColumn} className="tbl-row" style={{ gridTemplateColumns: GRID, alignItems: 'start', cursor: 'default', minWidth: 980 }}>
+                  <div className="row-id">{assignment.sourceColumn}</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>
+                    {assignment.samples.join(' · ') || '—'}
+                    {sample && transformed !== sample && <div>→ {transformed}</div>}
+                  </div>
+                  <div>
+                    <select
+                      value={selectedKey}
+                      onChange={(event) => {
+                        const target = queue?.targets.find((item) => item.key === event.target.value);
+                        if (target) updateAssignment(index, applyTarget(assignment, target));
+                      }}
+                      style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '6px 8px' }}
+                    >
+                      {!selectedKnown && <option value={selectedKey}>{assignment.domainCode || 'File'} · {assignment.attributeCode || assignment.role}</option>}
+                      {targetsByGroup.map(([group, targets]) => (
+                        <optgroup key={group} label={group}>
+                          {targets.map((target) => (
+                            <option key={target.key} value={target.key}>{target.label}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                    {assignment.role === 'filter' && (
+                      <input
+                        value={assignment.filterEquals || ''}
+                        placeholder="Keep rows equal to"
+                        onChange={(event) => updateAssignment(index, { ...assignment, filterEquals: event.target.value })}
+                        style={{ width: '100%', marginTop: 4, border: '1px solid var(--line)', padding: '4px 6px' }}
+                      />
                     )}
                   </div>
+                  <div>
+                    <select
+                      value={assignment.transform.kind}
+                      onChange={(event) => updateAssignment(index, {
+                        ...assignment,
+                        transform: { ...assignment.transform, kind: event.target.value as ColumnAssignment['transform']['kind'] },
+                      })}
+                      style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '6px 8px' }}
+                    >
+                      {TRANSFORM_OPTIONS.map((option) => (
+                        <option key={option.kind} value={option.kind}>{option.label}</option>
+                      ))}
+                    </select>
+                    {assignment.transform.kind === 'replace' && (
+                      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                        <input
+                          value={assignment.transform.find || ''}
+                          placeholder="Find"
+                          onChange={(event) => updateAssignment(index, { ...assignment, transform: { ...assignment.transform, find: event.target.value } })}
+                          style={{ width: '50%', border: '1px solid var(--line)', padding: '4px 6px' }}
+                        />
+                        <input
+                          value={assignment.transform.replaceWith || ''}
+                          placeholder="Replace"
+                          onChange={(event) => updateAssignment(index, { ...assignment, transform: { ...assignment.transform, replaceWith: event.target.value } })}
+                          style={{ width: '50%', border: '1px solid var(--line)', padding: '4px 6px' }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+                    {assignment.suggestion.method === 'manual' ? 'Manual' : assignment.suggestion.method === 'ai' ? 'AI review' : assignment.suggestion.method === 'source_map' ? 'Source map' : 'Determined'}
+                    {' · '}
+                    {assignment.suggestion.reason}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
-          {preview.contextColumns.length > 0 && (
-            <div className="nav-desc" style={{ marginBottom: 12 }}>
-              {preview.contextColumns.map((column) => `${column.column}: ${column.purpose}`).join(' · ')}
-            </div>
-          )}
-          {preview.unmappedColumns.length > 0 && (
-            <div className="nav-desc" style={{ marginBottom: 12 }}>Unmapped columns: {preview.unmappedColumns.join(', ')}</div>
-          )}
-          <div className="data-table" style={{ marginBottom: 22 }}>
-            <div className="tbl-head" style={{ gridTemplateColumns: '180px 160px 1fr 160px 120px' }}>
-              <div>Attribute</div>
-              <div>List</div>
-              <div>File value</div>
-              <div>List value</div>
-              <div>Match</div>
-            </div>
-            {preview.normalizations.map((hit) => (
-              <div key={`${hit.attributeCode}-${hit.input}`} className="tbl-row" style={{ gridTemplateColumns: '180px 160px 1fr 160px 120px' }}>
-                <div>{hit.attributeCode}</div>
-                <div>{hit.listCode}</div>
-                <div>{hit.input}</div>
-                <div>{hit.canonicalCode || '—'}</div>
-                <div>{hit.matchType === 'unmapped' ? 'Needs a list value' : hit.matchType.replace('_', ' ')}</div>
-              </div>
-            ))}
-          </div>
-          {preview.warnings.length > 0 && (
-            <div className="nav-desc" style={{ marginBottom: 18 }}>{preview.warnings.join(' · ')}</div>
-          )}
-        </>
-      )}
-
-      {result && (
-        <>
-          <div className="section-title">
-            <h2>Load result</h2>
-            <span className="hint">As of {result.asOfDate}</span>
-          </div>
-          <div className="page-header">
-            <div>
-              <div className="page-title" style={{ fontSize: 18 }}>
-                {createdTotal === 0
-                  ? `${matchedTotal} existing entities matched. No new entities were created.`
-                  : `${createdTotal} entities created, ${matchedTotal} matched.`}
-              </div>
-              <div className="page-meta">
-                Attributes created {result.attributes.created}, updated {result.attributes.updated}, unchanged {result.attributes.unchanged}.
-                Relationships created {result.relationships.created}, matched {result.relationships.matched}.
-              </div>
-            </div>
-            <div className="page-actions">
-              <Link href="/issuers" className="btn">Issuers</Link>
-              <Link href="/funds" className="btn">Funds</Link>
-              <Link href="/securities" className="btn">Securities</Link>
-              <Link href="/positions" className="btn">Positions</Link>
-            </div>
-          </div>
-          <div className="data-table">
-            <div className="tbl-head" style={{ gridTemplateColumns: '160px 1fr 1fr 1fr 1fr' }}>
-              <div>Entity</div>
-              <div>In file</div>
-              <div>Created</div>
-              <div>Matched</div>
-              <div>Failed</div>
-            </div>
-            {result.domains.map((domain) => (
-              <div key={domain.domainCode} className="tbl-row" style={{ gridTemplateColumns: '160px 1fr 1fr 1fr 1fr' }}>
-                <div>{DOMAIN_LABEL[domain.domainCode] || domain.domainCode}</div>
-                <div>{domain.distinctEntities}</div>
-                <div>{domain.created}</div>
-                <div>{domain.matched}</div>
-                <div>{domain.failed}</div>
-              </div>
-            ))}
-          </div>
-          {(result.errors.length > 0 || result.warnings.length > 0) && (
-            <div className="nav-desc" style={{ marginTop: 12 }}>
-              {[...result.errors, ...result.warnings].slice(0, 8).join(' · ')}
-            </div>
-          )}
         </>
       )}
     </div>

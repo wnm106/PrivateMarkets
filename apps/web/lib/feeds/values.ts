@@ -77,6 +77,37 @@ export function normalizeToList(
   );
 }
 
+export function applyTransform(raw: string, transform?: { kind: string; find?: string; replaceWith?: string } | null): string {
+  const text = raw ?? '';
+  switch (transform?.kind) {
+    case 'none':
+      return text;
+    case 'uppercase':
+      return text.trim().toUpperCase();
+    case 'lowercase':
+      return text.trim().toLowerCase();
+    case 'number':
+      return text.replace(/,/g, '').trim();
+    case 'percent': {
+      const trimmed = text.trim();
+      if (!trimmed.endsWith('%')) return trimmed;
+      const parsed = Number(trimmed.slice(0, -1).replace(/,/g, '').trim());
+      return Number.isFinite(parsed) ? String(parsed / 100) : trimmed;
+    }
+    case 'date':
+      return parseUsDate(text) || text.trim();
+    case 'replace': {
+      const find = transform.find ?? '';
+      if (!find) return text;
+      return text.split(find).join(transform.replaceWith ?? '');
+    }
+    case 'list':
+    case 'trim':
+    default:
+      return text.trim();
+  }
+}
+
 export function parseUsDate(input: string): string | null {
   const text = input.trim();
   const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);

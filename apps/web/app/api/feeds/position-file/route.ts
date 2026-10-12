@@ -1,61 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { executeFeed, positionFileMap, previewFeed } from '@/lib/feeds/feed-loader';
-import { dependencyLoadWaves } from '@/lib/feeds/load-order';
-import { supabaseServerClient } from '@/lib/supabase-server';
+import { createImportInstance, listImportInstances, listMappingCatalog } from '@/lib/feeds/import-instances';
+import { POSITION_FILE_MAP } from '@/lib/feeds/position-file-map';
+import { requireFeedUser } from '@/lib/feeds/require-user';
+import { mappingTargets } from '@/lib/feeds/suggest';
 
 export const dynamic = 'force-dynamic';
 
-async function requireUser() {
-  const supabase = await supabaseServerClient();
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data.user) return null;
-  return data.user;
-}
-
 export async function GET() {
-  const user = await requireUser();
+  const user = await requireFeedUser();
   if (!user) return NextResponse.json({ error: 'Sign in to load a position file' }, { status: 401 });
-  const map = positionFileMap();
-  return NextResponse.json({
-    mapCode: map.mapCode,
-    sourceCode: map.sourceCode,
-    name: map.name,
-    description: map.description,
-    loadWaves: dependencyLoadWaves(map.domains),
-    domains: map.domains.map((domain) => ({
-      domainCode: domain.domainCode,
-      templateCode: domain.templateCode,
-      identityColumn: domain.identityColumn,
-      nameColumn: domain.nameColumn,
-      attributes: domain.attributes,
-      parents: domain.parents,
-    })),
-  });
+  try {
+    const [catalog, instances] = await Promise.all([listMappingCatalog(), listImportInstances()]);
+    return NextResponse.json({
+      sourceCode: POSITION_FILE_MAP.sourceCode,
+      name: POSITION_FILE_MAP.name,
+      description: POSITION_FILE_MAP.description,
+      targets: mappingTargets(catalog.attributes, catalog.domains),
+      instances,
+    });
+  } catch (error: any) {
+    return NextResponse.json({ error: error?.message || 'The import queue could not be loaded' }, { status: 400 });
+  }
 }
 
 export async function POST(request: NextRequest) {
-  const user = await requireUser();
+  const user = await requireFeedUser();
   if (!user) return NextResponse.json({ error: 'Sign in to load a position file' }, { status: 401 });
-
   const form = await request.formData();
   const file = form.get('file');
-  const mode = String(form.get('mode') || 'preview');
-  const asOfDate = String(form.get('asOfDate') || '');
-  if (!(file instanceof File)) {
-    return NextResponse.json({ error: 'Choose a CSV or Excel file' }, { status: 400 });
-  }
-  const bytes = Buffer.from(await file.arrayBuffer());
-  const map = positionFileMap();
-
+  if (!(file instanceof File)) return NextResponse.json({ error: 'Choose a CSV or Excel file' }, { status: 400 });
   try {
-    if (mode === 'load') {
-      if (!asOfDate) return NextResponse.json({ error: 'Choose today or a specific as-of date' }, { status: 400 });
-      const result = await executeFeed(map, file.name, bytes, asOfDate);
-      return NextResponse.json(result);
-    }
-    const preview = await previewFeed(map, file.name, bytes);
-    return NextResponse.json(preview);
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const instance = await createImportInstance(file.name, file.type || 'application/octet-stream', bytes);
+    return NextResponse.json(instance);
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'The position file could not be read' }, { status: 400 });
+    return NextResponse.json({ error: error?.message || 'The file could not be stored' }, { status: 400 });
   }
 }
