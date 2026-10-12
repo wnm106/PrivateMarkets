@@ -488,8 +488,8 @@ export const INVESTORS_QUERY = `
 `;
 
 export const POSITIONS_QUERY = `
-  query Positions($filter: EntityFilter, $pagination: PaginationInput) {
-    positions(filter: $filter, pagination: $pagination) {
+  query Positions($filter: EntityFilter, $pagination: PaginationInput, $asOfDate: Date) {
+    positions(filter: $filter, pagination: $pagination, asOfDate: $asOfDate) {
       edges {
         node {
           id
@@ -499,6 +499,13 @@ export const POSITIONS_QUERY = `
           parentRelationships {
             parentEntityCode
             parentEntityName
+            parentDomainCode
+            relationshipType
+          }
+          childRelationships {
+            childEntityCode
+            childEntityName
+            childDomainCode
             relationshipType
           }
         }

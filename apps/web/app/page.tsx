@@ -88,14 +88,10 @@ export default function LandingPage() {
         // aliased so every domain's count comes back in a single request.
         const counts: Record<string, number> = {};
         if (activeDomains.length > 0) {
-          // Separate POSITION domain (uses intersections) from regular entities
-          const regularDomains = activeDomains.filter(d => d.domainCode !== 'POSITION');
-          const hasPosition = activeDomains.some(d => d.domainCode === 'POSITION');
-
-          if (regularDomains.length > 0) {
+          if (activeDomains.length > 0) {
             const countsQuery = `
               query {
-                ${regularDomains
+                ${activeDomains
                   .map(
                     (d, i) =>
                       `d${i}: entities(filter: { domainCode: "${d.domainCode}" }, pagination: { first: 1 }) { totalCount }`
@@ -108,24 +104,9 @@ export default function LandingPage() {
               Record<string, never>
             >(countsQuery);
 
-            regularDomains.forEach((d, i) => {
+            activeDomains.forEach((d, i) => {
               counts[d.domainCode] = countsResult.data?.[`d${i}`]?.totalCount || 0;
             });
-          }
-
-          // Fetch position count from intersections
-          if (hasPosition) {
-            const positionCountResult = await graphqlQuery<
-              { intersections: { totalCount: number } },
-              any
-            >(`
-              query {
-                intersections(filter: { intersectionTypeCode: "POSITION" }, pagination: { first: 1 }) {
-                  totalCount
-                }
-              }
-            `);
-            counts['POSITION'] = positionCountResult.data?.intersections?.totalCount || 0;
           }
         }
 
@@ -346,6 +327,21 @@ export default function LandingPage() {
             <div>
               <div className="nav-title">Composite Entities</div>
               <div className="nav-desc">Intersection framework for N-ary entity combinations with bi-temporal tracking.</div>
+            </div>
+          </div>
+        </Link>
+        <Link href="/imports">
+          <div className="nav-card">
+            <div className="nav-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M12 3v12" />
+                <path d="m7 10 5 5 5-5" />
+                <path d="M4 21h16" />
+              </svg>
+            </div>
+            <div>
+              <div className="nav-title">Position File Load</div>
+              <div className="nav-desc">Map a flat file onto Issuer, Fund, Security, and Position, then load parents first.</div>
             </div>
           </div>
         </Link>
