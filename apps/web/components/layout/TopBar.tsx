@@ -1,6 +1,7 @@
 'use client';
 
 import { useTemporalStore } from '@/lib/store';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { AsOfDatePicker } from './AsOfDatePicker';
@@ -8,7 +9,7 @@ import { UserMenu } from './UserMenu';
 import { BrandLogo } from './BrandLogo';
 
 export function TopBar() {
-  const { persona, setPersona } = useTemporalStore();
+  const { persona, setPersona, chatOpen, toggleChat } = useTemporalStore();
   const [showAdminMenu, setShowAdminMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -59,6 +60,23 @@ export function TopBar() {
         </div>
       </div>
       <div className="topbar-right" style={{ position: 'relative', zIndex: 1000 }}>
+        <button
+          className={`chat-launcher ${chatOpen ? 'active' : ''}`}
+          onClick={toggleChat}
+          aria-label={chatOpen ? 'Close assistant' : 'Open assistant'}
+          aria-expanded={chatOpen}
+          title={chatOpen ? 'Close assistant' : 'Open assistant'}
+        >
+          <Image
+            className="chat-launcher-avatar"
+            src="/tapestraichat-icon.png"
+            alt=""
+            width={26}
+            height={26}
+            unoptimized
+          />
+          <span className="chat-launcher-label">Chat</span>
+        </button>
         <AsOfDatePicker />
         <div ref={menuRef} style={{ position: 'relative' }}>
           <button

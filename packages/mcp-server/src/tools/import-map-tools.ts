@@ -3,8 +3,8 @@
  * Provides AI agents with tools to analyze and execute data imports
  */
 
-import { ToolRegistry } from '../lib/tool-registry.js';
-import { ToolDefinition } from '../lib/types.js';
+import { ToolRegistry } from '../lib/tool-registry';
+import { ToolDefinition } from '../lib/types';
 import { analyzeImportMap, executeImportMap, ImportMap } from '../lib/import-map/import-orchestrator';
 import { getIdentifierSuggestions } from '../lib/import-map/identifier-validator';
 
@@ -222,7 +222,7 @@ const parseDataPreviewTool: ToolDefinition = {
     required: ['sourceData', 'sourceFormat'],
   },
   execute: async (args, supabase) => {
-    const { parseData } = await import('../lib/import-map/data-parsers.js');
+    const { parseData } = await import('../lib/import-map/data-parsers');
     
     const parsedData = await parseData(
       args.sourceData,

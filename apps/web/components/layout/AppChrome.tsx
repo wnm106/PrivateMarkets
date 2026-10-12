@@ -18,10 +18,16 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
   return (
     <>
       <ImpersonationBanner />
-      <TopBar />
-      <SourceLegend />
-      <main className="main">{children}</main>
-      <ChatPanel />
+      {/* The assistant is a flex sibling of the page content, so opening it
+          compresses the page rather than overlaying it. */}
+      <div className="app-shell">
+        <div className="app-shell-main">
+          <TopBar />
+          <SourceLegend />
+          <main className="main">{children}</main>
+        </div>
+        <ChatPanel />
+      </div>
     </>
   );
 }

@@ -1,6 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js';
-import { ToolDefinition, ToolExecutionResult } from './types.js';
-import { ToolContext, getContextProfile, isCategoryAllowed } from './context-profiles.js';
+import { ToolDefinition, ToolExecutionResult } from './types';
+import { ToolContext, getContextProfile, isCategoryAllowed } from './context-profiles';
 
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();

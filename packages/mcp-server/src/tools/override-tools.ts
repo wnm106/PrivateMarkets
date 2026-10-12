@@ -1,5 +1,5 @@
-import { ToolRegistry } from '../lib/tool-registry.js';
-import { ToolDefinition } from '../lib/types.js';
+import { ToolRegistry } from '../lib/tool-registry';
+import { ToolDefinition } from '../lib/types';
 
 const submitManualOverride: ToolDefinition = {
   name: 'submit_manual_override',

@@ -25,12 +25,14 @@ export function markdownToHtml(markdown: string): string {
   html = html.replace(/^# (.+)$/gm, '<h1 style="font-size: 18px; font-weight: 600; margin: 16px 0 12px 0; color: var(--ink);">$1</h1>');
 
   // Bold (**text** or __text__)
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
 
-  // Italic (*text* or _text_)
-  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-  html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+  // Italic (*text* or _text_). The underscore form must not fire inside a word,
+  // otherwise identifiers like DEAL_STANDARD lose their underscore and render as
+  // emphasis (and a stray underscore can then pair with a distant one across lines).
+  html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/gm, '$1<em>$2</em>');
 
   // Links [text](url)
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color: var(--accent-2); text-decoration: underline;">$1</a>');

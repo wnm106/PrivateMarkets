@@ -1,5 +1,5 @@
-import { ToolRegistry } from '../lib/tool-registry.js';
-import { ToolDefinition } from '../lib/types.js';
+import { ToolRegistry } from '../lib/tool-registry';
+import { ToolDefinition } from '../lib/types';
 
 const getFieldLineage: ToolDefinition = {
   name: 'get_field_lineage',

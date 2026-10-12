@@ -787,6 +787,147 @@ const { updateAttribute } = await client.request(`
 });
 ```
 
+## Assistant (Chat) API
+
+The assistant is served by Next.js route handlers under `/api/chat`. It requires a
+Supabase session token in `Authorization: Bearer <access_token>` for history; the
+reporting modules already send this via `authHeaders()`.
+
+### POST /api/chat
+
+Sends a turn and records it against a per-user conversation.
+
+```json
+{
+  "messages": [{ "role": "user", "text": "What funds changed this week?" }],
+  "toolContext": "entity-explorer",
+  "context": { "page": "funds", "domainCode": "FUND" },
+  "conversationId": "optional-uuid-to-append-to"
+}
+```
+
+Response:
+
+```json
+{
+  "text": "…",
+  "toolCalls": [{ "name": "list_entities", "args": {} }],
+  "conversationId": "8d1fb2b2-…",
+  "conversation": { "id": "8d1fb2b2-…", "title": "What funds changed this week?", "message_count": 2 }
+}
+```
+
+Notes:
+- The server creates the conversation on the first turn when `conversationId` is
+  omitted, and titles it from the first user message.
+- When a conversation already has stored turns, its history is authoritative over
+  the request's `messages`, so a late response cannot overwrite newer thread state.
+- Anonymous callers still get a reply; nothing is persisted.
+- **Tool calls run as the calling user.** Every tool query is issued with the
+  caller's token, so tenancy and row level security restrict what the assistant can
+  read. A user with no tenant membership sees "0" rather than system-wide totals.
+  This is also required operationally: the data schemas grant `USAGE` to the
+  `authenticated` role but not to `service_role`, and the security-invoker views
+  (`public.entity_master` → `read_projections.entity_master`) are refused for the
+  service role before RLS is consulted. Never run the tool registry with the
+  service-role key.
+
+### Standalone MCP server (stdio)
+
+`packages/mcp-server/src/server.ts` exposes the same tools over stdio for external
+MCP clients (Claude Desktop, VS Code). A stdio process has no HTTP request, so it
+cannot discover the caller and must be *given* an identity:
+
+```bash
+SUPABASE_URL=https://<project>.supabase.co
+SUPABASE_ANON_KEY=<anon key>
+TAPESTRAI_MCP_ACCESS_TOKEN=<signed-in user access token>
+```
+
+Every tool and resource query is issued with that token, so the server is subject
+to the same tenancy/RLS rules as the web app.
+
+> **Do not put the service-role key here.** The data schemas grant `USAGE` to
+> `authenticated` only, so a service-role (or anon) token fails on the
+> security-invoker views with `permission denied for view entity_master` before RLS
+> is consulted. The server detects a service-role token or a missing token at
+> startup, logs how to fix it, and returns an explanatory error instead of an
+> opaque failure.
+
+Access tokens expire. When the configured token ages out, calls start failing --
+supply a fresh user token and restart the server.
+
+### Conversation history
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/chat/conversations` | List the caller's threads, most recent first (`?limit=`, max 200) |
+| `POST` | `/api/chat/conversations` | Create an empty thread |
+| `GET` | `/api/chat/conversations/:id` | Thread plus all messages |
+| `PATCH` | `/api/chat/conversations/:id` | Rename (`{ "title": "…" }`) |
+| `DELETE` | `/api/chat/conversations/:id` | Delete the thread and its messages |
+
+All five return `401` without a valid session. Conversations are private to their
+owner: row level security is keyed on `created_by = auth.uid()`, and messages are
+reachable only through a conversation the caller owns. A non-owner receives `404`
+rather than a permission error.
+
+### Attachments
+
+A turn may carry reference files -- screenshots to design against, or sample
+HTML/Markdown/JSON to imitate.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/chat/attachments` | Multipart upload (`file`, optional `conversationId`) |
+| `GET` | `/api/chat/attachments/:id` | Owner-only download |
+
+Uploads are capped at 5 MB per file, and `POST /api/chat` accepts at most six
+`attachmentIds` per turn. When no `conversationId` is supplied the upload creates
+the thread and returns it, so the caller can attach its first file before it has
+ever sent a message.
+
+`attachmentIds` are only inlined when they belong to the conversation being
+appended to *and* are still unbound; the ids are stamped with the resulting
+message so the file stays with the turn it was sent with. Images are passed as
+Gemini `inlineData` so the model actually sees the pixels; text-like files are
+inlined as a fenced block; other binaries are named so the model knows they were
+supplied and can ask for their contents. Once a turn is answered, the transcript
+endpoint folds attachments onto their stored message.
+
+Because only unbound ids are inlined, `attachmentIds` must all reference a single
+thread. Uploading a batch in parallel against a thread that does not exist yet is
+the way to get this wrong: the uploads race to create the thread, and the ids
+that land in the loser are silently dropped. Establish the thread with the first
+file, then upload the rest against it.
+
+### Designing from chat
+
+The primary chat panel doubles as the report designer's assistant, so there is a
+single chat surface in the app. When a designer is open it publishes its draft to
+`lib/designer-bridge.ts`; the panel reads that for context and promotes itself to
+the `report-designer` tool profile. Assistant replies containing a JSON block
+shaped like a proposal render as a card with an **Apply to draft** button.
+
+Applying is deliberately two-step and never automatic: the chat *proposes*, a
+human clicks Apply to merge it into the draft, then Save to persist. No MCP tool
+can write a dashboard -- an assistant that can persist HTML on its own is a real
+risk. The designer subscribes to proposals rather than polling for them, so a
+backgrounded tab cannot strand one.
+
+### Schema
+
+`public.chat_conversations` (owner, title, last-known context, denormalised
+`message_count` / `last_message_at`), `public.chat_messages` (role, content,
+`tool_calls`, model) and `public.chat_message_attachments` (file metadata plus the
+owning `message_id`). A trigger maintains the denormalised counts; deleting a
+conversation cascades to its messages and attachments. Objects live in the private
+`chat-attachments` bucket under an owner-prefixed path; because storage does not
+participate in the cascade, `DELETE /api/chat/conversations/:id` removes them
+explicitly before the rows go. See
+`supabase/migrations/20261012000000_chat_history.sql` and
+`supabase/migrations/20261012010000_chat_attachments.sql`.
+
 ## Best Practices
 
 1. **Use projections**: Only request fields you need

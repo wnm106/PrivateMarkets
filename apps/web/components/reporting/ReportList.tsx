@@ -35,7 +35,7 @@ const STARTER_HTML = `<div class="wrap">
     var e = d.entity || {};
     document.getElementById('title').textContent = e.entityName || 'Dashboard';
     document.getElementById('body').innerHTML =
-      '<p>Ask the AI assistant to design this dashboard, or edit the HTML directly.</p>';
+      '<p>Ask the assistant in the chat panel to design this dashboard, or edit the HTML directly.</p>';
   });
 </script>`;
 
@@ -195,7 +195,7 @@ export function ReportList({ kind }: { kind: 'dashboard' | 'narrative' }) {
         <div style={{ textAlign: 'center', padding: '40px 0' }}><div className="loader">Loading…</div></div>
       ) : shown.length === 0 ? (
         <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: '13px' }}>
-          Nothing here yet. Create your first {label.toLowerCase()} and let the AI assistant help you design it.
+          Nothing here yet. Create your first {label.toLowerCase()} and let the chat assistant help you design it.
         </div>
       ) : (
         <div className="data-table">

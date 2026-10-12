@@ -1,5 +1,5 @@
-import { ToolRegistry } from '../lib/tool-registry.js';
-import { ToolDefinition } from '../lib/types.js';
+import { ToolRegistry } from '../lib/tool-registry';
+import { ToolDefinition } from '../lib/types';
 
 const getAttributeMetadata: ToolDefinition = {
   name: 'get_attribute_metadata',
@@ -86,12 +86,12 @@ const getTemplateMetadata: ToolDefinition = {
         description,
         is_active,
         template_attribute_assignments (
-          attribute_code,
-          attribute_name,
           is_required,
           display_order,
           display_label,
           attribute_register (
+            attribute_code,
+            attribute_name,
             description,
             data_type,
             list_values
@@ -111,9 +111,20 @@ const getTemplateMetadata: ToolDefinition = {
     const { data, error } = await query;
     if (error) throw error;
 
+    // The attribute code/name live on the related attribute_register row; lift
+    // them onto each assignment so callers see a flat attribute list.
+    const templates = (data || []).map((template: any) => ({
+      ...template,
+      template_attribute_assignments: (template.template_attribute_assignments || []).map((assignment: any) => ({
+        ...assignment,
+        attribute_code: assignment.attribute_register?.attribute_code ?? null,
+        attribute_name: assignment.attribute_register?.attribute_name ?? null,
+      })),
+    }));
+
     return {
-      templates: data || [],
-      count: data?.length || 0,
+      templates,
+      count: templates.length,
     };
   },
 };

@@ -1,5 +1,5 @@
-import { ToolRegistry } from '../lib/tool-registry.js';
-import { ToolDefinition } from '../lib/types.js';
+import { ToolRegistry } from '../lib/tool-registry';
+import { ToolDefinition } from '../lib/types';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
 // through `.schema('compliance')` first.
@@ -296,7 +296,7 @@ const createComplianceRule: ToolDefinition = {
 
 const updateComplianceRule: ToolDefinition = {
   name: 'update_compliance_rule',
-  description: "Update a compliance rule's metadata (name, category, active status, description). Does NOT change rule logic — use create_compliance_rule_version for that.",
+  description: "Update a compliance rule's metadata (name, category, active status, description). Does NOT change rule logic â€” use create_compliance_rule_version for that.",
   category: 'compliance',
   inputSchema: {
     type: 'object',

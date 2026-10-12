@@ -1,4 +1,4 @@
-import { ToolCategory } from './types.js';
+import { ToolCategory } from './types';
 
 /**
  * Context profiles define which tool categories are available

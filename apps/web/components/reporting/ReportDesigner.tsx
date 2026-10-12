@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { graphqlQuery, graphqlMutation, ENTITIES_QUERY, DOMAIN_TYPES_QUERY } from '@/lib/graphql';
@@ -15,13 +15,13 @@ import {
   type NarrativeTemplate,
 } from '@/lib/reporting';
 import { JsonField } from './JsonField';
-import { DesignerAssistant } from './DesignerAssistant';
 import { DashboardRunner } from './DashboardRunner';
 import { NarrativeRunner } from './NarrativeRunner';
+import { setActiveDesigner, subscribeProposals } from '@/lib/designer-bridge';
 
 type Kind = 'dashboard' | 'narrative';
 type LeftTab = 'details' | 'data' | 'params' | 'content';
-type RightTab = 'preview' | 'assistant';
+type RightTab = 'preview' | 'code';
 
 interface Draft {
   name: string;
@@ -79,6 +79,78 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
   const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved]);
   const sample = samples.find((s) => s.id === sampleId);
 
+  const patch = (p: Partial<Draft>) => setDraft((d) => ({ ...d, ...p }));
+
+  /** Merges an AI proposal (dashboardName/htmlTemplate/... or narrativeName/instructions/...) into the draft. */
+  const applyProposal = useCallback(
+    (p: Record<string, any>) => {
+      const next: Partial<Draft> = {};
+      const name = p.dashboardName ?? p.narrativeName ?? p.name;
+      if (typeof name === 'string') next.name = name;
+      if (typeof p.description === 'string') next.description = p.description;
+      if (kind === 'dashboard' && typeof p.htmlTemplate === 'string') next.htmlTemplate = p.htmlTemplate;
+      if (kind === 'narrative' && typeof p.instructions === 'string') next.instructions = p.instructions;
+      if (Array.isArray(p.dataQueries)) next.dataQueries = p.dataQueries;
+      if (Array.isArray(p.parameters)) next.parameters = p.parameters;
+      if (kind === 'narrative' && Array.isArray(p.outputBlocks)) next.outputBlocks = p.outputBlocks;
+      patch(next);
+      setMessage({ type: 'ok', text: 'Applied assistant changes to the draft. Review the preview, then Save.' });
+    },
+    [kind]
+  );
+
+  // Publish this designer to the chat bridge so the primary chat panel can see
+  // (and propose changes to) the draft that is currently open.
+  useEffect(() => {
+    setActiveDesigner({
+      kind,
+      domainCode: draft.domainCode,
+      sampleEntityCode: sample?.entityCode,
+      draft:
+        kind === 'dashboard'
+          ? {
+              dashboardName: draft.name,
+              description: draft.description,
+              htmlTemplate: draft.htmlTemplate,
+              dataQueries: draft.dataQueries,
+              parameters: draft.parameters,
+            }
+          : {
+              narrativeName: draft.name,
+              description: draft.description,
+              instructions: draft.instructions,
+              dataQueries: draft.dataQueries,
+              parameters: draft.parameters,
+              outputBlocks: draft.outputBlocks,
+            },
+    });
+  }, [
+    kind,
+    draft.domainCode,
+    draft.name,
+    draft.description,
+    draft.htmlTemplate,
+    draft.instructions,
+    draft.dataQueries,
+    draft.parameters,
+    draft.outputBlocks,
+    sample?.entityCode,
+  ]);
+
+  // Clear the registration when leaving the designer.
+  useEffect(
+    () => () => {
+      setActiveDesigner(null);
+    },
+    []
+  );
+
+  // Pick up proposals the chat panel queued for this draft. Subscribed rather
+  // than polled so a backgrounded tab cannot strand a proposal.
+  useEffect(() => {
+    return subscribeProposals((queued) => applyProposal(queued.proposal));
+  }, [applyProposal]);
+
   useEffect(() => {
     graphqlQuery<{ domainTypes: any[] }, any>(DOMAIN_TYPES_QUERY).then(({ data }) => setDomains(data?.domainTypes || []));
   }, []);
@@ -101,23 +173,6 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
       cancelled = true;
     };
   }, [draft.domainCode]);
-
-  const patch = (p: Partial<Draft>) => setDraft((d) => ({ ...d, ...p }));
-
-  /** Merges an AI proposal (dashboardName/htmlTemplate/... or narrativeName/instructions/...) into the draft. */
-  const applyProposal = (p: Record<string, any>) => {
-    const next: Partial<Draft> = {};
-    const name = p.dashboardName ?? p.narrativeName ?? p.name;
-    if (typeof name === 'string') next.name = name;
-    if (typeof p.description === 'string') next.description = p.description;
-    if (kind === 'dashboard' && typeof p.htmlTemplate === 'string') next.htmlTemplate = p.htmlTemplate;
-    if (kind === 'narrative' && typeof p.instructions === 'string') next.instructions = p.instructions;
-    if (Array.isArray(p.dataQueries)) next.dataQueries = p.dataQueries;
-    if (Array.isArray(p.parameters)) next.parameters = p.parameters;
-    if (kind === 'narrative' && Array.isArray(p.outputBlocks)) next.outputBlocks = p.outputBlocks;
-    patch(next);
-    setMessage({ type: 'ok', text: 'Applied assistant changes to the draft. Review the preview, then Save.' });
-  };
 
   const save = async () => {
     setSaving(true);
@@ -277,7 +332,8 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
               <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginBottom: '6px' }}>
                 HTML/CSS/JS fragment, rendered in a sandbox with no network access. Use <code>tapestr.onData(fn)</code> to receive{' '}
                 <code>{'{ entity, data, params }'}</code>; helpers: <code>tapestr.fmt</code>, <code>tapestr.charts.bar/line/donut</code>,{' '}
-                <code>tapestr.table</code>, <code>tapestr.setParam</code>, <code>tapestr.esc</code>. Ask the assistant to write it for you.
+                <code>tapestr.table</code>, <code>tapestr.setParam</code>, <code>tapestr.esc</code>. Ask the assistant
+                in the chat panel to write it for you, or attach a screenshot to design against.
               </div>
               <textarea
                 className="mono"
@@ -339,7 +395,6 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--line)', marginBottom: '14px' }}>
             <button style={tabBtn(rightTab === 'preview')} onClick={() => setRightTab('preview')}>Preview</button>
-            <button style={tabBtn(rightTab === 'assistant')} onClick={() => setRightTab('assistant')}>✦ AI assistant</button>
             <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--ink-3)' }}>
               Sample {draft.domainCode}
               <select className="select" style={{ padding: '4px 26px 4px 8px', fontSize: '11px', maxWidth: '200px' }} value={sampleId} onChange={(e) => setSampleId(e.target.value)}>
@@ -351,20 +406,8 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
             </div>
           </div>
 
-          {/* Assistant stays mounted so the conversation survives tab switches. */}
-          <div style={{ display: rightTab === 'assistant' ? 'block' : 'none' }}>
-            <DesignerAssistant
-              kind={kind}
-              domainCode={draft.domainCode}
-              sampleEntityCode={sample?.entityCode}
-              draft={
-                kind === 'dashboard'
-                  ? { dashboardName: draft.name, description: draft.description, htmlTemplate: draft.htmlTemplate, dataQueries: draft.dataQueries, parameters: draft.parameters }
-                  : { narrativeName: draft.name, description: draft.description, instructions: draft.instructions, dataQueries: draft.dataQueries, parameters: draft.parameters, outputBlocks: draft.outputBlocks }
-              }
-              onApply={applyProposal}
-            />
-          </div>
+          {/* The designer no longer hosts its own assistant: all design chat goes
+              through the primary ChatPanel, which receives this draft via the bridge. */}
 
           {rightTab === 'preview' &&
             (!sampleId ? (
