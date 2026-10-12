@@ -243,7 +243,7 @@ export default function PositionFilePage() {
           queue?.instances.map((instance) => (
             <div key={instance.id} className="tbl-row" style={{ gridTemplateColumns: '190px 1.3fr 70px 110px 1.2fr 120px' }}>
               <div>{formatWhen(instance.receivedAt)}</div>
-              <button className="btn" style={{ textAlign: 'left' }} onClick={() => selectInstance(instance.id)}>{instance.fileName}</button>
+              <button onClick={() => selectInstance(instance.id)} style={{ textAlign: 'left', background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit' }}>{instance.fileName}</button>
               <div>{instance.rowCount}</div>
               <div>{instance.status}</div>
               <div>{resultText(instance)}</div>
