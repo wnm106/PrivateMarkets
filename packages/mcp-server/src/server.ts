@@ -17,6 +17,7 @@ import { registerLineageTools } from './tools/lineage-tools.js';
 import { registerOverrideTools } from './tools/override-tools.js';
 import { registerDQTools } from './tools/dq-tools.js';
 import { registerImportMapTools } from './tools/import-map-tools.js';
+import { registerPositionFileTools } from './tools/position-file-tools.js';
 import { registerComplianceTools } from './tools/compliance-tools.js';
 import { registerReportingTools } from './tools/reporting-tools.js';
 import { ToolRegistry } from './lib/tool-registry.js';
@@ -57,6 +58,7 @@ registerLineageTools(toolRegistry);
 registerOverrideTools(toolRegistry);
 registerDQTools(toolRegistry);
 registerImportMapTools(toolRegistry);
+registerPositionFileTools(toolRegistry);
 registerComplianceTools(toolRegistry);
 registerReportingTools(toolRegistry);
 
