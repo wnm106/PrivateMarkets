@@ -9,6 +9,7 @@ export interface ChatContext {
   entityCode?: string;
   domainCode?: string;
   entityId?: string;
+  toolContext?: 'entity-explorer' | 'entity-admin' | 'compliance' | 'data-quality' | 'import' | 'lineage' | 'report-designer' | 'general';
 }
 
 export interface ChatResponse {
@@ -29,7 +30,7 @@ export async function sendGeminiMessage(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ messages, context }),
+      body: JSON.stringify({ messages, context, toolContext: context?.toolContext }),
     });
 
     let data;

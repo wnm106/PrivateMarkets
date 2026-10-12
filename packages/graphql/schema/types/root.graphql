@@ -49,12 +49,38 @@ type Query {
   # Import Map queries
   importMaps: [ImportMap!]!
   importMap(id: ID!): ImportMap
+  identifierSuggestions(domainCode: String!): IdentifierSuggestionsResult!
 
   # Intersection queries
   intersectionTypes: [IntersectionType!]!
   intersectionType(id: ID, intersectionCode: String): IntersectionType
   intersections(filter: IntersectionFilter, pagination: PaginationInput, asOfDate: Date): IntersectionConnection!
   intersection(id: ID, intersectionCode: String, asOfDate: Date): Intersection
+
+  # Precedence Rules queries
+  precedenceRules(domainCode: String, attributeCode: String, isActive: Boolean): [PrecedenceRule!]!
+  precedenceRule(id: ID!): PrecedenceRule
+
+  # Compliance Rules queries
+  complianceRules(filter: ComplianceRuleFilter): [ComplianceRule!]!
+  complianceRule(id: ID, ruleCode: String): ComplianceRule
+  complianceEvaluationRuns(ruleId: ID, first: Int): [ComplianceEvaluationRun!]!
+  complianceEvaluationRun(id: ID!): ComplianceEvaluationRun
+  complianceResults(filter: ComplianceResultFilter, pagination: PaginationInput): ComplianceEvaluationResultConnection!
+
+  # Reference List (Controlled Vocabulary) queries
+  referenceLists(domainCode: String, isActive: Boolean): [ReferenceList!]!
+  referenceList(id: ID, listCode: String): ReferenceList
+  normalizeValue(listCode: String!, values: [String!]!): [NormalizationResult!]!
+
+  # Reporting (dashboards & narratives) -- types in reporting.graphql
+  dashboards(domainCode: String, isActive: Boolean): [Dashboard!]!
+  dashboard(id: ID, dashboardCode: String): Dashboard
+  narratives(domainCode: String, isActive: Boolean): [Narrative!]!
+  narrative(id: ID, narrativeCode: String): Narrative
+  narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
+  runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON, asOfDate: String, knowledgeDate: String): DataQueryResponse!
+  gridQuery(input: GridQueryInput!): GridResult!
 }
 
 type Mutation {
@@ -92,6 +118,78 @@ type Mutation {
   createIntersection(input: CreateIntersectionInput!): CreateIntersectionResult!
   updateIntersection(input: UpdateIntersectionInput!): UpdateIntersectionResult!
   deleteIntersection(id: ID!): DeleteIntersectionResult!
+  
+  # Source Registry mutations
+  createDataSource(input: CreateDataSourceInput!): CreateDataSourceResult!
+  updateDataSource(input: UpdateDataSourceInput!): UpdateDataSourceResult!
+  deleteDataSource(id: ID!): DeleteDataSourceResult!
+  testDataSourceConnection(id: ID!): TestDataSourceConnectionResult!
+  toggleDataSourceActive(id: ID!, active: Boolean!): ToggleDataSourceActiveResult!
+  reorderSources(order: [SourceReorderInput!]!): ReorderSourcesResult!
+  
+  # Data Connection mutations
+  createDataConnection(input: CreateDataConnectionInput!): CreateDataConnectionResult!
+  updateDataConnection(id: ID!, input: UpdateDataConnectionInput!): UpdateDataConnectionResult!
+  deleteDataConnection(id: ID!): DeleteDataConnectionResult!
+  testDataConnection(id: ID!): TestDataConnectionResult!
+  
+  # Data Loader mutations
+  createDataLoader(input: CreateDataLoaderInput!): CreateDataLoaderResult!
+  updateDataLoader(id: ID!, input: UpdateDataLoaderInput!): UpdateDataLoaderResult!
+  deleteDataLoader(id: ID!): DeleteDataLoaderResult!
+  triggerDataLoader(id: ID!): TriggerDataLoaderResult!
+  
+  # Import Map mutations
+  createImportMap(input: CreateImportMapInput!): CreateImportMapResult!
+  updateImportMap(input: UpdateImportMapInput!): UpdateImportMapResult!
+  deleteImportMap(id: ID!): DeleteImportMapResult!
+  analyzeImportMap(input: AnalyzeImportMapInput!): AnalyzeImportMapResult!
+  executeImportMap(input: ExecuteImportMapInput!): ExecuteImportMapResult!
+
+  # Relationship type (dimension) mutations
+  createRelationshipType(input: CreateRelationshipTypeInput!): CreateRelationshipTypeResult!
+  updateRelationshipType(input: UpdateRelationshipTypeInput!): UpdateRelationshipTypeResult!
+  deleteRelationshipType(id: ID!): DeleteRelationshipTypeResult!
+
+  # Entity identifier (match key) mutations
+  createEntityIdentifier(input: CreateEntityIdentifierInput!): CreateEntityIdentifierResult!
+  updateEntityIdentifier(input: UpdateEntityIdentifierInput!): UpdateEntityIdentifierResult!
+  deleteEntityIdentifier(id: ID!): DeleteEntityIdentifierResult!
+
+  # Precedence Rules mutations
+  createPrecedenceRule(input: CreatePrecedenceRuleInput!): CreatePrecedenceRuleResult!
+  updatePrecedenceRule(id: ID!, input: UpdatePrecedenceRuleInput!): UpdatePrecedenceRuleResult!
+  deletePrecedenceRule(id: ID!): DeletePrecedenceRuleResult!
+  updateAttributeDefaultPrecedence(attributeCode: String!, chain: [String!]!): UpdateDefaultPrecedenceResult!
+  reorderPrecedenceChain(ruleId: String!, chain: [PrecedenceChainInput!]!): ReorderPrecedenceChainResult!
+
+  # Compliance Rules mutations
+  createComplianceRule(input: CreateComplianceRuleInput!): CreateComplianceRuleResult!
+  updateComplianceRule(id: ID!, input: UpdateComplianceRuleInput!): UpdateComplianceRuleResult!
+  deleteComplianceRule(id: ID!): DeleteComplianceRuleResult!
+  createComplianceRuleVersion(input: CreateComplianceRuleVersionInput!): CreateComplianceRuleVersionResult!
+  createComplianceScopeAssignment(input: CreateComplianceScopeAssignmentInput!): CreateComplianceScopeAssignmentResult!
+  deleteComplianceScopeAssignment(id: ID!): DeleteComplianceScopeAssignmentResult!
+  evaluateComplianceRule(input: EvaluateComplianceRuleInput!): EvaluateComplianceRuleResult!
+
+  # Reference List (Controlled Vocabulary) mutations
+  createReferenceList(input: CreateReferenceListInput!): CreateReferenceListResult!
+  updateReferenceList(input: UpdateReferenceListInput!): UpdateReferenceListResult!
+  deleteReferenceList(id: ID!): DeleteReferenceListResult!
+  addReferenceListValue(input: AddReferenceListValueInput!): AddReferenceListValueResult!
+  updateReferenceListValue(input: UpdateReferenceListValueInput!): UpdateReferenceListValueResult!
+  deleteReferenceListValue(id: ID!): DeleteReferenceListValueResult!
+  addValueSynonyms(input: AddSynonymsInput!): SynonymUpdateResult!
+  removeValueSynonyms(input: RemoveSynonymsInput!): SynonymUpdateResult!
+  linkAttributeToList(attributeId: ID!, listCode: String!): UpdateAttributeDefinitionResult!
+
+  # Reporting (dashboards & narratives)
+  createDashboard(input: CreateDashboardInput!): CreateDashboardResult!
+  updateDashboard(id: ID!, input: UpdateDashboardInput!): UpdateDashboardResult!
+  deleteDashboard(id: ID!): DeleteDashboardResult!
+  createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
+  updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
+  deleteNarrative(id: ID!): DeleteNarrativeResult!
 }
 
 # Root Subscription Type
@@ -152,22 +250,6 @@ type ManualOverrideResult {
 }
 
 # Metadata Types
-type AttributeDefinition {
-  id: ID!
-  attributeCode: String!
-  attributeName: String!
-  dataType: String!
-  description: String
-  unitOfMeasure: String
-  isRequired: Boolean!
-  isMultiValued: Boolean!
-  referenceDomainCode: String
-  defaultPrecedenceRank: Int!
-  aggregationType: String
-  weightAttributeCode: String
-  numericPrecision: Int
-}
-
 input UpdateAttributeDefinitionInput {
   id: ID!
   displayFormat: String
@@ -223,6 +305,41 @@ type EntityIdentifierDefinition {
   updatedAt: DateTime!
 }
 
+# Entity Identifier Input Types
+input CreateEntityIdentifierInput {
+  identifierCode: String!
+  identifierName: String!
+  domainCode: String!
+  attributeCodes: [String!]!
+  isPrimary: Boolean
+  description: String
+  isActive: Boolean
+}
+
+input UpdateEntityIdentifierInput {
+  identifierName: String
+  attributeCodes: [String!]
+  isPrimary: Boolean
+  description: String
+  isActive: Boolean
+}
+
+# Entity Identifier Mutation Result Types
+type CreateEntityIdentifierResult {
+  identifier: EntityIdentifierDefinition
+  errors: [MutationError!]!
+}
+
+type UpdateEntityIdentifierResult {
+  identifier: EntityIdentifierDefinition
+  errors: [MutationError!]!
+}
+
+type DeleteEntityIdentifierResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
 # Data Source Types
 type DataSource {
   id: ID!
@@ -235,6 +352,8 @@ type DataSource {
   connectionConfig: JSON
   precedenceRank: Int!
   isActive: Boolean!
+  isProtected: Boolean!
+  color: String
   metadata: JSON
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -248,6 +367,68 @@ type DataSourceStats {
 type SourceBreakdown {
   sourceId: ID!
   recordCount: Int!
+}
+
+# Source Registry Input/Result Types
+input CreateDataSourceInput {
+  sourceCode: String!
+  sourceName: String!
+  sourceType: String!
+  vendorName: String
+  feedFormat: String
+  feedFrequency: String
+  precedenceRank: Int
+  color: String
+  metadata: JSON
+}
+
+input UpdateDataSourceInput {
+  id: ID!
+  sourceName: String
+  sourceType: String
+  vendorName: String
+  feedFormat: String
+  feedFrequency: String
+  precedenceRank: Int
+  color: String
+  isActive: Boolean
+  metadata: JSON
+}
+
+input SourceReorderInput {
+  id: ID!
+  precedenceRank: Int!
+}
+
+type CreateDataSourceResult {
+  dataSource: DataSource
+  errors: [MutationError!]!
+}
+
+type UpdateDataSourceResult {
+  dataSource: DataSource
+  errors: [MutationError!]!
+}
+
+type DeleteDataSourceResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type TestDataSourceConnectionResult {
+  success: Boolean!
+  message: String
+  errors: [MutationError!]!
+}
+
+type ToggleDataSourceActiveResult {
+  dataSource: DataSource
+  errors: [MutationError!]!
+}
+
+type ReorderSourcesResult {
+  sources: [DataSource!]!
+  errors: [MutationError!]!
 }
 
 # Data Connection Types
@@ -271,6 +452,8 @@ type DataConnection {
   metadata: JSON
   createdAt: DateTime!
   updatedAt: DateTime!
+  # Related loaders
+  loaders: [DataLoader!]
 }
 
 type DataLoader {
@@ -295,4 +478,399 @@ type DataLoader {
   metadata: JSON
   createdAt: DateTime!
   updatedAt: DateTime!
+}
+
+# Precedence Rules Types
+type PrecedenceRule {
+  id: ID!
+  ruleCode: String
+  ruleName: String!
+  domainCode: String!
+  templateCode: String
+  attributeCode: String!
+  priorityTier: String!
+  isActive: Boolean!
+  conditions: [PrecedenceCondition!]!
+  chain: [PrecedenceChainItem!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+  metadata: JSON
+}
+
+type PrecedenceCondition {
+  id: ID!
+  ruleId: ID!
+  conditionGroup: Int!
+  conditionOrder: Int!
+  attributeCode: String!
+  operator: String!
+  value: String
+  logicOperator: String!
+  createdAt: DateTime!
+}
+
+type PrecedenceChainItem {
+  id: ID!
+  ruleId: ID!
+  chainOrder: Int!
+  sourceCode: String!
+  conditionType: String!
+  createdAt: DateTime!
+}
+
+input CreatePrecedenceRuleInput {
+  ruleCode: String
+  ruleName: String!
+  domainCode: String!
+  templateCode: String
+  attributeCode: String!
+  priorityTier: String
+  isActive: Boolean
+  conditions: [PrecedenceConditionInput!]
+  chain: [PrecedenceChainInput!]
+  metadata: JSON
+}
+
+input UpdatePrecedenceRuleInput {
+  ruleCode: String
+  ruleName: String
+  domainCode: String
+  templateCode: String
+  attributeCode: String
+  priorityTier: String
+  isActive: Boolean
+  conditions: [PrecedenceConditionInput!]
+  chain: [PrecedenceChainInput!]
+  metadata: JSON
+}
+
+input PrecedenceConditionInput {
+  conditionGroup: Int
+  conditionOrder: Int
+  attributeCode: String!
+  operator: String!
+  value: String
+  logicOperator: String
+}
+
+input PrecedenceChainInput {
+  chainOrder: Int
+  sourceCode: String!
+  conditionType: String
+}
+
+type CreatePrecedenceRuleResult {
+  precedenceRule: PrecedenceRule
+  errors: [MutationError!]!
+}
+
+type UpdatePrecedenceRuleResult {
+  precedenceRule: PrecedenceRule
+  errors: [MutationError!]!
+}
+
+type DeletePrecedenceRuleResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type UpdateDefaultPrecedenceResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type ReorderPrecedenceChainResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# Data Connection Result Types
+type CreateDataConnectionResult {
+  connection: DataConnection
+  errors: [MutationError!]!
+}
+
+type UpdateDataConnectionResult {
+  connection: DataConnection
+  errors: [MutationError!]!
+}
+
+type DeleteDataConnectionResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type TestDataConnectionResult {
+  testResult: Boolean
+  errors: [MutationError!]!
+}
+
+# Data Loader Result Types
+type CreateDataLoaderResult {
+  loader: DataLoader
+  errors: [MutationError!]!
+}
+
+type UpdateDataLoaderResult {
+  loader: DataLoader
+  errors: [MutationError!]!
+}
+
+type DeleteDataLoaderResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type TriggerDataLoaderResult {
+  success: Boolean!
+  runId: String
+  errors: [MutationError!]!
+}
+
+# Input Types for Data Connection Mutations
+input CreateDataConnectionInput {
+  connectionCode: String!
+  connectionName: String!
+  sourceType: String!
+  vendorName: String
+  endpointUrl: String
+  endpointMethod: String
+  endpointHeaders: JSON
+  requestTimeout: Int
+  authType: String!
+  authConfig: JSON
+  precedenceRank: Int
+  isActive: Boolean
+}
+
+input UpdateDataConnectionInput {
+  connectionName: String
+  sourceType: String
+  vendorName: String
+  endpointUrl: String
+  endpointMethod: String
+  endpointHeaders: JSON
+  requestTimeout: Int
+  authConfig: JSON
+  precedenceRank: Int
+  isActive: Boolean
+}
+
+# Input Types for Data Loader Mutations
+input CreateDataLoaderInput {
+  loaderCode: String!
+  loaderName: String!
+  connectionId: ID!
+  domainCode: String
+  attributeCodes: [String!]
+  loadFrequency: String!
+  cronExpression: String
+  loadWindow: String
+  batchSize: Int
+}
+
+input UpdateDataLoaderInput {
+  loaderName: String
+  domainCode: String
+  attributeCodes: [String!]
+  loadFrequency: String
+  cronExpression: String
+  loadWindow: String
+  batchSize: Int
+}
+
+# Import Map Types
+type ImportMap {
+  id: ID!
+  name: String!
+  description: String
+  sourceFormat: String!
+  domainMappings: [DomainImportMapping!]!
+  status: String!
+  options: JSON
+  lastAnalysis: JSON
+  lastAnalysisAt: DateTime
+  lastExecution: JSON
+  lastExecutionAt: DateTime
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+}
+
+type DomainImportMapping {
+  domainCode: String!
+  sourceColumn: String!
+  targetField: String!
+  mappingType: String
+  isRequired: Boolean
+}
+
+type IdentifierSuggestionsResult {
+  identifiers: [IdentifierDefinition!]!
+  recommendations: [String!]!
+}
+
+type IdentifierDefinition {
+  identifierCode: String!
+  identifierName: String!
+  domainCode: String!
+  attributeCodes: [String!]!
+  isPrimary: Boolean!
+  description: String
+  isActive: Boolean!
+}
+
+# Import Map Result Types
+type CreateImportMapResult {
+  importMap: ImportMap
+  errors: [MutationError!]!
+}
+
+type UpdateImportMapResult {
+  importMap: ImportMap
+  errors: [MutationError!]!
+}
+
+type DeleteImportMapResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type AnalyzeImportMapResult {
+  analysis: ImportMapAnalysis
+  errors: [MutationError!]!
+}
+
+type ImportMapAnalysis {
+  summary: ImportMapSummary
+  mappings: [MappingSuggestion!]!
+  identifiers: [IdentifierCandidate!]!
+}
+
+type ImportMapSummary {
+  columns: Int!
+  rows: Int!
+  domains: Int!
+  matches: Int!
+  unmatched: Int!
+}
+
+type MappingSuggestion {
+  column: String!
+  domain: String
+  field: String
+  confidence: Float!
+}
+
+type IdentifierCandidate {
+  domain: String!
+  identifier: String!
+  format: String!
+  confidence: Float!
+}
+
+type ExecuteImportMapResult {
+  executionId: String!
+  success: Boolean!
+  results: ImportMapExecutionResults
+  summary: ImportMapSummary
+  errors: [String!]!
+}
+
+type ImportMapExecutionResults {
+  imported: Int!
+  skipped: Int!
+  errors: [ImportMapError!]!
+}
+
+type ImportMapError {
+  row: Int!
+  column: String!
+  message: String!
+}
+
+# Input Types for Import Map Mutations
+input CreateImportMapInput {
+  name: String!
+  description: String
+  sourceFormat: String!
+  sourceData: String!
+  domainMappings: [DomainImportMappingInput!]
+  options: JSON
+}
+
+input DomainImportMappingInput {
+  domainCode: String!
+  sourceColumn: String!
+  targetField: String!
+  mappingType: String
+  isRequired: Boolean
+}
+
+input UpdateImportMapInput {
+  name: String
+  description: String
+  domainMappings: [DomainImportMappingInput!]
+  options: JSON
+}
+
+input AnalyzeImportMapInput {
+  importMapId: ID!
+}
+
+input ExecuteImportMapInput {
+  importMapId: ID!
+  dryRun: Boolean
+  skipValidation: Boolean
+  continueOnError: Boolean
+  batchSize: Int
+}
+
+# Relationship Type Types
+type RelationshipTypeConnection {
+  edges: [RelationshipTypeEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type RelationshipTypeEdge {
+  node: RelationshipType!
+  cursor: String!
+}
+
+# Relationship Type Mutation Results
+type CreateRelationshipTypeResult {
+  relationshipType: RelationshipType
+  errors: [MutationError!]!
+}
+
+type UpdateRelationshipTypeResult {
+  relationshipType: RelationshipType
+  errors: [MutationError!]!
+}
+
+type DeleteRelationshipTypeResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# Input Types for Relationship Type Mutations
+input CreateRelationshipTypeInput {
+  relationshipCode: String!
+  relationshipName: String!
+  parentDomainCode: String
+  childDomainCode: String
+  description: String
+  isActive: Boolean
+  cardinality: String
+  compositeKey: [String!]
+}
+
+input UpdateRelationshipTypeInput {
+  relationshipName: String
+  description: String
+  isActive: Boolean
+  cardinality: String
+  compositeKey: [String!]
 }

@@ -69,7 +69,7 @@ async function parseXLSX(data: Buffer, sheetName?: string): Promise<ParsedData> 
   }
 
   // Convert to JSON with headers
-  const records = XLSX.utils.sheet_to_json(sheet, { defval: null });
+  const records = XLSX.utils.sheet_to_json(sheet, { defval: null }) as Record<string, any>[];
   
   if (records.length === 0) {
     return { fields: [], records: [], recordCount: 0, format: 'xlsx' };

@@ -35,6 +35,12 @@ export interface RelationshipMapping {
 }
 
 export interface ImportOptions {
+  // Parsing options
+  sheetName?: string;
+  delimiter?: string;
+  tableSelector?: string;
+  rootElement?: string;
+  // Execution options
   dryRun?: boolean;
   batchSize?: number;
   skipValidation?: boolean;

@@ -131,7 +131,7 @@ export function ChatPanel({ context }: ChatPanelProps) {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '15px' }}>
             <span style={{ fontSize: '20px' }}>🤖</span>
-            <span>Meridian Assistant</span>
+            <span>tapestr.ai Assistant</span>
           </div>
           <div style={{ display: 'flex', gap: '4px' }}>
             <button
@@ -195,7 +195,7 @@ export function ChatPanel({ context }: ChatPanelProps) {
             >
               <div style={{ fontSize: '48px' }}>👋</div>
               <div style={{ fontSize: '14px', lineHeight: 1.5, maxWidth: '280px' }}>
-                Hi! I'm your Meridian MDM assistant. Ask me about entities, data quality, lineage, or anything else!
+                Hi! I'm your tapestr.ai MDM assistant. Ask me about entities, data quality, lineage, or anything else!
               </div>
             </div>
           )}

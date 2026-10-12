@@ -9,70 +9,78 @@ export const entityResolvers = {
     ) => {
       const { filter, pagination, asOfDate } = args;
       
-      // Query from generic entity_master view
-      let query = context.supabase
-        .from('entity_master')
-        .select('*', { count: 'exact' });
-      
-      // Apply filters
-      if (filter) {
-        if (filter.domainCode) {
-          query = query.eq('domain_code', filter.domainCode);
-        }
-        if (filter.templateCode) {
-          query = query.eq('template_code', filter.templateCode);
-        }
-        if (filter.entityCode) {
-          query = query.eq('entity_code', filter.entityCode);
-        }
-        if (filter.entityName) {
-          query = query.ilike('entity_name', `%${filter.entityName}%`);
-        }
-        if (filter.isActive !== undefined) {
-          query = query.eq('is_active', filter.isActive);
-        }
-        // Attribute-based filtering using JSONB operators
-        if (filter.attributes) {
-          for (const [key, value] of Object.entries(filter.attributes)) {
-            query = query.contains('attributes', { [key]: { value } });
+      try {
+        // Query from generic entity_master view
+        let query = context.supabase
+          .from('entity_master')
+          .select('*', { count: 'exact' });
+        
+        // Apply filters
+        if (filter) {
+          if (filter.domainCode) {
+            query = query.eq('domain_code', filter.domainCode);
+          }
+          if (filter.templateCode) {
+            query = query.eq('template_code', filter.templateCode);
+          }
+          if (filter.entityCode) {
+            query = query.eq('entity_code', filter.entityCode);
+          }
+          if (filter.entityName) {
+            query = query.ilike('entity_name', `%${filter.entityName}%`);
+          }
+          if (filter.isActive !== undefined) {
+            query = query.eq('is_active', filter.isActive);
+          }
+          // Attribute-based filtering using JSONB operators
+          if (filter.attributes) {
+            for (const [key, value] of Object.entries(filter.attributes)) {
+              query = query.contains('attributes', { [key]: { value } });
+            }
+          }
+          // Relationship filters
+          if (filter.hasParent) {
+            // This would require a more complex query with entity_relationships
+            // For now, we'll handle this in post-processing
+          }
+          if (filter.hasChild) {
+            // Similar to hasParent
           }
         }
-        // Relationship filters
-        if (filter.hasParent) {
-          // This would require a more complex query with entity_relationships
-          // For now, we'll handle this in post-processing
+        
+        // Apply pagination
+        const limit = pagination?.first || 20;
+        const offset = pagination?.after ? parseInt(atob(pagination.after)) : 0;
+        
+        query = query.range(offset, offset + limit - 1);
+        query = query.order('entity_name');
+        
+        const { data, error, count } = await query;
+        
+        if (error) {
+          console.error('Error fetching entities:', error);
+          throw error;
         }
-        if (filter.hasChild) {
-          // Similar to hasParent
-        }
+        
+        const edges = (data || []).map((row: any, index: number) => ({
+          node: mapEntityRow(row),
+          cursor: btoa(String(offset + index)),
+        }));
+        
+        return {
+          edges,
+          pageInfo: {
+            hasNextPage: (offset + limit) < (count || 0),
+            hasPreviousPage: offset > 0,
+            startCursor: edges[0]?.cursor,
+            endCursor: edges[edges.length - 1]?.cursor,
+          },
+          totalCount: count || 0,
+        };
+      } catch (error: any) {
+        console.error('Exception in entities resolver:', error);
+        throw error;
       }
-      
-      // Apply pagination
-      const limit = pagination?.first || 20;
-      const offset = pagination?.after ? parseInt(atob(pagination.after)) : 0;
-      
-      query = query.range(offset, offset + limit - 1);
-      query = query.order('entity_name');
-      
-      const { data, error, count } = await query;
-      
-      if (error) throw error;
-      
-      const edges = (data || []).map((row: any, index: number) => ({
-        node: mapEntityRow(row),
-        cursor: btoa(String(offset + index)),
-      }));
-      
-      return {
-        edges,
-        pageInfo: {
-          hasNextPage: (offset + limit) < (count || 0),
-          hasPreviousPage: offset > 0,
-          startCursor: edges[0]?.cursor,
-          endCursor: edges[edges.length - 1]?.cursor,
-        },
-        totalCount: count || 0,
-      };
     },
     
     entity: async (
@@ -243,6 +251,7 @@ export const entityResolvers = {
         compositeKey: row.composite_key || [],
         description: row.description,
         isActive: row.is_active,
+        isRequired: row.is_required || false,
       }));
     },
   },
@@ -270,22 +279,25 @@ export const entityResolvers = {
         byAttribute.get(code)!.push(row);
       });
       
-      return Array.from(byAttribute.entries()).map(([code, values]) => ({
-        attributeCode: code,
-        attributeName: values[0].attribute_register.attribute_name,
-        currentValue: values[0].golden_value,
-        competingValues: values.map((v: any) => ({
-          source: v.source_registry.source_code,
-          sourceName: v.source_registry.source_name,
-          value: v.golden_value,
-          precedenceRank: v.precedence_rank,
-          validFrom: v.valid_from,
-          validTo: v.valid_to,
-          confidenceScore: v.confidence_score,
-        })),
-        resolutionRule: values[0].resolution_rule_applied,
-        lastUpdated: values[0].system_from,
-      }));
+      return Array.from(byAttribute.entries()).map(([code, values]) => {
+        const winningRecord = values.find(v => v.golden_value !== null && v.golden_value !== undefined && v.golden_value !== '') || values[0];
+        return {
+          attributeCode: code,
+          attributeName: winningRecord.attribute_register.attribute_name,
+          currentValue: winningRecord.golden_value,
+          competingValues: values.map((v: any) => ({
+            source: v.source_registry.source_code,
+            sourceName: v.source_registry.source_name,
+            value: v.golden_value,
+            precedenceRank: v.precedence_rank,
+            validFrom: v.valid_from,
+            validTo: v.valid_to,
+            confidenceScore: v.confidence_score,
+          })),
+          resolutionRule: winningRecord.resolution_rule_applied,
+          lastUpdated: winningRecord.system_from,
+        };
+      });
     },
   },
   
@@ -710,6 +722,7 @@ export const entityResolvers = {
             is_required: input.isRequired ?? false,
             is_multi_valued: input.isMultiValued ?? false,
             reference_domain_code: input.referenceDomainCode,
+            domain_code: input.domainCode,
           })
           .select()
           .single();
@@ -836,6 +849,185 @@ export const entityResolvers = {
         return {
           assignment: null,
           errors: [{ field: '', message: error.message, code: 'ASSIGN_FAILED' }],
+        };
+      }
+    },
+
+    updateTemplateAttribute: async (
+      _: any,
+      args: { input: any },
+      context: Context
+    ) => {
+      const { input } = args;
+
+      try {
+        const updateData: any = {};
+        if (input.isRequired !== undefined) updateData.is_required = input.isRequired;
+        if (input.precedenceRank !== undefined) updateData.precedence_rank = input.precedenceRank;
+        if (input.displayOrder !== undefined) updateData.display_order = input.displayOrder;
+        if (input.displayLabel !== undefined) updateData.display_label = input.displayLabel;
+
+        const { data, error } = await context.supabase
+          .from('template_attribute_assignments')
+          .update(updateData)
+          .eq('template_id', input.templateId)
+          .eq('attribute_id', input.attributeId)
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        // Fetch attribute details
+        const { data: attr } = await context.supabase
+          .from('attribute_register')
+          .select('*')
+          .eq('id', input.attributeId)
+          .single();
+
+        return {
+          assignment: {
+            attributeId: data.attribute_id,
+            attribute: {
+              id: attr.id,
+              attributeCode: attr.attribute_code,
+              attributeName: attr.attribute_name,
+              dataType: attr.data_type,
+              description: attr.description,
+              unitOfMeasure: attr.unit_of_measure,
+              isRequired: attr.is_required,
+              isMultiValued: attr.is_multi_valued,
+              referenceDomainCode: attr.reference_domain_code,
+              defaultPrecedenceRank: attr.default_precedence_rank,
+            },
+            isRequired: data.is_required,
+            precedenceRank: data.precedence_rank,
+            displayOrder: data.display_order,
+            displayLabel: data.display_label,
+          },
+          errors: [],
+        };
+      } catch (error: any) {
+        return {
+          assignment: null,
+          errors: [{ field: '', message: error.message, code: 'UPDATE_FAILED' }],
+        };
+      }
+    },
+
+    reorderTemplateAttributes: async (
+      _: any,
+      args: { input: any },
+      context: Context
+    ) => {
+      const { input } = args;
+
+      try {
+        // Update display_order for each attribute based on its position in the array
+        const updates = input.attributeIds.map((attributeId: string, index: number) =>
+          context.supabase
+            .from('template_attribute_assignments')
+            .update({ display_order: index + 1 })
+            .eq('template_id', input.templateId)
+            .eq('attribute_id', attributeId)
+        );
+
+        await Promise.all(updates);
+
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        return { success: false, errors: [{ field: '', message: error.message, code: 'REORDER_FAILED' }] };
+      }
+    },
+
+    updateTemplate: async (
+      _: any,
+      args: { id: string; input: any },
+      context: Context
+    ) => {
+      const { id, input } = args;
+
+      try {
+        const updateData: any = { updated_at: new Date().toISOString() };
+        if (input.templateName !== undefined) updateData.template_name = input.templateName;
+        if (input.description !== undefined) updateData.description = input.description;
+        if (input.isActive !== undefined) updateData.is_active = input.isActive;
+        if (input.applicabilityRules !== undefined) updateData.applicability_rules = input.applicabilityRules;
+
+        const { data, error } = await context.supabase
+          .from('domain_templates')
+          .update(updateData)
+          .eq('id', id)
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        // Fetch attribute assignments for the updated template
+        const { data: assignments } = await context.supabase
+          .from('template_attribute_assignments')
+          .select('*, attribute_register!inner(*)')
+          .eq('template_id', data.id);
+
+        return {
+          template: {
+            id: data.id,
+            templateCode: data.template_code,
+            domainCode: data.domain_code,
+            templateName: data.template_name,
+            description: data.description,
+            isActive: data.is_active,
+            applicabilityRules: data.applicability_rules || {},
+            attributes: (assignments || []).map((a: any) => ({
+              attributeId: a.attribute_id,
+              attribute: {
+                id: a.attribute_register.id,
+                attributeCode: a.attribute_register.attribute_code,
+                attributeName: a.attribute_register.attribute_name,
+                dataType: a.attribute_register.data_type,
+                description: a.attribute_register.description,
+                unitOfMeasure: a.attribute_register.unit_of_measure,
+                isRequired: a.attribute_register.is_required,
+                isMultiValued: a.attribute_register.is_multi_valued,
+                referenceDomainCode: a.attribute_register.reference_domain_code,
+                defaultPrecedenceRank: a.attribute_register.default_precedence_rank,
+              },
+              isRequired: a.is_required,
+              precedenceRank: a.precedence_rank,
+              displayOrder: a.display_order,
+              displayLabel: a.display_label,
+            })),
+          },
+          errors: [],
+        };
+      } catch (error: any) {
+        return {
+          template: null,
+          errors: [{ field: '', message: error.message, code: 'UPDATE_FAILED' }],
+        };
+      }
+    },
+
+    unassignAttributeFromTemplate: async (
+      _: any,
+      args: { templateId: string; attributeId: string },
+      context: Context
+    ) => {
+      const { templateId, attributeId } = args;
+
+      try {
+        const { error } = await context.supabase
+          .from('template_attribute_assignments')
+          .delete()
+          .eq('template_id', templateId)
+          .eq('attribute_id', attributeId);
+
+        if (error) throw error;
+
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        return {
+          success: false,
+          errors: [{ field: '', message: error.message, code: 'UNASSIGN_FAILED' }],
         };
       }
     },

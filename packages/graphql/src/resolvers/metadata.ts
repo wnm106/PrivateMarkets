@@ -7,29 +7,144 @@ export const metadataResolvers = {
      * Get all attributes, optionally filtered by domain
      */
     attributeRegister: async (_: any, args: { domainCode?: string; includeDerived?: boolean }, { supabase }: { supabase: SupabaseClient }) => {
-      let query = supabase
-        .from('attribute_register')
-        .select('*')
-        .order('attribute_code');
+      console.log('[attributeRegister] Called with args:', args);
+      
+      // Use RPC function to bypass PostgREST schema cache for aggregation fields
+      const { data, error } = await supabase
+        .rpc('get_attributes_with_aggregation', { 
+          p_domain_code: null // Get all attributes, we'll filter in the resolver
+        });
 
-      // Filter by domain if specified
-      if (args.domainCode) {
-        query = query.eq('reference_domain_code', args.domainCode);
-      }
-
-      // Filter out derived attributes unless explicitly requested
-      if (!args.includeDerived) {
-        query = query.or('is_derived.eq.false,is_derived.is.null');
-      }
-
-      const { data, error } = await query;
+      console.log('[attributeRegister] RPC result:', { dataLength: data?.length, error: error?.message });
 
       if (error) {
-        console.error('Error fetching attribute register:', error);
-        throw new Error('Failed to fetch attributes');
+        console.error('[attributeRegister] RPC error:', error);
+        // Fallback to regular query if RPC fails
+        let query = supabase
+          .from('attribute_register')
+          .select('*')
+          .order('attribute_code');
+
+        if (!args.includeDerived) {
+          query = query.or('is_derived.eq.false,is_derived.is.null');
+        }
+
+        const { data: fallbackData, error: fallbackError } = await query;
+
+        console.log('[attributeRegister] Fallback query result:', { 
+          dataLength: fallbackData?.length, 
+          error: fallbackError?.message 
+        });
+
+        if (fallbackError) {
+          console.error('[attributeRegister] Fallback error:', fallbackError);
+          throw new Error('Failed to fetch attributes');
+        }
+
+        let attributes = (fallbackData || []).map(mapAttributeDefinition);
+        
+        // If domainCode is specified, filter to show:
+        // 1. Attributes with matching domain_code, OR
+        // 2. Attributes with null domain_code (global/shared), OR
+        // 3. Attributes assigned to templates in this domain
+        if (args.domainCode) {
+          // Get all templates for this domain
+          const { data: domainTemplates } = await supabase
+            .from('domain_templates')
+            .select('id')
+            .eq('domain_code', args.domainCode);
+          
+          const templateIds = (domainTemplates || []).map((t: any) => t.id);
+          
+          // Get all attribute assignments for these templates
+          let assignedAttributeIds = new Set<string>();
+          if (templateIds.length > 0) {
+            const { data: assignments } = await supabase
+              .from('template_attribute_assignments')
+              .select('attribute_id')
+              .in('template_id', templateIds);
+            
+            assignedAttributeIds = new Set(
+              (assignments || []).map((a: any) => a.attribute_id)
+            );
+          }
+          
+          attributes = attributes.filter((attr: any) => 
+            attr.domainCode === args.domainCode || 
+            attr.domainCode === null ||
+            assignedAttributeIds.has(attr.id)
+          );
+        }
+        
+        return attributes;
       }
 
-      return (data || []).map(mapAttributeDefinition);
+      // RPC returns JSONB array, parse it
+      const allAttributes = Array.isArray(data) ? data : (data ? JSON.parse(data as any) : []);
+      
+      console.log('[attributeRegister] Parsed attributes count:', allAttributes.length);
+      
+      // Filter out derived attributes unless explicitly requested
+      let filtered = args.includeDerived 
+        ? allAttributes 
+        : allAttributes.filter((attr: any) => !attr.is_derived);
+
+      // If domainCode is specified, filter to show:
+      // 1. Attributes with matching domain_code, OR
+      // 2. Attributes with null domain_code (global/shared), OR
+      // 3. Attributes assigned to templates in this domain
+      if (args.domainCode) {
+        console.log('[attributeRegister] Filtering by domainCode:', args.domainCode);
+        
+        // Get all templates for this domain
+        const { data: domainTemplates, error: templatesError } = await supabase
+          .from('domain_templates')
+          .select('id')
+          .eq('domain_code', args.domainCode);
+        
+        console.log('[attributeRegister] Templates query result:', { 
+          templateCount: domainTemplates?.length, 
+          error: templatesError?.message 
+        });
+        
+        const templateIds = (domainTemplates || []).map((t: any) => t.id);
+        
+        // Get all attribute assignments for these templates
+        let assignedAttributeIds = new Set<string>();
+        if (templateIds.length > 0) {
+          const { data: assignments, error: assignmentsError } = await supabase
+            .from('template_attribute_assignments')
+            .select('attribute_id')
+            .in('template_id', templateIds);
+          
+          console.log('[attributeRegister] Assignments query result:', { 
+            assignmentCount: assignments?.length, 
+            error: assignmentsError?.message 
+          });
+          
+          assignedAttributeIds = new Set(
+            (assignments || []).map((a: any) => a.attribute_id)
+          );
+        }
+        
+        console.log('[attributeRegister] Assigned attribute IDs:', Array.from(assignedAttributeIds));
+        console.log('[attributeRegister] Before filtering, attributes count:', filtered.length);
+        
+        filtered = filtered.filter((attr: any) => {
+          const matches = attr.domain_code === args.domainCode || 
+            attr.domain_code === null ||
+            assignedAttributeIds.has(attr.id);
+          if (matches) {
+            console.log('[attributeRegister] Attribute matches:', attr.attribute_code, 'domain_code:', attr.domain_code);
+          }
+          return matches;
+        });
+        
+        console.log('[attributeRegister] After filtering, attributes count:', filtered.length);
+      }
+
+      console.log('[attributeRegister] Returning filtered count:', filtered.length);
+      return filtered.map(mapAttributeDefinition);
     },
 
     domainTemplates: async (_: any, args: { domainCode?: string }, { supabase }: { supabase: SupabaseClient }) => {
@@ -81,6 +196,7 @@ export const metadataResolvers = {
         templateName: t.template_name,
         description: t.description,
         isActive: t.is_active,
+        applicabilityRules: t.applicability_rules || {},
         attributes: (assignmentsByTemplate.get(t.id) || []).map((a: any) => ({
           attributeId: a.attribute_id,
           attribute: mapAttributeDefinition(a.attribute_register),
@@ -205,6 +321,7 @@ export const metadataResolvers = {
           is_required: input.isRequired || false,
           is_multi_valued: input.isMultiValued || false,
           reference_domain_code: input.referenceDomainCode,
+          domain_code: input.domainCode,
           default_precedence_rank: input.defaultPrecedenceRank || 100,
           is_derived: input.isDerived || false,
           derivation_type: input.derivationType,
@@ -254,6 +371,7 @@ export const metadataResolvers = {
         if (input.isRequired !== undefined) updateData.is_required = input.isRequired;
         if (input.isMultiValued !== undefined) updateData.is_multi_valued = input.isMultiValued;
         if (input.referenceDomainCode !== undefined) updateData.reference_domain_code = input.referenceDomainCode;
+        if (input.domainCode !== undefined) updateData.domain_code = input.domainCode;
         if (input.defaultPrecedenceRank !== undefined) updateData.default_precedence_rank = input.defaultPrecedenceRank;
         if (input.isDerived !== undefined) updateData.is_derived = input.isDerived;
         if (input.derivationType !== undefined) updateData.derivation_type = input.derivationType;
@@ -275,11 +393,20 @@ export const metadataResolvers = {
         if (input.isEditable !== undefined) updateData.is_editable = input.isEditable;
         if (input.isVisible !== undefined) updateData.is_visible = input.isVisible;
         
-        // Aggregation and precision fields
-        if (input.aggregationType !== undefined) updateData.aggregation_type = input.aggregationType;
-        if (input.weightAttributeCode !== undefined) updateData.weight_attribute_code = input.weightAttributeCode;
-        if (input.numericPrecision !== undefined) updateData.numeric_precision = input.numericPrecision;
+        // Reference list link
+        if (input.referenceListCode !== undefined) updateData.reference_list_code = input.referenceListCode;
+        
+        // Extract aggregation fields for separate RPC update (bypasses schema cache)
+        const aggregationFields = {
+          aggregationType: input.aggregationType,
+          weightAttributeCode: input.weightAttributeCode,
+          numericPrecision: input.numericPrecision,
+        };
+        const hasAggregationUpdates = input.aggregationType !== undefined || 
+                                       input.weightAttributeCode !== undefined || 
+                                       input.numericPrecision !== undefined;
 
+        // Update non-aggregation fields using regular Supabase client
         const { data, error } = await supabase
           .from('attribute_register')
           .update(updateData)
@@ -293,6 +420,40 @@ export const metadataResolvers = {
             success: false,
             attribute: null,
             errors: [{ field: 'general', message: error.message, code: 'DATABASE_ERROR' }],
+          };
+        }
+
+        // Update aggregation fields using RPC function (bypasses schema cache)
+        if (hasAggregationUpdates) {
+          const { data: rpcData, error: rpcError } = await supabase
+            .rpc('update_attribute_aggregation', {
+              p_attribute_id: input.id,
+              p_aggregation_type: aggregationFields.aggregationType || 'NONE',
+              p_weight_attribute_code: aggregationFields.weightAttributeCode || null,
+              p_numeric_precision: aggregationFields.numericPrecision ?? null,
+            });
+
+          if (rpcError) {
+            console.error('Error updating aggregation fields:', rpcError);
+            return {
+              success: false,
+              attribute: null,
+              errors: [{ field: 'general', message: rpcError.message, code: 'DATABASE_ERROR' }],
+            };
+          }
+
+          // Merge the RPC result with the regular update result
+          const mergedData = {
+            ...data,
+            aggregation_type: rpcData?.aggregation_type || aggregationFields.aggregationType || 'NONE',
+            weight_attribute_code: rpcData?.weight_attribute_code || aggregationFields.weightAttributeCode,
+            numeric_precision: rpcData?.numeric_precision ?? aggregationFields.numericPrecision,
+          };
+
+          return {
+            success: true,
+            attribute: mapAttributeDefinition(mergedData),
+            errors: [],
           };
         }
 
@@ -371,6 +532,7 @@ function mapAttributeDefinition(row: any) {
     isRequired: row.is_required || false,
     isMultiValued: row.is_multi_valued || false,
     referenceDomainCode: row.reference_domain_code,
+    domainCode: row.domain_code,
     defaultPrecedenceRank: row.default_precedence_rank || 100,
     isDerived: row.is_derived || false,
     derivationType: row.derivation_type,
@@ -389,6 +551,8 @@ function mapAttributeDefinition(row: any) {
     displayGroup: row.display_group || 0,
     isEditable: row.is_editable !== false,
     isVisible: row.is_visible !== false,
+    // Reference list link
+    referenceListCode: row.reference_list_code || null,
     // Aggregation and precision
     aggregationType: row.aggregation_type || 'NONE',
     weightAttributeCode: row.weight_attribute_code,
@@ -408,6 +572,7 @@ interface CreateAttributeInput {
   isRequired?: boolean;
   isMultiValued?: boolean;
   referenceDomainCode?: string;
+  domainCode?: string;
   defaultPrecedenceRank?: number;
   isDerived?: boolean;
   derivationType?: string;
@@ -428,6 +593,7 @@ interface UpdateAttributeDefinitionInput {
   isRequired?: boolean;
   isMultiValued?: boolean;
   referenceDomainCode?: string;
+  domainCode?: string;
   defaultPrecedenceRank?: number;
   isDerived?: boolean;
   derivationType?: string;
@@ -446,6 +612,8 @@ interface UpdateAttributeDefinitionInput {
   displayGroup?: number;
   isEditable?: boolean;
   isVisible?: boolean;
+  // Reference list link
+  referenceListCode?: string;
   // Aggregation and precision
   aggregationType?: 'NONE' | 'MIN' | 'MAX' | 'SUM' | 'AVG' | 'WEIGHTED_AVG';
   weightAttributeCode?: string;

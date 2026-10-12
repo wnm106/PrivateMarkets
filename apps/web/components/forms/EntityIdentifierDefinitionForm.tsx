@@ -2,9 +2,17 @@
 
 import { useState, useEffect } from 'react';
 
+interface Attribute {
+  id: string;
+  attributeCode: string;
+  attributeName: string;
+  dataType: string;
+}
+
 interface EntityIdentifierDefinitionFormProps {
   mode: 'create' | 'edit';
   initialData?: any;
+  availableAttributes?: Attribute[];
   onSubmit: (data: any) => void;
   onCancel: () => void;
 }
@@ -20,7 +28,8 @@ interface FormData {
 
 export function EntityIdentifierDefinitionForm({ 
   mode, 
-  initialData, 
+  initialData,
+  availableAttributes = [],
   onSubmit, 
   onCancel 
 }: EntityIdentifierDefinitionFormProps) {
@@ -55,11 +64,21 @@ export function EntityIdentifierDefinitionForm({
     }
   };
 
+  const toggleAttribute = (attrCode: string) => {
+    setFormData(prev => {
+      const codes = prev.attributeCodes.includes(attrCode)
+        ? prev.attributeCodes.filter(c => c !== attrCode)
+        : [...prev.attributeCodes, attrCode];
+      return { ...prev, attributeCodes: codes };
+    });
+  };
+
   const validate = () => {
     const newErrors: Record<string, string> = {};
     if (!formData.domainCode) newErrors.domainCode = 'Domain is required';
     if (!formData.identifierCode) newErrors.identifierCode = 'Identifier code is required';
     if (!formData.identifierName) newErrors.identifierName = 'Identifier name is required';
+    if (formData.attributeCodes.length === 0) newErrors.attributeCodes = 'At least one attribute is required';
     
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -142,6 +161,68 @@ export function EntityIdentifierDefinitionForm({
               rows={3}
               style={{ resize: 'vertical' }}
             />
+          </div>
+
+          {/* Composite Attribute Selection */}
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
+            <label>
+              Composite Attributes *
+              <span style={{ fontWeight: 400, color: 'var(--ink-3)', fontSize: '11px', marginLeft: '8px' }}>
+                ({formData.attributeCodes.length} selected)
+              </span>
+            </label>
+            {errors.attributeCodes && (
+              <div style={{ color: 'var(--red)', fontSize: '11px', marginBottom: '8px' }}>{errors.attributeCodes}</div>
+            )}
+            {availableAttributes.length === 0 ? (
+              <div style={{
+                padding: '16px', background: 'var(--surface, #fafafa)',
+                border: '1px solid var(--line)', borderRadius: '6px',
+                fontSize: '12px', color: 'var(--ink-3)', textAlign: 'center',
+              }}>
+                No attributes available for this domain. Create attributes first.
+              </div>
+            ) : (
+              <div style={{
+                maxHeight: '200px', overflowY: 'auto',
+                border: '1px solid var(--line)', borderRadius: '6px',
+                background: 'var(--surface, #fafafa)',
+              }}>
+                {availableAttributes.map(attr => {
+                  const isSelected = formData.attributeCodes.includes(attr.attributeCode);
+                  return (
+                    <div
+                      key={attr.attributeCode}
+                      onClick={() => toggleAttribute(attr.attributeCode)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '10px',
+                        padding: '8px 12px', borderBottom: '1px solid var(--line)',
+                        cursor: 'pointer', background: isSelected ? '#fef6ec' : 'transparent',
+                        transition: 'background 0.15s',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleAttribute(attr.attributeCode)}
+                        style={{ width: '14px', height: '14px', cursor: 'pointer' }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <span style={{ fontSize: '12px', fontWeight: 500 }}>{attr.attributeName}</span>
+                        <span style={{ fontSize: '10px', color: 'var(--ink-3)', marginLeft: '8px' }}>
+                          <span className="mono">{attr.attributeCode}</span> · {attr.dataType}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {formData.attributeCodes.length > 0 && (
+              <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--ink-3)' }}>
+                Composite key: {formData.attributeCodes.join(', ')}
+              </div>
+            )}
           </div>
         </div>
       </div>

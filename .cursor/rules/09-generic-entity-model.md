@@ -40,6 +40,7 @@ Each entity belongs to a **domain**:
 | DEAL | Investment deal | Acquisition, Financing, Exit |
 | PRICE | Price data | Market price, Navbar price |
 | POSITION | Investment position | Direct position, Indirect position |
+| CASH_FLOW | Cash flow events | Dividend, Interest, Principal repayment |
 
 ## Templates
 

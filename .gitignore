@@ -48,3 +48,26 @@ yarn-error.log*
 # Cloudflare
 .wrangler/
 .dev.vars
+
+# Local scratch scripts — several contain hardcoded Supabase keys/connection
+# strings with embedded passwords. Never commit these; use env vars instead.
+populate_db.js
+populate_db_sequential.js
+populate_supabase_client.js
+check-schema.js
+fix_entity_master_view.js
+fix_security_domain.js
+test_supabase_connection.ts
+setup-cashflow.ts
+run-migration-*.ts
+tmp_stdout.txt
+tmp_stderr.txt
+*.tmp
+
+# One-off scripts run in the Supabase SQL editor / root, not part of the app
+diagnose_position_visibility.sql
+fix-entity-identifier-permissions.sql
+migrate_entities_to_bill_client.sql
+
+# Stray duplicate of apps/web/public/tapestrai.jpg
+/tapestrai.jpg

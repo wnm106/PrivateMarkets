@@ -5,7 +5,7 @@ project_id = "meridian-mdm"
 [api]
 enabled = true
 port = 54321
-schemas = ["public", "metadata_register", "entity_instances", "golden_master", "position_master", "data_quality", "read_projections"]
+schemas = ["public", "metadata_register", "entity_instances", "golden_master", "position_master", "data_quality", "compliance", "read_projections", "tenancy"]
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
 
@@ -16,7 +16,7 @@ major_version = 17
 
 [db.seed]
 enabled = true
-sql_paths = ["./seed/*.sql"]
+sql_paths = ["./seed/001_seed_data.sql"]
 
 [studio]
 enabled = true
@@ -48,6 +48,20 @@ enable_confirmations = false
 
 [auth.external.google]
 enabled = false
+
+# Azure AD / Entra ID sign-in. Register ONE multi-tenant Azure App Registration
+# (Supported account types: "Accounts in any organizational directory") so any
+# client's own Azure AD tenant can be used to sign in; tenancy.handle_new_auth_user()
+# then routes the user to the correct client via tenancy.client_identity_providers
+# (matched on the Azure "tid" claim or verified email domain). Set the real values
+# via env vars locally (.env) and via the Supabase Dashboard in production.
+[auth.external.azure]
+enabled = true
+client_id = "env(AZURE_CLIENT_ID)"
+secret = "env(AZURE_CLIENT_SECRET)"
+# "common" allows sign-in from any Azure AD tenant (required for multi-tenant clients).
+url = "https://login.microsoftonline.com/common/v2.0"
+redirect_uri = ""
 
 [edge_runtime]
 policy = "per_worker"

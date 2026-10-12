@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useEffect, useState, useCallback } from 'react';
 import { graphqlQuery, graphqlMutation, INVESTORS_QUERY, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
 import { EntityForm } from '@/components/forms/EntityForm';
+import { useTemporalStore } from '@/lib/store';
+import { DomainKey } from '@/lib/mock-data';
 
 interface EntityNode {
   id: string;
@@ -18,22 +20,24 @@ interface EntityNode {
 }
 
 export default function InvestorsPage() {
+  const domain: DomainKey = 'investors';
   const [entities, setEntities] = useState<EntityNode[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const asOfDate = useTemporalStore(state => state.asOfDate);
 
   const fetchInvestors = useCallback(async () => {
     const { data } = await graphqlQuery<{ investors: { edges: { node: EntityNode }[]; totalCount: number } }>(
       INVESTORS_QUERY,
-      {}
+      { asOfDate }
     );
     if (data?.investors) {
       setEntities(data.investors.edges.map(e => e.node));
       setTotalCount(data.investors.totalCount);
     }
     setLoading(false);
-  }, []);
+  }, [asOfDate]);
 
   useEffect(() => {
     fetchInvestors();
@@ -111,27 +115,29 @@ export default function InvestorsPage() {
           <div className="tbl-row"><div>No investors found. Add investors via the generic entity API.</div></div>
         ) : (
           entities.map((entity) => (
-            <div key={entity.id} className="tbl-row">
-              <div className="row-id">{entity.entityCode}</div>
-              <div className="row-name">{entity.entityName}</div>
-              <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
-                {Object.keys(entity.attributes || {}).slice(0, 3).map(k => (
-                  <span key={k} style={{ marginRight: '8px' }}>
-                    {k}: {String(entity.attributes[k]?.value ?? '').slice(0, 20)}
-                  </span>
-                ))}
+            <Link key={entity.id} href={`/${domain}/${entity.id}`}>
+              <div className="tbl-row" style={{ cursor: 'pointer' }}>
+                <div className="row-id">{entity.entityCode}</div>
+                <div className="row-name">{entity.entityName}</div>
+                <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
+                  {Object.keys(entity.attributes || {}).slice(0, 3).map(k => (
+                    <span key={k} style={{ marginRight: '8px' }}>
+                      {k}: {String(entity.attributes[k]?.value ?? '').slice(0, 20)}
+                    </span>
+                  ))}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
+                  {entity.parentRelationships?.map((r, i) => (
+                    <span key={i} style={{ marginRight: '8px' }}>
+                      ← {r.parentEntityName} ({r.relationshipType})
+                    </span>
+                  ))}
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <span className="status-chip active">Active</span>
+                </div>
               </div>
-              <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
-                {entity.parentRelationships?.map((r, i) => (
-                  <span key={i} style={{ marginRight: '8px' }}>
-                    ← {r.parentEntityName} ({r.relationshipType})
-                  </span>
-                ))}
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <span className="status-chip active">Active</span>
-              </div>
-            </div>
+            </Link>
           ))
         )}
       </div>

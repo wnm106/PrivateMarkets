@@ -1,0 +1,134 @@
+# Reference List (Controlled Vocabulary) Types
+
+type ReferenceList {
+  id: ID!
+  listCode: String!
+  listName: String!
+  domainCode: String
+  description: String
+  isActive: Boolean!
+  activeValueCount: Int!
+  totalValueCount: Int!
+  totalSynonymCount: Int!
+  linkedAttributeCount: Int!
+  values: [ReferenceListValue!]
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type ReferenceListValue {
+  id: ID!
+  listId: ID!
+  valueCode: String!
+  valueLabel: String!
+  displayOrder: Int!
+  isActive: Boolean!
+  synonyms: [String!]!
+  metadata: JSON
+}
+
+type NormalizationResult {
+  normalized: Boolean!
+  input: String
+  canonicalCode: String
+  canonicalLabel: String
+  matchType: String
+  confidence: String
+  message: String
+}
+
+type ReferenceListConnection {
+  edges: [ReferenceListEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ReferenceListEdge {
+  node: ReferenceList!
+  cursor: String!
+}
+
+# Queries are added to root.graphql
+# Mutations are added to root.graphql
+
+# Mutation Input Types
+input CreateReferenceListInput {
+  listCode: String!
+  listName: String!
+  domainCode: String
+  description: String
+}
+
+input UpdateReferenceListInput {
+  id: ID!
+  listName: String
+  description: String
+  isActive: Boolean
+}
+
+input AddReferenceListValueInput {
+  listId: ID!
+  valueCode: String!
+  valueLabel: String!
+  displayOrder: Int
+  synonyms: [String!]
+}
+
+input UpdateReferenceListValueInput {
+  id: ID!
+  valueLabel: String
+  displayOrder: Int
+  isActive: Boolean
+  synonyms: [String!]
+}
+
+input AddSynonymsInput {
+  valueId: ID!
+  synonyms: [String!]!
+}
+
+input RemoveSynonymsInput {
+  valueId: ID!
+  synonyms: [String!]!
+}
+
+# Mutation Result Types
+type CreateReferenceListResult {
+  referenceList: ReferenceList
+  errors: [MutationError!]!
+}
+
+type UpdateReferenceListResult {
+  referenceList: ReferenceList
+  errors: [MutationError!]!
+}
+
+type DeleteReferenceListResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type AddReferenceListValueResult {
+  value: ReferenceListValue
+  errors: [MutationError!]!
+}
+
+type UpdateReferenceListValueResult {
+  value: ReferenceListValue
+  errors: [MutationError!]!
+}
+
+type DeleteReferenceListValueResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type SynonymUpdateResult {
+  value: ReferenceListValue
+  errors: [MutationError!]!
+}
+
+type NormalizeValueResult {
+  results: [NormalizationResult!]!
+  errors: [MutationError!]!
+}

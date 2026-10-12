@@ -1,5 +1,5 @@
 {
-  "name": "@meridian-mdm/config",
+  "name": "@tapestrai/config",
   "version": "0.1.0",
   "private": true,
   "main": "./index.js",

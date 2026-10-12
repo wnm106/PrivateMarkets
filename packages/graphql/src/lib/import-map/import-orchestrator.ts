@@ -462,91 +462,152 @@ function generateEntityCode(
 }
 
 /**
- * Insert entity attributes
+ * Insert entity attributes with reference list normalization
  */
 async function insertEntityAttributes(
   entityId: string,
   attributes: Record<string, any>,
   supabase: SupabaseClient,
   userId?: string
-): Promise<void> {
-  for (const [attrCode, value] of Object.entries(attributes)) {
-    const { data: attr } = await supabase
-      .from('attribute_register')
-      .select('id, default_precedence_rank')
-      .eq('attribute_code', attrCode)
-      .single();
+): Promise<{ normalized: number; unmapped: string[] }> {
+  let normalizedCount = 0;
+  const unmappedValues: string[] = [];
 
-    if (attr) {
-      const { data: source } = await supabase
-        .from('source_registry')
-        .select('id')
-        .eq('source_code', 'IMPORT')
-        .maybeSingle();
+  // Pre-fetch attribute metadata including reference list codes
+  const attrCodes = Object.keys(attributes);
+  const { data: attrDefs } = await supabase
+    .from('attribute_register')
+    .select('attribute_code, id, default_precedence_rank, reference_list_code, data_type')
+    .in('attribute_code', attrCodes);
 
-      await supabase.from('entity_attribute_values').insert({
-        entity_id: entityId,
-        attribute_id: attr.id,
-        source_id: source?.id,
-        golden_value: typeof value === 'string' ? value : null,
-        golden_value_numeric: typeof value === 'number' ? value : null,
-        golden_value_date: typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null,
-        valid_from: new Date().toISOString().split('T')[0],
-        precedence_rank: attr.default_precedence_rank,
-        created_by: userId,
-      });
+  const attrMap = new Map((attrDefs || []).map((a: any) => [a.attribute_code, a]));
+
+  const { data: source } = await supabase
+    .from('source_registry')
+    .select('id')
+    .eq('source_code', 'IMPORT')
+    .maybeSingle();
+
+  for (const [attrCode, rawValue] of Object.entries(attributes)) {
+    const attr = attrMap.get(attrCode);
+    if (!attr) continue;
+
+    let value = rawValue;
+
+    // Normalize value against reference list if the attribute has one
+    if (attr.reference_list_code && typeof rawValue === 'string' && rawValue.trim()) {
+      const { data: normResult, error: normError } = await supabase
+        .rpc('normalize_reference_value', {
+          p_list_code: attr.reference_list_code,
+          p_input_value: rawValue,
+        });
+
+      if (!normError && normResult) {
+        const result = typeof normResult === 'string' ? JSON.parse(normResult) : normResult;
+        if (result.normalized && result.canonical_code) {
+          value = result.canonical_code;
+          normalizedCount++;
+        } else if (!result.normalized) {
+          unmappedValues.push(`${attrCode}: "${rawValue}" → ${result.message || 'no match'}`);
+          // Still insert the original value - it will be flagged for review
+        }
+      }
     }
+
+    await supabase.from('entity_attribute_values').insert({
+      entity_id: entityId,
+      attribute_id: attr.id,
+      source_id: source?.id,
+      golden_value: typeof value === 'string' ? value : null,
+      golden_value_numeric: typeof value === 'number' ? value : null,
+      golden_value_date: typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null,
+      valid_from: new Date().toISOString().split('T')[0],
+      precedence_rank: attr.default_precedence_rank,
+      created_by: userId,
+    });
   }
+
+  return { normalized: normalizedCount, unmapped: unmappedValues };
 }
 
 /**
- * Update entity attributes (bi-temporal)
+ * Update entity attributes (bi-temporal) with reference list normalization
  */
 async function updateEntityAttributes(
   entityId: string,
   attributes: Record<string, any>,
   supabase: SupabaseClient,
   userId?: string
-): Promise<void> {
-  for (const [attrCode, value] of Object.entries(attributes)) {
-    const { data: attr } = await supabase
-      .from('attribute_register')
-      .select('id, default_precedence_rank')
-      .eq('attribute_code', attrCode)
-      .single();
+): Promise<{ normalized: number; unmapped: string[] }> {
+  let normalizedCount = 0;
+  const unmappedValues: string[] = [];
 
-    if (attr) {
-      // Close existing record
-      await supabase
-        .from('entity_attribute_values')
-        .update({
-          valid_to: new Date().toISOString().split('T')[0],
-          system_to: new Date().toISOString(),
-        })
-        .eq('entity_id', entityId)
-        .eq('attribute_id', attr.id)
-        .eq('system_to', '9999-12-31 23:59:59');
+  // Pre-fetch attribute metadata including reference list codes
+  const attrCodes = Object.keys(attributes);
+  const { data: attrDefs } = await supabase
+    .from('attribute_register')
+    .select('attribute_code, id, default_precedence_rank, reference_list_code')
+    .in('attribute_code', attrCodes);
 
-      // Insert new record
-      const { data: source } = await supabase
-        .from('source_registry')
-        .select('id')
-        .eq('source_code', 'IMPORT')
-        .maybeSingle();
+  const attrMap = new Map((attrDefs || []).map((a: any) => [a.attribute_code, a]));
 
-      await supabase.from('entity_attribute_values').insert({
-        entity_id: entityId,
-        attribute_id: attr.id,
-        source_id: source?.id,
-        golden_value: typeof value === 'string' ? value : null,
-        golden_value_numeric: typeof value === 'number' ? value : null,
-        golden_value_date: typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null,
-        valid_from: new Date().toISOString().split('T')[0],
-        precedence_rank: attr.default_precedence_rank,
-        created_by: userId,
-      });
+  const { data: source } = await supabase
+    .from('source_registry')
+    .select('id')
+    .eq('source_code', 'IMPORT')
+    .maybeSingle();
+
+  for (const [attrCode, rawValue] of Object.entries(attributes)) {
+    const attr = attrMap.get(attrCode);
+    if (!attr) continue;
+
+    let value = rawValue;
+
+    // Normalize value against reference list if the attribute has one
+    if (attr.reference_list_code && typeof rawValue === 'string' && rawValue.trim()) {
+      const { data: normResult, error: normError } = await supabase
+        .rpc('normalize_reference_value', {
+          p_list_code: attr.reference_list_code,
+          p_input_value: rawValue,
+        });
+
+      if (!normError && normResult) {
+        const result = typeof normResult === 'string' ? JSON.parse(normResult) : normResult;
+        if (result.normalized && result.canonical_code) {
+          value = result.canonical_code;
+          normalizedCount++;
+        } else if (!result.normalized) {
+          unmappedValues.push(`${attrCode}: "${rawValue}" → ${result.message || 'no match'}`);
+        }
+      }
     }
+
+    // Close existing record
+    await supabase
+      .from('entity_attribute_values')
+      .update({
+        valid_to: new Date().toISOString().split('T')[0],
+        system_to: new Date().toISOString(),
+      })
+      .eq('entity_id', entityId)
+      .eq('attribute_id', attr.id)
+      .eq('system_to', '9999-12-31 23:59:59');
+
+    // Insert new record
+    await supabase.from('entity_attribute_values').insert({
+      entity_id: entityId,
+      attribute_id: attr.id,
+      source_id: source?.id,
+      golden_value: typeof value === 'string' ? value : null,
+      golden_value_numeric: typeof value === 'number' ? value : null,
+      golden_value_date: typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null,
+      valid_from: new Date().toISOString().split('T')[0],
+      precedence_rank: attr.default_precedence_rank,
+      created_by: userId,
+    });
   }
+
+  return { normalized: normalizedCount, unmapped: unmappedValues };
 }
 
 /**

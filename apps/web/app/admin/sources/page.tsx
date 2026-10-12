@@ -1,387 +1,365 @@
-import { useState } from 'react';
-import Link from 'next/link';
-import DataConnectionForm from '@/components/forms/DataConnectionForm';
-import DataLoaderForm from '@/components/forms/DataLoaderForm';
-import { useDataConnections, useDataLoaders, useDeleteDataConnection, useDeleteDataLoader, useTestDataConnection, useTriggerDataLoader } from '@/lib/hooks/useDataConnections';
+'use client';
 
-export default function SourcesPage() {
-  const [activeTab, setActiveTab] = useState<'connections' | 'loaders'>('connections');
-  const [showConnectionForm, setShowConnectionForm] = useState(false);
-  const [showLoaderForm, setShowLoaderForm] = useState(false);
-  const [editingConnection, setEditingConnection] = useState<any>(null);
-  const [editingLoader, setEditingLoader] = useState<any>(null);
+import { useState, useEffect } from 'react';
+import { graphqlClient } from '@/lib/graphql';
+import {
+  DATA_SOURCES_QUERY,
+  CREATE_DATA_SOURCE_MUTATION,
+  UPDATE_DATA_SOURCE_MUTATION,
+  DELETE_DATA_SOURCE_MUTATION,
+  TOGGLE_DATA_SOURCE_ACTIVE_MUTATION,
+} from '@/lib/graphql';
 
-  const { data: connections, isLoading: loadingConnections } = useDataConnections();
-  const { data: loaders, isLoading: loadingLoaders } = useDataLoaders();
-  const deleteConnection = useDeleteDataConnection();
-  const deleteLoader = useDeleteDataLoader();
-  const testConnection = useTestDataConnection();
-  const triggerLoader = useTriggerDataLoader();
+interface Source {
+  id: string;
+  sourceCode: string;
+  sourceName: string;
+  sourceType: string;
+  vendorName: string | null;
+  feedFormat: string | null;
+  feedFrequency: string | null;
+  precedenceRank: number;
+  isActive: boolean;
+  isProtected: boolean;
+  color: string | null;
+  metadata: any;
+  createdAt: string;
+  updatedAt: string;
+}
 
-  const handleDeleteConnection = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this connection? All associated loaders will also be deleted.')) {
-      return;
-    }
+interface SourceFormData {
+  sourceCode: string;
+  sourceName: string;
+  sourceType: string;
+  vendorName: string;
+  feedFormat: string;
+  feedFrequency: string;
+  precedenceRank: number;
+  color: string;
+  isActive: boolean;
+}
+
+const SOURCE_TYPES = ['VENDOR', 'INTERNAL', 'MANUAL', 'CALCULATED'];
+const FEED_FORMATS = ['JSON', 'CSV', 'XML', 'API', 'FLAT_FILE', 'OTHER'];
+const FEED_FREQUENCIES = ['REAL_TIME', 'HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY', 'ON_DEMAND'];
+const DEFAULT_COLOR = '#6b7280';
+
+export default function AdminSourcesPage() {
+  const [sources, setSources] = useState<Source[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [editingSource, setEditingSource] = useState<Source | null>(null);
+  const [formData, setFormData] = useState<SourceFormData>({
+    sourceCode: '', sourceName: '', sourceType: 'VENDOR', vendorName: '',
+    feedFormat: 'API', feedFrequency: 'DAILY', precedenceRank: 100,
+    color: DEFAULT_COLOR, isActive: true,
+  });
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortField, setSortField] = useState<'precedenceRank' | 'sourceName'>('precedenceRank');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
+  useEffect(() => { loadSources(); }, []);
+
+  const loadSources = async () => {
+    setLoading(true); setError(null);
     try {
-      await deleteConnection.mutateAsync(id);
-    } catch (error) {
-      alert(`Error: ${error instanceof Error ? error.message : 'Failed to delete connection'}`);
-    }
+      const result = await graphqlClient.query(DATA_SOURCES_QUERY, {}).toPromise();
+      if (result.error) setError(result.error.message);
+      else if (result.data?.dataSources) setSources(result.data.dataSources);
+    } catch (err: any) { setError(err.message); }
+    finally { setLoading(false); }
   };
 
-  const handleDeleteLoader = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this loader?')) {
-      return;
-    }
-    try {
-      await deleteLoader.mutateAsync(id);
-    } catch (error) {
-      alert(`Error: ${error instanceof Error ? error.message : 'Failed to delete loader'}`);
-    }
+  const handleCreate = () => {
+    setEditingSource(null);
+    setFormData({ sourceCode: '', sourceName: '', sourceType: 'VENDOR', vendorName: '',
+      feedFormat: 'API', feedFrequency: 'DAILY', precedenceRank: 100, color: DEFAULT_COLOR, isActive: true });
+    setShowModal(true);
   };
 
-  const handleTestConnection = async (id: string) => {
-    try {
-      const result = await testConnection.mutateAsync(id);
-      alert(`Connection test ${result.success ? 'succeeded' : 'failed'}: ${result.message}`);
-    } catch (error) {
-      alert(`Error: ${error instanceof Error ? error.message : 'Failed to test connection'}`);
-    }
+  const handleEdit = (source: Source) => {
+    setEditingSource(source);
+    setFormData({ sourceCode: source.sourceCode, sourceName: source.sourceName,
+      sourceType: source.sourceType, vendorName: source.vendorName || '',
+      feedFormat: source.feedFormat || 'API', feedFrequency: source.feedFrequency || 'DAILY',
+      precedenceRank: source.precedenceRank, color: source.color || DEFAULT_COLOR, isActive: source.isActive });
+    setShowModal(true);
   };
 
-  const handleTriggerLoader = async (id: string) => {
+  const handleSave = async () => {
     try {
-      const result = await triggerLoader.mutateAsync(id);
-      if (result.success) {
-        alert(`Loader triggered successfully. Run ID: ${result.runId}`);
+      if (editingSource) {
+        const result = await graphqlClient.mutation(UPDATE_DATA_SOURCE_MUTATION, {
+          input: { id: editingSource.id, sourceName: formData.sourceName, sourceType: formData.sourceType,
+            vendorName: formData.vendorName || null, feedFormat: formData.feedFormat || null,
+            feedFrequency: formData.feedFrequency || null, precedenceRank: formData.precedenceRank,
+            color: formData.color, isActive: formData.isActive },
+        }).toPromise();
+        if (result.error) { setError(result.error.message); return; }
+        if (result.data?.updateDataSource?.errors?.length > 0) { setError(result.data.updateDataSource.errors[0].message); return; }
+      } else {
+        const result = await graphqlClient.mutation(CREATE_DATA_SOURCE_MUTATION, {
+          input: { sourceCode: formData.sourceCode.toUpperCase(), sourceName: formData.sourceName,
+            sourceType: formData.sourceType, vendorName: formData.vendorName || null,
+            feedFormat: formData.feedFormat || null, feedFrequency: formData.feedFrequency || null,
+            precedenceRank: formData.precedenceRank, color: formData.color },
+        }).toPromise();
+        if (result.error) { setError(result.error.message); return; }
+        if (result.data?.createDataSource?.errors?.length > 0) { setError(result.data.createDataSource.errors[0].message); return; }
       }
-    } catch (error) {
-      alert(`Error: ${error instanceof Error ? error.message : 'Failed to trigger loader'}`);
-    }
+      setShowModal(false);
+      await loadSources();
+    } catch (err: any) { setError(err.message); }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'ACTIVE': return '#10b981';
-      case 'IDLE': return '#6b7280';
-      case 'RUNNING': return '#3b82f6';
-      case 'ERROR': return '#ef4444';
-      case 'TESTING': return '#f59e0b';
-      default: return '#6b7280';
-    }
+  const handleDelete = async (source: Source) => {
+    if (source.isProtected) { setError('Cannot delete a protected source'); return; }
+    if (!confirm(`Delete "${source.sourceName}"?`)) return;
+    try {
+      const result = await graphqlClient.mutation(DELETE_DATA_SOURCE_MUTATION, { id: source.id }).toPromise();
+      if (result.error) { setError(result.error.message); return; }
+      if (result.data?.deleteDataSource?.errors?.length > 0) { setError(result.data.deleteDataSource.errors[0].message); return; }
+      await loadSources();
+    } catch (err: any) { setError(err.message); }
   };
 
-  const getFrequencyLabel = (freq: string) => {
-    switch (freq) {
-      case 'INTRADAY': return 'Intraday';
-      case 'HOURLY': return 'Hourly';
-      case 'DAILY': return 'Daily';
-      case 'WEEKLY': return 'Weekly';
-      case 'MONTHLY': return 'Monthly';
-      case 'ON_DEMAND': return 'On Demand';
-      default: return freq;
-    }
+  const handleToggleActive = async (source: Source) => {
+    if (source.isProtected && source.isActive) return;
+    try {
+      const result = await graphqlClient.mutation(TOGGLE_DATA_SOURCE_ACTIVE_MUTATION, { id: source.id, active: !source.isActive }).toPromise();
+      if (result.error) { setError(result.error.message); return; }
+      if (result.data?.toggleDataSourceActive?.errors?.length > 0) { setError(result.data.toggleDataSourceActive.errors[0].message); return; }
+      await loadSources();
+    } catch (err: any) { setError(err.message); }
   };
 
-  const getAuthTypeLabel = (authType: string) => {
-    switch (authType) {
-      case 'NONE': return 'None';
-      case 'API_KEY': return 'API Key';
-      case 'BEARER_TOKEN': return 'Bearer Token';
-      case 'BASIC_AUTH': return 'Basic Auth';
-      case 'OAUTH2_CLIENT': return 'OAuth2 Client';
-      case 'CERTIFICATE': return 'Certificate';
-      case 'CUSTOM_HEADER': return 'Custom Header';
-      default: return authType;
-    }
+  const handleSort = (field: 'precedenceRank' | 'sourceName') => {
+    if (sortField === field) setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortDirection('asc'); }
   };
 
-  if (loadingConnections || loadingLoaders) {
-    return <div className="loading">Loading...</div>;
+  const filteredSources = sources
+    .filter(s => { const q = searchQuery.toLowerCase(); return s.sourceName.toLowerCase().includes(q) || s.sourceCode.toLowerCase().includes(q) || (s.vendorName?.toLowerCase().includes(q) ?? false); })
+    .sort((a, b) => { const m = sortDirection === 'asc' ? 1 : -1; return sortField === 'precedenceRank' ? (a.precedenceRank - b.precedenceRank) * m : a.sourceName.localeCompare(b.sourceName) * m; });
+
+  const generateSourceCode = (name: string) => name.toUpperCase().replace(/[^A-Z0-9\s]/g, '').replace(/\s+/g, '_').substring(0, 50);
+
+
+  if (loading) {
+    return <div className="p-8"><div className="text-center">Loading sources...</div></div>;
   }
 
   return (
-    <div className="container">
-      <div className="header">
-        <div className="breadcrumbs">
-          <Link href="/admin" className="breadcrumb-link">Admin</Link>
-          <span className="breadcrumb-sep">/</span>
-          <span className="breadcrumb-current">Data Sources</span>
-        </div>
-        <h1>Data Sources</h1>
-        <div className="header-actions">
-          {activeTab === 'connections' && (
-            <button className="btn btn-primary" onClick={() => setShowConnectionForm(true)}>
-              + New Connection
-            </button>
-          )}
-          {activeTab === 'loaders' && (
-            <button className="btn btn-primary" onClick={() => setShowLoaderForm(true)}>
-              + New Loader
-            </button>
-          )}
-        </div>
+    <div className="p-8">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold mb-2">Source Registry</h1>
+        <p className="text-gray-600">
+          Manage the data sources that provide attribute values for entities. Manual Override is protected and cannot be removed.
+        </p>
       </div>
 
-      <div className="tabs">
-        <button
-          className={`tab ${activeTab === 'connections' ? 'active' : ''}`}
-          onClick={() => setActiveTab('connections')}
-        >
-          Connections ({connections?.length || 0})
-        </button>
-        <button
-          className={`tab ${activeTab === 'loaders' ? 'active' : ''}`}
-          onClick={() => setActiveTab('loaders')}
-        >
-          Loaders ({loaders?.length || 0})
-        </button>
-      </div>
-
-      {activeTab === 'connections' && (
-        <div className="card-grid">
-          {connections?.map((conn: any) => (
-            <div key={conn.id} className="card">
-              <div className="card-header">
-                <div>
-                  <h3>{conn.connectionName}</h3>
-                  <p className="card-code">{conn.connectionCode}</p>
-                </div>
-                <span
-                  className="status-badge"
-                  style={{ backgroundColor: getStatusColor(conn.connectionStatus) }}
-                >
-                  {conn.connectionStatus}
-                </span>
-              </div>
-
-              <div className="card-body">
-                <div className="detail-row">
-                  <span className="detail-label">Type:</span>
-                  <span>{conn.sourceType}</span>
-                </div>
-                {conn.vendorName && (
-                  <div className="detail-row">
-                    <span className="detail-label">Vendor:</span>
-                    <span>{conn.vendorName}</span>
-                  </div>
-                )}
-                {conn.endpointUrl && (
-                  <div className="detail-row">
-                    <span className="detail-label">Endpoint:</span>
-                    <span className="mono">{conn.endpointUrl}</span>
-                  </div>
-                )}
-                <div className="detail-row">
-                  <span className="detail-label">Auth:</span>
-                  <span>{getAuthTypeLabel(conn.authType)}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">Precedence:</span>
-                  <span>{conn.precedenceRank}</span>
-                </div>
-                {conn.lastTestedAt && (
-                  <div className="detail-row">
-                    <span className="detail-label">Last Tested:</span>
-                    <span>{new Date(conn.lastTestedAt).toLocaleString()}</span>
-                  </div>
-                )}
-                <div className="detail-row">
-                  <span className="detail-label">Loaders:</span>
-                  <span>{conn.loaders?.length || 0}</span>
-                </div>
-              </div>
-
-              <div className="card-actions">
-                <button
-                  className="btn btn-sm"
-                  onClick={() => handleTestConnection(conn.id)}
-                  disabled={testConnection.isPending}
-                >
-                  Test
-                </button>
-                <button
-                  className="btn btn-sm"
-                  onClick={() => {
-                    setEditingConnection(conn);
-                    setShowConnectionForm(true);
-                  }}
-                >
-                  Edit
-                </button>
-                <button
-                  className="btn btn-sm btn-danger"
-                  onClick={() => handleDeleteConnection(conn.id)}
-                  disabled={deleteConnection.isPending}
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {activeTab === 'loaders' && (
-        <div className="card-grid">
-          {loaders?.map((loader: any) => (
-            <div key={loader.id} className="card">
-              <div className="card-header">
-                <div>
-                  <h3>{loader.loaderName}</h3>
-                  <p className="card-code">{loader.loaderCode}</p>
-                </div>
-                <span
-                  className="status-badge"
-                  style={{ backgroundColor: getStatusColor(loader.loaderStatus) }}
-                >
-                  {loader.loaderStatus}
-                </span>
-              </div>
-
-              <div className="card-body">
-                <div className="detail-row">
-                  <span className="detail-label">Connection:</span>
-                  <span>{loader.connection?.connectionName || 'N/A'}</span>
-                </div>
-                {loader.domainCode && (
-                  <div className="detail-row">
-                    <span className="detail-label">Domain:</span>
-                    <span>{loader.domainCode}</span>
-                  </div>
-                )}
-                {loader.attributeCodes?.length > 0 && (
-                  <div className="detail-row">
-                    <span className="detail-label">Attributes:</span>
-                    <span className="mono">{loader.attributeCodes.join(', ')}</span>
-                  </div>
-                )}
-                <div className="detail-row">
-                  <span className="detail-label">Frequency:</span>
-                  <span>{getFrequencyLabel(loader.loadFrequency)}</span>
-                </div>
-                {loader.cronExpression && (
-                  <div className="detail-row">
-                    <span className="detail-label">Cron:</span>
-                    <span className="mono">{loader.cronExpression}</span>
-                  </div>
-                )}
-                {loader.loadWindow && (
-                  <div className="detail-row">
-                    <span className="detail-label">Window:</span>
-                    <span>{loader.loadWindow}</span>
-                  </div>
-                )}
-                <div className="detail-row">
-                  <span className="detail-label">Batch Size:</span>
-                  <span>{loader.batchSize}</span>
-                </div>
-                {loader.lastRunAt && (
-                  <div className="detail-row">
-                    <span className="detail-label">Last Run:</span>
-                    <span>{new Date(loader.lastRunAt).toLocaleString()}</span>
-                  </div>
-                )}
-                {loader.nextRunAt && (
-                  <div className="detail-row">
-                    <span className="detail-label">Next Run:</span>
-                    <span>{new Date(loader.nextRunAt).toLocaleString()}</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="card-actions">
-                <button
-                  className="btn btn-sm"
-                  onClick={() => handleTriggerLoader(loader.id)}
-                  disabled={triggerLoader.isPending}
-                >
-                  Run Now
-                </button>
-                <button
-                  className="btn btn-sm"
-                  onClick={() => {
-                    setEditingLoader(loader);
-                    setShowLoaderForm(true);
-                  }}
-                >
-                  Edit
-                </button>
-                <button
-                  className="btn btn-sm btn-danger"
-                  onClick={() => handleDeleteLoader(loader.id)}
-                  disabled={deleteLoader.isPending}
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {showConnectionForm && (
-        <div className="modal-overlay" onClick={() => {
-          setShowConnectionForm(false);
-          setEditingConnection(null);
-        }}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{editingConnection ? 'Edit Connection' : 'New Connection'}</h2>
-              <button
-                className="close-btn"
-                onClick={() => {
-                  setShowConnectionForm(false);
-                  setEditingConnection(null);
-                }}
-              >
-                ×
-              </button>
-            </div>
-            <DataConnectionForm
-              connection={editingConnection}
-              onSuccess={() => {
-                setShowConnectionForm(false);
-                setEditingConnection(null);
-              }}
-              onCancel={() => {
-                setShowConnectionForm(false);
-                setEditingConnection(null);
-              }}
-            />
+      {error && (
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+          <div className="flex items-center justify-between">
+            <span className="text-red-800">{error}</span>
+            <button onClick={() => setError(null)} className="text-red-600 hover:text-red-800">×</button>
           </div>
         </div>
       )}
 
-      {showLoaderForm && (
-        <div className="modal-overlay" onClick={() => {
-          setShowLoaderForm(false);
-          setEditingLoader(null);
-        }}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{editingLoader ? 'Edit Loader' : 'New Loader'}</h2>
-              <button
-                className="close-btn"
-                onClick={() => {
-                  setShowLoaderForm(false);
-                  setEditingLoader(null);
-                }}
-              >
-                ×
-              </button>
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <div className="flex-1 max-w-md">
+          <input type="text" placeholder="Search sources..." value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <button onClick={handleCreate} className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+          + Add Source
+        </button>
+      </div>
+
+      <div className="bg-white rounded-lg shadow overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Code</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vendor</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Feed</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                onClick={() => handleSort('precedenceRank')}>
+                Precedence {sortField === 'precedenceRank' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {filteredSources.map((source) => (
+              <tr key={source.id} className={`hover:bg-gray-50 ${!source.isActive ? 'opacity-50' : ''}`}>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="flex items-center gap-3">
+                    {source.isProtected && <span className="text-gray-400" title="Protected source">🔒</span>}
+                    <div className="w-4 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: source.color || DEFAULT_COLOR }} />
+                    <span className={`font-medium ${!source.isActive ? 'line-through' : ''}`}>{source.sourceName}</span>
+                  </div>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <code className="text-sm bg-gray-100 px-2 py-1 rounded">{source.sourceCode}</code>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <span className={`px-2 py-1 text-xs font-medium rounded ${
+                    source.sourceType === 'VENDOR' ? 'bg-blue-100 text-blue-800'
+                    : source.sourceType === 'INTERNAL' ? 'bg-green-100 text-green-800'
+                    : source.sourceType === 'MANUAL' ? 'bg-yellow-100 text-yellow-800'
+                    : 'bg-gray-100 text-gray-800'
+                  }`}>{source.sourceType}</span>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{source.vendorName || '-'}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {source.feedFormat ? `${source.feedFormat} / ${source.feedFrequency || 'N/A'}` : '-'}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{source.precedenceRank}</td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <button onClick={() => handleToggleActive(source)} disabled={source.isProtected && source.isActive}
+                    className={`px-3 py-1 text-xs font-medium rounded ${
+                      source.isActive ? 'bg-green-100 text-green-800 hover:bg-green-200' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    } ${source.isProtected && source.isActive ? 'cursor-not-allowed opacity-50' : ''}`}>
+                    {source.isActive ? 'Active' : 'Inactive'}
+                  </button>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                  <div className="flex gap-2">
+                    <button onClick={() => handleEdit(source)} className="text-blue-600 hover:text-blue-800">Edit</button>
+                    {!source.isProtected && (
+                      <button onClick={() => handleDelete(source)} className="text-red-600 hover:text-red-800">Delete</button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filteredSources.length === 0 && (
+          <div className="text-center py-12 text-gray-500">
+            {searchQuery ? 'No sources match your search' : 'No sources found'}
+          </div>
+        )}
+      </div>
+
+      {showModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-bold">{editingSource ? 'Edit Source' : 'Add Source'}</h2>
+                <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Source Name <span className="text-red-500">*</span>
+                  </label>
+                  <input type="text" value={formData.sourceName}
+                    onChange={(e) => {
+                      const name = e.target.value;
+                      setFormData({ ...formData, sourceName: name,
+                        sourceCode: editingSource ? formData.sourceCode : generateSourceCode(name) });
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="e.g., Bloomberg Terminal" />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Source Code <span className="text-red-500">*</span>
+                  </label>
+                  <input type="text" value={formData.sourceCode}
+                    onChange={(e) => setFormData({ ...formData, sourceCode: e.target.value.toUpperCase() })}
+                    disabled={!!editingSource}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    placeholder="e.g., BLOOMBERG" />
+                  <p className="text-xs text-gray-500 mt-1">Auto-generated from name. Uppercase snake_case format.</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Source Type</label>
+                  <select value={formData.sourceType} onChange={(e) => setFormData({ ...formData, sourceType: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    {SOURCE_TYPES.map((type) => (<option key={type} value={type}>{type}</option>))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Vendor Name</label>
+                  <input type="text" value={formData.vendorName}
+                    onChange={(e) => setFormData({ ...formData, vendorName: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="e.g., Bloomberg LP" />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Feed Format</label>
+                    <select value={formData.feedFormat} onChange={(e) => setFormData({ ...formData, feedFormat: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      {FEED_FORMATS.map((format) => (<option key={format} value={format}>{format}</option>))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Feed Frequency</label>
+                    <select value={formData.feedFrequency} onChange={(e) => setFormData({ ...formData, feedFrequency: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      {FEED_FREQUENCIES.map((freq) => (<option key={freq} value={freq}>{freq}</option>))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Precedence Rank</label>
+                  <input type="number" value={formData.precedenceRank}
+                    onChange={(e) => setFormData({ ...formData, precedenceRank: parseInt(e.target.value) || 100 })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" min="1" />
+                  <p className="text-xs text-gray-500 mt-1">Lower numbers have higher priority</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Color</label>
+                  <div className="flex items-center gap-3">
+                    <input type="color" value={formData.color}
+                      onChange={(e) => setFormData({ ...formData, color: e.target.value })}
+                      className="w-16 h-10 border border-gray-300 rounded cursor-pointer" />
+                    <input type="text" value={formData.color}
+                      onChange={(e) => setFormData({ ...formData, color: e.target.value })}
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="#6b7280" />
+                  </div>
+                </div>
+
+                {!editingSource && (
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" id="isActive" checked={formData.isActive}
+                      onChange={(e) => setFormData({ ...formData, isActive: e.target.checked })} className="w-4 h-4" />
+                    <label htmlFor="isActive" className="text-sm font-medium text-gray-700">Active</label>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button onClick={handleSave}
+                  disabled={!formData.sourceName || !formData.sourceCode}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:bg-gray-300 disabled:cursor-not-allowed">
+                  {editingSource ? 'Update' : 'Create'}
+                </button>
+                <button onClick={() => setShowModal(false)}
+                  className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium">
+                  Cancel
+                </button>
+              </div>
             </div>
-            <DataLoaderForm
-              loader={editingLoader}
-              onSuccess={() => {
-                setShowLoaderForm(false);
-                setEditingLoader(null);
-              }}
-              onCancel={() => {
-                setShowLoaderForm(false);
-                setEditingLoader(null);
-              }}
-            />
           </div>
         </div>
       )}

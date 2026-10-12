@@ -1,5 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { ToolDefinition, ToolExecutionResult } from './types.js';
+import { ToolContext, getContextProfile, isCategoryAllowed } from './context-profiles.js';
 
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
@@ -13,20 +14,86 @@ export class ToolRegistry {
     this.tools.set(tool.name, tool);
   }
 
-  listTools(): any[] {
-    return Array.from(this.tools.values()).map((tool) => ({
+  listTools(context?: ToolContext | string): any[] {
+    const tools = Array.from(this.tools.values());
+    const filtered = context 
+      ? tools.filter(tool => isCategoryAllowed(tool.category, context))
+      : tools;
+    
+    return filtered.map((tool) => ({
       name: tool.name,
       description: tool.description,
+      category: tool.category,
       inputSchema: tool.inputSchema,
     }));
   }
 
-  async executeTool(name: string, args: Record<string, any>): Promise<ToolExecutionResult> {
+  /**
+   * Get tool definitions in Gemini function calling format
+   */
+  listToolsForGemini(context?: ToolContext | string): any[] {
+    const tools = Array.from(this.tools.values());
+    const filtered = context 
+      ? tools.filter(tool => isCategoryAllowed(tool.category, context))
+      : tools;
+    
+    return filtered.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: {
+        type: 'OBJECT',
+        properties: this.convertSchemaToGemini(tool.inputSchema),
+      },
+    }));
+  }
+
+  /**
+   * Convert JSON Schema to Gemini function parameter format
+   */
+  private convertSchemaToGemini(schema: any): any {
+    if (!schema || !schema.properties) return {};
+    
+    const properties: any = {};
+    for (const [key, value] of Object.entries(schema.properties)) {
+      const prop = value as any;
+      properties[key] = {
+        type: this.mapJsonSchemaTypeToGemini(prop.type),
+        description: prop.description || '',
+      };
+      
+      if (prop.enum) {
+        properties[key].enum = prop.enum;
+      }
+      
+      if (prop.items) {
+        properties[key].items = prop.items;
+      }
+    }
+    
+    return properties;
+  }
+
+  private mapJsonSchemaTypeToGemini(type: string): string {
+    switch (type?.toLowerCase()) {
+      case 'string': return 'STRING';
+      case 'number': return 'NUMBER';
+      case 'integer': return 'INTEGER';
+      case 'boolean': return 'BOOLEAN';
+      case 'array': return 'ARRAY';
+      case 'object': return 'OBJECT';
+      default: return 'STRING';
+    }
+  }
+
+  /**
+   * @param supabaseOverride Optional per-call client (e.g. scoped to the caller's JWT so RLS applies).
+   */
+  async executeTool(name: string, args: Record<string, any>, supabaseOverride?: SupabaseClient): Promise<ToolExecutionResult> {
     const tool = this.tools.get(name);
     if (!tool) {
       throw new Error(`Unknown tool: ${name}`);
     }
-    return tool.execute(args, this.supabase);
+    return tool.execute(args, supabaseOverride || this.supabase);
   }
 
   getSupabase(): SupabaseClient {

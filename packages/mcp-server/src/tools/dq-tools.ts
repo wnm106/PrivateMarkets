@@ -4,6 +4,7 @@ import { ToolDefinition } from '../lib/types.js';
 const listDQExceptions: ToolDefinition = {
   name: 'list_dq_exceptions',
   description: 'List data quality exceptions with optional filtering by status, severity, and domain.',
+  category: 'dq',
   inputSchema: {
     type: 'object',
     properties: {
@@ -54,6 +55,7 @@ const listDQExceptions: ToolDefinition = {
 const resolveDQException: ToolDefinition = {
   name: 'resolve_dq_exception',
   description: 'Resolve a data quality exception by updating its status and adding resolution notes.',
+  category: 'dq',
   inputSchema: {
     type: 'object',
     properties: {
@@ -85,6 +87,7 @@ const resolveDQException: ToolDefinition = {
 const getDQSummary: ToolDefinition = {
   name: 'get_dq_summary',
   description: 'Get a summary of data quality metrics including exception counts by severity and domain.',
+  category: 'dq',
   inputSchema: {
     type: 'object',
     properties: {},

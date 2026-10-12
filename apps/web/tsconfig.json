@@ -4,8 +4,8 @@
     "plugins": [{ "name": "next" }],
     "paths": {
       "@/*": ["./*"],
-      "@meridian-mdm/ui": ["../../packages/ui/src"],
-      "@meridian-mdm/ui/*": ["../../packages/ui/src/*"]
+      "@tapestrai/ui": ["../../packages/ui/src"],
+      "@tapestrai/ui/*": ["../../packages/ui/src/*"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

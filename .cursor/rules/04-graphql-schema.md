@@ -104,7 +104,8 @@ Entity (generic)
 ├── SECURITY (domain)
 ├── DEAL (domain)
 ├── PRICE (domain)
-└── POSITION (domain)
+├── POSITION (domain)
+└── CASH_FLOW (domain)
 
 Intersection (composite)
 ├── Member entities from any domain

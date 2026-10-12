@@ -1,7 +1,7 @@
 # Attribute Aggregation & Precision Feature
 
 ## Overview
-This implementation adds aggregation behavior and numeric precision controls to attributes in the Meridian MDM system.
+This implementation adds aggregation behavior and numeric precision controls to attributes in the tapestr.ai MDM system.
 
 ## Features Implemented
 
@@ -206,4 +206,4 @@ psql -U <user> -d <database> -f supabase/migrations/00016_attribute_aggregation_
 
 ## Summary
 
-This implementation provides a complete foundation for attribute aggregation and precision control across the Meridian MDM system. The database layer enforces validation rules, the GraphQL API exposes the new fields, and the admin UI allows easy configuration and visualization.
+This implementation provides a complete foundation for attribute aggregation and precision control across the tapestr.ai MDM system. The database layer enforces validation rules, the GraphQL API exposes the new fields, and the admin UI allows easy configuration and visualization.

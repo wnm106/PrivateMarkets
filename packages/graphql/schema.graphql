@@ -1,3 +1,4 @@
+
 # File: common.graphql
 # Scalar Types
 scalar Date
@@ -124,11 +125,11 @@ type AttributeDefinition {
   derivationFormula: String
   derivationDependencies: [String!]
   formulaLanguage: String
-  
+
   # Time dimension fields
   isTimeVarying: Boolean!
-  timeDimension: TimeDimension
-  
+  timeDimension: String
+
   # Display and validation metadata
   displayFormat: String
   listValues: [String!]
@@ -143,14 +144,10 @@ type AttributeDefinition {
   aggregationType: String
   weightAttributeCode: String
   numericPrecision: Int
-}
 
-# Time dimension enum for attributes
-enum TimeDimension {
-  NONE
-  VALID_TIME
-  TRANSACTION_TIME
-  BITEMPORAL
+  # Reference list linkage
+  referenceListCode: String
+  referenceList: ReferenceListSummary
 }
 
 # Derivation evaluation result
@@ -295,6 +292,409 @@ type UpdateDQRuleResult {
 
 type ResolveDQExceptionResult {
   success: Boolean!
+  errors: [MutationError!]!
+}
+
+# File: compliance.graphql
+# Compliance Rules Engine Types
+# Bi-temporal, entity-level-agnostic investment/regulatory limit rules.
+# Distinct from DQRule (data_quality): compliance rules express concentration,
+# exposure, diversification, eligibility, leverage, and liquidity tests with
+# numerator/denominator calculations, hard/soft limits, and aggregate rollups.
+
+enum ComplianceRuleCategory {
+  CONCENTRATION
+  EXPOSURE
+  DIVERSIFICATION
+  ELIGIBILITY
+  LEVERAGE
+  LIQUIDITY
+  OTHER
+}
+
+enum ComplianceAggregation {
+  SUM
+  AVG
+  COUNT
+  MIN
+  MAX
+  VALUE
+  CONSTANT
+}
+
+enum ComplianceDenominatorScope {
+  SAME_GROUP
+  ANCHOR_TOTAL
+  CONSTANT
+}
+
+enum ComplianceResultUnit {
+  RATIO
+  PERCENTAGE
+  CURRENCY
+  COUNT
+}
+
+enum ComplianceLimitDirection {
+  MAX
+  MIN
+}
+
+enum ComplianceResultStatus {
+  PASS
+  SOFT_BREACH
+  HARD_BREACH
+  NO_DATA
+  ERROR
+}
+
+enum ComplianceRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum ComplianceOffsetUnit {
+  DAY
+  WEEK
+  MONTH
+  QUARTER
+  YEAR
+}
+
+enum CompliancePeriodSnap {
+  MONTH_END
+  QUARTER_END
+  YEAR_END
+}
+
+enum ComplianceKnowledgeMode {
+  RUN
+  AT_OFFSET_DATE
+}
+
+enum ComplianceResultTransform {
+  NONE
+  DIFFERENCE
+  ABS_DIFFERENCE
+  PCT_CHANGE
+  ABS_PCT_CHANGE
+}
+
+enum ComplianceConditionScope {
+  BASE
+  ANCHOR
+}
+
+enum ComplianceScopeType {
+  INCLUDE
+  EXCLUDE
+}
+
+type ComplianceRule {
+  id: ID!
+  ruleCode: String!
+  ruleName: String!
+  ruleCategory: ComplianceRuleCategory!
+  anchorDomainCode: String!
+  appliesToAll: Boolean!
+  isActive: Boolean!
+  description: String
+  scopeAssignments: [ComplianceScopeAssignment!]!
+  versions: [ComplianceRuleVersion!]!
+  currentVersion(asOfDate: Date, knowledgeDate: DateTime): ComplianceRuleVersion
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+}
+
+# Source / time dimension of an attribute reference. All fields optional;
+# empty = the run's source scope (GOLDEN) at the run's as-of date.
+type ComplianceAttributeDimension {
+  sourceScope: String
+  offsetUnit: ComplianceOffsetUnit
+  offsetAmount: Int
+  snapTo: CompliancePeriodSnap
+  knowledgeMode: ComplianceKnowledgeMode
+}
+
+input ComplianceAttributeDimensionInput {
+  sourceScope: String
+  offsetUnit: ComplianceOffsetUnit
+  offsetAmount: Int
+  snapTo: CompliancePeriodSnap
+  knowledgeMode: ComplianceKnowledgeMode
+}
+
+type ComplianceRollupHop {
+  relationshipCode: String!
+  direction: String! # UP | DOWN
+  recursive: Boolean!
+}
+
+type ComplianceRuleVersion {
+  id: ID!
+  ruleId: ID!
+  versionNumber: Int!
+  # Bi-temporal
+  validFrom: Date!
+  validTo: Date!
+  systemFrom: DateTime!
+  systemTo: DateTime!
+  # Descriptive
+  ruleName: String!
+  description: String
+  changeReason: String
+  # Rollup definition
+  baseDomainCode: String!
+  baseRollupPath: [ComplianceRollupHop!]!
+  groupByPath: [ComplianceRollupHop!]!
+  groupByAttributeCode: String
+  # Numerator / denominator
+  numeratorAttributeCode: String!
+  numeratorAggregation: ComplianceAggregation!
+  numeratorDimension: ComplianceAttributeDimension
+  denominatorDimension: ComplianceAttributeDimension
+  groupByDimension: ComplianceAttributeDimension
+  resultTransform: ComplianceResultTransform!
+  denominatorAttributeCode: String
+  denominatorAggregation: ComplianceAggregation
+  denominatorScope: ComplianceDenominatorScope!
+  denominatorConstantValue: Float
+  resultUnit: ComplianceResultUnit!
+  # Limits
+  limitDirection: ComplianceLimitDirection!
+  softLimitValue: Float
+  hardLimitValue: Float
+  defaultSourceScope: String!
+  isActive: Boolean!
+  conditions: [ComplianceRuleCondition!]!
+  metadata: JSON
+  createdAt: DateTime!
+  createdBy: String
+}
+
+type ComplianceRuleCondition {
+  id: ID!
+  ruleVersionId: ID!
+  appliesTo: ComplianceConditionScope!
+  conditionGroup: Int!
+  conditionOrder: Int!
+  attributeCode: String!
+  attributeDimension: ComplianceAttributeDimension
+  operator: String!
+  value: String
+  compareAttributeCode: String
+  compareDimension: ComplianceAttributeDimension
+  logicOperator: String!
+  createdAt: DateTime!
+}
+
+type ComplianceScopeAssignment {
+  id: ID!
+  ruleId: ID!
+  scopeType: ComplianceScopeType!
+  entityId: ID!
+  entityCode: String
+  entityName: String
+  includeChildren: Boolean!
+  notes: String
+  createdAt: DateTime!
+  createdBy: String
+}
+
+type ComplianceEvaluationRun {
+  id: ID!
+  ruleId: ID!
+  rule: ComplianceRule
+  ruleVersionId: ID!
+  asOfDate: Date!
+  knowledgeDate: DateTime!
+  sourceScope: String!
+  runStatus: ComplianceRunStatus!
+  errorMessage: String
+  resultCount: Int
+  breachCount: Int
+  triggeredBy: String
+  startedAt: DateTime!
+  completedAt: DateTime
+  results: [ComplianceEvaluationResult!]!
+}
+
+type ComplianceEvaluationResult {
+  id: ID!
+  runId: ID!
+  ruleId: ID!
+  ruleVersionId: ID!
+  anchorEntityId: ID!
+  anchorEntityCode: String
+  anchorEntityName: String
+  groupByValue: String
+  asOfDate: Date!
+  knowledgeDate: DateTime!
+  sourceScope: String!
+  numeratorValue: Float
+  denominatorValue: Float
+  computedValue: Float
+  limitDirection: ComplianceLimitDirection
+  softLimitValue: Float
+  hardLimitValue: Float
+  status: ComplianceResultStatus!
+  breachAmount: Float
+  contributingEntityIds: [ID!]
+  contributingCount: Int
+  detail: JSON
+  evaluatedAt: DateTime!
+}
+
+type ComplianceEvaluationResultConnection {
+  edges: [ComplianceEvaluationResultEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ComplianceEvaluationResultEdge {
+  node: ComplianceEvaluationResult!
+  cursor: String!
+}
+
+# -------------------- Filters --------------------
+
+input ComplianceRuleFilter {
+  ruleCode: StringFilter
+  ruleCategory: ComplianceRuleCategory
+  anchorDomainCode: String
+  isActive: Boolean
+}
+
+input ComplianceResultFilter {
+  ruleId: IDFilter
+  anchorEntityId: IDFilter
+  status: ComplianceResultStatus
+  runId: IDFilter
+  asOfDateRange: DateRangeFilter
+}
+
+# -------------------- Inputs --------------------
+
+input ComplianceRollupHopInput {
+  relationshipCode: String!
+  direction: String!
+  recursive: Boolean
+}
+
+input CreateComplianceRuleInput {
+  ruleCode: String!
+  ruleName: String!
+  ruleCategory: ComplianceRuleCategory!
+  anchorDomainCode: String!
+  appliesToAll: Boolean
+  description: String
+  metadata: JSON
+}
+
+input UpdateComplianceRuleInput {
+  ruleName: String
+  ruleCategory: ComplianceRuleCategory
+  appliesToAll: Boolean
+  isActive: Boolean
+  description: String
+  metadata: JSON
+}
+
+input CreateComplianceRuleVersionInput {
+  ruleId: ID!
+  validFrom: Date!
+  validTo: Date
+  ruleName: String!
+  description: String
+  changeReason: String
+  baseDomainCode: String!
+  baseRollupPath: [ComplianceRollupHopInput!]
+  groupByPath: [ComplianceRollupHopInput!]
+  groupByAttributeCode: String
+  numeratorAttributeCode: String!
+  numeratorAggregation: ComplianceAggregation!
+  numeratorDimension: ComplianceAttributeDimensionInput
+  denominatorDimension: ComplianceAttributeDimensionInput
+  groupByDimension: ComplianceAttributeDimensionInput
+  resultTransform: ComplianceResultTransform
+  denominatorAttributeCode: String
+  denominatorAggregation: ComplianceAggregation
+  denominatorScope: ComplianceDenominatorScope
+  denominatorConstantValue: Float
+  resultUnit: ComplianceResultUnit
+  limitDirection: ComplianceLimitDirection!
+  softLimitValue: Float
+  hardLimitValue: Float
+  defaultSourceScope: String
+  conditions: [ComplianceRuleConditionInput!]
+  metadata: JSON
+}
+
+input ComplianceRuleConditionInput {
+  appliesTo: ComplianceConditionScope!
+  conditionGroup: Int
+  conditionOrder: Int
+  attributeCode: String!
+  attributeDimension: ComplianceAttributeDimensionInput
+  operator: String!
+  value: String
+  compareAttributeCode: String
+  compareDimension: ComplianceAttributeDimensionInput
+  logicOperator: String
+}
+
+input CreateComplianceScopeAssignmentInput {
+  ruleId: ID!
+  scopeType: ComplianceScopeType!
+  entityId: ID!
+  includeChildren: Boolean
+  notes: String
+}
+
+input EvaluateComplianceRuleInput {
+  ruleCode: String!
+  asOfDate: Date!
+  knowledgeDate: DateTime
+  sourceScope: String
+}
+
+# -------------------- Results --------------------
+
+type CreateComplianceRuleResult {
+  rule: ComplianceRule
+  errors: [MutationError!]!
+}
+
+type UpdateComplianceRuleResult {
+  rule: ComplianceRule
+  errors: [MutationError!]!
+}
+
+type DeleteComplianceRuleResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type CreateComplianceRuleVersionResult {
+  version: ComplianceRuleVersion
+  errors: [MutationError!]!
+}
+
+type CreateComplianceScopeAssignmentResult {
+  scopeAssignment: ComplianceScopeAssignment
+  errors: [MutationError!]!
+}
+
+type DeleteComplianceScopeAssignmentResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type EvaluateComplianceRuleResult {
+  run: ComplianceEvaluationRun
   errors: [MutationError!]!
 }
 
@@ -516,23 +916,17 @@ type UpdateEntityResult {
 }
 
 # Relationship Type Metadata
-enum RelationshipCardinality {
-  ONE_TO_ONE
-  ONE_TO_MANY
-  MANY_TO_ONE
-  COMPOSITE
-}
-
 type RelationshipType {
   id: ID!
   relationshipCode: String!
   relationshipName: String!
   parentDomainCode: String
   childDomainCode: String
-  cardinality: RelationshipCardinality
-  compositeKey: [String!]
   description: String
   isActive: Boolean!
+  isRequired: Boolean!
+  cardinality: String!
+  compositeKey: [String!]!
 }
 
 type CreateRelationshipResult {
@@ -586,46 +980,6 @@ type CreateAttributeResult {
   errors: [MutationError!]!
 }
 
-type DeleteAttributeResult {
-  success: Boolean!
-  deletedId: ID
-  errors: [MutationError!]!
-}
-
-input UpdateAttributeDefinitionInput {
-  id: ID!
-  attributeName: String
-  description: String
-  dataType: String
-  unitOfMeasure: String
-  isRequired: Boolean
-  isMultiValued: Boolean
-  referenceDomainCode: String
-  defaultPrecedenceRank: Int
-  isDerived: Boolean
-  derivationType: String
-  derivationFormula: String
-  derivationDependencies: [String!]
-  formulaLanguage: String
-  displayFormat: String
-  listValues: [String!]
-  validationRules: JSON
-  defaultValue: String
-  displaySection: String
-  displayGroup: Int
-  isEditable: Boolean
-  isVisible: Boolean
-  aggregationType: String
-  weightAttributeCode: String
-  numericPrecision: Int
-}
-
-type UpdateAttributeDefinitionResult {
-  success: Boolean!
-  attribute: AttributeDefinition
-  errors: [MutationError!]!
-}
-
 input CreateTemplateInput {
   templateCode: String!
   domainCode: String!
@@ -638,21 +992,16 @@ type CreateTemplateResult {
   errors: [MutationError!]!
 }
 
+input UpdateTemplateInput {
+  templateName: String
+  description: String
+  isActive: Boolean
+  applicabilityRules: JSON
+}
+
 type UpdateTemplateResult {
   template: Template
   errors: [MutationError!]!
-}
-
-type DeleteTemplateResult {
-  success: Boolean!
-  deletedId: ID
-  errors: [MutationError!]!
-}
-
-input UpdateTemplateInput {
-  templateId: ID!
-  templateName: String
-  description: String
 }
 
 input AssignAttributeInput {
@@ -859,6 +1208,154 @@ type CreateFundResult {
 
 type UpdateFundResult {
   fund: Fund
+  errors: [MutationError!]!
+}
+
+# File: intersection.graphql
+# Intersection Types: Generic composite entity framework
+
+# Intersection Type Definition (metadata)
+type IntersectionType {
+  id: ID!
+  intersectionCode: String!
+  intersectionName: String!
+  description: String
+  isActive: Boolean!
+  members: [IntersectionTypeMember!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Intersection Type Member (defines which entity domains compose this intersection)
+type IntersectionTypeMember {
+  id: ID!
+  intersectionTypeId: ID!
+  domainCode: String!
+  memberRole: String!
+  isRequired: Boolean!
+  displayOrder: Int!
+}
+
+# Intersection Instance (actual intersection record)
+type Intersection {
+  id: ID!
+  intersectionCode: String!
+  intersectionTypeCode: String!
+  intersectionTypeName: String!
+  
+  # Members (constituent entities)
+  members: [IntersectionMember!]!
+  
+  # Attributes (intersection-specific data)
+  attributes: JSONObject!
+  
+  # Temporal
+  validFrom: Date!
+  validTo: Date!
+  
+  # Metadata
+  metadata: JSONObject
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Intersection Member (links intersection to constituent entity)
+type IntersectionMember {
+  memberRole: String!
+  entityId: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+}
+
+type IntersectionConnection {
+  edges: [IntersectionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type IntersectionEdge {
+  node: Intersection!
+  cursor: String!
+}
+
+input IntersectionFilter {
+  intersectionTypeCode: String
+  intersectionCode: String
+  memberEntityId: ID
+  memberRole: String
+  isActive: Boolean
+}
+
+input CreateIntersectionTypeInput {
+  intersectionCode: String!
+  intersectionName: String!
+  description: String
+  members: [IntersectionTypeMemberInput!]!
+}
+
+input IntersectionTypeMemberInput {
+  domainCode: String!
+  memberRole: String!
+  isRequired: Boolean
+  displayOrder: Int
+}
+
+type CreateIntersectionTypeResult {
+  intersectionType: IntersectionType
+  errors: [MutationError!]!
+}
+
+input UpdateIntersectionTypeInput {
+  id: ID!
+  intersectionName: String
+  description: String
+  isActive: Boolean
+}
+
+type UpdateIntersectionTypeResult {
+  intersectionType: IntersectionType
+  errors: [MutationError!]!
+}
+
+type DeleteIntersectionTypeResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+input CreateIntersectionInput {
+  intersectionCode: String!
+  intersectionTypeCode: String!
+  members: [IntersectionMemberInput!]!
+  attributes: JSONObject
+  validFrom: Date!
+  metadata: JSONObject
+}
+
+input IntersectionMemberInput {
+  entityId: ID!
+  memberRole: String!
+}
+
+type CreateIntersectionResult {
+  intersection: Intersection
+  errors: [MutationError!]!
+}
+
+input UpdateIntersectionInput {
+  id: ID!
+  members: [IntersectionMemberInput!]
+  attributes: JSONObject
+  metadata: JSONObject
+}
+
+type UpdateIntersectionResult {
+  intersection: Intersection
+  errors: [MutationError!]!
+}
+
+type DeleteIntersectionResult {
+  success: Boolean!
   errors: [MutationError!]!
 }
 
@@ -1153,6 +1650,246 @@ type UpdatePriceResult {
   errors: [MutationError!]!
 }
 
+# File: tenancy.graphql
+# Multi-tenant client/user management: tenants, membership, RBAC, entity ACLs, impersonation
+
+type Client {
+  id: ID!
+  clientCode: String!
+  clientName: String!
+  isActive: Boolean!
+  isInternal: Boolean!
+  createdAt: DateTime!
+}
+
+type Role {
+  id: ID!
+  clientId: ID
+  roleCode: String!
+  roleName: String!
+  description: String
+  isSystemRole: Boolean!
+  permissionCodes: [String!]!
+}
+
+type Profile {
+  id: ID!
+  email: String
+  displayName: String
+  isTenantAdmin: Boolean!
+  isActive: Boolean!
+}
+
+type ClientUser {
+  id: ID!
+  clientId: ID!
+  userId: ID!
+  isActive: Boolean!
+  profile: Profile
+  roles: [Role!]!
+}
+
+type EntityGrant {
+  id: ID!
+  clientId: ID!
+  entityId: ID!
+  granteeType: String!
+  userId: ID
+  roleId: ID
+  granteeLabel: String
+  accessLevel: String!
+  includeChildren: Boolean!
+  createdAt: DateTime!
+}
+
+type ImpersonationSession {
+  id: ID!
+  clientId: ID!
+  clientName: String
+  reason: String
+  startedAt: DateTime!
+}
+
+type Me {
+  id: ID!
+  email: String
+  displayName: String
+  isTenantAdmin: Boolean!
+  clients: [Client!]!
+  impersonating: ImpersonationSession
+}
+
+type UpdateProfileResult {
+  success: Boolean!
+  profile: Me
+  errors: [MutationError!]!
+}
+
+input UpdateProfileInput {
+  displayName: String
+}
+
+type MutationResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+input CreateClientInput {
+  clientCode: String!
+  clientName: String!
+  adminEmail: String
+}
+
+input CreateRoleInput {
+  clientId: ID!
+  roleCode: String!
+  roleName: String!
+  description: String
+  permissionCodes: [String!]!
+}
+
+input InviteUserInput {
+  clientId: ID!
+  email: String!
+  roleIds: [ID!]!
+}
+
+input AssignRoleInput {
+  clientId: ID!
+  userId: ID!
+  roleId: ID!
+}
+
+input GrantEntityAccessInput {
+  clientId: ID!
+  entityId: ID!
+  granteeType: String!
+  userId: ID
+  roleId: ID
+  accessLevel: String!
+  includeChildren: Boolean!
+}
+
+# File: referencelist.graphql
+# Reference List Types
+
+type ReferenceListSummary {
+  id: ID!
+  listCode: String!
+  listName: String!
+  domainCode: String
+  description: String
+  isActive: Boolean!
+  valueCount: Int!
+  synonymCount: Int!
+  linkedAttributeCount: Int!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type ReferenceListDetail {
+  id: ID!
+  listCode: String!
+  listName: String!
+  domainCode: String
+  description: String
+  isActive: Boolean!
+  valueCount: Int!
+  synonymCount: Int!
+  linkedAttributeCount: Int!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  values: [ReferenceListValue!]!
+}
+
+type ReferenceListValue {
+  id: ID!
+  listId: ID!
+  valueCode: String!
+  valueLabel: String!
+  displayOrder: Int!
+  synonyms: [String!]
+  isActive: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type NormalizationResult {
+  normalized: Boolean!
+  input: String!
+  canonicalCode: String
+  canonicalLabel: String
+  matchType: String
+  confidence: String
+  message: String
+}
+
+input CreateReferenceListInput {
+  listCode: String!
+  listName: String!
+  domainCode: String
+  description: String
+}
+
+input UpdateReferenceListInput {
+  id: ID!
+  listName: String
+  description: String
+  isActive: Boolean
+}
+
+input AddReferenceListValueInput {
+  listCode: String!
+  valueCode: String!
+  valueLabel: String!
+  displayOrder: Int
+  synonyms: [String!]
+}
+
+input UpdateReferenceListValueInput {
+  id: ID!
+  valueCode: String
+  valueLabel: String
+  displayOrder: Int
+  synonyms: [String!]
+  isActive: Boolean
+}
+
+input AddSynonymsInput {
+  valueId: ID!
+  synonyms: [String!]!
+}
+
+type CreateReferenceListResult {
+  referenceList: ReferenceListDetail
+  errors: [MutationError!]!
+}
+
+type UpdateReferenceListResult {
+  referenceList: ReferenceListSummary
+  errors: [MutationError!]!
+}
+
+type DeleteReferenceListResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type ReferenceListValueResult {
+  value: ReferenceListValue
+  errors: [MutationError!]!
+}
+
+type DeleteReferenceListValueResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type LinkAttributeToListResult {
+  attribute: AttributeDefinition
+  errors: [MutationError!]!
+}
+
 # File: root.graphql
 # Root Query Type
 
@@ -1212,6 +1949,41 @@ type Query {
   intersectionType(id: ID, intersectionCode: String): IntersectionType
   intersections(filter: IntersectionFilter, pagination: PaginationInput, asOfDate: Date): IntersectionConnection!
   intersection(id: ID, intersectionCode: String, asOfDate: Date): Intersection
+
+  # Precedence Rules queries
+  precedenceRules(domainCode: String, attributeCode: String, isActive: Boolean): [PrecedenceRule!]!
+  precedenceRule(id: ID!): PrecedenceRule
+
+  # Tenancy queries
+  me: Me!
+  clients: [Client!]!
+  client(id: ID!): Client
+  clientUsers(clientId: ID!): [ClientUser!]!
+  roles(clientId: ID): [Role!]!
+  permissionsCatalog: [String!]!
+  entityGrants(entityId: ID!): [EntityGrant!]!
+  myPermissions(clientId: ID!): [String!]!
+
+  # Compliance Rules queries
+  complianceRules(filter: ComplianceRuleFilter): [ComplianceRule!]!
+  complianceRule(id: ID, ruleCode: String): ComplianceRule
+  complianceEvaluationRuns(ruleId: ID, first: Int): [ComplianceEvaluationRun!]!
+  complianceEvaluationRun(id: ID!): ComplianceEvaluationRun
+  complianceResults(filter: ComplianceResultFilter, pagination: PaginationInput): ComplianceEvaluationResultConnection!
+
+  # Reference List queries
+  referenceLists(domainCode: String, isActive: Boolean): [ReferenceListSummary!]!
+  referenceList(id: ID, listCode: String): ReferenceListDetail
+  normalizeValue(listCode: String!, values: [String!]!): [NormalizationResult!]!
+
+  # Reporting (dashboards & narratives)
+  dashboards(domainCode: String, isActive: Boolean): [Dashboard!]!
+  dashboard(id: ID, dashboardCode: String): Dashboard
+  narratives(domainCode: String, isActive: Boolean): [Narrative!]!
+  narrative(id: ID, narrativeCode: String): Narrative
+  narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
+  runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON, asOfDate: String, knowledgeDate: String): DataQueryResponse!
+  gridQuery(input: GridQueryInput!): GridResult!
 }
 
 type Mutation {
@@ -1228,6 +2000,7 @@ type Mutation {
   updateAttribute(input: UpdateAttributeInput!): UpdateAttributeResult!
   splitValidTime(input: SplitValidTimeInput!): SplitValidTimeResult!
   submitManualOverride(input: ManualOverrideInput!): ManualOverrideResult!
+  addCompetingSource(input: AddCompetingSourceInput!): AddCompetingSourceResult!
   
   # Metadata mutations
   createDomainType(input: CreateDomainTypeInput!): CreateDomainTypeResult!
@@ -1235,11 +2008,11 @@ type Mutation {
   deleteDomainType(id: ID!): DeleteDomainTypeResult!
   createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
   updateAttributeDefinition(input: UpdateAttributeDefinitionInput!): UpdateAttributeDefinitionResult!
-  deleteAttribute(id: ID!): DeleteAttributeResult!
+  deleteAttribute(id: ID!): MutationResult!
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
-  updateTemplate(input: UpdateTemplateInput!): UpdateTemplateResult!
-  deleteTemplate(id: ID!): DeleteTemplateResult!
+  updateTemplate(id: ID!, input: UpdateTemplateInput!): UpdateTemplateResult!
   assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
+  unassignAttributeFromTemplate(templateId: ID!, attributeId: ID!): MutationResult!
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
@@ -1253,15 +2026,90 @@ type Mutation {
   updateIntersection(input: UpdateIntersectionInput!): UpdateIntersectionResult!
   deleteIntersection(id: ID!): DeleteIntersectionResult!
   
+  # Source Registry mutations
+  createDataSource(input: CreateDataSourceInput!): CreateDataSourceResult!
+  updateDataSource(input: UpdateDataSourceInput!): UpdateDataSourceResult!
+  deleteDataSource(id: ID!): DeleteDataSourceResult!
+  testDataSourceConnection(id: ID!): TestDataSourceConnectionResult!
+  toggleDataSourceActive(id: ID!, active: Boolean!): ToggleDataSourceActiveResult!
+  reorderSources(order: [SourceReorderInput!]!): ReorderSourcesResult!
+  
+  # Data Connection mutations
+  createDataConnection(input: CreateDataConnectionInput!): CreateDataConnectionResult!
+  updateDataConnection(id: ID!, input: UpdateDataConnectionInput!): UpdateDataConnectionResult!
+  deleteDataConnection(id: ID!): DeleteDataConnectionResult!
+  testDataConnection(id: ID!): TestDataConnectionResult!
+  
+  # Data Loader mutations
+  createDataLoader(input: CreateDataLoaderInput!): CreateDataLoaderResult!
+  updateDataLoader(id: ID!, input: UpdateDataLoaderInput!): UpdateDataLoaderResult!
+  deleteDataLoader(id: ID!): DeleteDataLoaderResult!
+  triggerDataLoader(id: ID!): TriggerDataLoaderResult!
+  
+  # Import Map mutations
+  createImportMap(input: CreateImportMapInput!): CreateImportMapResult!
+  updateImportMap(input: UpdateImportMapInput!): UpdateImportMapResult!
+  deleteImportMap(id: ID!): DeleteImportMapResult!
+  analyzeImportMap(input: AnalyzeImportMapInput!): AnalyzeImportMapResult!
+  executeImportMap(input: ExecuteImportMapInput!): ExecuteImportMapResult!
+
   # Relationship type (dimension) mutations
   createRelationshipType(input: CreateRelationshipTypeInput!): CreateRelationshipTypeResult!
   updateRelationshipType(input: UpdateRelationshipTypeInput!): UpdateRelationshipTypeResult!
   deleteRelationshipType(id: ID!): DeleteRelationshipTypeResult!
-  
+
   # Entity identifier (match key) mutations
   createEntityIdentifier(input: CreateEntityIdentifierInput!): CreateEntityIdentifierResult!
   updateEntityIdentifier(input: UpdateEntityIdentifierInput!): UpdateEntityIdentifierResult!
   deleteEntityIdentifier(id: ID!): DeleteEntityIdentifierResult!
+
+  # Precedence Rules mutations
+  createPrecedenceRule(input: CreatePrecedenceRuleInput!): CreatePrecedenceRuleResult!
+  updatePrecedenceRule(id: ID!, input: UpdatePrecedenceRuleInput!): UpdatePrecedenceRuleResult!
+  deletePrecedenceRule(id: ID!): DeletePrecedenceRuleResult!
+  updateAttributeDefaultPrecedence(attributeCode: String!, chain: [String!]!): UpdateDefaultPrecedenceResult!
+  reorderPrecedenceChain(ruleId: String!, chain: [PrecedenceChainInput!]!): ReorderPrecedenceChainResult!
+
+  # Tenancy mutations
+  createClient(input: CreateClientInput!): MutationResult!
+  createRole(input: CreateRoleInput!): MutationResult!
+  inviteUser(input: InviteUserInput!): MutationResult!
+  assignRole(input: AssignRoleInput!): MutationResult!
+  revokeRole(clientId: ID!, userId: ID!, roleId: ID!): MutationResult!
+  deactivateClientUser(clientId: ID!, userId: ID!): MutationResult!
+  grantEntityAccess(input: GrantEntityAccessInput!): MutationResult!
+  revokeEntityAccess(id: ID!): MutationResult!
+  startImpersonation(clientId: ID!, reason: String): MutationResult!
+  stopImpersonation: MutationResult!
+  updateProfile(input: UpdateProfileInput!): UpdateProfileResult!
+
+  # Compliance Rules mutations
+  createComplianceRule(input: CreateComplianceRuleInput!): CreateComplianceRuleResult!
+  updateComplianceRule(id: ID!, input: UpdateComplianceRuleInput!): UpdateComplianceRuleResult!
+  deleteComplianceRule(id: ID!): DeleteComplianceRuleResult!
+  createComplianceRuleVersion(input: CreateComplianceRuleVersionInput!): CreateComplianceRuleVersionResult!
+  createComplianceScopeAssignment(input: CreateComplianceScopeAssignmentInput!): CreateComplianceScopeAssignmentResult!
+  deleteComplianceScopeAssignment(id: ID!): DeleteComplianceScopeAssignmentResult!
+  evaluateComplianceRule(input: EvaluateComplianceRuleInput!): EvaluateComplianceRuleResult!
+
+  # Reference List mutations
+  createReferenceList(input: CreateReferenceListInput!): CreateReferenceListResult!
+  updateReferenceList(input: UpdateReferenceListInput!): UpdateReferenceListResult!
+  deleteReferenceList(id: ID!): DeleteReferenceListResult!
+  addReferenceListValue(input: AddReferenceListValueInput!): ReferenceListValueResult!
+  updateReferenceListValue(input: UpdateReferenceListValueInput!): ReferenceListValueResult!
+  deleteReferenceListValue(id: ID!): DeleteReferenceListValueResult!
+  addValueSynonyms(input: AddSynonymsInput!): ReferenceListValueResult!
+  removeValueSynonyms(input: AddSynonymsInput!): ReferenceListValueResult!
+  linkAttributeToList(attributeId: ID!, listCode: String!): LinkAttributeToListResult!
+
+  # Reporting (dashboards & narratives)
+  createDashboard(input: CreateDashboardInput!): CreateDashboardResult!
+  updateDashboard(id: ID!, input: UpdateDashboardInput!): UpdateDashboardResult!
+  deleteDashboard(id: ID!): DeleteDashboardResult!
+  createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
+  updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
+  deleteNarrative(id: ID!): DeleteNarrativeResult!
 }
 
 # Root Subscription Type
@@ -1321,92 +2169,40 @@ type ManualOverrideResult {
   errors: [MutationError!]!
 }
 
-# Relationship Type management types
-input CreateRelationshipTypeInput {
-  relationshipCode: String!
-  relationshipName: String!
-  parentDomainCode: String
-  childDomainCode: String
-  cardinality: RelationshipCardinality
-  compositeKey: [String!]
-  description: String
+input AddCompetingSourceInput {
+  entityId: ID!
+  attributeCode: String!
+  sourceId: ID!
+  value: String!
+  validFrom: Date
 }
 
-type CreateRelationshipTypeResult {
-  relationshipType: RelationshipType
-  errors: [MutationError!]!
-}
-
-input UpdateRelationshipTypeInput {
-  id: ID!
-  relationshipName: String
-  description: String
-  parentDomainCode: String
-  childDomainCode: String
-  cardinality: RelationshipCardinality
-  compositeKey: [String!]
-  isActive: Boolean
-}
-
-type UpdateRelationshipTypeResult {
-  relationshipType: RelationshipType
-  errors: [MutationError!]!
-}
-
-type DeleteRelationshipTypeResult {
+type AddCompetingSourceResult {
   success: Boolean!
-  errors: [MutationError!]!
-}
-
-# Entity Identifier (match key) management types
-input CreateEntityIdentifierInput {
-  domainCode: String!
-  identifierCode: String!
-  identifierName: String!
-  attributeCodes: [String!]!
-  isPrimary: Boolean
-  description: String
-}
-
-type CreateEntityIdentifierResult {
-  identifier: EntityIdentifierDefinition
-  errors: [MutationError!]!
-}
-
-input UpdateEntityIdentifierInput {
-  id: ID!
-  identifierName: String
-  attributeCodes: [String!]
-  isPrimary: Boolean
-  description: String
-  isActive: Boolean
-}
-
-type UpdateEntityIdentifierResult {
-  identifier: EntityIdentifierDefinition
-  errors: [MutationError!]!
-}
-
-type DeleteEntityIdentifierResult {
-  success: Boolean!
+  attributeValueId: ID
   errors: [MutationError!]!
 }
 
 # Metadata Types
-type AttributeDefinition {
+input UpdateAttributeDefinitionInput {
   id: ID!
-  attributeCode: String!
-  attributeName: String!
-  dataType: String!
-  description: String
-  unitOfMeasure: String
-  isRequired: Boolean!
-  isMultiValued: Boolean!
-  referenceDomainCode: String
-  defaultPrecedenceRank: Int!
+  displayFormat: String
+  listValues: [String!]
+  validationRules: JSON
+  defaultValue: String
+  displaySection: String
+  displayGroup: Int
+  isEditable: Boolean
+  isVisible: Boolean
   aggregationType: String
   weightAttributeCode: String
   numericPrecision: Int
+}
+
+type UpdateAttributeDefinitionResult {
+  success: Boolean!
+  attribute: AttributeDefinition
+  errors: [MutationError!]!
 }
 
 type Template {
@@ -1441,6 +2237,576 @@ type EntityIdentifierDefinition {
   isActive: Boolean!
   createdAt: DateTime!
   updatedAt: DateTime!
+}
+
+# Entity Identifier Input Types
+input CreateEntityIdentifierInput {
+  identifierCode: String!
+  identifierName: String!
+  domainCode: String!
+  attributeCodes: [String!]!
+  isPrimary: Boolean
+  description: String
+  isActive: Boolean
+}
+
+input UpdateEntityIdentifierInput {
+  identifierName: String
+  attributeCodes: [String!]
+  isPrimary: Boolean
+  description: String
+  isActive: Boolean
+}
+
+# Entity Identifier Mutation Result Types
+type CreateEntityIdentifierResult {
+  identifier: EntityIdentifierDefinition
+  errors: [MutationError!]!
+}
+
+type UpdateEntityIdentifierResult {
+  identifier: EntityIdentifierDefinition
+  errors: [MutationError!]!
+}
+
+type DeleteEntityIdentifierResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# Data Source Types
+type DataSource {
+  id: ID!
+  sourceCode: String!
+  sourceName: String!
+  sourceType: String!
+  vendorName: String
+  feedFormat: String
+  feedFrequency: String
+  connectionConfig: JSON
+  precedenceRank: Int!
+  isActive: Boolean!
+  isProtected: Boolean!
+  color: String
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type DataSourceStats {
+  totalSources: Int!
+  sourceBreakdown: [SourceBreakdown!]!
+}
+
+type SourceBreakdown {
+  sourceId: ID!
+  recordCount: Int!
+}
+
+# Source Registry Input/Result Types
+input CreateDataSourceInput {
+  sourceCode: String!
+  sourceName: String!
+  sourceType: String!
+  vendorName: String
+  feedFormat: String
+  feedFrequency: String
+  precedenceRank: Int
+  color: String
+  metadata: JSON
+}
+
+input UpdateDataSourceInput {
+  id: ID!
+  sourceName: String
+  sourceType: String
+  vendorName: String
+  feedFormat: String
+  feedFrequency: String
+  precedenceRank: Int
+  color: String
+  isActive: Boolean
+  metadata: JSON
+}
+
+input SourceReorderInput {
+  id: ID!
+  precedenceRank: Int!
+}
+
+type CreateDataSourceResult {
+  dataSource: DataSource
+  errors: [MutationError!]!
+}
+
+type UpdateDataSourceResult {
+  dataSource: DataSource
+  errors: [MutationError!]!
+}
+
+type DeleteDataSourceResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type TestDataSourceConnectionResult {
+  success: Boolean!
+  message: String
+  errors: [MutationError!]!
+}
+
+type ToggleDataSourceActiveResult {
+  dataSource: DataSource
+  errors: [MutationError!]!
+}
+
+type ReorderSourcesResult {
+  sources: [DataSource!]!
+  errors: [MutationError!]!
+}
+
+# Data Connection Types
+type DataConnection {
+  id: ID!
+  connectionCode: String!
+  connectionName: String!
+  sourceType: String!
+  vendorName: String
+  endpointUrl: String
+  endpointMethod: String
+  endpointHeaders: JSON
+  requestTimeout: Int
+  authType: String
+  authConfig: JSON
+  connectionStatus: String
+  lastTestedAt: DateTime
+  lastTestResult: JSON
+  precedenceRank: Int!
+  isActive: Boolean!
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  # Related loaders
+  loaders: [DataLoader!]
+}
+
+type DataLoader {
+  id: ID!
+  loaderCode: String!
+  loaderName: String!
+  connectionId: ID!
+  connection: DataConnection
+  domainCode: String!
+  attributeCodes: [String!]!
+  loadFrequency: String
+  cronExpression: String
+  loadWindow: String
+  batchSize: Int
+  transformMapping: JSON
+  fieldMapping: JSON
+  loaderStatus: String
+  lastRunAt: DateTime
+  lastRunResult: JSON
+  nextRunAt: DateTime
+  isActive: Boolean!
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Precedence Rules Types
+type PrecedenceRule {
+  id: ID!
+  ruleCode: String
+  ruleName: String!
+  domainCode: String!
+  templateCode: String
+  attributeCode: String!
+  priorityTier: String!
+  isActive: Boolean!
+  conditions: [PrecedenceCondition!]!
+  chain: [PrecedenceChainItem!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+  metadata: JSON
+}
+
+type PrecedenceCondition {
+  id: ID!
+  ruleId: ID!
+  conditionGroup: Int!
+  conditionOrder: Int!
+  attributeCode: String!
+  operator: String!
+  value: String
+  logicOperator: String!
+  createdAt: DateTime!
+}
+
+type PrecedenceChainItem {
+  id: ID!
+  ruleId: ID!
+  chainOrder: Int!
+  sourceCode: String!
+  conditionType: String!
+  createdAt: DateTime!
+}
+
+input CreatePrecedenceRuleInput {
+  ruleCode: String
+  ruleName: String!
+  domainCode: String!
+  templateCode: String
+  attributeCode: String!
+  priorityTier: String
+  isActive: Boolean
+  conditions: [PrecedenceConditionInput!]
+  chain: [PrecedenceChainInput!]
+  metadata: JSON
+}
+
+input UpdatePrecedenceRuleInput {
+  ruleCode: String
+  ruleName: String
+  domainCode: String
+  templateCode: String
+  attributeCode: String
+  priorityTier: String
+  isActive: Boolean
+  conditions: [PrecedenceConditionInput!]
+  chain: [PrecedenceChainInput!]
+  metadata: JSON
+}
+
+input PrecedenceConditionInput {
+  conditionGroup: Int
+  conditionOrder: Int
+  attributeCode: String!
+  operator: String!
+  value: String
+  logicOperator: String
+}
+
+input PrecedenceChainInput {
+  chainOrder: Int
+  sourceCode: String!
+  conditionType: String
+}
+
+type CreatePrecedenceRuleResult {
+  precedenceRule: PrecedenceRule
+  errors: [MutationError!]!
+}
+
+type UpdatePrecedenceRuleResult {
+  precedenceRule: PrecedenceRule
+  errors: [MutationError!]!
+}
+
+type DeletePrecedenceRuleResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type UpdateDefaultPrecedenceResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type ReorderPrecedenceChainResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# Data Connection Result Types
+type CreateDataConnectionResult {
+  connection: DataConnection
+  errors: [MutationError!]!
+}
+
+type UpdateDataConnectionResult {
+  connection: DataConnection
+  errors: [MutationError!]!
+}
+
+type DeleteDataConnectionResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type TestDataConnectionResult {
+  testResult: Boolean
+  errors: [MutationError!]!
+}
+
+# Data Loader Result Types
+type CreateDataLoaderResult {
+  loader: DataLoader
+  errors: [MutationError!]!
+}
+
+type UpdateDataLoaderResult {
+  loader: DataLoader
+  errors: [MutationError!]!
+}
+
+type DeleteDataLoaderResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type TriggerDataLoaderResult {
+  success: Boolean!
+  runId: String
+  errors: [MutationError!]!
+}
+
+# Input Types for Data Connection Mutations
+input CreateDataConnectionInput {
+  connectionCode: String!
+  connectionName: String!
+  sourceType: String!
+  vendorName: String
+  endpointUrl: String
+  endpointMethod: String
+  endpointHeaders: JSON
+  requestTimeout: Int
+  authType: String!
+  authConfig: JSON
+  precedenceRank: Int
+  isActive: Boolean
+}
+
+input UpdateDataConnectionInput {
+  connectionName: String
+  sourceType: String
+  vendorName: String
+  endpointUrl: String
+  endpointMethod: String
+  endpointHeaders: JSON
+  requestTimeout: Int
+  authConfig: JSON
+  precedenceRank: Int
+  isActive: Boolean
+}
+
+# Input Types for Data Loader Mutations
+input CreateDataLoaderInput {
+  loaderCode: String!
+  loaderName: String!
+  connectionId: ID!
+  domainCode: String
+  attributeCodes: [String!]
+  loadFrequency: String!
+  cronExpression: String
+  loadWindow: String
+  batchSize: Int
+}
+
+input UpdateDataLoaderInput {
+  loaderName: String
+  domainCode: String
+  attributeCodes: [String!]
+  loadFrequency: String
+  cronExpression: String
+  loadWindow: String
+  batchSize: Int
+}
+
+# Import Map Types
+type ImportMap {
+  id: ID!
+  name: String!
+  description: String
+  sourceFormat: String!
+  domainMappings: [DomainImportMapping!]!
+  status: String!
+  options: JSON
+  lastAnalysis: JSON
+  lastAnalysisAt: DateTime
+  lastExecution: JSON
+  lastExecutionAt: DateTime
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+}
+
+type DomainImportMapping {
+  domainCode: String!
+  sourceColumn: String!
+  targetField: String!
+  mappingType: String
+  isRequired: Boolean
+}
+
+type IdentifierSuggestionsResult {
+  identifiers: [IdentifierDefinition!]!
+  recommendations: [String!]!
+}
+
+type IdentifierDefinition {
+  identifierCode: String!
+  identifierName: String!
+  domainCode: String!
+  attributeCodes: [String!]!
+  isPrimary: Boolean!
+  description: String
+  isActive: Boolean!
+}
+
+# Import Map Result Types
+type CreateImportMapResult {
+  importMap: ImportMap
+  errors: [MutationError!]!
+}
+
+type UpdateImportMapResult {
+  importMap: ImportMap
+  errors: [MutationError!]!
+}
+
+type DeleteImportMapResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type AnalyzeImportMapResult {
+  analysis: ImportMapAnalysis
+  errors: [MutationError!]!
+}
+
+type ImportMapAnalysis {
+  summary: ImportMapSummary
+  mappings: [MappingSuggestion!]!
+  identifiers: [IdentifierCandidate!]!
+}
+
+type ImportMapSummary {
+  columns: Int!
+  rows: Int!
+  domains: Int!
+  matches: Int!
+  unmatched: Int!
+}
+
+type MappingSuggestion {
+  column: String!
+  domain: String
+  field: String
+  confidence: Float!
+}
+
+type IdentifierCandidate {
+  domain: String!
+  identifier: String!
+  format: String!
+  confidence: Float!
+}
+
+type ExecuteImportMapResult {
+  executionId: String!
+  success: Boolean!
+  results: ImportMapExecutionResults
+  summary: ImportMapSummary
+  errors: [String!]!
+}
+
+type ImportMapExecutionResults {
+  imported: Int!
+  skipped: Int!
+  errors: [ImportMapError!]!
+}
+
+type ImportMapError {
+  row: Int!
+  column: String!
+  message: String!
+}
+
+# Input Types for Import Map Mutations
+input CreateImportMapInput {
+  name: String!
+  description: String
+  sourceFormat: String!
+  sourceData: String!
+  domainMappings: [DomainImportMappingInput!]
+  options: JSON
+}
+
+input DomainImportMappingInput {
+  domainCode: String!
+  sourceColumn: String!
+  targetField: String!
+  mappingType: String
+  isRequired: Boolean
+}
+
+input UpdateImportMapInput {
+  name: String
+  description: String
+  domainMappings: [DomainImportMappingInput!]
+  options: JSON
+}
+
+input AnalyzeImportMapInput {
+  importMapId: ID!
+}
+
+input ExecuteImportMapInput {
+  importMapId: ID!
+  dryRun: Boolean
+  skipValidation: Boolean
+  continueOnError: Boolean
+  batchSize: Int
+}
+
+# Relationship Type Types
+type RelationshipTypeConnection {
+  edges: [RelationshipTypeEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type RelationshipTypeEdge {
+  node: RelationshipType!
+  cursor: String!
+}
+
+# Relationship Type Mutation Results
+type CreateRelationshipTypeResult {
+  relationshipType: RelationshipType
+  errors: [MutationError!]!
+}
+
+type UpdateRelationshipTypeResult {
+  relationshipType: RelationshipType
+  errors: [MutationError!]!
+}
+
+type DeleteRelationshipTypeResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# Input Types for Relationship Type Mutations
+input CreateRelationshipTypeInput {
+  relationshipCode: String!
+  relationshipName: String!
+  parentDomainCode: String
+  childDomainCode: String
+  description: String
+  isActive: Boolean
+  cardinality: String
+  compositeKey: [String!]
+}
+
+input UpdateRelationshipTypeInput {
+  relationshipName: String
+  description: String
+  isActive: Boolean
+  cardinality: String
+  compositeKey: [String!]
 }
 
 # File: security.graphql
@@ -1551,279 +2917,207 @@ type UpdateSecurityResult {
   errors: [MutationError!]!
 }
 
-# File: intersection.graphql
-# Intersection Types: Generic composite entity framework
 
-# Intersection Type Definition (metadata)
-type IntersectionType {
+# Reporting: Custom Dashboards & Narratives
+#
+# Dashboards and narratives are templates attached to an entity type (domainCode).
+# dataQueries is an array of DataQuerySpec (see src/lib/data-query-engine.ts) that is
+# executed at view time against the entity being viewed + user filter inputs.
+
+type Dashboard {
   id: ID!
-  intersectionCode: String!
-  intersectionName: String!
+  dashboardCode: String!
+  dashboardName: String!
   description: String
+  domainCode: String!
+  htmlTemplate: String!
+  dataQueries: JSON!
+  parameters: JSON!
   isActive: Boolean!
-  members: [IntersectionTypeMember!]!
+  metadata: JSON
   createdAt: DateTime!
   updatedAt: DateTime!
 }
 
-# Intersection Type Member (defines which entity domains compose this intersection)
-type IntersectionTypeMember {
+type Narrative {
   id: ID!
-  intersectionTypeId: ID!
-  domainCode: String!
-  memberRole: String!
-  isRequired: Boolean!
-  displayOrder: Int!
-}
-
-# Intersection Instance (actual intersection record)
-type Intersection {
-  id: ID!
-  intersectionCode: String!
-  intersectionTypeCode: String!
-  intersectionTypeName: String!
-  
-  # Members (constituent entities)
-  members: [IntersectionMember!]!
-  
-  # Attributes (intersection-specific data)
-  attributes: JSONObject!
-  
-  # Temporal
-  validFrom: Date!
-  validTo: Date!
-  
-  # Metadata
-  metadata: JSONObject
-  createdAt: DateTime!
-  updatedAt: DateTime!
-}
-
-# Intersection Member (links intersection to constituent entity)
-type IntersectionMember {
-  memberRole: String!
-  entityId: ID!
-  entityCode: String!
-  entityName: String!
-  domainCode: String!
-}
-
-type IntersectionConnection {
-  edges: [IntersectionEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-type IntersectionEdge {
-  node: Intersection!
-  cursor: String!
-}
-
-input IntersectionFilter {
-  intersectionTypeCode: String
-  intersectionCode: String
-  memberEntityId: ID
-  memberRole: String
-  isActive: Boolean
-}
-
-input CreateIntersectionTypeInput {
-  intersectionCode: String!
-  intersectionName: String!
+  narrativeCode: String!
+  narrativeName: String!
   description: String
-  members: [IntersectionTypeMemberInput!]!
-}
-
-input IntersectionTypeMemberInput {
   domainCode: String!
-  memberRole: String!
-  isRequired: Boolean
-  displayOrder: Int
-}
-
-type CreateIntersectionTypeResult {
-  intersectionType: IntersectionType
-  errors: [MutationError!]!
-}
-
-input UpdateIntersectionTypeInput {
-  id: ID!
-  intersectionName: String
-  description: String
-  isActive: Boolean
-}
-
-type UpdateIntersectionTypeResult {
-  intersectionType: IntersectionType
-  errors: [MutationError!]!
-}
-
-type DeleteIntersectionTypeResult {
-  success: Boolean!
-  errors: [MutationError!]!
-}
-
-input CreateIntersectionInput {
-  intersectionCode: String!
-  intersectionTypeCode: String!
-  members: [IntersectionMemberInput!]!
-  attributes: JSONObject
-  validFrom: Date!
-  metadata: JSONObject
-}
-
-input IntersectionMemberInput {
-  entityId: ID!
-  memberRole: String!
-}
-
-type CreateIntersectionResult {
-  intersection: Intersection
-  errors: [MutationError!]!
-}
-
-input UpdateIntersectionInput {
-  id: ID!
-  members: [IntersectionMemberInput!]
-  attributes: JSONObject
-  metadata: JSONObject
-}
-
-type UpdateIntersectionResult {
-  intersection: Intersection
-  errors: [MutationError!]!
-}
-
-type DeleteIntersectionResult {
-  success: Boolean!
-  errors: [MutationError!]!
-}
-
-# Data Source Types
-type DataSource {
-  id: ID!
-  sourceCode: String!
-  sourceName: String!
-  sourceType: String!
-  vendorName: String
-  feedFormat: String
-  feedFrequency: String
-  connectionConfig: JSONObject
-  precedenceRank: Int!
+  instructions: String!
+  dataQueries: JSON!
+  parameters: JSON!
+  outputBlocks: JSON!
+  model: String
   isActive: Boolean!
-  metadata: JSONObject
+  metadata: JSON
   createdAt: DateTime!
   updatedAt: DateTime!
 }
 
-type DataSourceStats {
-  totalSources: Int!
-  sourceBreakdown: [SourceBreakdown!]!
-}
-
-type SourceBreakdown {
-  sourceId: ID!
-  recordCount: Int!
-}
-
-# Data Connection Types
-type DataConnection {
+type NarrativeRun {
   id: ID!
-  connectionCode: String!
-  connectionName: String!
-  sourceType: String!
-  vendorName: String
-  endpointUrl: String
-  endpointMethod: String
-  endpointHeaders: JSONObject
-  requestTimeout: Int
-  authType: String
-  authConfig: JSONObject
-  connectionStatus: String
-  lastTestedAt: DateTime
-  lastTestResult: JSONObject
-  precedenceRank: Int!
-  isActive: Boolean!
-  metadata: JSONObject
-  createdAt: DateTime!
-  updatedAt: DateTime!
-}
-
-type DataLoader {
-  id: ID!
-  loaderCode: String!
-  loaderName: String!
-  connectionId: ID!
-  connection: DataConnection
-  domainCode: String!
-  attributeCodes: [String!]!
-  loadFrequency: String
-  cronExpression: String
-  loadWindow: String
-  batchSize: Int
-  transformMapping: JSONObject
-  fieldMapping: JSONObject
-  loaderStatus: String
-  lastRunAt: DateTime
-  lastRunResult: JSONObject
-  nextRunAt: DateTime
-  isActive: Boolean!
-  metadata: JSONObject
-  createdAt: DateTime!
-  updatedAt: DateTime!
-}
-
-# Import Map Types
-type ImportMap {
-  id: ID!
-  name: String!
-  description: String
-  sourceFormat: String!
-  sourceData: String!
-  domainMappings: [DomainImportMapping!]!
-  options: JSONObject
+  narrativeId: ID!
+  entityId: ID
+  parameters: JSON!
+  blocks: JSON!
   status: String!
-  executedBy: String
-  executedAt: DateTime
-  resultSummary: JSONObject
+  errorMessage: String
+  model: String
   createdAt: DateTime!
-  updatedAt: DateTime!
+  createdBy: ID
 }
 
-type DomainImportMapping {
-  domainCode: String!
-  templateCode: String
-  fieldMappings: [FieldMapping!]!
-  relationshipMappings: [RelationshipMapping!]!
+type DataQueryResponse {
+  anchor: JSON
+  results: JSON!
+  warnings: [String!]!
+  validationErrors: [String!]!
+  asOfDate: String
 }
 
-type FieldMapping {
-  sourceField: String!
-  targetAttribute: String!
-  confidence: Float
-  isAutoRecommended: Boolean
+input GridQueryInput {
+  start: String!
+  domainCode: String
+  entityId: ID
+  entityCode: String
+  path: JSON
+  includeAnchor: Boolean
+  lookups: JSON
+  asOfDate: String
+  knowledgeDate: String
+  filters: JSON
+  columns: [String!]
+  sort: JSON
+  groupBy: [String!]
+  groupKeys: JSON
+  metrics: JSON
+  flat: Boolean
+  offset: Int
+  limit: Int
+  export: Boolean
+  params: JSON
 }
 
-type RelationshipMapping {
-  relationshipCode: String!
-  parentDomainCode: String!
-  childDomainCode: String!
-  parentKeyField: String!
-  childKeyField: String!
+type GridColumn {
+  code: String!
+  name: String
+  kind: String
+  aggregation: String
+  weight: String
+  unit: String
+  precision: Int
 }
 
-# Additional resolver types (not in schema.graphql but used by resolvers)
-# Identifier Suggestions Result
-type IdentifierSuggestionsResult {
-  identifiers: [IdentifierDefinition!]!
-  recommendations: [String!]!
+type GridResult {
+  mode: String!
+  level: Int
+  groupField: String
+  total: Int!
+  matched: Int!
+  rows: JSON!
+  summary: JSON
+  columns: [GridColumn!]!
+  groupBy: [String!]!
+  asOfDate: String
+  knowledgeDate: String
+  entityCount: Int
 }
 
-type IdentifierDefinition {
-  identifierCode: String!
-  identifierName: String!
-  attributeCodes: [String!]!
-  isPrimary: Boolean!
+input CreateDashboardInput {
+  dashboardCode: String!
+  dashboardName: String!
   description: String
+  domainCode: String!
+  htmlTemplate: String
+  dataQueries: JSON
+  parameters: JSON
+  isActive: Boolean
+  metadata: JSON
 }
+
+input UpdateDashboardInput {
+  dashboardName: String
+  description: String
+  domainCode: String
+  htmlTemplate: String
+  dataQueries: JSON
+  parameters: JSON
+  isActive: Boolean
+  metadata: JSON
+}
+
+input CreateNarrativeInput {
+  narrativeCode: String!
+  narrativeName: String!
+  description: String
+  domainCode: String!
+  instructions: String
+  dataQueries: JSON
+  parameters: JSON
+  outputBlocks: JSON
+  model: String
+  isActive: Boolean
+  metadata: JSON
+}
+
+input UpdateNarrativeInput {
+  narrativeName: String
+  description: String
+  domainCode: String
+  instructions: String
+  dataQueries: JSON
+  parameters: JSON
+  outputBlocks: JSON
+  model: String
+  isActive: Boolean
+  metadata: JSON
+}
+
+type CreateDashboardResult {
+  dashboard: Dashboard
+  errors: [MutationError!]!
+}
+
+type UpdateDashboardResult {
+  dashboard: Dashboard
+  errors: [MutationError!]!
+}
+
+type DeleteDashboardResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type CreateNarrativeResult {
+  narrative: Narrative
+  errors: [MutationError!]!
+}
+
+type UpdateNarrativeResult {
+  narrative: Narrative
+  errors: [MutationError!]!
+}
+
+type DeleteNarrativeResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# Query fields (add to type Query):
+#   dashboards(domainCode: String, isActive: Boolean): [Dashboard!]!
+#   dashboard(id: ID, dashboardCode: String): Dashboard
+#   narratives(domainCode: String, isActive: Boolean): [Narrative!]!
+#   narrative(id: ID, narrativeCode: String): Narrative
+#   narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
+#   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON): DataQueryResponse!
+#
+# Mutation fields (add to type Mutation):
+#   createDashboard(input: CreateDashboardInput!): CreateDashboardResult!
+#   updateDashboard(id: ID!, input: UpdateDashboardInput!): UpdateDashboardResult!
+#   deleteDashboard(id: ID!): DeleteDashboardResult!
+#   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
+#   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
+#   deleteNarrative(id: ID!): DeleteNarrativeResult!
 

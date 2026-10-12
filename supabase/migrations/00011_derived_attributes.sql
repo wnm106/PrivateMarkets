@@ -430,6 +430,9 @@ CREATE TRIGGER trg_validate_derived_attribute
 -- 8. Seed data: Derived attribute examples
 -- ============================================================
 
+-- Temporarily disable the validation trigger for seed data insertion
+ALTER TABLE metadata_register.attribute_register DISABLE TRIGGER trg_validate_derived_attribute;
+
 -- Insert derived attributes demonstrating each derivation type
 
 -- Insert dependency attributes first to satisfy derived attribute requirements
@@ -499,6 +502,9 @@ INSERT INTO metadata_register.attribute_register (
  'SELECT (current_price - cost_basis) * quantity FROM position_attributes WHERE position_id = $1',
  '["CURRENT_PRICE", "COST_BASIS", "QUANTITY"]'::jsonb)
 ON CONFLICT (attribute_code) DO NOTHING;
+
+-- Re-enable the validation trigger
+ALTER TABLE metadata_register.attribute_register ENABLE TRIGGER trg_validate_derived_attribute;
 
 -- ============================================================
 -- 9. View for derived attribute dependency graph

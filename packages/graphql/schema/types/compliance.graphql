@@ -1,0 +1,401 @@
+# Compliance Rules Engine Types
+# Bi-temporal, entity-level-agnostic investment/regulatory limit rules.
+# Distinct from DQRule (data_quality): compliance rules express concentration,
+# exposure, diversification, eligibility, leverage, and liquidity tests with
+# numerator/denominator calculations, hard/soft limits, and aggregate rollups.
+
+enum ComplianceRuleCategory {
+  CONCENTRATION
+  EXPOSURE
+  DIVERSIFICATION
+  ELIGIBILITY
+  LEVERAGE
+  LIQUIDITY
+  OTHER
+}
+
+enum ComplianceAggregation {
+  SUM
+  AVG
+  COUNT
+  MIN
+  MAX
+  VALUE
+  CONSTANT
+}
+
+enum ComplianceDenominatorScope {
+  SAME_GROUP
+  ANCHOR_TOTAL
+  CONSTANT
+}
+
+enum ComplianceResultUnit {
+  RATIO
+  PERCENTAGE
+  CURRENCY
+  COUNT
+}
+
+enum ComplianceLimitDirection {
+  MAX
+  MIN
+}
+
+enum ComplianceResultStatus {
+  PASS
+  SOFT_BREACH
+  HARD_BREACH
+  NO_DATA
+  ERROR
+}
+
+enum ComplianceRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum ComplianceOffsetUnit {
+  DAY
+  WEEK
+  MONTH
+  QUARTER
+  YEAR
+}
+
+enum CompliancePeriodSnap {
+  MONTH_END
+  QUARTER_END
+  YEAR_END
+}
+
+enum ComplianceKnowledgeMode {
+  RUN
+  AT_OFFSET_DATE
+}
+
+enum ComplianceResultTransform {
+  NONE
+  DIFFERENCE
+  ABS_DIFFERENCE
+  PCT_CHANGE
+  ABS_PCT_CHANGE
+}
+
+enum ComplianceConditionScope {
+  BASE
+  ANCHOR
+}
+
+enum ComplianceScopeType {
+  INCLUDE
+  EXCLUDE
+}
+
+type ComplianceRule {
+  id: ID!
+  ruleCode: String!
+  ruleName: String!
+  ruleCategory: ComplianceRuleCategory!
+  anchorDomainCode: String!
+  appliesToAll: Boolean!
+  isActive: Boolean!
+  description: String
+  scopeAssignments: [ComplianceScopeAssignment!]!
+  versions: [ComplianceRuleVersion!]!
+  currentVersion(asOfDate: Date, knowledgeDate: DateTime): ComplianceRuleVersion
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+}
+
+# Source / time dimension of an attribute reference. All fields optional;
+# empty = the run's source scope (GOLDEN) at the run's as-of date.
+type ComplianceAttributeDimension {
+  sourceScope: String
+  offsetUnit: ComplianceOffsetUnit
+  offsetAmount: Int
+  snapTo: CompliancePeriodSnap
+  knowledgeMode: ComplianceKnowledgeMode
+}
+
+input ComplianceAttributeDimensionInput {
+  sourceScope: String
+  offsetUnit: ComplianceOffsetUnit
+  offsetAmount: Int
+  snapTo: CompliancePeriodSnap
+  knowledgeMode: ComplianceKnowledgeMode
+}
+
+type ComplianceRollupHop {
+  relationshipCode: String!
+  direction: String! # UP | DOWN
+  recursive: Boolean!
+}
+
+type ComplianceRuleVersion {
+  id: ID!
+  ruleId: ID!
+  versionNumber: Int!
+  # Bi-temporal
+  validFrom: Date!
+  validTo: Date!
+  systemFrom: DateTime!
+  systemTo: DateTime!
+  # Descriptive
+  ruleName: String!
+  description: String
+  changeReason: String
+  # Rollup definition
+  baseDomainCode: String!
+  baseRollupPath: [ComplianceRollupHop!]!
+  groupByPath: [ComplianceRollupHop!]!
+  groupByAttributeCode: String
+  # Numerator / denominator
+  numeratorAttributeCode: String!
+  numeratorAggregation: ComplianceAggregation!
+  numeratorDimension: ComplianceAttributeDimension
+  denominatorDimension: ComplianceAttributeDimension
+  groupByDimension: ComplianceAttributeDimension
+  resultTransform: ComplianceResultTransform!
+  denominatorAttributeCode: String
+  denominatorAggregation: ComplianceAggregation
+  denominatorScope: ComplianceDenominatorScope!
+  denominatorConstantValue: Float
+  resultUnit: ComplianceResultUnit!
+  # Limits
+  limitDirection: ComplianceLimitDirection!
+  softLimitValue: Float
+  hardLimitValue: Float
+  defaultSourceScope: String!
+  isActive: Boolean!
+  conditions: [ComplianceRuleCondition!]!
+  metadata: JSON
+  createdAt: DateTime!
+  createdBy: String
+}
+
+type ComplianceRuleCondition {
+  id: ID!
+  ruleVersionId: ID!
+  appliesTo: ComplianceConditionScope!
+  conditionGroup: Int!
+  conditionOrder: Int!
+  attributeCode: String!
+  attributeDimension: ComplianceAttributeDimension
+  operator: String!
+  value: String
+  compareAttributeCode: String
+  compareDimension: ComplianceAttributeDimension
+  logicOperator: String!
+  createdAt: DateTime!
+}
+
+type ComplianceScopeAssignment {
+  id: ID!
+  ruleId: ID!
+  scopeType: ComplianceScopeType!
+  entityId: ID!
+  entityCode: String
+  entityName: String
+  includeChildren: Boolean!
+  notes: String
+  createdAt: DateTime!
+  createdBy: String
+}
+
+type ComplianceEvaluationRun {
+  id: ID!
+  ruleId: ID!
+  rule: ComplianceRule
+  ruleVersionId: ID!
+  asOfDate: Date!
+  knowledgeDate: DateTime!
+  sourceScope: String!
+  runStatus: ComplianceRunStatus!
+  errorMessage: String
+  resultCount: Int
+  breachCount: Int
+  triggeredBy: String
+  startedAt: DateTime!
+  completedAt: DateTime
+  results: [ComplianceEvaluationResult!]!
+}
+
+type ComplianceEvaluationResult {
+  id: ID!
+  runId: ID!
+  ruleId: ID!
+  ruleVersionId: ID!
+  anchorEntityId: ID!
+  anchorEntityCode: String
+  anchorEntityName: String
+  groupByValue: String
+  asOfDate: Date!
+  knowledgeDate: DateTime!
+  sourceScope: String!
+  numeratorValue: Float
+  denominatorValue: Float
+  computedValue: Float
+  limitDirection: ComplianceLimitDirection
+  softLimitValue: Float
+  hardLimitValue: Float
+  status: ComplianceResultStatus!
+  breachAmount: Float
+  contributingEntityIds: [ID!]
+  contributingCount: Int
+  detail: JSON
+  evaluatedAt: DateTime!
+}
+
+type ComplianceEvaluationResultConnection {
+  edges: [ComplianceEvaluationResultEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ComplianceEvaluationResultEdge {
+  node: ComplianceEvaluationResult!
+  cursor: String!
+}
+
+# -------------------- Filters --------------------
+
+input ComplianceRuleFilter {
+  ruleCode: StringFilter
+  ruleCategory: ComplianceRuleCategory
+  anchorDomainCode: String
+  isActive: Boolean
+}
+
+input ComplianceResultFilter {
+  ruleId: IDFilter
+  anchorEntityId: IDFilter
+  status: ComplianceResultStatus
+  runId: IDFilter
+  asOfDateRange: DateRangeFilter
+}
+
+# -------------------- Inputs --------------------
+
+input ComplianceRollupHopInput {
+  relationshipCode: String!
+  direction: String!
+  recursive: Boolean
+}
+
+input CreateComplianceRuleInput {
+  ruleCode: String!
+  ruleName: String!
+  ruleCategory: ComplianceRuleCategory!
+  anchorDomainCode: String!
+  appliesToAll: Boolean
+  description: String
+  metadata: JSON
+}
+
+input UpdateComplianceRuleInput {
+  ruleName: String
+  ruleCategory: ComplianceRuleCategory
+  appliesToAll: Boolean
+  isActive: Boolean
+  description: String
+  metadata: JSON
+}
+
+input CreateComplianceRuleVersionInput {
+  ruleId: ID!
+  validFrom: Date!
+  validTo: Date
+  ruleName: String!
+  description: String
+  changeReason: String
+  baseDomainCode: String!
+  baseRollupPath: [ComplianceRollupHopInput!]
+  groupByPath: [ComplianceRollupHopInput!]
+  groupByAttributeCode: String
+  numeratorAttributeCode: String!
+  numeratorAggregation: ComplianceAggregation!
+  numeratorDimension: ComplianceAttributeDimensionInput
+  denominatorDimension: ComplianceAttributeDimensionInput
+  groupByDimension: ComplianceAttributeDimensionInput
+  resultTransform: ComplianceResultTransform
+  denominatorAttributeCode: String
+  denominatorAggregation: ComplianceAggregation
+  denominatorScope: ComplianceDenominatorScope
+  denominatorConstantValue: Float
+  resultUnit: ComplianceResultUnit
+  limitDirection: ComplianceLimitDirection!
+  softLimitValue: Float
+  hardLimitValue: Float
+  defaultSourceScope: String
+  conditions: [ComplianceRuleConditionInput!]
+  metadata: JSON
+}
+
+input ComplianceRuleConditionInput {
+  appliesTo: ComplianceConditionScope!
+  conditionGroup: Int
+  conditionOrder: Int
+  attributeCode: String!
+  attributeDimension: ComplianceAttributeDimensionInput
+  operator: String!
+  value: String
+  compareAttributeCode: String
+  compareDimension: ComplianceAttributeDimensionInput
+  logicOperator: String
+}
+
+input CreateComplianceScopeAssignmentInput {
+  ruleId: ID!
+  scopeType: ComplianceScopeType!
+  entityId: ID!
+  includeChildren: Boolean
+  notes: String
+}
+
+input EvaluateComplianceRuleInput {
+  ruleCode: String!
+  asOfDate: Date!
+  knowledgeDate: DateTime
+  sourceScope: String
+}
+
+# -------------------- Results --------------------
+
+type CreateComplianceRuleResult {
+  rule: ComplianceRule
+  errors: [MutationError!]!
+}
+
+type UpdateComplianceRuleResult {
+  rule: ComplianceRule
+  errors: [MutationError!]!
+}
+
+type DeleteComplianceRuleResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type CreateComplianceRuleVersionResult {
+  version: ComplianceRuleVersion
+  errors: [MutationError!]!
+}
+
+type CreateComplianceScopeAssignmentResult {
+  scopeAssignment: ComplianceScopeAssignment
+  errors: [MutationError!]!
+}
+
+type DeleteComplianceScopeAssignmentResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type EvaluateComplianceRuleResult {
+  run: ComplianceEvaluationRun
+  errors: [MutationError!]!
+}

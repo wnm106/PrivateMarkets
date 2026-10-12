@@ -1,4 +1,4 @@
-# Meridian MDM Frontend Rebuild Summary
+# tapestr.ai MDM Frontend Rebuild Summary
 
 ## Overview
 Complete frontend rebuild to match the HTML mockup design specification. The application now uses an editorial, high-density financial design language with IBM Plex fonts and a warm color palette.

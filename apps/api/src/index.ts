@@ -1,6 +1,6 @@
 import { createYoga, createSchema } from 'graphql-yoga';
 import { createClient } from '@supabase/supabase-js';
-import { schema } from '@meridian-mdm/graphql';
+import { schema } from '@tapestrai/graphql';
 
 export interface Env {
   SUPABASE_URL: string;
@@ -20,14 +20,23 @@ const yoga = createYoga<{ env: Env }>({
     allowedHeaders: ['Content-Type', 'Authorization'],
   },
   context: async ({ request, env }) => {
-    const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
-    
-    // Extract user from Authorization header
     const authHeader = request.headers.get('Authorization');
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+
+    // IMPORTANT: scoped to the CALLER's own JWT so Postgres Row Level Security
+    // (multi-tenant isolation + per-entity ACLs, see supabase/migrations/00026-00030)
+    // actually applies. The service role key bypasses RLS entirely and must only
+    // be used for specific privileged operations via `supabaseAdmin`.
+    const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
+      global: token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const supabaseAdmin = env.SUPABASE_SERVICE_ROLE_KEY
+      ? createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
+      : null;
+
     let user = null;
-    
-    if (authHeader?.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
+    if (token) {
       const { data: { user: authUser } } = await supabase.auth.getUser(token);
       if (authUser) {
         user = {
@@ -38,9 +47,10 @@ const yoga = createYoga<{ env: Env }>({
         };
       }
     }
-    
+
     return {
       supabase,
+      supabaseAdmin,
       user,
       requestId: crypto.randomUUID(),
       loaders: {} as any,
