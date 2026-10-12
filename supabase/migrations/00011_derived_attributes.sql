@@ -432,28 +432,27 @@ CREATE TRIGGER trg_validate_derived_attribute
 
 -- Insert derived attributes demonstrating each derivation type
 
--- Simple calculation: Current Yield = Annual Interest / Current Price * 100
-INSERT INTO metadata_register.attribute_register (
-    attribute_code, attribute_name, data_type, description,
 -- Insert dependency attributes first to satisfy derived attribute requirements
 INSERT INTO metadata_register.attribute_register (attribute_code, attribute_name, data_type, description, is_required, default_precedence_rank)
 VALUES
 ('ANNUAL_INTEREST', 'Annual Interest', 'CURRENCY', 'Annual interest payment amount', FALSE, 100),
-('CURRENT_PRICE', 'Current Price', 'CURRENCY', 'Current market price', FALSE, 100)
+('CURRENT_PRICE', 'Current Price', 'CURRENCY', 'Current market price', FALSE, 100),
+('POSITION.MARKET_VALUE', 'Position Market Value', 'CURRENCY', 'Market value of a position', FALSE, 100),
+('ISSUER.CREDIT_RATING', 'Issuer Credit Rating', 'STRING', 'Credit rating of the parent issuer', FALSE, 100),
+('CASH_FLOWS', 'Cash Flows', 'JSON', 'Bond cash flow schedule', FALSE, 100),
+('YIELD_CURVE', 'Yield Curve', 'JSON', 'Yield curve used for duration', FALSE, 100),
+('COST_BASIS', 'Cost Basis', 'CURRENCY', 'Position cost basis', FALSE, 100),
+('QUANTITY', 'Quantity', 'NUMBER', 'Position quantity', FALSE, 100)
 ON CONFLICT (attribute_code) DO NOTHING;
 
+-- Simple calculation: Current Yield = Annual Interest / Current Price * 100
+INSERT INTO metadata_register.attribute_register (
+    attribute_code, attribute_name, data_type, description,
     is_derived, derivation_type, derivation_formula, derivation_dependencies
 ) VALUES
 ('CURRENT_YIELD', 'Current Yield (%)', 'PERCENTAGE', 'Calculated yield based on current price',
  TRUE, 'SIMPLE',
  'SELECT (annual_interest / NULLIF(current_price, 0) * 100) FROM attributes WHERE attribute_code IN (''ANNUAL_INTEREST'', ''CURRENT_PRICE'')',
--- Insert dependency attributes first to satisfy derived attribute requirements
-INSERT INTO metadata_register.attribute_register (attribute_code, attribute_name, data_type, description, is_required, default_precedence_rank)
-VALUES
-('ANNUAL_INTEREST', 'Annual Interest', 'CURRENCY', 'Annual interest payment amount', FALSE, 100),
-('CURRENT_PRICE', 'Current Price', 'CURRENCY', 'Current market price', FALSE, 100)
-ON CONFLICT (attribute_code) DO NOTHING;
-
  '["ANNUAL_INTEREST", "CURRENT_PRICE"]'::jsonb)
 ON CONFLICT (attribute_code) DO NOTHING;
 

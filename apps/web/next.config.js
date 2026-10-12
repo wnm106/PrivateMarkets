@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Next.js 16 blocks dev assets when the browser host is not the bind host.
+  allowedDevOrigins: ['127.0.0.1', 'localhost'],
   transpilePackages: ['@meridian-mdm/ui', '@meridian-mdm/graphql'],
   experimental: {
     optimizePackageImports: ['@meridian-mdm/ui'],

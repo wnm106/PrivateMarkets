@@ -15,7 +15,7 @@
     "typecheck": "turbo run typecheck",
     "db:migrate": "supabase db push",
     "db:seed": "supabase db seed",
-    "db:reset": "supabase db reset",
+    "db:reset": "supabase db reset --local --yes",
     "db:studio": "supabase studio",
     "generate:graphql": "graphql-codegen --config codegen.ts",
     "clean": "turbo run clean && rm -rf node_modules"
