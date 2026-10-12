@@ -70,9 +70,11 @@ export const goldenSourceResolvers = {
       const { data } = await context.supabase
         .from("template_attribute_assignments").select("default_precedence_chain, chain_version")
         .eq("template_id", args.templateId).eq("attribute_id", attr.id).maybeSingle();
-      if (!data?.default_precedence_chain) return null;
-      const chain = data.default_precedence_chain as string[];
-      return { templateId: args.templateId, attributeCode: args.attributeCode, chain: ["MANUAL", ...chain.filter((c: string) => c !== "MANUAL")], chainVersion: data.chain_version || 1 };
+      const sources = Array.isArray(data?.default_precedence_chain)
+        ? (data.default_precedence_chain as string[]).filter((code) => code && code !== "MANUAL")
+        : [];
+      if (sources.length === 0 || !data) return null;
+      return { templateId: args.templateId, attributeCode: args.attributeCode, chain: ["MANUAL", ...sources], chainVersion: data.chain_version || 1 };
     },
 
     qualifyEntityTemplate: async (_: any, args: { entityId: string; domainCode: string }, context: Context) => {
@@ -123,23 +125,23 @@ export const goldenSourceResolvers = {
           .eq("attribute_id", attr.id)
           .maybeSingle();
 
+        const sources = (chain || []).filter((code) => code && code !== "MANUAL");
+        const storedChain = sources.length > 0 ? sources : null;
         let chainVersion = 0;
         if (assignment) {
-          // Update existing assignment (trigger will bump chain_version)
           const { error: updateError } = await context.supabase
             .from("template_attribute_assignments")
-            .update({ default_precedence_chain: chain })
+            .update({ default_precedence_chain: storedChain })
             .eq("id", assignment.id);
           if (updateError) throw updateError;
           chainVersion = (assignment.chain_version || 0) + 1;
-        } else {
-          // Create new assignment with the chain
+        } else if (storedChain) {
           const { data: newAssignment, error: insertError } = await context.supabase
             .from("template_attribute_assignments")
             .insert({
               template_id: templateId,
               attribute_id: attr.id,
-              default_precedence_chain: chain,
+              default_precedence_chain: storedChain,
               is_required: false,
               display_order: 999,
             })

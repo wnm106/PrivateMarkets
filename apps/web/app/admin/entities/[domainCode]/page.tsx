@@ -24,7 +24,6 @@ import {
   UPDATE_RELATIONSHIP_TYPE_MUTATION,
   DELETE_RELATIONSHIP_TYPE_MUTATION,
   DELETE_ATTRIBUTE_MUTATION,
-  UPDATE_ATTRIBUTE_MUTATION,
   ENTITY_IDENTIFIER_DEFINITIONS_QUERY,
   CREATE_ENTITY_IDENTIFIER_MUTATION,
   UPDATE_ENTITY_IDENTIFIER_MUTATION,
@@ -40,28 +39,9 @@ import {
 import { RelationshipTypeForm } from '@/components/forms/RelationshipTypeForm';
 import { EntityIdentifierDefinitionForm } from '@/components/forms/EntityIdentifierDefinitionForm';
 import { TemplateAttributePicker, type PickerAttribute } from '@/components/forms/TemplateAttributePicker';
+import { AttributeExpandPanel } from '@/components/admin/AttributeExpandPanel';
 
 type TabType = 'attributes' | 'templates' | 'relationships' | 'identifiers' | 'intersections';
-
-const NUMERIC_DATA_TYPES = ['NUMBER', 'INTEGER', 'DECIMAL', 'FLOAT', 'CURRENCY', 'PERCENTAGE', 'PERCENT'];
-
-const VALID_DATA_TYPES = [
-  'STRING',
-  'NUMBER',
-  'INTEGER',
-  'DECIMAL',
-  'BOOLEAN',
-  'DATE',
-  'TIMESTAMP',
-  'JSON',
-  'REFERENCE',
-  'REFERENCE_LIST',
-  'CURRENCY',
-  'PERCENTAGE',
-  'EMAIL',
-  'URL',
-  'PHONE',
-];
 
 interface DomainType {
   id: string;
@@ -94,6 +74,7 @@ interface Attribute {
   numericPrecision?: number;
   unitOfMeasure?: string;
   referenceListCode?: string;
+  defaultPrecedenceChain?: string[];
 }
 
 interface TemplateAttribute {
@@ -189,13 +170,17 @@ export default function EntityTypeDetailPage() {
   const [showCreateIdentifierModal, setShowCreateIdentifierModal] = useState(false);
   const [showCreateIntersectionModal, setShowCreateIntersectionModal] = useState(false);
   const [editingIntersection, setEditingIntersection] = useState<IntersectionType | null>(null);
-  const [editingAttribute, setEditingAttribute] = useState<Attribute | null>(null);
-  const [editAttributeForm, setEditAttributeForm] = useState<Partial<Attribute>>({});
+  const [expandedAttributeId, setExpandedAttributeId] = useState<string | null>(null);
   const [editingRelationship, setEditingRelationship] = useState<RelationshipType | null>(null);
   const [editingIdentifier, setEditingIdentifier] = useState<EntityIdentifierDefinition | null>(null);
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('attributes');
+
+  const refreshAttributes = useCallback(async () => {
+    const attrsResult = await graphqlClient.query(ATTRIBUTE_REGISTER_QUERY, { domainCode }, { requestPolicy: 'network-only' }).toPromise();
+    setAttributes(attrsResult.data?.attributeRegister || []);
+  }, [domainCode]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -327,85 +312,6 @@ export default function EntityTypeDetailPage() {
     } catch (error: any) {
       console.error('Error deleting attribute:', error);
       alert(error?.message || 'Failed to delete attribute');
-    }
-  };
-
-  const handleEditAttribute = (attr: Attribute) => {
-    setEditingAttribute(attr);
-    setEditAttributeForm({
-      attributeName: attr.attributeName || '',
-      dataType: attr.dataType || 'STRING',
-      description: attr.description || '',
-      unitOfMeasure: attr.unitOfMeasure || '',
-      displayFormat: attr.displayFormat || '',
-      listValues: attr.listValues || [],
-      isMultiValued: attr.isMultiValued || false,
-      validationRules: attr.validationRules || {},
-      defaultValue: attr.defaultValue || '',
-      displaySection: attr.displaySection || 'General',
-      displayGroup: attr.displayGroup || 0,
-      isEditable: attr.isEditable ?? true,
-      isVisible: attr.isVisible ?? true,
-      aggregationType: attr.aggregationType || 'NONE',
-      weightAttributeCode: attr.weightAttributeCode || '',
-      numericPrecision: attr.numericPrecision,
-      referenceListCode: attr.referenceListCode || '',
-    });
-  };
-
-  const handleCancelEditAttribute = () => {
-    setEditingAttribute(null);
-    setEditAttributeForm({});
-  };
-
-  const handleSaveEditAttribute = async () => {
-    if (!editingAttribute) return;
-
-    try {
-      const result = await graphqlClient
-        .mutation(UPDATE_ATTRIBUTE_MUTATION, {
-          input: {
-            id: editingAttribute.id,
-            attributeName: editAttributeForm.attributeName || null,
-            dataType: editAttributeForm.dataType || 'STRING',
-            description: editAttributeForm.description || null,
-            unitOfMeasure: editAttributeForm.unitOfMeasure || null,
-            displayFormat: editAttributeForm.displayFormat || null,
-            listValues: editAttributeForm.listValues || [],
-            isMultiValued: editAttributeForm.isMultiValued ?? false,
-            validationRules: editAttributeForm.validationRules || {},
-            defaultValue: editAttributeForm.defaultValue || null,
-            displaySection: editAttributeForm.displaySection || 'General',
-            displayGroup: editAttributeForm.displayGroup || 0,
-            isEditable: editAttributeForm.isEditable ?? true,
-            isVisible: editAttributeForm.isVisible ?? true,
-            aggregationType: editAttributeForm.aggregationType || 'NONE',
-            weightAttributeCode: editAttributeForm.aggregationType === 'WEIGHTED_AVG' 
-              ? (editAttributeForm.weightAttributeCode || null)
-              : null,
-            numericPrecision: editAttributeForm.numericPrecision,
-            referenceListCode: editAttributeForm.referenceListCode || null,
-          },
-        })
-        .toPromise();
-
-      if (result.data?.updateAttributeDefinition?.success) {
-        setEditingAttribute(null);
-        setEditAttributeForm({});
-        loadData();
-      } else {
-        const errors = result.data?.updateAttributeDefinition?.errors;
-        if (errors && errors.length > 0) {
-          alert(errors[0].message);
-        } else if (result.error) {
-          alert(`GraphQL Error: ${result.error.message}`);
-        } else {
-          alert('Failed to update attribute - no success flag returned');
-        }
-      }
-    } catch (error: any) {
-      console.error('Error updating attribute:', error);
-      alert(error?.message || 'Failed to update attribute');
     }
   };
 
@@ -842,47 +748,70 @@ export default function EntityTypeDetailPage() {
       {activeTab === 'attributes' && (
         <Section
           title={`Attributes (${domainAttributes.length})`}
-          subtitle="Data fields available when building templates for this entity type"
+          subtitle="Click an attribute to edit its values. The source sequence at the bottom is the global default; templates only override it."
           action={<button className="btn" onClick={() => setShowCreateAttributeModal(true)}>+ Attribute</button>}
         >
           {domainAttributes.length > 0 ? (
             <div style={{ display: 'grid', gap: '8px' }}>
-              {domainAttributes.map(attr => (
-                <div key={attr.id} style={rowStyle}>
-                  <div>
-                    <div style={{ fontSize: '14px', fontWeight: 500 }}>
-                      {attr.attributeName}
-                      {attr.isRequired && <span style={{ color: 'var(--red)', marginLeft: '4px' }}>*</span>}
+              {domainAttributes.map(attr => {
+                const expanded = expandedAttributeId === attr.id;
+                const sequence = (attr.defaultPrecedenceChain || []).filter((code) => code && code !== 'MANUAL');
+                return (
+                <div
+                  key={attr.id}
+                  style={{
+                    ...rowStyle,
+                    flexDirection: 'column',
+                    alignItems: 'stretch',
+                    gap: expanded ? '12px' : 0,
+                    cursor: 'pointer',
+                    borderColor: expanded ? 'var(--accent, #2563eb)' : 'var(--line)',
+                  }}
+                  onClick={() => setExpandedAttributeId(expanded ? null : attr.id)}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                    <div>
+                      <div style={{ fontSize: '14px', fontWeight: 500 }}>
+                        {expanded ? '▾' : '▸'} {attr.attributeName}
+                        {attr.isRequired && <span style={{ color: 'var(--red)', marginLeft: '4px' }}>*</span>}
+                      </div>
+                      <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: 'var(--ink-3)', marginTop: '2px', flexWrap: 'wrap' }}>
+                        <span className="mono">{attr.attributeCode}</span>
+                        <span>Type: {attr.dataType}</span>
+                        {attr.isMultiValued && <span>Multi-valued</span>}
+                        {attr.referenceListCode && (
+                          <span style={{ color: 'var(--accent-2)' }}>
+                            📋 {attr.referenceListCode}
+                          </span>
+                        )}
+                        {sequence.length > 0 && (
+                          <span>Sequence: Manual → {sequence.join(' → ')}</span>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: 'var(--ink-3)', marginTop: '2px' }}>
-                      <span className="mono">{attr.attributeCode}</span>
-                      <span>Type: {attr.dataType}</span>
-                      {attr.isMultiValued && <span>Multi-valued</span>}
-                      {attr.referenceListCode && (
-                        <span style={{ color: 'var(--accent-2)' }}>
-                          📋 {attr.referenceListCode}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                      className="btn"
-                      style={{ fontSize: '12px', padding: '4px 10px' }}
-                      onClick={() => handleEditAttribute(attr)}
-                    >
-                      Edit
-                    </button>
                     <button
                       className="btn"
                       style={{ color: 'var(--red)', fontSize: '12px', padding: '4px 10px' }}
-                      onClick={() => handleDeleteAttribute(attr)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleDeleteAttribute(attr);
+                      }}
                     >
                       Delete
                     </button>
                   </div>
+                  {expanded && (
+                    <AttributeExpandPanel
+                      attribute={attr}
+                      weightAttributes={attributes}
+                      referenceLists={referenceLists}
+                      onSaved={() => { void refreshAttributes(); }}
+                      onCancel={() => setExpandedAttributeId(null)}
+                    />
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <EmptyNote text="No attributes defined for this entity type yet." />
@@ -1118,237 +1047,6 @@ export default function EntityTypeDetailPage() {
           onClose={() => setShowCreateAttributeModal(false)}
           onSubmit={handleCreateAttribute}
         />
-      )}
-
-      {/* Edit Attribute Modal */}
-      {editingAttribute && (
-        <ModalOverlay onClose={handleCancelEditAttribute}>
-          <div style={{ background: 'white', borderRadius: '8px', padding: '24px', maxWidth: '600px', width: '100%', maxHeight: '80vh', overflow: 'auto' }}>
-            <h2 style={{ fontSize: '20px', fontWeight: 600, marginBottom: '16px' }}>
-              Edit Attribute: {editingAttribute.attributeName}
-            </h2>
-            <div style={{ display: 'grid', gap: '12px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Attribute Name</label>
-                  <input
-                    type="text"
-                    value={editAttributeForm.attributeName || ''}
-                    onChange={e => setEditAttributeForm({ ...editAttributeForm, attributeName: e.target.value })}
-                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Data Type</label>
-                  <select
-                    value={editAttributeForm.dataType || 'STRING'}
-                    onChange={e => setEditAttributeForm({ ...editAttributeForm, dataType: e.target.value })}
-                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px', background: 'white' }}
-                  >
-                    {VALID_DATA_TYPES.map(dt => (
-                      <option key={dt} value={dt}>{dt}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Description</label>
-                <textarea
-                  value={editAttributeForm.description || ''}
-                  onChange={e => setEditAttributeForm({ ...editAttributeForm, description: e.target.value })}
-                  style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px', minHeight: '60px' }}
-                />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Unit of Measure</label>
-                  <input
-                    type="text"
-                    value={editAttributeForm.unitOfMeasure || ''}
-                    onChange={e => setEditAttributeForm({ ...editAttributeForm, unitOfMeasure: e.target.value })}
-                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
-                    placeholder="e.g., USD, kg, miles"
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Display Format</label>
-                  <input
-                    type="text"
-                    value={editAttributeForm.displayFormat || ''}
-                    onChange={e => setEditAttributeForm({ ...editAttributeForm, displayFormat: e.target.value })}
-                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
-                    placeholder="e.g., currency, percentage, date"
-                  />
-                </div>
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Default Value</label>
-                <input
-                  type="text"
-                  value={editAttributeForm.defaultValue || ''}
-                  onChange={e => setEditAttributeForm({ ...editAttributeForm, defaultValue: e.target.value })}
-                  style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
-                />
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Display Section</label>
-                <input
-                  type="text"
-                  value={editAttributeForm.displaySection || ''}
-                  onChange={e => setEditAttributeForm({ ...editAttributeForm, displaySection: e.target.value })}
-                  style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
-                  placeholder="e.g., General, Pricing, Details"
-                />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 500 }}>
-                  <input
-                    type="checkbox"
-                    checked={editAttributeForm.isMultiValued || false}
-                    onChange={e => setEditAttributeForm({ ...editAttributeForm, isMultiValued: e.target.checked })}
-                  />
-                  Multi-valued
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 500 }}>
-                  <input
-                    type="checkbox"
-                    checked={editAttributeForm.isEditable ?? true}
-                    onChange={e => setEditAttributeForm({ ...editAttributeForm, isEditable: e.target.checked })}
-                  />
-                  Editable
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 500 }}>
-                  <input
-                    type="checkbox"
-                    checked={editAttributeForm.isVisible ?? true}
-                    onChange={e => setEditAttributeForm({ ...editAttributeForm, isVisible: e.target.checked })}
-                  />
-                  Visible
-                </label>
-                <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Numeric Precision</label>
-                  <input
-                    type="number"
-                    value={editAttributeForm.numericPrecision || ''}
-                    onChange={e => setEditAttributeForm({ ...editAttributeForm, numericPrecision: e.target.value ? parseInt(e.target.value) : undefined })}
-                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
-                    placeholder="e.g., 2"
-                  />
-                </div>
-              </div>
-              {/* Reference List Link */}
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>
-                  Reference List <span style={{ fontWeight: 400, color: '#6b7280', fontSize: '11px' }}>(for normalizing imported values)</span>
-                </label>
-                <select
-                  value={editAttributeForm.referenceListCode || ''}
-                  onChange={e => {
-                    const listCode = e.target.value;
-                    setEditAttributeForm({ 
-                      ...editAttributeForm, 
-                      referenceListCode: listCode,
-                      dataType: listCode ? 'REFERENCE_LIST' : editAttributeForm.dataType,
-                    });
-                  }}
-                  style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px', background: 'white' }}
-                >
-                  <option value="">— None (free text) —</option>
-                  {referenceLists.map(rl => (
-                    <option key={rl.listCode} value={rl.listCode}>
-                      {rl.listName} ({rl.listCode})
-                    </option>
-                  ))}
-                </select>
-                {editAttributeForm.referenceListCode && (
-                  <div style={{ fontSize: '11px', color: '#059669', marginTop: '4px' }}>
-                    ✓ Imported values will be normalized against this list's canonical values and synonyms
-                  </div>
-                )}
-              </div>
-              {/* Aggregation Type and Weight Attribute Code */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Aggregation Type</label>
-                  <select
-                    value={editAttributeForm.aggregationType || 'NONE'}
-                    onChange={e => {
-                      const newAgg = e.target.value;
-                      setEditAttributeForm({ 
-                        ...editAttributeForm, 
-                        aggregationType: newAgg,
-                        // Clear weight attribute if not using weighted average
-                        weightAttributeCode: newAgg === 'WEIGHTED_AVG' ? editAttributeForm.weightAttributeCode : ''
-                      });
-                    }}
-                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px', background: 'white' }}
-                  >
-                    <option value="NONE">None</option>
-                    <option value="MIN">Min</option>
-                    <option value="MAX">Max</option>
-                    <option value="SUM">Sum</option>
-                    <option value="AVG">Average</option>
-                    <option value="WEIGHTED_AVG">Weighted Average</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Weight Attribute Code</label>
-                  <select
-                    value={editAttributeForm.weightAttributeCode || ''}
-                    onChange={e => setEditAttributeForm({ ...editAttributeForm, weightAttributeCode: e.target.value })}
-                    disabled={editAttributeForm.aggregationType !== 'WEIGHTED_AVG'}
-                    style={{ 
-                      width: '100%', 
-                      padding: '8px', 
-                      border: '1px solid var(--ink-4)', 
-                      borderRadius: '4px', 
-                      fontSize: '14px', 
-                      background: editAttributeForm.aggregationType !== 'WEIGHTED_AVG' ? '#f3f4f6' : 'white',
-                      color: editAttributeForm.aggregationType !== 'WEIGHTED_AVG' ? '#9ca3af' : 'inherit'
-                    }}
-                  >
-                    <option value="">-- Select weight attribute --</option>
-                    {attributes
-                      .filter(attr => NUMERIC_DATA_TYPES.includes(attr.dataType))
-                      .map(attr => (
-                        <option key={attr.id} value={attr.attributeCode}>
-                          {attr.attributeName} ({attr.attributeCode})
-                        </option>
-                      ))
-                    }
-                  </select>
-                  {editAttributeForm.aggregationType !== 'WEIGHTED_AVG' && (
-                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '4px' }}>
-                      Only available when Aggregation Type is "Weighted Average"
-                    </div>
-                  )}
-                  {editAttributeForm.aggregationType === 'WEIGHTED_AVG' && 
-                   attributes.filter(attr => NUMERIC_DATA_TYPES.includes(attr.dataType)).length === 0 && (
-                    <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px' }}>
-                      No numeric attributes found
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
-                <button
-                  className="btn"
-                  onClick={handleSaveEditAttribute}
-                  style={{ background: '#2563eb', color: 'white', padding: '8px 16px', border: 'none', borderRadius: '4px', fontWeight: 600, cursor: 'pointer' }}
-                >
-                  Save
-                </button>
-                <button
-                  className="btn"
-                  onClick={handleCancelEditAttribute}
-                  style={{ padding: '8px 16px' }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        </ModalOverlay>
       )}
 
       {/* Create Template Modal (domain fixed to this entity type) */}
@@ -2841,21 +2539,31 @@ function TemplateSourcePrefsSection({
   const loadChains = async () => {
     setLoading(true);
     try {
-      const chains: any[] = [];
-      for (const attr of currentAttributes) {
-        const attrCode = attr.attribute?.attributeCode || attr.attributeCode;
-        const attrName = attr.attribute?.attributeName || attr.attributeName;
-        const chainResult = await graphqlQuery<{ templatePrecedenceChain: any }>(
+      const register = await graphqlQuery<{ attributeRegister: Attribute[] }, { domainCode: string }>(
+        ATTRIBUTE_REGISTER_QUERY,
+        { domainCode: template.domainCode },
+      );
+      const globalByCode = new Map(
+        (register.data?.attributeRegister || []).map((attr) => [attr.attributeCode, attr.defaultPrecedenceChain || []]),
+      );
+      const chains = await Promise.all(currentAttributes.map(async (attr) => {
+        const attrCode = attr.attribute?.attributeCode || (attr as any).attributeCode;
+        const attrName = attr.attribute?.attributeName || (attr as any).attributeName;
+        const chainResult = await graphqlQuery<{ templatePrecedenceChain: any }, { templateId: string; attributeCode: string }>(
           TEMPLATE_PRECEDENCE_CHAIN_QUERY,
           { templateId: template.id, attributeCode: attrCode }
         );
-        chains.push({
+        const override = chainResult.data?.templatePrecedenceChain;
+        const globalChain = globalByCode.get(attrCode) || [];
+        return {
           attributeCode: attrCode,
           attributeName: attrName,
-          chain: chainResult.data?.templatePrecedenceChain?.chain || ['MANUAL'],
-          chainVersion: chainResult.data?.templatePrecedenceChain?.chainVersion || 1,
-        });
-      }
+          globalChain,
+          hasOverride: Boolean(override),
+          chain: override?.chain || ['MANUAL', ...globalChain],
+          chainVersion: override?.chainVersion || 0,
+        };
+      }));
       setAttributeChains(chains);
     } catch (error) {
       console.error('Error loading chains:', error);
@@ -2864,10 +2572,10 @@ function TemplateSourcePrefsSection({
     }
   };
 
-  const handleChainUpdated = (attrCode: string, newChain: string[]) => {
+  const handleChainUpdated = (attrCode: string, update: { chain: string[]; hasOverride: boolean; chainVersion: number }) => {
     setAttributeChains(prev =>
       prev.map(c =>
-        c.attributeCode === attrCode ? { ...c, chain: newChain } : c
+        c.attributeCode === attrCode ? { ...c, ...update } : c
       )
     );
   };
@@ -2879,9 +2587,7 @@ function TemplateSourcePrefsSection({
   return (
     <div style={{ display: 'grid', gap: '16px' }}>
       <div style={{ fontSize: '12px', color: 'var(--ink-3)', lineHeight: '1.5' }}>
-        Configure which data sources take priority for each attribute. The system uses a 4-tier waterfall:
-        Manual Override (Tier 1) always wins, followed by Conditional Rules (Tier 2), Template Default Chain (Tier 3),
-        and Global Source Registry (Tier 4) as fallback.
+        Each attribute uses its global source sequence. Set an override here only when this template should differ. Manual override still wins first, then conditional rules, then this template override, then the global sequence.
       </div>
 
       {attributeChains.map(attr => (
@@ -2890,6 +2596,8 @@ function TemplateSourcePrefsSection({
           attributeCode={attr.attributeCode}
           attributeName={attr.attributeName}
           chain={attr.chain}
+          globalChain={attr.globalChain}
+          hasOverride={attr.hasOverride}
           chainVersion={attr.chainVersion}
           templateId={template.id}
           onChainUpdated={handleChainUpdated}
@@ -2903,6 +2611,8 @@ function SourceChainEditor({
   attributeCode,
   attributeName,
   chain,
+  globalChain,
+  hasOverride,
   chainVersion,
   templateId,
   onChainUpdated,
@@ -2910,9 +2620,11 @@ function SourceChainEditor({
   attributeCode: string;
   attributeName: string;
   chain: string[];
+  globalChain: string[];
+  hasOverride: boolean;
   chainVersion: number;
   templateId: string;
-  onChainUpdated: (attrCode: string, newChain: string[]) => void;
+  onChainUpdated: (attrCode: string, update: { chain: string[]; hasOverride: boolean; chainVersion: number }) => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [draftChain, setDraftChain] = useState<string[]>(chain.filter(c => c !== 'MANUAL'));
@@ -2949,24 +2661,29 @@ function SourceChainEditor({
     }
   };
 
-  const saveChain = async () => {
+  const saveChain = async (nextChain: string[]) => {
     setSaving(true);
     try {
       const result = await graphqlMutation<{ updateTemplatePrecedenceChain: any }>(
         UPDATE_TEMPLATE_PRECEDENCE_CHAIN_MUTATION,
-        { templateId, attributeCode, chain: draftChain }
+        { templateId, attributeCode, chain: nextChain }
       );
       if (result.data?.updateTemplatePrecedenceChain?.success) {
         const r = result.data.updateTemplatePrecedenceChain;
-        alert(`✅ Chain saved (v${r.chainVersion}). ${r.entitiesResolved} entities re-resolved.`);
-        onChainUpdated(attributeCode, ['MANUAL', ...draftChain]);
+        const kept = nextChain.filter((code) => code && code !== 'MANUAL');
+        const usingOverride = kept.length > 0;
+        onChainUpdated(attributeCode, {
+          hasOverride: usingOverride,
+          chain: usingOverride ? ['MANUAL', ...kept] : ['MANUAL', ...globalChain.filter((code) => code !== 'MANUAL')],
+          chainVersion: r.chainVersion || 0,
+        });
         setIsEditing(false);
       } else {
         const err = result.data?.updateTemplatePrecedenceChain?.errors?.[0];
-        alert(`❌ Failed: ${err?.message || 'Unknown error'}`);
+        alert(`Failed: ${err?.message || 'Unknown error'}`);
       }
     } catch (error: any) {
-      alert(`❌ Error: ${error.message}`);
+      alert(`Error: ${error.message}`);
     } finally {
       setSaving(false);
     }
@@ -2983,17 +2700,27 @@ function SourceChainEditor({
         <div>
           <div style={{ fontWeight: 600, fontSize: '14px' }}>{attributeName}</div>
           <div style={{ fontSize: '11px', color: 'var(--ink-3)', fontFamily: 'monospace' }}>
-            {attributeCode} · v{chainVersion}
+            {attributeCode} · {hasOverride ? `template override v${chainVersion}` : 'using global sequence'}
           </div>
         </div>
         {!isEditing ? (
-          <button
-            className="btn"
-            onClick={() => { setIsEditing(true); setDraftChain(chain.filter(c => c !== 'MANUAL')); }}
-            style={{ fontSize: '12px' }}
-          >
-            Edit Chain
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {hasOverride && (
+              <button className="btn" onClick={() => saveChain([])} disabled={saving} style={{ fontSize: '12px' }}>
+                Use global sequence
+              </button>
+            )}
+            <button
+              className="btn"
+              onClick={() => {
+                setDraftChain((hasOverride ? chain : ['MANUAL', ...globalChain]).filter(c => c !== 'MANUAL'));
+                setIsEditing(true);
+              }}
+              style={{ fontSize: '12px' }}
+            >
+              {hasOverride ? 'Edit override' : 'Override for this template'}
+            </button>
+          </div>
         ) : (
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
@@ -3005,11 +2732,11 @@ function SourceChainEditor({
             </button>
             <button
               className="btn btn-primary"
-              onClick={saveChain}
+              onClick={() => saveChain(draftChain)}
               disabled={saving || draftChain.length === 0}
               style={{ fontSize: '12px' }}
             >
-              {saving ? 'Saving...' : 'Save & Re-resolve'}
+              {saving ? 'Saving...' : 'Save override'}
             </button>
           </div>
         )}
@@ -3026,8 +2753,12 @@ function SourceChainEditor({
           <span style={{ fontSize: '9px', color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>always #1</span>
         </div>
         <span style={{ color: 'var(--ink-3)' }}>→</span>
-
-        {draftChain.map((srcCode, idx) => {
+        {(() => {
+          const shownChain = isEditing ? draftChain : chain.filter((code) => code !== 'MANUAL');
+          if (shownChain.length === 0) {
+            return <span style={{ fontSize: '12px', color: 'var(--ink-3)' }}>No sources in this sequence yet.</span>;
+          }
+          return shownChain.map((srcCode, idx) => {
           const color = sourceColors[srcCode] || '#6b7280';
           return (
             <div key={srcCode} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -3055,7 +2786,7 @@ function SourceChainEditor({
                         ↑
                       </button>
                     )}
-                    {idx < draftChain.length - 1 && (
+                    {idx < shownChain.length - 1 && (
                       <button
                         onClick={() => moveItem(idx, idx + 1)}
                         style={{
@@ -3085,10 +2816,11 @@ function SourceChainEditor({
                 <span style={{ fontSize: '12px', fontWeight: 500, color }}>{srcCode}</span>
                 <span style={{ fontSize: '9px', color: 'var(--ink-3)' }}>#{idx + 2}</span>
               </div>
-              {idx < draftChain.length - 1 && <span style={{ color: 'var(--ink-3)' }}>→</span>}
+              {idx < shownChain.length - 1 && <span style={{ color: 'var(--ink-3)' }}>→</span>}
             </div>
           );
-        })}
+        });
+        })()}
       </div>
 
       {isEditing && (

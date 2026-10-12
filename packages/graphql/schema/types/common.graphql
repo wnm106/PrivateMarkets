@@ -146,6 +146,9 @@ type AttributeDefinition {
   aggregationType: String
   weightAttributeCode: String
   numericPrecision: Int
+
+  # Global source sequence. Templates override this only when they set their own chain.
+  defaultPrecedenceChain: [String!]!
 }
 
 # Derivation evaluation result

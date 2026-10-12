@@ -7,8 +7,8 @@ import { PrecedenceRule, PrecedenceEvaluationResult } from "../schema/types";
  * Implements a strict 4-tier waterfall to determine which source wins:
  *   TIER 1: MANUAL OVERRIDE (always wins if it exists)
  *   TIER 2: TEMPLATE-SCOPED CONDITIONAL RULE (precedence_rules with conditions)
- *   TIER 3: TEMPLATE DEFAULT CHAIN (template_attribute_assignments.default_precedence_chain)
- *   TIER 4: GLOBAL SOURCE REGISTRY FALLBACK (source_registry.precedence_rank)
+ *   TIER 3: TEMPLATE OVERRIDE (template_attribute_assignments.default_precedence_chain, this attribute only)
+ *   TIER 4: ATTRIBUTE GLOBAL SEQUENCE, else source_registry.precedence_rank
  *
  * MANUAL is always injected at position 0 of every chain regardless of configuration.
  */
@@ -21,7 +21,7 @@ export async function evaluatePrecedence(
   templateId?: string | null
 ): Promise<PrecedenceEvaluationResult> {
   // Parallel fetch: source values + entity attributes + rules + sources
-  const [valuesResult, entityAttrsResult, rulesResult, sourcesResult] = await Promise.all([
+  const [valuesResult, entityAttrsResult, rulesResult, sourcesResult, attributeResult] = await Promise.all([
     supabase
       .from("source_attribute_values")
       .select("*, source_registry:source_id(id, source_code, source_name)")
@@ -43,12 +43,18 @@ export async function evaluatePrecedence(
       .select("id, source_code, precedence_rank")
       .eq("is_active", true)
       .order("precedence_rank", { ascending: true }),
+    supabase
+      .from("attribute_register")
+      .select("id, metadata")
+      .eq("attribute_code", attributeCode)
+      .maybeSingle(),
   ]);
 
   const attributeValues = valuesResult.data || [];
   const entityAttributes = entityAttrsResult.data || [];
   const rules = rulesResult.data || [];
   const allSources = sourcesResult.data || [];
+  const attributeRow = attributeResult.data;
 
   // Build source_code -> source_id map
   const sourceIdMap: Record<string, string> = {};
@@ -150,38 +156,45 @@ export async function evaluatePrecedence(
     }
   }
 
-  // TIER 3: TEMPLATE DEFAULT PRECEDENCE CHAIN
-  if (templateId) {
+  // TIER 3: TEMPLATE OVERRIDE for this attribute. An empty chain means "use the global sequence".
+  let templateOverride: string[] = [];
+  let templateChainVersion = 1;
+  if (templateId && attributeRow?.id) {
     const { data: assignment } = await supabase
       .from("template_attribute_assignments")
       .select("default_precedence_chain, chain_version")
       .eq("template_id", templateId)
-      .limit(1)
+      .eq("attribute_id", attributeRow.id)
       .maybeSingle();
 
-    if (assignment?.default_precedence_chain && Array.isArray(assignment.default_precedence_chain)) {
-      const chainCodes = assignment.default_precedence_chain as string[];
-      const fullChain = ["MANUAL", ...chainCodes.filter((c: string) => c !== "MANUAL")];
-      const winner = findWinner(fullChain);
-      const version = assignment.chain_version || 1;
-
-      return {
-        winningSource: winner?.source || fullChain[0],
-        winningSourceId: winner?.sourceId || sourceIdMap[fullChain[0]],
-        appliedRule: null,
-        isDefault: true,
-        tierUsed: 3,
-        resolutionVersion: version,
-        allCandidates: buildCandidates(fullChain),
-      };
-    }
+    templateOverride = sourceCodes(assignment?.default_precedence_chain);
+    templateChainVersion = assignment?.chain_version || 1;
   }
 
-  // TIER 4: GLOBAL SOURCE REGISTRY FALLBACK
-  const globalChain = [
-    "MANUAL",
-    ...allSources.map((s: any) => s.source_code).filter((c: string) => c !== "MANUAL"),
-  ];
+  if (templateOverride.length > 0) {
+    const fullChain = ["MANUAL", ...templateOverride];
+    const winner = findWinner(fullChain);
+    return {
+      winningSource: winner?.source || fullChain[0],
+      winningSourceId: winner?.sourceId || sourceIdMap[fullChain[0]],
+      appliedRule: null,
+      isDefault: true,
+      tierUsed: 3,
+      resolutionVersion: templateChainVersion,
+      allCandidates: buildCandidates(fullChain),
+    };
+  }
+
+  // TIER 4: attribute global sequence, then the source registry order when none is set.
+  const metadataChain = sourceCodes(attributeRow?.metadata?.defaultPrecedenceChain);
+  const columnChain = sourceCodes((attributeRow as { default_precedence_chain?: unknown } | null)?.default_precedence_chain);
+  const attributeChain = metadataChain.length > 0 ? metadataChain : columnChain;
+  const globalChain = attributeChain.length > 0
+    ? ["MANUAL", ...attributeChain]
+    : [
+        "MANUAL",
+        ...allSources.map((s: any) => s.source_code).filter((c: string) => c !== "MANUAL"),
+      ];
   const winner = findWinner(globalChain);
 
   return {
@@ -193,6 +206,11 @@ export async function evaluatePrecedence(
     resolutionVersion: 0,
     allCandidates: buildCandidates(globalChain),
   };
+}
+
+function sourceCodes(chain: unknown): string[] {
+  if (!Array.isArray(chain)) return [];
+  return chain.filter((code): code is string => typeof code === "string" && code.length > 0 && code !== "MANUAL");
 }
 
 /**
