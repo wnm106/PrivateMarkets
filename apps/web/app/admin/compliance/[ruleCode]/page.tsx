@@ -458,7 +458,7 @@ export default function ComplianceRuleDetailPage() {
                           {scopeConds.map((c, i) => (
                             <span key={i} className="mono">
                               {i > 0 && <span style={{ color: 'var(--accent)' }}> {c.logicOperator} </span>}
-                              {c.attributeCode}{c.attributeDimension ? ` [${describeDimension(c.attributeDimension)}]` : ""} {c.operator} {c.compareAttributeCode ? `${c.compareAttributeCode}${c.compareDimension ? ` [${describeDimension(c.compareDimension)}]` : ""}` : (c.value || "")}
+                              {pathPrefix(c.attributeDimension)}{c.attributeCode}{c.attributeDimension ? ` [${describeDimension(c.attributeDimension)}]` : ""} {c.operator} {c.compareAttributeCode ? `${pathPrefix(c.compareDimension)}${c.compareAttributeCode}${c.compareDimension ? ` [${describeDimension(c.compareDimension)}]` : ""}` : (c.value || "")}
                             </span>
                           ))}
                         </div>
@@ -639,6 +639,25 @@ function formatNum(n?: number | null) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+function displayConditionValue(operator: string, value?: string | null): string {
+  if (!value) return '';
+  if ((operator === 'in' || operator === 'not_in') && value.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.join(', ');
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+function pathPrefix(dim: any): string {
+  const hops = dim?.relationshipPath || [];
+  if (!hops.length) return '';
+  return `${hops.map((h: any) => h.relationshipCode).join(' → ')} · `;
+}
+
 function formatHops(hops: RollupHopDto[]) {
   if (!hops || hops.length === 0) return '—';
   return hops.map((h) => `${h.direction}${h.recursive ? '*' : ''}:${h.relationshipCode}`).join(' → ');
@@ -677,10 +696,12 @@ function versionToFormData(rule: RuleDto, v: VersionDto): Partial<ComplianceRule
       conditionGroup: 1,
       conditionOrder: c.conditionOrder,
       attributeCode: c.attributeCode,
+      attributePath: (c.attributeDimension?.relationshipPath || []).map((h: any) => ({ relationshipCode: h.relationshipCode, direction: h.direction })),
       attributeDimension: dimensionFromDto(c.attributeDimension),
       operator: c.operator,
-      value: c.value || '',
+      value: displayConditionValue(c.operator, c.value),
       compareAttributeCode: c.compareAttributeCode || '',
+      compareAttributePath: (c.compareDimension?.relationshipPath || []).map((h: any) => ({ relationshipCode: h.relationshipCode, direction: h.direction })),
       compareDimension: dimensionFromDto(c.compareDimension),
       logicOperator: c.logicOperator as 'AND' | 'OR',
     })),

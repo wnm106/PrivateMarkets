@@ -9,6 +9,8 @@ import {
 } from '@/lib/graphql';
 import { AttributePicker } from './AttributePicker';
 import { EntityAttributeTree } from './EntityAttributeTree';
+import { ComplianceAttributeSelect, useRelationshipAttributes } from './ComplianceAttributeSelect';
+import { CompliancePopulationPreview } from './CompliancePopulationPreview';
 
 export interface RollupHop {
   relationshipCode: string;
@@ -33,17 +35,26 @@ export const emptyDimension = (): DimensionState => ({
   knowledgeMode: 'RUN',
 });
 
-export function dimensionToInput(d?: DimensionState | null) {
-  if (!d) return undefined;
-  const hasOffset = d.offsetAmount !== '' && Number(d.offsetAmount) !== 0;
+export function dimensionToInput(d?: DimensionState | null, path?: Array<{ relationshipCode: string; direction: string }> | null) {
   const out: Record<string, any> = {};
-  if (d.sourceScope) out.sourceScope = d.sourceScope;
-  if (hasOffset) {
-    out.offsetAmount = parseInt(d.offsetAmount, 10);
-    out.offsetUnit = d.offsetUnit;
+  if (d) {
+    const hasOffset = d.offsetAmount !== '' && Number(d.offsetAmount) !== 0;
+    if (d.sourceScope) out.sourceScope = d.sourceScope;
+    if (hasOffset) {
+      out.offsetAmount = parseInt(d.offsetAmount, 10);
+      out.offsetUnit = d.offsetUnit;
+    }
+    if (d.snapTo) out.snapTo = d.snapTo;
+    if (d.knowledgeMode && d.knowledgeMode !== 'RUN') out.knowledgeMode = d.knowledgeMode;
   }
-  if (d.snapTo) out.snapTo = d.snapTo;
-  if (d.knowledgeMode && d.knowledgeMode !== 'RUN') out.knowledgeMode = d.knowledgeMode;
+  const hops = (path || []).filter((hop) => hop.relationshipCode);
+  if (hops.length) {
+    out.relationshipPath = hops.map((hop) => ({
+      relationshipCode: hop.relationshipCode,
+      direction: hop.direction,
+      recursive: false,
+    }));
+  }
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -74,10 +85,12 @@ export interface ComplianceCondition {
   conditionGroup: number;
   conditionOrder: number;
   attributeCode: string;
+  attributePath: Array<{ relationshipCode: string; direction: 'UP' | 'DOWN' }>;
   attributeDimension: DimensionState;
   operator: string;
   value: string;
   compareAttributeCode: string; // when set, compare to this attribute instead of the literal value
+  compareAttributePath: Array<{ relationshipCode: string; direction: 'UP' | 'DOWN' }>;
   compareDimension: DimensionState;
   logicOperator: 'AND' | 'OR';
 }
@@ -275,10 +288,12 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
           conditionGroup: 1,
           conditionOrder: prev.conditions.filter((c) => c.appliesTo === appliesTo).length + 1,
           attributeCode: '',
+          attributePath: [],
           attributeDimension: emptyDimension(),
           operator: 'equals',
           value: '',
           compareAttributeCode: '',
+          compareAttributePath: [],
           compareDimension: emptyDimension(),
           logicOperator: 'AND',
         },
@@ -627,8 +642,10 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
                   title="Filter the records being measured"
                   conditions={baseConditions}
                   allConditions={formData.conditions}
-                  attributes={baseAttributes}
                   rootDomainCode={formData.baseDomainCode}
+                  domainLabel={domainName(formData.baseDomainCode)}
+                  relationshipTypes={relationshipTypes}
+                  domains={domains}
                   onAdd={() => addCondition('BASE')}
                   onUpdate={updateCondition}
                   onRemove={removeCondition}
@@ -638,8 +655,10 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
                   title="Only run for certain entities"
                   conditions={anchorConditions}
                   allConditions={formData.conditions}
-                  attributes={anchorAttributes}
                   rootDomainCode={formData.anchorDomainCode}
+                  domainLabel={domainName(formData.anchorDomainCode)}
+                  relationshipTypes={relationshipTypes}
+                  domains={domains}
                   onAdd={() => addCondition('ANCHOR')}
                   onUpdate={updateCondition}
                   onRemove={removeCondition}
@@ -906,8 +925,10 @@ function ConditionGroup({
   title,
   conditions,
   allConditions,
-  attributes,
   rootDomainCode,
+  domainLabel,
+  relationshipTypes,
+  domains,
   onAdd,
   onUpdate,
   onRemove,
@@ -915,12 +936,15 @@ function ConditionGroup({
   title: string;
   conditions: ComplianceCondition[];
   allConditions: ComplianceCondition[];
-  attributes: AttributeOpt[];
   rootDomainCode: string;
+  domainLabel: string;
+  relationshipTypes: RelationshipTypeOpt[];
+  domains: Domain[];
   onAdd: () => void;
   onUpdate: (idx: number, patch: Partial<ComplianceCondition>) => void;
   onRemove: (idx: number) => void;
 }) {
+  const { options } = useRelationshipAttributes(rootDomainCode, relationshipTypes, domains);
   return (
     <div style={{ background: 'var(--bg)', border: '1px solid var(--line)', padding: '16px' }}>
       <div className="section-kicker">{title}</div>
@@ -945,19 +969,14 @@ function ConditionGroup({
                 <option value="OR">OR</option>
               </select>
             )}
-            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-              <select
-                className="select"
-                value={cond.attributeCode}
-                onChange={(e) => onUpdate(idx, { attributeCode: e.target.value })}
-                style={{ flex: 1 }}
-              >
-                <option value="">Select attribute...</option>
-                {attributes.map((a) => (
-                  <option key={a.attributeCode} value={a.attributeCode}>{a.attributeName}</option>
-                ))}
-              </select>
-            </div>
+            <ComplianceAttributeSelect
+              rootDomainCode={rootDomainCode}
+              relationshipTypes={relationshipTypes}
+              domains={domains}
+              attributeCode={cond.attributeCode}
+              path={cond.attributePath}
+              onChange={(attributeCode, attributePath) => onUpdate(idx, { attributeCode, attributePath })}
+            />
             <select
               className="select"
               value={cond.operator}
@@ -989,7 +1008,7 @@ function ConditionGroup({
               <div id={`tree-${idx}`} style={{ display: 'none', marginTop: '6px' }}>
                 <EntityAttributeTree
                   rootDomainCode={rootDomainCode}
-                  onSelect={(sel) => onUpdate(idx, { attributeCode: sel.attribute.attributeCode })}
+                  onSelect={(sel) => onUpdate(idx, { attributeCode: sel.attribute.attributeCode, attributePath: sel.path })}
                   selectedCode={cond.attributeCode}
                   maxHeight="300px"
                 />
@@ -1013,7 +1032,10 @@ function ConditionGroup({
                 <select
                   className="select"
                   value={cond.compareAttributeCode ? 'attribute' : 'literal'}
-                  onChange={(e) => onUpdate(idx, { compareAttributeCode: e.target.value === 'attribute' ? (attributes[0]?.attributeCode || '') : '' })}
+                  onChange={(e) => onUpdate(idx, {
+                    compareAttributeCode: e.target.value === 'attribute' ? (cond.compareAttributeCode || '__PICK__') : '',
+                    compareAttributePath: e.target.value === 'attribute' ? (cond.compareAttributePath || []) : [],
+                  })}
                 >
                   <option value="literal">Literal value</option>
                   <option value="attribute">Another attribute (e.g. other source or prior period)</option>
@@ -1022,15 +1044,15 @@ function ConditionGroup({
               {cond.compareAttributeCode && (
                 <>
                   <div className="field" style={{ marginTop: '10px', maxWidth: '420px' }}>
-                    <select
-                      className="select"
-                      value={cond.compareAttributeCode}
-                      onChange={(e) => onUpdate(idx, { compareAttributeCode: e.target.value })}
-                    >
-                      {attributes.map((a) => (
-                        <option key={a.attributeCode} value={a.attributeCode}>{a.attributeName}</option>
-                      ))}
-                    </select>
+                    <ComplianceAttributeSelect
+                      rootDomainCode={rootDomainCode}
+                      relationshipTypes={relationshipTypes}
+                      domains={domains}
+                      attributeCode={cond.compareAttributeCode === '__PICK__' ? '' : cond.compareAttributeCode}
+                      path={cond.compareAttributePath}
+                      onChange={(compareAttributeCode, compareAttributePath) => onUpdate(idx, { compareAttributeCode, compareAttributePath })}
+                      placeholder="Select attribute to compare..."
+                    />
                   </div>
                   <DimensionPicker
                     compact
@@ -1047,6 +1069,12 @@ function ConditionGroup({
         );
       })}
       <button className="add-cond" onClick={onAdd}>+ Add condition</button>
+      <CompliancePopulationPreview
+        domainCode={rootDomainCode}
+        domainLabel={domainLabel}
+        conditions={conditions}
+        options={options}
+      />
     </div>
   );
 }
@@ -1119,6 +1147,18 @@ export function DimensionPicker({
   );
 }
 
+function normalizeConditionValue(c: ComplianceCondition): string | undefined {
+  if (c.compareAttributeCode && c.compareAttributeCode !== '__PICK__') return undefined;
+  if (c.operator === 'is_null' || c.operator === 'is_not_null') return undefined;
+  const value = (c.value || '').trim();
+  if (!value) return undefined;
+  if (c.operator === 'in' || c.operator === 'not_in') {
+    if (value.startsWith('[')) return value;
+    return JSON.stringify(value.split(',').map((part) => part.trim()).filter(Boolean));
+  }
+  return c.value;
+}
+
 // Shared by the create-rule and new-version flows.
 export function buildComplianceVersionInput(ruleId: string, data: ComplianceRuleFormData) {
   const cleanHops = (hops: RollupHop[]) =>
@@ -1157,11 +1197,11 @@ export function buildComplianceVersionInput(ruleId: string, data: ComplianceRule
         conditionGroup: c.conditionGroup,
         conditionOrder: idx + 1,
         attributeCode: c.attributeCode,
-        attributeDimension: dimensionToInput(c.attributeDimension),
+        attributeDimension: dimensionToInput(c.attributeDimension, c.attributePath),
         operator: c.operator,
-        value: c.compareAttributeCode || c.operator === 'is_null' || c.operator === 'is_not_null' ? undefined : c.value,
-        compareAttributeCode: c.compareAttributeCode || undefined,
-        compareDimension: c.compareAttributeCode ? dimensionToInput(c.compareDimension) : undefined,
+        value: normalizeConditionValue(c),
+        compareAttributeCode: c.compareAttributeCode && c.compareAttributeCode !== '__PICK__' ? c.compareAttributeCode : undefined,
+        compareDimension: c.compareAttributeCode && c.compareAttributeCode !== '__PICK__' ? dimensionToInput(c.compareDimension, c.compareAttributePath) : undefined,
         logicOperator: c.logicOperator,
       })),
   };

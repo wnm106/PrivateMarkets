@@ -1,5 +1,12 @@
 import { Context } from '../context';
 import { getComplianceEngine } from '../lib/compliance-engine';
+import {
+  matchPopulationEntity,
+  targetsAlongPath,
+  textOfAttribute,
+  type PopulationCondition,
+  type RelationshipHopRef,
+} from '../lib/compliance-population';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
 // through `.schema('compliance')` first (same convention as tenancy.ts /
@@ -92,6 +99,10 @@ export const complianceResolvers = {
         },
         totalCount: count || 0,
       };
+    },
+
+    compliancePopulationPreview: async (_: any, args: { input: any }, context: Context) => {
+      return previewPopulation(context, args.input);
     },
   },
 
@@ -364,7 +375,14 @@ function toSnakeHops(hops?: Array<{ relationshipCode: string; direction: string;
   }));
 }
 
-function toSnakeDim(dim?: { sourceScope?: string; offsetUnit?: string; offsetAmount?: number; snapTo?: string; knowledgeMode?: string } | null) {
+function toSnakeDim(dim?: {
+  sourceScope?: string;
+  offsetUnit?: string;
+  offsetAmount?: number;
+  snapTo?: string;
+  knowledgeMode?: string;
+  relationshipPath?: Array<{ relationshipCode: string; direction: string; recursive?: boolean }>;
+} | null) {
   if (!dim) return {};
   const out: Record<string, any> = {};
   if (dim.sourceScope) out.source_scope = dim.sourceScope;
@@ -372,17 +390,33 @@ function toSnakeDim(dim?: { sourceScope?: string; offsetUnit?: string; offsetAmo
   if (dim.offsetAmount !== undefined && dim.offsetAmount !== null) out.offset_amount = dim.offsetAmount;
   if (dim.snapTo) out.snap_to = dim.snapTo;
   if (dim.knowledgeMode) out.knowledge_mode = dim.knowledgeMode;
+  const path = (dim.relationshipPath || []).filter((h) => h?.relationshipCode);
+  if (path.length) {
+    out.relationship_path = path.map((h) => ({
+      relationship_code: h.relationshipCode,
+      direction: h.direction,
+      recursive: !!h.recursive,
+    }));
+  }
   return out;
 }
 
 function toCamelDim(dim: any) {
   if (!dim || Object.keys(dim).length === 0) return null;
+  const relationshipPath = Array.isArray(dim.relationship_path)
+    ? dim.relationship_path.map((h: any) => ({
+        relationshipCode: h.relationship_code,
+        direction: h.direction,
+        recursive: h.recursive ?? false,
+      }))
+    : [];
   return {
     sourceScope: dim.source_scope ?? null,
     offsetUnit: dim.offset_unit ?? null,
     offsetAmount: dim.offset_amount ?? null,
     snapTo: dim.snap_to ?? null,
     knowledgeMode: dim.knowledge_mode ?? null,
+    relationshipPath,
   };
 }
 
@@ -523,4 +557,159 @@ function mapResult(row: any) {
     detail: row.detail,
     evaluatedAt: row.evaluated_at,
   };
+}
+
+const POPULATION_CAP = 5000;
+
+function hopsFromDimension(dim: any): RelationshipHopRef[] {
+  const raw = dim?.relationshipPath || [];
+  return raw
+    .map((h: any) => ({
+      relationshipCode: h.relationshipCode,
+      direction: (h.direction || 'UP').toUpperCase(),
+      recursive: !!h.recursive,
+    }))
+    .filter((h: RelationshipHopRef) => h.relationshipCode);
+}
+
+async function previewPopulation(context: Context, input: any) {
+  const domainCode = input?.domainCode;
+  if (!domainCode) throw new Error('domainCode is required');
+  const limit = Math.min(Math.max(Number(input.limit ?? 25) || 25, 1), 100);
+  const offset = Math.max(Number(input.offset ?? 0) || 0, 0);
+  const asOf = new Date().toISOString().slice(0, 10);
+  const now = new Date().toISOString();
+
+  const conditions: PopulationCondition[] = (input.conditions || [])
+    .filter((c: any) => c?.attributeCode)
+    .map((c: any) => ({
+      conditionGroup: c.conditionGroup,
+      conditionOrder: c.conditionOrder,
+      attributeCode: c.attributeCode,
+      operator: c.operator || 'equals',
+      value: c.value ?? null,
+      compareAttributeCode: c.compareAttributeCode || null,
+      attributePath: hopsFromDimension(c.attributeDimension),
+      comparePath: hopsFromDimension(c.compareDimension),
+      logicOperator: c.logicOperator || 'AND',
+    }));
+
+  const { rows, truncated } = await fetchDomainEntities(context.supabase, domainCode);
+  const hopMaps = await loadRelationshipMaps(context.supabase, conditions, asOf, now);
+
+  const attributes = new Map<string, any>();
+  for (const row of rows) attributes.set(row.entity_id, row.attributes || {});
+
+  const needed = new Set<string>();
+  for (const row of rows) {
+    for (const cond of conditions) {
+      for (const id of targetsAlongPath(row.entity_id, cond.attributePath || [], hopMaps)) needed.add(id);
+      for (const id of targetsAlongPath(row.entity_id, cond.comparePath || [], hopMaps)) needed.add(id);
+    }
+  }
+  for (const row of rows) needed.delete(row.entity_id);
+  await fetchAttributeBlobs(context.supabase, [...needed], attributes);
+
+  const matches: Array<{ entityId: string; entityCode: string; entityName: string | null; values: Record<string, string | null> }> = [];
+  for (const row of rows) {
+    const result = matchPopulationEntity(
+      row.entity_id,
+      conditions,
+      (id, path) => targetsAlongPath(id, path, hopMaps),
+      (id, code) => textOfAttribute(attributes.get(id), code),
+    );
+    if (result.match) {
+      matches.push({
+        entityId: row.entity_id,
+        entityCode: row.entity_code,
+        entityName: row.entity_name,
+        values: result.values,
+      });
+    }
+  }
+
+  return {
+    total: matches.length,
+    scanned: rows.length,
+    truncated,
+    rows: matches.slice(offset, offset + limit),
+  };
+}
+
+async function fetchDomainEntities(supabase: Context['supabase'], domainCode: string) {
+  const pageSize = 1000;
+  const rows: Array<{ entity_id: string; entity_code: string; entity_name: string | null; attributes: any }> = [];
+  for (let from = 0; rows.length < POPULATION_CAP; from += pageSize) {
+    const { data, error } = await supabase
+      .from('entity_master')
+      .select('entity_id, entity_code, entity_name, attributes')
+      .eq('domain_code', domainCode)
+      .order('entity_code', { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`Failed to load ${domainCode} records: ${error.message}`);
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) return { rows, truncated: false };
+  }
+  return { rows: rows.slice(0, POPULATION_CAP), truncated: true };
+}
+
+async function loadRelationshipMaps(
+  supabase: Context['supabase'],
+  conditions: PopulationCondition[],
+  asOf: string,
+  now: string,
+) {
+  const hops = new Map<string, RelationshipHopRef>();
+  for (const cond of conditions) {
+    for (const hop of [...(cond.attributePath || []), ...(cond.comparePath || [])]) {
+      hops.set(`${hop.direction}:${hop.relationshipCode}`, hop);
+    }
+  }
+  const maps = new Map<string, Map<string, string[]>>();
+  for (const [key, hop] of hops) {
+    maps.set(key, await loadOneHop(supabase, hop, asOf, now));
+  }
+  return maps;
+}
+
+async function loadOneHop(supabase: Context['supabase'], hop: RelationshipHopRef, asOf: string, now: string) {
+  const fromCol = hop.direction === 'DOWN' ? 'parent_entity_id' : 'child_entity_id';
+  const toCol = hop.direction === 'DOWN' ? 'child_entity_id' : 'parent_entity_id';
+  const map = new Map<string, string[]>();
+  const pageSize = 1000;
+  for (let from = 0; from < 200000; from += pageSize) {
+    const { data, error } = await supabase
+      .schema('entity_instances')
+      .from('entity_relationships')
+      .select('parent_entity_id, child_entity_id')
+      .eq('relationship_code', hop.relationshipCode)
+      .lte('valid_from', asOf)
+      .gte('valid_to', asOf)
+      .lte('system_from', now)
+      .gte('system_to', now)
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`Failed to walk ${hop.relationshipCode}: ${error.message}`);
+    for (const row of data || []) {
+      const start = row[fromCol] as string;
+      const target = row[toCol] as string;
+      const list = map.get(start) || [];
+      list.push(target);
+      map.set(start, list);
+    }
+    if (!data || data.length < pageSize) break;
+  }
+  return map;
+}
+
+async function fetchAttributeBlobs(supabase: Context['supabase'], ids: string[], into: Map<string, any>) {
+  const chunk = 150;
+  for (let i = 0; i < ids.length; i += chunk) {
+    const slice = ids.slice(i, i + chunk);
+    const { data, error } = await supabase
+      .from('entity_master')
+      .select('entity_id, attributes')
+      .in('entity_id', slice);
+    if (error) throw new Error(`Failed to load related attributes: ${error.message}`);
+    for (const row of data || []) into.set(row.entity_id, row.attributes || {});
+  }
 }
