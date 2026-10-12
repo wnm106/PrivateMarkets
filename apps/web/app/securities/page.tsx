@@ -1,47 +1,19 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, useCallback } from 'react';
-import { graphqlQuery, graphqlMutation, SECURITIES_QUERY, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
+import { useState } from 'react';
+import { graphqlMutation, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
 import { EntityForm } from '@/components/forms/EntityForm';
+import { EntityAttributeTable } from '@/components/entities/EntityAttributeTable';
 import { useTemporalStore } from '@/lib/store';
 import { DomainKey } from '@/lib/mock-data';
 
-interface EntityNode {
-  id: string;
-  entityCode: string;
-  entityName: string;
-  attributes: Record<string, any>;
-  parentRelationships: Array<{
-    parentEntityCode: string;
-    parentEntityName: string;
-    relationshipType: string;
-  }>;
-}
-
 export default function SecuritiesPage() {
   const domain: DomainKey = 'securities';
-  const [entities, setEntities] = useState<EntityNode[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const asOfDate = useTemporalStore(state => state.asOfDate);
-
-  const fetchSecurities = useCallback(async () => {
-    const { data } = await graphqlQuery<{ securities: { edges: { node: EntityNode }[]; totalCount: number } }>(
-      SECURITIES_QUERY,
-      { asOfDate }
-    );
-    if (data?.securities) {
-      setEntities(data.securities.edges.map(e => e.node));
-      setTotalCount(data.securities.totalCount);
-    }
-    setLoading(false);
-  }, [asOfDate]);
-
-  useEffect(() => {
-    fetchSecurities();
-  }, [fetchSecurities]);
 
   const handleCreate = async (formData: any) => {
     const { data, error } = await graphqlMutation<{ createEntity: { entity: any; errors: any[] } }>(
@@ -61,7 +33,7 @@ export default function SecuritiesPage() {
     );
     if (data?.createEntity?.entity) {
       setShowCreateModal(false);
-      await fetchSecurities();
+      setRefreshKey((k) => k + 1);
     }
   };
 
@@ -88,58 +60,23 @@ export default function SecuritiesPage() {
         </div>
       </div>
 
-      <div className="filter-bar">
-        <div className="filter-label">Filter</div>
-        <div className="filter-pill">
-          Instrument Type: All <span style={{ color: 'var(--ink-4)' }}>▾</span>
-        </div>
-        <div className="filter-pill">
-          Primary Source: All <span style={{ color: 'var(--ink-4)' }}>▾</span>
-        </div>
-        <div className="filter-count">
-          Showing <strong>{entities.length}</strong> of {totalCount}
-        </div>
-      </div>
-
-      <div className="data-table">
-        <div className="tbl-head">
-          <div>ID</div>
-          <div>Name</div>
-          <div>Attributes</div>
-          <div>Issuer</div>
-          <div style={{ textAlign: 'center' }}>Status</div>
-        </div>
-        {loading ? (
-          <div className="tbl-row"><div>Loading...</div></div>
-        ) : entities.length === 0 ? (
-          <div className="tbl-row"><div>No securities found. Add securities via the generic entity API.</div></div>
-        ) : (
-          entities.map((entity) => {
-            const issuerRel = entity.parentRelationships?.find(r => r.relationshipType === 'SECURITY_ISSUER');
-            return (
-              <Link key={entity.id} href={`/${domain}/${entity.id}`}>
-                <div className="tbl-row">
-                  <div className="row-id">{entity.entityCode}</div>
-                  <div className="row-name">{entity.entityName}</div>
-                  <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
-                    {Object.entries(entity.attributes || {}).slice(0, 3).map(([k, v]: [string, any]) => (
-                      <span key={k} style={{ marginRight: '8px' }}>
-                        {k}: {String(v?.value ?? '').slice(0, 20)}
-                      </span>
-                    ))}
-                  </div>
-                  <div style={{ color: 'var(--ink-2)', fontSize: '11px' }}>
-                    {issuerRel ? issuerRel.parentEntityName : '—'}
-                  </div>
-                  <div style={{ textAlign: 'center' }}>
-                    <span className="status-chip active">Active</span>
-                  </div>
-                </div>
-              </Link>
-            );
-          })
-        )}
-      </div>
+      <EntityAttributeTable
+        domainCode="SECURITY"
+        domainKey={domain}
+        asOfDate={asOfDate}
+        refreshKey={refreshKey}
+        emptyMessage="No securities found. Add securities via the generic entity API."
+        onTotalChange={setTotalCount}
+        related={[{
+          alias: 'issuer',
+          label: 'Issuer',
+          direction: 'UP',
+          relationshipCode: 'SECURITY_ISSUER',
+          domainCode: 'ISSUER',
+          field: 'entity_name',
+          header: 'Issuer',
+        }]}
+      />
 
       {showCreateModal && (
         <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>

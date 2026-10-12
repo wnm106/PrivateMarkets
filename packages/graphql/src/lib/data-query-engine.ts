@@ -20,7 +20,8 @@ export type DataQueryAggregation =
 
 export type DataQueryOperator =
   | 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte'
-  | 'in' | 'nin' | 'contains' | 'startsWith' | 'between' | 'isNull' | 'notNull';
+  | 'in' | 'nin' | 'contains' | 'startsWith' | 'between' | 'isNull' | 'notNull'
+  | 'searchAny';
 
 export interface DataQueryHop {
   /** Only follow relationships with this code (or relationship_type). Omit = any. */
@@ -198,7 +199,8 @@ Fields: either a built-in (entity_code, entity_name, domain_code), an attribute_
 a RELATED entity's attribute as "<alias>.<ATTRIBUTE_CODE>" (e.g. "sec.INDUSTRY", "iss.RATING", "sec.entity_name"). Related fields work everywhere a
 field does: select, filters, groupBy (grouping positions by their security's industry), orderBy, metrics, and in the grid UI. Lookups should be to-one
 relationships (each row has one security / one issuer); with several related entities the lowest entity_code is used. Lookups are resolved as of the as-of date.
-Operators: eq neq gt gte lt lte in nin contains startsWith between isNull notNull.
+Operators: eq neq gt gte lt lte in nin contains startsWith between isNull notNull searchAny.
+searchAny matches the value against entity code, entity name, and every selected attribute (OR). The field may be entity_code.
 Aggregations: SUM AVG MIN MAX COUNT COUNT_DISTINCT WEIGHTED_AVG.
 A filter with "param" is skipped when the user has not supplied that input (unless "required": true).
 Built-in params always available: entityId, entityCode, asOfDate (valid-time as-of date; relationships AND attribute values are evaluated as of that date).
