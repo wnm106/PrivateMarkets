@@ -3,7 +3,8 @@ const nextConfig = {
   reactStrictMode: true,
   // Next.js 16 blocks dev assets when the browser host is not the bind host.
   allowedDevOrigins: ['127.0.0.1', 'localhost'],
-  transpilePackages: ['@tapestrai/ui', '@tapestrai/graphql'],
+  transpilePackages: ['@tapestrai/ui', '@tapestrai/graphql', '@tapestrai/mcp-server'],
+  serverExternalPackages: ['xlsx'],
   experimental: {
     optimizePackageImports: ['@tapestrai/ui'],
   },
