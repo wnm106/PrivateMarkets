@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useEffect, useState, useCallback } from 'react';
 import { graphqlQuery, graphqlMutation, SECURITIES_QUERY, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
 import { EntityForm } from '@/components/forms/EntityForm';
+import { useTemporalStore } from '@/lib/store';
+import { DomainKey } from '@/lib/mock-data';
 
 interface EntityNode {
   id: string;
@@ -18,22 +20,24 @@ interface EntityNode {
 }
 
 export default function SecuritiesPage() {
+  const domain: DomainKey = 'securities';
   const [entities, setEntities] = useState<EntityNode[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const asOfDate = useTemporalStore(state => state.asOfDate);
 
   const fetchSecurities = useCallback(async () => {
     const { data } = await graphqlQuery<{ securities: { edges: { node: EntityNode }[]; totalCount: number } }>(
       SECURITIES_QUERY,
-      {}
+      { asOfDate }
     );
     if (data?.securities) {
       setEntities(data.securities.edges.map(e => e.node));
       setTotalCount(data.securities.totalCount);
     }
     setLoading(false);
-  }, []);
+  }, [asOfDate]);
 
   useEffect(() => {
     fetchSecurities();
@@ -113,7 +117,7 @@ export default function SecuritiesPage() {
           entities.map((entity) => {
             const issuerRel = entity.parentRelationships?.find(r => r.relationshipType === 'SECURITY_ISSUER');
             return (
-              <Link key={entity.id} href={`/securities/${entity.id}`}>
+              <Link key={entity.id} href={`/${domain}/${entity.id}`}>
                 <div className="tbl-row">
                   <div className="row-id">{entity.entityCode}</div>
                   <div className="row-name">{entity.entityName}</div>

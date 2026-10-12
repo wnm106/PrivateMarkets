@@ -16,13 +16,13 @@
     "jsx": "preserve",
     "plugins": [{ "name": "next" }],
     "paths": {
-      "@meridian-mdm/ui": ["./packages/ui/src"],
-      "@meridian-mdm/ui/*": ["./packages/ui/src/*"],
-      "@meridian-mdm/graphql": ["./packages/graphql/src"],
-      "@meridian-mdm/graphql/*": ["./packages/graphql/src/*"],
-      "@meridian-mdm/database": ["./packages/database/src"],
-      "@meridian-mdm/mcp-server": ["./packages/mcp-server/src"],
-      "@meridian-mdm/config": ["./packages/config"]
+      "@tapestrai/ui": ["./packages/ui/src"],
+      "@tapestrai/ui/*": ["./packages/ui/src/*"],
+      "@tapestrai/graphql": ["./packages/graphql/src"],
+      "@tapestrai/graphql/*": ["./packages/graphql/src/*"],
+      "@tapestrai/database": ["./packages/database/src"],
+      "@tapestrai/mcp-server": ["./packages/mcp-server/src"],
+      "@tapestrai/config": ["./packages/config"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx", "**/*.mts"],

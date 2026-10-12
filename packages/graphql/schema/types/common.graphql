@@ -123,7 +123,11 @@ type AttributeDefinition {
   derivationFormula: String
   derivationDependencies: [String!]
   formulaLanguage: String
-  
+
+  # Time dimension fields
+  isTimeVarying: Boolean!
+  timeDimension: String
+
   # Display and validation metadata
   displayFormat: String
   listValues: [String!]
@@ -133,6 +137,10 @@ type AttributeDefinition {
   displayGroup: Int
   isEditable: Boolean!
   isVisible: Boolean!
+  
+  # Reference list link
+  referenceListCode: String
+  referenceList: ReferenceList
   
   # Aggregation and precision
   aggregationType: String

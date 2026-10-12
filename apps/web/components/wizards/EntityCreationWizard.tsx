@@ -348,7 +348,6 @@ export function EntityCreationWizard({ domain }: EntityCreationWizardProps) {
           </div>
         </div>
       )}
-      )}
 
       {step === 3 && (
         <div className="builder-card">

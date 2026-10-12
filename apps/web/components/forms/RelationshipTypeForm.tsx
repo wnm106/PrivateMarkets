@@ -18,6 +18,7 @@ interface FormData {
   cardinality: 'ONE_TO_ONE' | 'ONE_TO_MANY' | 'MANY_TO_ONE' | 'COMPOSITE';
   compositeKey: string[];
   description: string;
+  isRequired: boolean;
 }
 
 export function RelationshipTypeForm({ 
@@ -43,6 +44,7 @@ export function RelationshipTypeForm({
     cardinality: initialData?.cardinality || 'ONE_TO_ONE',
     compositeKey: initialData?.compositeKey || [],
     description: initialData?.description || '',
+    isRequired: initialData?.isRequired || false,
   });
   
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -57,6 +59,7 @@ export function RelationshipTypeForm({
         cardinality: initialData.cardinality || 'ONE_TO_ONE',
         compositeKey: initialData.compositeKey || [],
         description: initialData.description || '',
+        isRequired: initialData.isRequired || false,
       });
     }
   }, [initialData]);
@@ -81,7 +84,9 @@ export function RelationshipTypeForm({
 
   const handleSubmit = () => {
     if (validate()) {
-      onSubmit(formData);
+      // Remove isRequired - not in GraphQL schema
+      const { isRequired, ...submitData } = formData;
+      onSubmit(submitData);
     }
   };
 
@@ -162,6 +167,23 @@ export function RelationshipTypeForm({
               {formData.cardinality === 'ONE_TO_MANY' && 'One parent can have multiple children'}
               {formData.cardinality === 'MANY_TO_ONE' && 'Multiple parents can reference one child'}
               {formData.cardinality === 'ONE_TO_ONE' && 'Single parent to single child'}
+            </small>
+          </div>
+          
+          <div className="field">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={formData.isRequired}
+                onChange={(e) => handleChange('isRequired', e.target.checked)}
+                style={{ width: '16px', height: '16px' }}
+              />
+              <span>Required Parent</span>
+            </label>
+            <small className="field-hint">
+              {formData.isRequired 
+                ? 'Entity cannot be saved without this parent relationship' 
+                : 'This parent relationship is optional'}
             </small>
           </div>
           

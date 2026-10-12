@@ -6,6 +6,12 @@ import { intersectionResolvers } from './intersection';
 import { sourceResolvers } from './source';
 import { dataConnectionResolvers } from './dataconnection';
 import { importMapResolvers } from './importmap';
+import { precedenceResolvers } from './precedence';
+import { goldenSourceResolvers } from './goldensource';
+import { tenancyResolvers } from './tenancy';
+import { complianceResolvers } from './compliance';
+import { referenceListResolvers } from './referencelist';
+import { reportingResolvers } from './reporting';
 
 export const resolvers = {
   Query: {
@@ -13,10 +19,15 @@ export const resolvers = {
     ...dataQualityResolvers.Query,
     ...lineageResolvers.Query,
     ...intersectionResolvers.Query,
-    // Import sourceResolvers.Query as needed after schema updates
-    // sourceResolvers.Query,
-    // dataConnectionResolvers.Query,
-    // importMapResolvers.Query,
+    ...sourceResolvers.Query,
+    ...precedenceResolvers.Query,
+    ...goldenSourceResolvers.Query,
+    ...dataConnectionResolvers.Query,
+    ...importMapResolvers.Query,
+    ...tenancyResolvers.Query,
+    ...complianceResolvers.Query,
+    ...referenceListResolvers.Query,
+    ...reportingResolvers.Query,
     // Only attributeRegister/domainTemplates are declared in the schema today.
     // The rest of metadataResolvers.Query (derivedAttributes, evaluateDerivedAttribute,
     // evaluateDerivedAttributesBatch) depends on the derived-attributes migration
@@ -31,15 +42,24 @@ export const resolvers = {
     ...dataQualityResolvers.Mutation,
     ...lineageResolvers.Mutation,
     ...intersectionResolvers.Mutation,
-    // Import sourceResolvers.Mutation as needed after schema updates
-    // sourceResolvers.Mutation,
-    // dataConnectionResolvers.Mutation,
-    // importMapResolvers.Mutation,
+    ...sourceResolvers.Mutation,
+    ...precedenceResolvers.Mutation,
+    ...goldenSourceResolvers.Mutation,
+    ...dataConnectionResolvers.Mutation,
+    ...importMapResolvers.Mutation,
+    ...tenancyResolvers.Mutation,
+    ...complianceResolvers.Mutation,
+    ...referenceListResolvers.Mutation,
+    ...reportingResolvers.Mutation,
     updateAttributeDefinition: metadataResolvers.Mutation.updateAttributeDefinition,
+    deleteAttribute: metadataResolvers.Mutation.deleteAttribute,
   },
   
   Subscription: {},
   
   Entity: entityResolvers.Entity,
-  // DataConnection: dataConnectionResolvers.DataConnection,
+  DataConnection: dataConnectionResolvers.DataConnection,
+  ComplianceRule: complianceResolvers.ComplianceRule,
+  ComplianceEvaluationRun: complianceResolvers.ComplianceEvaluationRun,
+  AttributeDefinition: referenceListResolvers.AttributeDefinition,
 };

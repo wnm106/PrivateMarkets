@@ -112,16 +112,19 @@ export const intersectionResolvers = {
       const asOf = args.asOfDate || new Date().toISOString().split('T')[0];
 
       if (args.intersectionCode) {
-        // Use the get_intersection_full function for complete data
-        const { data, error } = await context.supabase.rpc('get_intersection_full', {
-          p_intersection_code: args.intersectionCode,
-          p_as_of_date: asOf,
-        });
+        // Query the intersection_master view directly by intersection_code
+        const { data, error } = await context.supabase
+          .from('intersection_master')
+          .select('*')
+          .eq('intersection_code', args.intersectionCode)
+          .single();
 
-        if (error) throw error;
-        if (!data) return null;
+        if (error) {
+          if (error.code === 'PGRST116') return null;
+          throw error;
+        }
 
-        return mapIntersectionFullRow(data);
+        return mapIntersectionRow(data);
       } else if (args.id) {
         // Query by ID from the view
         const { data, error } = await context.supabase
@@ -222,16 +225,49 @@ export const intersectionResolvers = {
           .from('intersection_types')
           .update(updateData)
           .eq('id', input.id)
-          .select(`
-            *,
-            intersection_type_members(*)
-          `)
+          .select('*')
           .single();
 
         if (error) throw error;
 
+        // Sync members: delete existing and re-insert
+        if (input.members !== undefined) {
+          // Delete all existing members for this type
+          await context.supabase
+            .from('intersection_type_members')
+            .delete()
+            .eq('intersection_type_id', input.id);
+
+          // Insert new members
+          if (input.members.length > 0) {
+            const membersToInsert = input.members.map((member: any, index: number) => ({
+              intersection_type_id: input.id,
+              domain_code: member.domainCode,
+              member_role: member.memberRole,
+              is_required: member.isRequired ?? true,
+              display_order: member.displayOrder ?? index,
+            }));
+
+            const { error: membersError } = await context.supabase
+              .from('intersection_type_members')
+              .insert(membersToInsert);
+
+            if (membersError) throw membersError;
+          }
+        }
+
+        // Fetch the updated type with members
+        const { data: updatedType } = await context.supabase
+          .from('intersection_types')
+          .select(`
+            *,
+            intersection_type_members(*)
+          `)
+          .eq('id', input.id)
+          .single();
+
         return {
-          intersectionType: mapIntersectionTypeRow(data),
+          intersectionType: mapIntersectionTypeRow(updatedType),
           errors: [],
         };
       } catch (error: any) {
@@ -548,7 +584,7 @@ function mapIntersectionTypeRow(row: any): any {
       displayOrder: member.display_order,
     })),
     createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    updatedAt: row.updated_at || row.created_at,
   };
 }
 

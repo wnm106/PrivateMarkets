@@ -4,6 +4,7 @@ import { ToolDefinition } from '../lib/types.js';
 const getFieldLineage: ToolDefinition = {
   name: 'get_field_lineage',
   description: 'Get field-level lineage for an entity, showing all competing source values and the resolved golden record.',
+  category: 'lineage',
   inputSchema: {
     type: 'object',
     properties: {
@@ -41,29 +42,33 @@ const getFieldLineage: ToolDefinition = {
       byAttribute.get(code)!.push(row);
     });
 
-    return Array.from(byAttribute.entries()).map(([code, values]) => ({
-      attributeCode: code,
-      attributeName: values[0].attribute_register.attribute_name,
-      dataType: values[0].attribute_register.data_type,
-      goldenValue: values[0].golden_value,
-      resolutionRule: values[0].resolution_rule_applied,
-      competingValues: values.map((v: any) => ({
-        source: v.source_registry.source_code,
-        sourceName: v.source_registry.source_name,
-        value: v.golden_value,
-        precedenceRank: v.precedence_rank,
-        validFrom: v.valid_from,
-        validTo: v.valid_to,
-        confidenceScore: v.confidence_score,
-        isOverride: v.is_manual_override,
-      })),
-    }));
+    return Array.from(byAttribute.entries()).map(([code, values]) => {
+      const winningRecord = values.find(v => v.golden_value !== null && v.golden_value !== undefined && v.golden_value !== '') || values[0];
+      return {
+        attributeCode: code,
+        attributeName: winningRecord.attribute_register.attribute_name,
+        dataType: winningRecord.attribute_register.data_type,
+        goldenValue: winningRecord.golden_value,
+        resolutionRule: winningRecord.resolution_rule_applied,
+        competingValues: values.map((v: any) => ({
+          source: v.source_registry.source_code,
+          sourceName: v.source_registry.source_name,
+          value: v.golden_value,
+          precedenceRank: v.precedence_rank,
+          validFrom: v.valid_from,
+          validTo: v.valid_to,
+          confidenceScore: v.confidence_score,
+          isOverride: v.is_manual_override,
+        })),
+      };
+    });
   },
 };
 
 const getTemporalHistory: ToolDefinition = {
   name: 'get_temporal_history',
   description: 'Get the bi-temporal history of a specific attribute for an entity, showing all changes over time.',
+  category: 'lineage',
   inputSchema: {
     type: 'object',
     properties: {

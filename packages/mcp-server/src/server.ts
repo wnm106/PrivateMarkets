@@ -1,6 +1,6 @@
 import { config } from 'dotenv';
 import { resolve } from 'path';
-config({ path: resolve(__dirname, '../../../../.env') });
+config({ path: resolve(__dirname, '../../../.env') });
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -8,6 +8,8 @@ import {
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { createClient } from '@supabase/supabase-js';
 import { registerDomainTools } from './tools/domain-tools.js';
@@ -15,7 +17,11 @@ import { registerLineageTools } from './tools/lineage-tools.js';
 import { registerOverrideTools } from './tools/override-tools.js';
 import { registerDQTools } from './tools/dq-tools.js';
 import { registerImportMapTools } from './tools/import-map-tools.js';
+import { registerComplianceTools } from './tools/compliance-tools.js';
+import { registerReportingTools } from './tools/reporting-tools.js';
 import { ToolRegistry } from './lib/tool-registry.js';
+import { listResources, readResource } from './resources.js';
+import { PROMPTS, getPromptMessages } from './prompts.js';
 
 const supabaseUrl = process.env.SUPABASE_URL || 'https://yxougybcfuignxydipes.supabase.co';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
@@ -31,13 +37,14 @@ if (!supabaseKey) {
 
 const server = new Server(
   {
-    name: 'meridian-mdm-mcp',
+    name: 'tapestrai-mcp',
     version: '0.1.0',
   },
   {
     capabilities: {
       tools: {},
       resources: {},
+      prompts: {},
     },
   }
 );
@@ -50,6 +57,8 @@ registerLineageTools(toolRegistry);
 registerOverrideTools(toolRegistry);
 registerDQTools(toolRegistry);
 registerImportMapTools(toolRegistry);
+registerComplianceTools(toolRegistry);
+registerReportingTools(toolRegistry);
 
 // Handle tool listing
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -86,75 +95,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // Handle resource listing
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
-  if (!supabase) {
-    return { resources: [] };
-  }
-  
-  // Dynamically list available domain templates as resources
-  const { data: templates } = await supabase
-    .from('domain_templates')
-    .select('id, template_code, domain_code, template_name')
-    .eq('is_active', true);
-  
-  return {
-    resources: (templates || []).map((t: any) => ({
-      uri: `meridian://template/${t.template_code}`,
-      name: `${t.domain_code}: ${t.template_name}`,
-      mimeType: 'application/json',
-      description: `Template definition for ${t.domain_code} domain`,
-    })),
-  };
+  return { resources: await listResources(supabase) };
 });
 
 // Handle resource reading
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-  if (!supabase) {
-    throw new Error('Supabase client not initialized. Set SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY.');
-  }
-  
   const { uri } = request.params;
-  
-  // Parse template URI
-  const match = uri.match(/^meridian:\/\/template\/(.+)$/);
-  if (!match) {
-    throw new Error(`Unknown resource URI: ${uri}`);
-  }
-  
-  const templateCode = match[1];
-  
-  // Fetch template with attributes
-  const { data: template } = await supabase
-    .from('domain_templates')
-    .select(`
-      *,
-      template_attribute_assignments(
-        *,
-        attribute_register(*)
-      )
-    `)
-    .eq('template_code', templateCode)
-    .single();
-  
-  if (!template) {
-    throw new Error(`Template not found: ${templateCode}`);
-  }
-  
+  const result = await readResource(uri, supabase);
   return {
     contents: [
       {
         uri,
-        mimeType: 'application/json',
-        text: JSON.stringify(template, null, 2),
+        mimeType: result.mimeType,
+        text: result.text,
       },
     ],
   };
+});
+
+// Handle prompt listing
+server.setRequestHandler(ListPromptsRequestSchema, async () => {
+  return { prompts: PROMPTS };
+});
+
+// Handle prompt retrieval
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+  const messages = getPromptMessages(name, args || {});
+  return { messages };
 });
 
 // Start the server
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('Meridian MDM MCP Server running on stdio');
+  console.error('tapestr.ai MDM MCP Server running on stdio');
 }
 
 main().catch((error) => {

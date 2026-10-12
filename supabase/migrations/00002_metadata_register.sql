@@ -108,10 +108,10 @@ COMMENT ON TABLE metadata_register.reference_lists IS 'Enumerated reference valu
 COMMENT ON TABLE metadata_register.reference_list_values IS 'Individual values within reference lists';
 
 -- Insert core domain types
-INSERT INTO metadata_register.domain_types (domain_code, domain_name, description) VALUES
-    ('FUND', 'Fund', 'Investment fund vehicles'),
-    ('ISSUER', 'Issuer', 'Companies and entities issuing securities'),
-    ('DEAL', 'Deal', 'Investment transactions and deals'),
-    ('SECURITY', 'Security', 'Tradeable financial instruments'),
-    ('PRICE', 'Price', 'Pricing data points'),
-    ('POSITION', 'Position', 'Portfolio positions and holdings');
+INSERT INTO metadata_register.domain_types (domain_code, domain_name, description, is_active) VALUES
+    ('FUND', 'Fund', 'Investment fund vehicles', true),
+    ('ISSUER', 'Issuer', 'Companies and entities issuing securities', true),
+    ('DEAL', 'Deal', 'Investment transactions and deals', true),
+    ('SECURITY', 'Security', 'Tradeable financial instruments', true),
+    ('PRICE', 'Price', 'Pricing data points', true),
+    ('POSITION', 'Position', 'Portfolio positions and holdings', true);

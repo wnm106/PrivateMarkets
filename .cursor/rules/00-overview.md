@@ -39,7 +39,7 @@ Meridian MDM is a comprehensive Master Data Management system for Private Market
 
 ### 1. Generic Entity Model (GEM)
 - **Single source of truth** for all entity types
-- Entities belong to domains: FUND, ISSUER, DEAL, SECURITY, PRICE, POSITION
+- Entities belong to domains: FUND, ISSUER, DEAL, SECURITY, PRICE, POSITION, CASH_FLOW
 - Uses `master_entities` table for generic storage
 - Links to domain-specific templates for attribute validation
 

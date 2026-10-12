@@ -3,6 +3,9 @@
 import { useTemporalStore } from '@/lib/store';
 import Link from 'next/link';
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { AsOfDatePicker } from './AsOfDatePicker';
+import { UserMenu } from './UserMenu';
+import { BrandLogo } from './BrandLogo';
 
 export function TopBar() {
   const { persona, setPersona } = useTemporalStore();
@@ -30,10 +33,7 @@ export function TopBar() {
       <div style={{ display: 'flex', alignItems: 'center' }}>
         <Link href="/" style={{ textDecoration: 'none' }}>
           <div className="brand">
-            <div className="brand-mark">M</div>
-            <div>
-              <div className="brand-text">Meridian</div>
-            </div>
+            <BrandLogo />
             <div className="brand-sub">Master Data · v2.4</div>
           </div>
         </Link>
@@ -59,16 +59,17 @@ export function TopBar() {
         </div>
       </div>
       <div className="topbar-right" style={{ position: 'relative', zIndex: 1000 }}>
+        <AsOfDatePicker />
         <div ref={menuRef} style={{ position: 'relative' }}>
           <button
             className="admin-menu-btn"
             onClick={() => setShowAdminMenu(!showAdminMenu)}
             style={{
               padding: '8px 16px',
-              background: 'var(--accent-2)',
-              color: 'var(--bg)',
+              background: 'var(--brand-gradient)',
+              color: '#fff',
               border: 'none',
-              borderRadius: '6px',
+              borderRadius: '8px',
               fontSize: '13px',
               fontWeight: '500',
               cursor: 'pointer',
@@ -87,10 +88,10 @@ export function TopBar() {
                 top: '100%',
                 right: 0,
                 marginTop: '8px',
-                background: '#1a1a17',
-                border: '1px solid #2a2a28',
-                borderRadius: '8px',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                background: 'var(--surface)',
+                border: '1px solid var(--line)',
+                borderRadius: '10px',
+                boxShadow: '0 12px 32px rgba(10, 22, 40, 0.14)',
                 minWidth: '200px',
                 zIndex: 1000,
                 overflow: 'hidden'
@@ -99,12 +100,12 @@ export function TopBar() {
                 <Link href="/admin/entities" onClick={() => setShowAdminMenu(false)}>
                   <div style={{
                     padding: '12px 16px',
-                    color: '#e6e3dc',
+                    color: 'var(--ink-2)',
                     textDecoration: 'none',
                     fontSize: '14px',
-                    borderBottom: '1px solid #2a2a28'
+                    borderBottom: '1px solid var(--line)'
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = '#2a2a28'}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
                   onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
                     Entity Management
@@ -113,12 +114,12 @@ export function TopBar() {
                 <Link href="/admin/sources" onClick={() => setShowAdminMenu(false)}>
                   <div style={{
                     padding: '12px 16px',
-                    color: '#e6e3dc',
+                    color: 'var(--ink-2)',
                     textDecoration: 'none',
                     fontSize: '14px',
-                    borderBottom: '1px solid #2a2a28'
+                    borderBottom: '1px solid var(--line)'
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = '#2a2a28'}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
                   onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
                     Data Sources
@@ -127,12 +128,12 @@ export function TopBar() {
                 <Link href="/admin/attributes" onClick={() => setShowAdminMenu(false)}>
                   <div style={{
                     padding: '12px 16px',
-                    color: '#e6e3dc',
+                    color: 'var(--ink-2)',
                     textDecoration: 'none',
                     fontSize: '14px',
-                    borderBottom: '1px solid #2a2a28'
+                    borderBottom: '1px solid var(--line)'
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = '#2a2a28'}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
                   onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
                     Attributes
@@ -141,12 +142,12 @@ export function TopBar() {
                 <Link href="/admin/templates" onClick={() => setShowAdminMenu(false)}>
                   <div style={{
                     padding: '12px 16px',
-                    color: '#e6e3dc',
+                    color: 'var(--ink-2)',
                     textDecoration: 'none',
                     fontSize: '14px',
-                    borderBottom: '1px solid #2a2a28'
+                    borderBottom: '1px solid var(--line)'
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = '#2a2a28'}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
                   onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
                     Templates
@@ -155,14 +156,70 @@ export function TopBar() {
                 <Link href="/admin/dq-rules" onClick={() => setShowAdminMenu(false)}>
                   <div style={{
                     padding: '12px 16px',
-                    color: '#e6e3dc',
+                    color: 'var(--ink-2)',
                     textDecoration: 'none',
-                    fontSize: '14px'
+                    fontSize: '14px',
+                    borderBottom: '1px solid var(--line)'
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = '#2a2a28'}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
                   onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
                     DQ Rules
+                  </div>
+                </Link>
+                <Link href="/admin/compliance" onClick={() => setShowAdminMenu(false)}>
+                  <div style={{
+                    padding: '12px 16px',
+                    color: 'var(--ink-2)',
+                    textDecoration: 'none',
+                    fontSize: '14px',
+                    borderBottom: '1px solid var(--line)'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    Compliance Rules
+                  </div>
+                </Link>
+                <Link href="/admin/dashboards" onClick={() => setShowAdminMenu(false)}>
+                  <div style={{
+                    padding: '12px 16px',
+                    color: 'var(--ink-2)',
+                    textDecoration: 'none',
+                    fontSize: '14px',
+                    borderBottom: '1px solid var(--line)'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    Dashboards
+                  </div>
+                </Link>
+                <Link href="/admin/narratives" onClick={() => setShowAdminMenu(false)}>
+                  <div style={{
+                    padding: '12px 16px',
+                    color: 'var(--ink-2)',
+                    textDecoration: 'none',
+                    fontSize: '14px',
+                    borderBottom: '1px solid var(--line)'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    Narratives
+                  </div>
+                </Link>
+                <Link href="/admin/tenancy" onClick={() => setShowAdminMenu(false)}>
+                  <div style={{
+                    padding: '12px 16px',
+                    color: 'var(--ink-2)',
+                    textDecoration: 'none',
+                    fontSize: '14px'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    Clients, Users &amp; Roles
                   </div>
                 </Link>
               </div>
@@ -171,10 +228,7 @@ export function TopBar() {
         <div className="status-pill">
           <span className="status-dot"></span>All systems healthy
         </div>
-        <div className="user-chip">
-          <div style={{ fontSize: '11px', color: '#cbcac4' }}>Bill Reagan</div>
-          <div className="avatar">BR</div>
-        </div>
+        <UserMenu />
       </div>
     </div>
   );

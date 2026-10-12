@@ -60,80 +60,116 @@ export interface PageInfo {
   endCursor?: string;
 }
 
-// Fund types
-export interface Fund {
+// ============== PRECEDENCE RULES ==============
+
+export interface PrecedenceRule {
   id: string;
-  entityCode: string;
-  entityName: string;
-  description?: string;
+  ruleCode: string;
+  ruleName: string;
+  domainCode: string;
+  templateCode?: string;
+  attributeCode: string;
+  priorityTier: string;
   isActive: boolean;
-  templateId?: string;
-  nav?: number;
-  navCurrency?: string;
-  navDate?: string;
-  inceptionDate?: string;
-  fundStatus?: string;
-  fundType?: string;
-  manager?: string;
-  aum?: number;
-  expenseRatio?: number;
-  domicile?: string;
-  legalStructure?: string;
-  navSource?: string;
-  lastUpdated?: string;
-  lineage?: any[];
-  metadata?: any;
+  conditions: PrecedenceCondition[];
+  chain: PrecedenceChainItem[];
   createdAt: string;
   updatedAt: string;
   createdBy?: string;
-  updatedBy?: string;
-}
-
-export interface FundConnection {
-  edges: FundEdge[];
-  pageInfo: PageInfo;
-  totalCount: number;
-}
-
-export interface FundEdge {
-  node: Fund;
-  cursor: string;
-}
-
-// Issuer types
-export interface Issuer {
-  id: string;
-  entityCode: string;
-  entityName: string;
-  description?: string;
-  isActive: boolean;
-  templateId?: string;
-  lei?: string;
-  country?: string;
-  sector?: string;
-  industry?: string;
-  marketCap?: number;
-  creditRating?: string;
-  website?: string;
-  foundedDate?: string;
-  employeeCount?: number;
-  lastUpdated?: string;
-  lineage?: any[];
   metadata?: any;
+}
+
+export interface PrecedenceCondition {
+  id: string;
+  ruleId: string;
+  conditionGroup: number;
+  conditionOrder: number;
+  attributeCode: string;
+  operator: string;
+  value: string;
+  logicOperator: string;
   createdAt: string;
-  updatedAt: string;
-  createdBy?: string;
-  updatedBy?: string;
 }
 
-export interface IssuerConnection {
-  edges: IssuerEdge[];
-  pageInfo: PageInfo;
-  totalCount: number;
+export interface PrecedenceChainItem {
+  id: string;
+  ruleId: string;
+  chainOrder: number;
+  sourceCode: string;
+  conditionType: string;
+  createdAt: string;
 }
 
-export interface IssuerEdge {
-  node: Issuer;
-  cursor: string;
+export interface PrecedenceRulePayload {
+  precedenceRule?: PrecedenceRule;
+  errors: Array<{ field: string; message: string; code: string }>;
+}
+
+export interface PrecedenceRuleDeletePayload {
+  success: boolean;
+  errors: Array<{ field: string; message: string; code: string }>;
+}
+
+export interface PrecedenceEvaluationResult {
+  winningSource: string;
+  winningSourceId?: string;
+  appliedRule: PrecedenceRule | null;
+  isDefault: boolean;
+  tierUsed: 1 | 2 | 3 | 4;
+  resolutionVersion: number;
+  allCandidates: Array<{
+    source: string;
+    sourceId?: string;
+    value: string;
+    rank: number;
+  }>;
+}
+
+export interface CreatePrecedenceRuleInput {
+  ruleCode?: string;
+  ruleName: string;
+  domainCode: string;
+  templateCode?: string;
+  attributeCode: string;
+  priorityTier?: string;
+  isActive?: boolean;
+  conditions?: Array<{
+    conditionGroup?: number;
+    conditionOrder?: number;
+    attributeCode: string;
+    operator: string;
+    value?: string;
+    logicOperator?: string;
+  }>;
+  chain?: Array<{
+    chainOrder?: number;
+    sourceCode: string;
+    conditionType?: string;
+  }>;
+  metadata?: any;
+}
+
+export interface UpdatePrecedenceRuleInput {
+  ruleCode?: string;
+  ruleName?: string;
+  domainCode?: string;
+  templateCode?: string;
+  attributeCode?: string;
+  priorityTier?: string;
+  isActive?: boolean;
+  conditions?: Array<{
+    conditionGroup?: number;
+    conditionOrder?: number;
+    attributeCode: string;
+    operator: string;
+    value?: string;
+    logicOperator?: string;
+  }>;
+  chain?: Array<{
+    chainOrder?: number;
+    sourceCode: string;
+    conditionType?: string;
+  }>;
+  metadata?: any;
 }
 

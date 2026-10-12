@@ -4,6 +4,7 @@ import { ToolDefinition } from '../lib/types.js';
 const submitManualOverride: ToolDefinition = {
   name: 'submit_manual_override',
   description: 'Submit a manual override for a specific entity attribute. This creates a new golden record with highest precedence.',
+  category: 'override',
   inputSchema: {
     type: 'object',
     properties: {
@@ -68,6 +69,7 @@ const submitManualOverride: ToolDefinition = {
 const splitValidTime: ToolDefinition = {
   name: 'split_valid_time',
   description: 'Split a bi-temporal record at a specific date, creating a new version with a different value.',
+  category: 'override',
   inputSchema: {
     type: 'object',
     properties: {

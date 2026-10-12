@@ -1,8 +1,7 @@
 import type { Metadata } from 'next';
-import { IBM_Plex_Sans, IBM_Plex_Serif, IBM_Plex_Mono } from 'next/font/google';
-import { TopBar } from '@/components/layout/TopBar';
-import { SourceLegend } from '@/components/layout/SourceLegend';
-import { ChatPanel } from '@/components/layout/ChatPanel';
+import { IBM_Plex_Sans, IBM_Plex_Mono, Outfit } from 'next/font/google';
+import { AppChrome } from '@/components/layout/AppChrome';
+import { AuthSync } from '@/components/auth/AuthSync';
 import '../styles/globals.css';
 
 const ibmPlexSans = IBM_Plex_Sans({
@@ -12,10 +11,11 @@ const ibmPlexSans = IBM_Plex_Sans({
   display: 'swap',
 });
 
-const ibmPlexSerif = IBM_Plex_Serif({
+// Geometric display face that echoes the tapestr.ai wordmark
+const brandDisplay = Outfit({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
-  variable: '--font-ibm-plex-serif',
+  variable: '--font-display',
   display: 'swap',
 });
 
@@ -27,7 +27,7 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Meridian MDM - Master Data Management',
+  title: 'tapestr.ai - Master Data Management',
   description: 'Bi-temporal financial Master Data Management platform for private markets investments',
 };
 
@@ -37,14 +37,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${ibmPlexSans.variable} ${ibmPlexSerif.variable} ${ibmPlexMono.variable}`}>
+    <html lang="en" className={`${ibmPlexSans.variable} ${brandDisplay.variable} ${ibmPlexMono.variable}`}>
       <body>
-        <TopBar />
-        <SourceLegend />
-        <main className="main">
-          {children}
-        </main>
-        <ChatPanel />
+        <AuthSync />
+        <AppChrome>{children}</AppChrome>
       </body>
     </html>
   );

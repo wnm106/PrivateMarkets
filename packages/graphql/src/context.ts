@@ -3,7 +3,14 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import DataLoader from 'dataloader';
 
 export interface Context {
+  /** Scoped to the caller's own JWT -- RLS applies. Use this for all normal data access. */
   supabase: SupabaseClient;
+  /**
+   * Service-role client (bypasses RLS). Only `null` if SUPABASE_SERVICE_ROLE_KEY
+   * isn't configured. Reserve for specific privileged/audited operations (e.g.
+   * `supabase.auth.admin.*` user invitation) -- never use for normal row access.
+   */
+  supabaseAdmin: SupabaseClient | null;
   user: User | null;
   requestId: string;
   loaders: DataLoaders;

@@ -88,24 +88,45 @@ export default function LandingPage() {
         // aliased so every domain's count comes back in a single request.
         const counts: Record<string, number> = {};
         if (activeDomains.length > 0) {
-          const countsQuery = `
-            query {
-              ${activeDomains
-                .map(
-                  (d, i) =>
-                    `d${i}: entities(filter: { domainCode: "${d.domainCode}" }, pagination: { first: 1 }) { totalCount }`
-                )
-                .join('\n')}
-            }
-          `;
-          const countsResult = await graphqlQuery<
-            Record<string, { totalCount: number } | undefined>,
-            Record<string, never>
-          >(countsQuery);
+          // Separate POSITION domain (uses intersections) from regular entities
+          const regularDomains = activeDomains.filter(d => d.domainCode !== 'POSITION');
+          const hasPosition = activeDomains.some(d => d.domainCode === 'POSITION');
 
-          activeDomains.forEach((d, i) => {
-            counts[d.domainCode] = countsResult.data?.[`d${i}`]?.totalCount || 0;
-          });
+          if (regularDomains.length > 0) {
+            const countsQuery = `
+              query {
+                ${regularDomains
+                  .map(
+                    (d, i) =>
+                      `d${i}: entities(filter: { domainCode: "${d.domainCode}" }, pagination: { first: 1 }) { totalCount }`
+                  )
+                  .join('\n')}
+              }
+            `;
+            const countsResult = await graphqlQuery<
+              Record<string, { totalCount: number } | undefined>,
+              Record<string, never>
+            >(countsQuery);
+
+            regularDomains.forEach((d, i) => {
+              counts[d.domainCode] = countsResult.data?.[`d${i}`]?.totalCount || 0;
+            });
+          }
+
+          // Fetch position count from intersections
+          if (hasPosition) {
+            const positionCountResult = await graphqlQuery<
+              { intersections: { totalCount: number } },
+              any
+            >(`
+              query {
+                intersections(filter: { intersectionTypeCode: "POSITION" }, pagination: { first: 1 }) {
+                  totalCount
+                }
+              }
+            `);
+            counts['POSITION'] = positionCountResult.data?.intersections?.totalCount || 0;
+          }
         }
 
         // Fetch DQ exceptions
@@ -307,6 +328,24 @@ export default function LandingPage() {
             <div>
               <div className="nav-title">Standardized Value Lists</div>
               <div className="nav-desc">Controlled vocabularies for types, seniority, ratings, and more.</div>
+            </div>
+          </div>
+        </Link>
+        <Link href="/intersections">
+          <div className="nav-card">
+            <div className="nav-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <circle cx="6" cy="6" r="3" />
+                <circle cx="18" cy="6" r="3" />
+                <circle cx="6" cy="18" r="3" />
+                <circle cx="18" cy="18" r="3" />
+                <path d="M8.5 7.5 15.5 16.5" />
+                <path d="M15.5 7.5 8.5 16.5" />
+              </svg>
+            </div>
+            <div>
+              <div className="nav-title">Composite Entities</div>
+              <div className="nav-desc">Intersection framework for N-ary entity combinations with bi-temporal tracking.</div>
             </div>
           </div>
         </Link>

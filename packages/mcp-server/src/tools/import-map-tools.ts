@@ -11,6 +11,7 @@ import { getIdentifierSuggestions } from '../lib/import-map/identifier-validator
 const analyzeImportMapTool: ToolDefinition = {
   name: 'analyze_import_map',
   description: 'Analyze a data file and generate AI-assisted field mapping recommendations for MDM entities. Parses XLSX, CSV, JSON, HTML, or XML data, extracts field names, recommends entity attribute mappings, validates entity identifiers, and determines import sequencing based on entity relationships.',
+  category: 'import',
   inputSchema: {
     type: 'object',
     properties: {
@@ -86,6 +87,7 @@ const analyzeImportMapTool: ToolDefinition = {
 const executeImportMapTool: ToolDefinition = {
   name: 'execute_import_map',
   description: 'Execute a data import using field mappings to create or update MDM entities. Imports data in the correct sequence based on entity relationships (parents first). Supports dry-run mode, batch processing, and error handling options.',
+  category: 'import',
   inputSchema: {
     type: 'object',
     properties: {
@@ -174,6 +176,7 @@ const executeImportMapTool: ToolDefinition = {
 const getIdentifierSuggestionsTool: ToolDefinition = {
   name: 'get_identifier_suggestions',
   description: 'Get identifier suggestions and recommendations for a domain. Shows what attributes form entity identifiers (e.g., ISIN for Security, LEI for Issuer) and provides recommendations for identifier configuration.',
+  category: 'import',
   inputSchema: {
     type: 'object',
     properties: {
@@ -192,6 +195,7 @@ const getIdentifierSuggestionsTool: ToolDefinition = {
 const parseDataPreviewTool: ToolDefinition = {
   name: 'parse_data_preview',
   description: 'Parse a data file and return a preview of extracted fields, sample values, and inferred data types. Useful for understanding the structure of incoming data before creating field mappings.',
+  category: 'import',
   inputSchema: {
     type: 'object',
     properties: {

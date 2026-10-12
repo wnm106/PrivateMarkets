@@ -1,0 +1,202 @@
+# Reporting: Custom Dashboards & Narratives
+#
+# Dashboards and narratives are templates attached to an entity type (domainCode).
+# dataQueries is an array of DataQuerySpec (see src/lib/data-query-engine.ts) that is
+# executed at view time against the entity being viewed + user filter inputs.
+
+type Dashboard {
+  id: ID!
+  dashboardCode: String!
+  dashboardName: String!
+  description: String
+  domainCode: String!
+  htmlTemplate: String!
+  dataQueries: JSON!
+  parameters: JSON!
+  isActive: Boolean!
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type Narrative {
+  id: ID!
+  narrativeCode: String!
+  narrativeName: String!
+  description: String
+  domainCode: String!
+  instructions: String!
+  dataQueries: JSON!
+  parameters: JSON!
+  outputBlocks: JSON!
+  model: String
+  isActive: Boolean!
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type NarrativeRun {
+  id: ID!
+  narrativeId: ID!
+  entityId: ID
+  parameters: JSON!
+  blocks: JSON!
+  status: String!
+  errorMessage: String
+  model: String
+  createdAt: DateTime!
+  createdBy: ID
+}
+
+type DataQueryResponse {
+  anchor: JSON
+  results: JSON!
+  warnings: [String!]!
+  validationErrors: [String!]!
+  asOfDate: String
+}
+
+input GridQueryInput {
+  start: String!
+  domainCode: String
+  entityId: ID
+  entityCode: String
+  path: JSON
+  includeAnchor: Boolean
+  lookups: JSON
+  asOfDate: String
+  knowledgeDate: String
+  filters: JSON
+  columns: [String!]
+  sort: JSON
+  groupBy: [String!]
+  groupKeys: JSON
+  metrics: JSON
+  flat: Boolean
+  offset: Int
+  limit: Int
+  export: Boolean
+  params: JSON
+}
+
+type GridColumn {
+  code: String!
+  name: String
+  kind: String
+  aggregation: String
+  weight: String
+  unit: String
+  precision: Int
+}
+
+type GridResult {
+  mode: String!
+  level: Int
+  groupField: String
+  total: Int!
+  matched: Int!
+  rows: JSON!
+  summary: JSON
+  columns: [GridColumn!]!
+  groupBy: [String!]!
+  asOfDate: String
+  knowledgeDate: String
+  entityCount: Int
+}
+
+input CreateDashboardInput {
+  dashboardCode: String!
+  dashboardName: String!
+  description: String
+  domainCode: String!
+  htmlTemplate: String
+  dataQueries: JSON
+  parameters: JSON
+  isActive: Boolean
+  metadata: JSON
+}
+
+input UpdateDashboardInput {
+  dashboardName: String
+  description: String
+  domainCode: String
+  htmlTemplate: String
+  dataQueries: JSON
+  parameters: JSON
+  isActive: Boolean
+  metadata: JSON
+}
+
+input CreateNarrativeInput {
+  narrativeCode: String!
+  narrativeName: String!
+  description: String
+  domainCode: String!
+  instructions: String
+  dataQueries: JSON
+  parameters: JSON
+  outputBlocks: JSON
+  model: String
+  isActive: Boolean
+  metadata: JSON
+}
+
+input UpdateNarrativeInput {
+  narrativeName: String
+  description: String
+  domainCode: String
+  instructions: String
+  dataQueries: JSON
+  parameters: JSON
+  outputBlocks: JSON
+  model: String
+  isActive: Boolean
+  metadata: JSON
+}
+
+type CreateDashboardResult {
+  dashboard: Dashboard
+  errors: [MutationError!]!
+}
+
+type UpdateDashboardResult {
+  dashboard: Dashboard
+  errors: [MutationError!]!
+}
+
+type DeleteDashboardResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+type CreateNarrativeResult {
+  narrative: Narrative
+  errors: [MutationError!]!
+}
+
+type UpdateNarrativeResult {
+  narrative: Narrative
+  errors: [MutationError!]!
+}
+
+type DeleteNarrativeResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# Query fields (add to type Query):
+#   dashboards(domainCode: String, isActive: Boolean): [Dashboard!]!
+#   dashboard(id: ID, dashboardCode: String): Dashboard
+#   narratives(domainCode: String, isActive: Boolean): [Narrative!]!
+#   narrative(id: ID, narrativeCode: String): Narrative
+#   narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
+#   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON): DataQueryResponse!
+#
+# Mutation fields (add to type Mutation):
+#   createDashboard(input: CreateDashboardInput!): CreateDashboardResult!
+#   updateDashboard(id: ID!, input: UpdateDashboardInput!): UpdateDashboardResult!
+#   deleteDashboard(id: ID!): DeleteDashboardResult!
+#   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
+#   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
+#   deleteNarrative(id: ID!): DeleteNarrativeResult!

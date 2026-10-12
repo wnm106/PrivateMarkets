@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useEffect, useState, useCallback } from 'react';
 import { graphqlQuery, graphqlMutation, ISSUERS_QUERY, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
 import { EntityForm } from '@/components/forms/EntityForm';
+import { useTemporalStore } from '@/lib/store';
+import { DomainKey } from '@/lib/mock-data';
 
 interface EntityNode {
   id: string;
@@ -18,22 +20,24 @@ interface EntityNode {
 }
 
 export default function IssuersPage() {
+  const domain: DomainKey = 'issuers';
   const [entities, setEntities] = useState<EntityNode[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const asOfDate = useTemporalStore(state => state.asOfDate);
 
   const fetchIssuers = useCallback(async () => {
     const { data } = await graphqlQuery<{ issuers: { edges: { node: EntityNode }[]; totalCount: number } }>(
       ISSUERS_QUERY,
-      {}
+      { asOfDate }
     );
     if (data?.issuers) {
       setEntities(data.issuers.edges.map(e => e.node));
       setTotalCount(data.issuers.totalCount);
     }
     setLoading(false);
-  }, []);
+  }, [asOfDate]);
 
   useEffect(() => {
     fetchIssuers();
@@ -112,7 +116,7 @@ export default function IssuersPage() {
         ) : (
           entities.map((entity) => {
             return (
-              <Link key={entity.id} href={`/issuers/${entity.id}`}>
+              <Link key={entity.id} href={`/${domain}/${entity.id}`}>
                 <div className="tbl-row" style={{ cursor: 'pointer' }}>
                   <div className="row-id">{entity.entityCode}</div>
                   <div className="row-name">{entity.entityName}</div>

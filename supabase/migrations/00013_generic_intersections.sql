@@ -345,23 +345,40 @@ SELECT
         '[]'::jsonb
     ) AS members,
     
-    -- Aggregate attributes as JSONB
+    -- Aggregate attributes as JSONB (only winning values with non-null golden_value)
     COALESCE(
         (
             SELECT jsonb_object_agg(
-                ar.attribute_code,
+                winning.attribute_code,
                 jsonb_build_object(
-                    'value', iav.golden_value,
-                    'value_numeric', iav.golden_value_numeric,
-                    'value_date', iav.golden_value_date,
-                    'source_id', iav.source_id
+                    'value', winning.golden_value,
+                    'value_numeric', winning.golden_value_numeric,
+                    'value_date', winning.golden_value_date,
+                    'source_id', winning.source_id,
+                    'source_code', winning.source_code,
+                    'precedence_rank', winning.precedence_rank
                 )
             )
-            FROM golden_master.intersection_attribute_values iav
-            JOIN metadata_register.attribute_register ar ON ar.id = iav.attribute_id
-            WHERE iav.intersection_id = ii.id
-              AND iav.valid_to = '9999-12-31'
-              AND iav.system_to = '9999-12-31 23:59:59'
+            FROM (
+                SELECT DISTINCT ON (iav2.intersection_id, ar2.attribute_code)
+                    iav2.intersection_id,
+                    ar2.attribute_code,
+                    iav2.golden_value,
+                    iav2.golden_value_numeric,
+                    iav2.golden_value_date,
+                    iav2.source_id,
+                    sr2.source_code,
+                    iav2.precedence_rank
+                FROM golden_master.intersection_attribute_values iav2
+                JOIN metadata_register.attribute_register ar2 ON ar2.id = iav2.attribute_id
+                LEFT JOIN entity_instances.source_registry sr2 ON sr2.id = iav2.source_id
+                WHERE iav2.intersection_id = ii.id
+                    AND iav2.valid_to = '9999-12-31'
+                    AND iav2.system_to = '9999-12-31 23:59:59'
+                    AND iav2.golden_value IS NOT NULL
+                    AND iav2.golden_value != ''
+                ORDER BY iav2.intersection_id, ar2.attribute_code, iav2.precedence_rank ASC
+            ) winning
         ),
         '{}'::jsonb
     ) AS attributes,

@@ -9,27 +9,35 @@ module.exports = {
     extend: {
       fontFamily: {
         sans: ['var(--font-ibm-plex-sans)', 'system-ui', 'sans-serif'],
-        serif: ['var(--font-ibm-plex-serif)', 'Georgia', 'serif'],
+        serif: ['var(--font-display)', 'var(--font-ibm-plex-sans)', 'sans-serif'],
+        display: ['var(--font-display)', 'var(--font-ibm-plex-sans)', 'sans-serif'],
         mono: ['var(--font-ibm-plex-mono)', 'Menlo', 'Monaco', 'monospace'],
       },
       colors: {
-        // Meridian design system
-        bg: '#f7f6f3',
-        'bg-alt': '#efece6',
+        // tapestr.ai design system
+        bg: '#f5f8fc',
+        'bg-alt': '#e8eff8',
         surface: '#ffffff',
         ink: {
-          DEFAULT: '#0a0a0a',
-          2: '#2a2a28',
-          3: '#5a5a55',
-          4: '#9a9a93',
+          DEFAULT: '#0a1628',
+          2: '#1e3050',
+          3: '#566a88',
+          4: '#93a3bb',
         },
         line: {
-          DEFAULT: '#e6e3dc',
-          strong: '#c9c5bb',
+          DEFAULT: '#dde6f1',
+          strong: '#b9c8dc',
         },
         accent: {
-          DEFAULT: '#b8531a',     // burnt sienna
-          2: '#1b3a4b',           // deep teal
+          DEFAULT: '#1a8cff',     // tapestr.ai bright blue
+          2: '#1e40af',           // tapestr blue
+        },
+        brand: {
+          navy: '#0a1628',
+          blue: '#1e40af',
+          sky: '#0a84e0',
+          cyan: '#00a3ff',
+          'ai-blue': '#1a8cff',
         },
         gold: '#c89c3f',
         green: '#2f7d4f',

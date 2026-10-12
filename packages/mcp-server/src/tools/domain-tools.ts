@@ -4,6 +4,7 @@ import { ToolDefinition } from '../lib/types.js';
 const getAttributeMetadata: ToolDefinition = {
   name: 'get_attribute_metadata',
   description: 'Get detailed metadata for one or more attributes including descriptions, data types, validation rules, and allowed values. Essential for understanding what data each attribute represents.',
+  category: 'domain-read',
   inputSchema: {
     type: 'object',
     properties: {
@@ -59,6 +60,7 @@ const getAttributeMetadata: ToolDefinition = {
 const getTemplateMetadata: ToolDefinition = {
   name: 'get_template_metadata',
   description: 'Get template definitions including which attributes are required for each template. Helps understand the structure and required fields for different entity types.',
+  category: 'domain-read',
   inputSchema: {
     type: 'object',
     properties: {
@@ -119,6 +121,7 @@ const getTemplateMetadata: ToolDefinition = {
 const getEntity: ToolDefinition = {
   name: 'get_entity',
   description: 'Get any entity by ID or entity code from the generic entity master view. Returns entity with all attributes and relationships as JSONB.',
+  category: 'domain-read',
   inputSchema: {
     type: 'object',
     properties: {
@@ -142,6 +145,7 @@ const getEntity: ToolDefinition = {
 const listEntities: ToolDefinition = {
   name: 'list_entities',
   description: 'List entities of any domain type with optional filtering and pagination. Uses the generic entity_master view.',
+  category: 'domain-read',
   inputSchema: {
     type: 'object',
     properties: {
@@ -176,6 +180,7 @@ const listEntities: ToolDefinition = {
 const createEntity: ToolDefinition = {
   name: 'create_entity',
   description: 'Create a new entity of any domain type with attributes and relationships.',
+  category: 'domain-write',
   inputSchema: {
     type: 'object',
     properties: {
@@ -251,6 +256,7 @@ const createEntity: ToolDefinition = {
 const createRelationship: ToolDefinition = {
   name: 'create_relationship',
   description: 'Create a relationship between two entities (e.g., Security issued by Issuer).',
+  category: 'domain-write',
   inputSchema: {
     type: 'object',
     properties: {
@@ -285,6 +291,7 @@ const createRelationship: ToolDefinition = {
 const getRelationshipTypes: ToolDefinition = {
   name: 'get_relationship_types',
   description: 'Get all available relationship types and their allowed domain combinations.',
+  category: 'domain-read',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -306,6 +313,7 @@ const getRelationshipTypes: ToolDefinition = {
 const getIntersectionTypes: ToolDefinition = {
   name: 'get_intersection_types',
   description: 'Get all available intersection types (composite entity definitions) with their member roles.',
+  category: 'domain-read',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -328,6 +336,7 @@ const getIntersectionTypes: ToolDefinition = {
 const createIntersectionType: ToolDefinition = {
   name: 'create_intersection_type',
   description: 'Create a new intersection type (composite entity definition). Example: A "Position" intersection that combines Fund + Security.',
+  category: 'domain-admin',
   inputSchema: {
     type: 'object',
     properties: {
@@ -400,6 +409,7 @@ const createIntersectionType: ToolDefinition = {
 const createIntersection: ToolDefinition = {
   name: 'create_intersection',
   description: 'Create a new intersection instance (composite entity). Example: Create a Position by combining a specific Fund and Security.',
+  category: 'domain-write',
   inputSchema: {
     type: 'object',
     properties: {
@@ -517,6 +527,7 @@ const createIntersection: ToolDefinition = {
 const listIntersections: ToolDefinition = {
   name: 'list_intersections',
   description: 'List intersection instances (composite entities) with optional filtering.',
+  category: 'domain-read',
   inputSchema: {
     type: 'object',
     properties: {
@@ -552,6 +563,7 @@ const listIntersections: ToolDefinition = {
 const getIntersection: ToolDefinition = {
   name: 'get_intersection',
   description: 'Get a complete intersection instance with all members and attributes.',
+  category: 'domain-read',
   inputSchema: {
     type: 'object',
     properties: {
@@ -591,6 +603,7 @@ const getIntersection: ToolDefinition = {
 const updateIntersection: ToolDefinition = {
   name: 'update_intersection',
   description: 'Update an intersection instance (members and/or attributes).',
+  category: 'domain-write',
   inputSchema: {
     type: 'object',
     properties: {
@@ -711,6 +724,172 @@ const updateIntersection: ToolDefinition = {
   },
 };
 
+const createDomainType: ToolDefinition = {
+  name: 'create_domain_type',
+  description: 'Create a new domain type (e.g., CASH_FLOW). First step when adding a new entity type.',
+  category: 'domain-admin',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      domainCode: { type: 'string' },
+      domainName: { type: 'string' },
+      description: { type: 'string' },
+    },
+    required: ['domainCode', 'domainName'],
+  },
+  execute: async (args, supabase) => {
+    const { data, error } = await supabase
+      .from('domain_types')
+      .insert({ domain_code: args.domainCode, domain_name: args.domainName, description: args.description })
+      .select().single();
+    if (error) throw error;
+    return data;
+  },
+};
+
+const createAttribute: ToolDefinition = {
+  name: 'create_attribute',
+  description: 'Create a new attribute definition in the attribute register.',
+  category: 'domain-admin',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      attributeCode: { type: 'string' },
+      attributeName: { type: 'string' },
+      dataType: { type: 'string', description: 'STRING, NUMBER, INTEGER, BOOLEAN, DATE, TIMESTAMP, JSON, CURRENCY, PERCENTAGE' },
+      description: { type: 'string' },
+      isRequired: { type: 'boolean' },
+      isMultiValued: { type: 'boolean' },
+      referenceDomainCode: { type: 'string' },
+    },
+    required: ['attributeCode', 'attributeName', 'dataType'],
+  },
+  execute: async (args, supabase) => {
+    const { data, error } = await supabase
+      .from('attribute_register')
+      .insert({
+        attribute_code: args.attributeCode, attribute_name: args.attributeName,
+        data_type: args.dataType, description: args.description,
+        is_required: args.isRequired || false, is_multi_valued: args.isMultiValued || false,
+        reference_domain_code: args.referenceDomainCode,
+      })
+      .select().single();
+    if (error) throw error;
+    return data;
+  },
+};
+
+const createTemplate: ToolDefinition = {
+  name: 'create_template',
+  description: 'Create a new entity template defining which attributes an entity type uses.',
+  category: 'domain-admin',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      templateCode: { type: 'string' },
+      templateName: { type: 'string' },
+      domainCode: { type: 'string' },
+      description: { type: 'string' },
+    },
+    required: ['templateCode', 'templateName', 'domainCode'],
+  },
+  execute: async (args, supabase) => {
+    const { data, error } = await supabase
+      .from('domain_templates')
+      .insert({ template_code: args.templateCode, template_name: args.templateName, domain_code: args.domainCode, description: args.description })
+      .select().single();
+    if (error) throw error;
+    return data;
+  },
+};
+
+const assignAttributeToTemplate: ToolDefinition = {
+  name: 'assign_attribute_to_template',
+  description: 'Assign an attribute to a template, making it part of that entity type.',
+  category: 'domain-admin',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      templateCode: { type: 'string' },
+      attributeCode: { type: 'string' },
+      isRequired: { type: 'boolean' },
+      displayOrder: { type: 'number' },
+    },
+    required: ['templateCode', 'attributeCode'],
+  },
+  execute: async (args, supabase) => {
+    const { data: template } = await supabase.from('domain_templates').select('id').eq('template_code', args.templateCode).single();
+    const { data: attribute } = await supabase.from('attribute_register').select('id').eq('attribute_code', args.attributeCode).single();
+    if (!template || !attribute) throw new Error('Template or attribute not found');
+    const { data, error } = await supabase
+      .from('template_attribute_assignments')
+      .insert({ template_id: template.id, attribute_id: attribute.id, is_required: args.isRequired || false, display_order: args.displayOrder || 0 })
+      .select().single();
+    if (error) throw error;
+    return data;
+  },
+};
+
+const createEntityIdentifier: ToolDefinition = {
+  name: 'create_entity_identifier',
+  description: 'Create a unique identifier definition for a domain. Can be single or composite.',
+  category: 'domain-admin',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      domainCode: { type: 'string' },
+      identifierCode: { type: 'string' },
+      identifierName: { type: 'string' },
+      attributeCodes: { type: 'array', items: { type: 'string' }, description: 'Attribute codes forming this identifier' },
+      isPrimary: { type: 'boolean' },
+      description: { type: 'string' },
+    },
+    required: ['domainCode', 'identifierCode', 'identifierName', 'attributeCodes'],
+  },
+  execute: async (args, supabase) => {
+    const { data, error } = await supabase
+      .from('entity_identifier_definitions')
+      .insert({
+        domain_code: args.domainCode, identifier_code: args.identifierCode,
+        identifier_name: args.identifierName, attribute_codes: args.attributeCodes,
+        is_primary: args.isPrimary || false, description: args.description,
+      })
+      .select().single();
+    if (error) throw error;
+    return data;
+  },
+};
+
+const createRelationshipType: ToolDefinition = {
+  name: 'create_relationship_type',
+  description: 'Create a relationship type between parent and child domains.',
+  category: 'domain-admin',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      relationshipCode: { type: 'string' },
+      relationshipName: { type: 'string' },
+      parentDomainCode: { type: 'string' },
+      childDomainCode: { type: 'string' },
+      cardinality: { type: 'string', description: 'ONE_TO_ONE, ONE_TO_MANY, MANY_TO_ONE, or COMPOSITE' },
+      description: { type: 'string' },
+    },
+    required: ['relationshipCode', 'relationshipName', 'parentDomainCode', 'childDomainCode'],
+  },
+  execute: async (args, supabase) => {
+    const { data, error } = await supabase
+      .from('relationship_types')
+      .insert({
+        relationship_code: args.relationshipCode, relationship_name: args.relationshipName,
+        parent_domain_code: args.parentDomainCode, child_domain_code: args.childDomainCode,
+        cardinality: args.cardinality || 'ONE_TO_ONE', description: args.description,
+      })
+      .select().single();
+    if (error) throw error;
+    return data;
+  },
+};
+
 export function registerDomainTools(registry: ToolRegistry): void {
   // Metadata tools - essential for agents to understand data context
   registry.registerTool(getAttributeMetadata);
@@ -722,6 +901,14 @@ export function registerDomainTools(registry: ToolRegistry): void {
   registry.registerTool(createEntity);
   registry.registerTool(createRelationship);
   registry.registerTool(getRelationshipTypes);
+  
+  // Admin/setup tools for entity type infrastructure
+  registry.registerTool(createDomainType);
+  registry.registerTool(createAttribute);
+  registry.registerTool(createTemplate);
+  registry.registerTool(assignAttributeToTemplate);
+  registry.registerTool(createEntityIdentifier);
+  registry.registerTool(createRelationshipType);
   
   // Intersection tools
   registry.registerTool(getIntersectionTypes);

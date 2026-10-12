@@ -7,7 +7,7 @@ export const sourceResolvers = {
      */
     dataSources: async (_: any, args: { type?: string; isActive?: boolean }, context: Context) => {
       let query = context.supabase
-        .from('source_registry')
+        .schema('entity_instances').from('source_registry')
         .select('*')
         .order('precedence_rank');
 
@@ -33,7 +33,7 @@ export const sourceResolvers = {
      * Get a specific data source by ID or code
      */
     dataSource: async (_: any, args: { id?: string; code?: string }, context: Context) => {
-      let query = context.supabase.from('source_registry').select('*');
+      let query = context.supabase.schema('entity_instances').from('source_registry').select('*');
 
       if (args.id) {
         query = query.eq('id', args.id);
@@ -47,6 +47,7 @@ export const sourceResolvers = {
 
       if (error) {
         if (error.code === 'PGRST116') return null;
+        console.error('Error fetching data source:', error);
         throw error;
       }
 
@@ -59,7 +60,7 @@ export const sourceResolvers = {
     dataSourceStats: async (_: any, args: { sourceId?: string }, context: Context) => {
       // First, get the grouped data without using aggregate in select
       let baseQuery = context.supabase
-        .from('source_attribute_values')
+        .schema('entity_instances').from('source_attribute_values')
         .select('source_id')
         .order('source_id');
 
@@ -103,7 +104,7 @@ export const sourceResolvers = {
         const { input } = args;
 
         // Prepare the record
-        const newSource = {
+        const newSource: any = {
           source_code: input.sourceCode,
           source_name: input.sourceName,
           source_type: input.sourceType,
@@ -113,11 +114,18 @@ export const sourceResolvers = {
           connection_config: input.connectionConfig || {},
           precedence_rank: input.precedenceRank || 100,
           is_active: input.isActive !== undefined ? input.isActive : true,
-          metadata: input.metadata || {},
+          is_protected: false,
         };
 
+        // Store color and metadata
+        const metadata: any = input.metadata || {};
+        if (input.color) {
+          metadata.color = input.color;
+        }
+        newSource.metadata = metadata;
+
         const { data, error } = await context.supabase
-          .from('source_registry')
+          .schema('entity_instances').from('source_registry')
           .insert(newSource)
           .select()
           .single();
@@ -143,6 +151,21 @@ export const sourceResolvers = {
       try {
         const { input } = args;
 
+        // Check if source is protected
+        const { data: existing, error: checkError } = await context.supabase
+          .schema('entity_instances').from('source_registry')
+          .select('is_protected')
+          .eq('id', input.id)
+          .single();
+
+        if (checkError) throw checkError;
+        if (existing?.is_protected && input.isActive === false) {
+          return {
+            dataSource: null,
+            errors: [{ field: 'general', message: 'Cannot deactivate a protected source', code: 'PROTECTED_SOURCE' }],
+          };
+        }
+
         const updateData: any = {};
         if (input.sourceName !== undefined) updateData.source_name = input.sourceName;
         if (input.sourceType !== undefined) updateData.source_type = input.sourceType;
@@ -152,10 +175,24 @@ export const sourceResolvers = {
         if (input.connectionConfig !== undefined) updateData.connection_config = input.connectionConfig;
         if (input.precedenceRank !== undefined) updateData.precedence_rank = input.precedenceRank;
         if (input.isActive !== undefined) updateData.is_active = input.isActive;
-        if (input.metadata !== undefined) updateData.metadata = input.metadata;
+
+        // Handle color and metadata together
+        if (input.color !== undefined || input.metadata !== undefined) {
+          const { data: current } = await context.supabase
+            .schema('entity_instances').from('source_registry')
+            .select('metadata')
+            .eq('id', input.id)
+            .single();
+          const currentMeta = (current?.metadata as Record<string, any>) || {};
+          const newMeta = { ...currentMeta, ...(input.metadata || {}) };
+          if (input.color !== undefined) {
+            newMeta.color = input.color;
+          }
+          updateData.metadata = newMeta;
+        }
 
         const { data, error } = await context.supabase
-          .from('source_registry')
+          .schema('entity_instances').from('source_registry')
           .update(updateData)
           .eq('id', input.id)
           .select()
@@ -176,34 +213,33 @@ export const sourceResolvers = {
     },
 
     /**
-     * Delete a data source
+     * Delete a data source (soft delete - sets is_active = false)
      */
     deleteDataSource: async (_: any, args: { id: string }, context: Context) => {
       try {
-        // Check if source is in use by any records
-        const { count: usageCount, error: usageError } = await context.supabase
-          .from('source_attribute_values')
-          .select('*', { count: 'exact' })
-          .eq('source_id', args.id);
+        // Check if source is protected
+        const { data: existing, error: checkError } = await context.supabase
+          .schema('entity_instances').from('source_registry')
+          .select('is_protected, source_code')
+          .eq('id', args.id)
+          .single();
 
-        if (usageError) {
+        if (checkError) throw checkError;
+        
+        if (existing?.is_protected) {
           return {
             success: false,
-            errors: [{ field: 'general', message: usageError.message, code: 'USAGE_CHECK_FAILED' }],
+            errors: [{ field: 'general', message: 'Cannot delete a protected source', code: 'PROTECTED_SOURCE' }],
           };
         }
 
-        if (usageCount && usageCount > 0) {
-          return {
-            success: false,
-            errors: [{ field: 'general', message: 'Cannot delete data source that is currently in use', code: 'IN_USE' }],
-          };
-        }
-
-        const { error } = await context.supabase
-          .from('source_registry')
-          .delete()
-          .eq('id', args.id);
+        // Soft delete - set is_active to false
+        const { data, error } = await context.supabase
+          .schema('entity_instances').from('source_registry')
+          .update({ is_active: false })
+          .eq('id', args.id)
+          .select()
+          .single();
 
         if (error) throw error;
 
@@ -223,7 +259,7 @@ export const sourceResolvers = {
       try {
         // Get the source configuration
         const { data: source, error: sourceError } = await context.supabase
-          .from('source_registry')
+          .schema('entity_instances').from('source_registry')
           .select('*')
           .eq('id', args.id)
           .single();
@@ -270,8 +306,26 @@ export const sourceResolvers = {
      */
     toggleDataSourceActive: async (_: any, args: { id: string; active: boolean }, context: Context) => {
       try {
+        // Check if source is protected and trying to deactivate
+        if (!args.active) {
+          const { data: existing, error: checkError } = await context.supabase
+            .schema('entity_instances').from('source_registry')
+            .select('is_protected')
+            .eq('id', args.id)
+            .single();
+
+          if (checkError) throw checkError;
+          
+          if (existing?.is_protected) {
+            return {
+              dataSource: null,
+              errors: [{ field: 'general', message: 'Cannot deactivate a protected source', code: 'PROTECTED_SOURCE' }],
+            };
+          }
+        }
+
         const { data, error } = await context.supabase
-          .from('source_registry')
+          .schema('entity_instances').from('source_registry')
           .update({ is_active: args.active })
           .eq('id', args.id)
           .select()
@@ -290,6 +344,37 @@ export const sourceResolvers = {
         };
       }
     },
+
+    /**
+     * Reorder sources by updating precedence_rank
+     */
+    reorderSources: async (_: any, args: { order: Array<{ id: string; precedenceRank: number }> }, context: Context) => {
+      try {
+        const updates = args.order.map(async (item) => {
+          const { data, error } = await context.supabase
+            .schema('entity_instances').from('source_registry')
+            .update({ precedence_rank: item.precedenceRank })
+            .eq('id', item.id)
+            .select()
+            .single();
+
+          if (error) throw error;
+          return mapSourceRegistry(data);
+        });
+
+        const sources = await Promise.all(updates);
+
+        return {
+          sources,
+          errors: [],
+        };
+      } catch (error: any) {
+        return {
+          sources: [],
+          errors: [{ field: 'general', message: error.message, code: 'REORDER_FAILED' }],
+        };
+      }
+    },
   },
 };
 
@@ -297,6 +382,7 @@ export const sourceResolvers = {
  * Map database row to GraphQL DataSource type
  */
 function mapSourceRegistry(row: any) {
+  const metadata = row.metadata || {};
   return {
     id: row.id,
     sourceCode: row.source_code,
@@ -308,7 +394,9 @@ function mapSourceRegistry(row: any) {
     connectionConfig: row.connection_config || {},
     precedenceRank: row.precedence_rank,
     isActive: row.is_active,
-    metadata: row.metadata || {},
+    isProtected: row.is_protected || false,
+    color: metadata.color || null,
+    metadata,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

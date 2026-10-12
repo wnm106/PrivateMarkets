@@ -1,9 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  transpilePackages: ['@meridian-mdm/ui', '@meridian-mdm/graphql'],
+  transpilePackages: ['@tapestrai/ui', '@tapestrai/graphql'],
   experimental: {
-    optimizePackageImports: ['@meridian-mdm/ui'],
+    optimizePackageImports: ['@tapestrai/ui'],
   },
   images: {
     remotePatterns: [

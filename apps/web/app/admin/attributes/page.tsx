@@ -134,7 +134,9 @@ export default function AdminAttributesPage() {
             isEditable: editForm.isEditable ?? true,
             isVisible: editForm.isVisible ?? true,
             aggregationType: editForm.aggregationType || 'NONE',
-            weightAttributeCode: editForm.weightAttributeCode || null,
+            weightAttributeCode: editForm.aggregationType === 'WEIGHTED_AVG' 
+              ? (editForm.weightAttributeCode || null)
+              : null,
             numericPrecision: editForm.numericPrecision,
           },
         })
@@ -442,6 +444,7 @@ export default function AdminAttributesPage() {
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Data Type
               </th>
+              {/* Aggregation and Precision columns */}
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Aggregation
               </th>
@@ -521,13 +524,21 @@ export default function AdminAttributesPage() {
                         <option value="WEIGHTED_AVG">Weighted Avg</option>
                       </select>
                       {editForm.aggregationType === 'WEIGHTED_AVG' && (
-                        <input
-                          type="text"
+                        <select
                           value={editForm.weightAttributeCode || ''}
                           onChange={e => setEditForm({ ...editForm, weightAttributeCode: e.target.value })}
-                          placeholder="Weight attribute code"
                           className="border border-gray-300 rounded px-2 py-1 text-sm mt-1 w-full"
-                        />
+                        >
+                          <option value="">-- Select weight attribute --</option>
+                          {attributes
+                            .filter(attr => ['NUMBER', 'INTEGER', 'DECIMAL', 'FLOAT', 'CURRENCY', 'PERCENTAGE', 'PERCENT'].includes(attr.dataType))
+                            .map(attr => (
+                              <option key={attr.id} value={attr.attributeCode}>
+                                {attr.attributeName} ({attr.attributeCode})
+                              </option>
+                            ))
+                          }
+                        </select>
                       )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -656,6 +667,7 @@ export default function AdminAttributesPage() {
                   </>
                 ) : (
                   <>
+                    {/* Aggregation and Precision cells */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                         <span>

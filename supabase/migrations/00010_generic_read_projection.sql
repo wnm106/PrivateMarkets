@@ -14,22 +14,22 @@ SELECT
     me.description,
     me.is_active,
     
-    -- Aggregate attributes as JSONB
+    -- Aggregate attributes as JSONB (only winning values with non-null golden_value)
     COALESCE(
         jsonb_object_agg(
-            ar.attribute_code,
+            winning.attribute_code,
             jsonb_build_object(
-                'value', eav.golden_value,
-                'value_numeric', eav.golden_value_numeric,
-                'value_date', eav.golden_value_date,
-                'value_timestamp', eav.golden_value_timestamp,
-                'source_id', eav.source_id,
-                'source_code', sr.source_code,
-                'precedence_rank', eav.precedence_rank,
-                'valid_from', eav.valid_from,
-                'valid_to', eav.valid_to
+                'value', winning.golden_value,
+                'value_numeric', winning.golden_value_numeric,
+                'value_date', winning.golden_value_date,
+                'value_timestamp', winning.golden_value_timestamp,
+                'source_id', winning.source_id,
+                'source_code', winning.source_code,
+                'precedence_rank', winning.precedence_rank,
+                'valid_from', winning.valid_from,
+                'valid_to', winning.valid_to
             )
-        ) FILTER (WHERE ar.attribute_code IS NOT NULL),
+        ) FILTER (WHERE winning.attribute_code IS NOT NULL),
         '{}'::jsonb
     ) AS attributes,
     
@@ -85,12 +85,29 @@ SELECT
 FROM entity_instances.master_entities me
 LEFT JOIN metadata_register.domain_types dt ON dt.domain_code = me.domain_code
 LEFT JOIN metadata_register.domain_templates dtpl ON dtpl.id = me.template_id
-LEFT JOIN golden_master.entity_attribute_values eav 
-    ON eav.entity_id = me.id 
-    AND eav.valid_to = '9999-12-31'
-    AND eav.system_to = '9999-12-31 23:59:59'
-LEFT JOIN metadata_register.attribute_register ar ON ar.id = eav.attribute_id
-LEFT JOIN entity_instances.source_registry sr ON sr.id = eav.source_id
+-- Use DISTINCT ON to pick the winning value for each attribute (lowest precedence_rank with non-null value)
+LEFT JOIN (
+    SELECT DISTINCT ON (eav.entity_id, ar.attribute_code)
+        eav.entity_id,
+        ar.attribute_code,
+        eav.golden_value,
+        eav.golden_value_numeric,
+        eav.golden_value_date,
+        eav.golden_value_timestamp,
+        eav.source_id,
+        sr.source_code,
+        eav.precedence_rank,
+        eav.valid_from,
+        eav.valid_to
+    FROM golden_master.entity_attribute_values eav
+    JOIN metadata_register.attribute_register ar ON ar.id = eav.attribute_id
+    LEFT JOIN entity_instances.source_registry sr ON sr.id = eav.source_id
+    WHERE eav.valid_to = '9999-12-31'
+        AND eav.system_to = '9999-12-31 23:59:59'
+        AND eav.golden_value IS NOT NULL
+        AND eav.golden_value != ''
+    ORDER BY eav.entity_id, ar.attribute_code, eav.precedence_rank ASC
+) winning ON winning.entity_id = me.id
 WHERE me.is_active = TRUE
 GROUP BY me.id, me.entity_code, me.entity_name, me.domain_code, me.template_id, 
          dt.domain_name, dtpl.template_name, me.description, me.is_active, 

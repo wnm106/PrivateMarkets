@@ -1,10 +1,10 @@
-# Meridian MDM
+# tapestr.ai MDM
 
 Bi-temporal financial Master Data Management platform for private markets investments.
 
 ## Overview
 
-Meridian MDM is a comprehensive master data management system designed for private markets investment firms. It provides:
+tapestr.ai MDM is a comprehensive master data management system designed for private markets investment firms. It provides:
 
 - **Bi-temporal EAV Architecture**: Track both valid time (when data was true) and system time (when data was known)
 - **Multi-source Integration**: Ingest data from Bloomberg, WSO, DealCloud, Allvue, S&P Capital IQ

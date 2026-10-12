@@ -5,23 +5,63 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
   graphqlClient,
+  graphqlQuery,
+  graphqlMutation,
   DOMAIN_TYPES_QUERY,
   ATTRIBUTE_REGISTER_QUERY,
   DOMAIN_TEMPLATES_QUERY,
+  TEMPLATE_PRECEDENCE_CHAIN_QUERY,
+  UPDATE_TEMPLATE_PRECEDENCE_CHAIN_MUTATION,
   UPDATE_DOMAIN_TYPE_MUTATION,
   DELETE_DOMAIN_TYPE_MUTATION,
   CREATE_ATTRIBUTE_MUTATION,
   CREATE_TEMPLATE_MUTATION,
+  UPDATE_TEMPLATE_MUTATION,
+  ASSIGN_ATTRIBUTE_TO_TEMPLATE_MUTATION,
+  UNASSIGN_ATTRIBUTE_FROM_TEMPLATE_MUTATION,
   RELATIONSHIP_TYPES_QUERY,
   CREATE_RELATIONSHIP_TYPE_MUTATION,
+  UPDATE_RELATIONSHIP_TYPE_MUTATION,
   DELETE_RELATIONSHIP_TYPE_MUTATION,
+  DELETE_ATTRIBUTE_MUTATION,
+  UPDATE_ATTRIBUTE_MUTATION,
   ENTITY_IDENTIFIER_DEFINITIONS_QUERY,
   CREATE_ENTITY_IDENTIFIER_MUTATION,
+  UPDATE_ENTITY_IDENTIFIER_MUTATION,
   DELETE_ENTITY_IDENTIFIER_MUTATION,
+  INTERSECTION_TYPES_QUERY,
+  CREATE_INTERSECTION_TYPE_MUTATION,
+  UPDATE_INTERSECTION_TYPE_MUTATION,
+  DELETE_INTERSECTION_TYPE_MUTATION,
+  REFERENCE_LISTS_QUERY,
+  UPDATE_TEMPLATE_ATTRIBUTE_MUTATION,
+  REORDER_TEMPLATE_ATTRIBUTES_MUTATION,
 } from '@/lib/graphql';
 import { RelationshipTypeForm } from '@/components/forms/RelationshipTypeForm';
+import { EntityIdentifierDefinitionForm } from '@/components/forms/EntityIdentifierDefinitionForm';
+import { TemplateAttributePicker, type PickerAttribute } from '@/components/forms/TemplateAttributePicker';
 
-type TabType = 'attributes' | 'templates' | 'relationships' | 'identifiers';
+type TabType = 'attributes' | 'templates' | 'relationships' | 'identifiers' | 'intersections';
+
+const NUMERIC_DATA_TYPES = ['NUMBER', 'INTEGER', 'DECIMAL', 'FLOAT', 'CURRENCY', 'PERCENTAGE', 'PERCENT'];
+
+const VALID_DATA_TYPES = [
+  'STRING',
+  'NUMBER',
+  'INTEGER',
+  'DECIMAL',
+  'BOOLEAN',
+  'DATE',
+  'TIMESTAMP',
+  'JSON',
+  'REFERENCE',
+  'REFERENCE_LIST',
+  'CURRENCY',
+  'PERCENTAGE',
+  'EMAIL',
+  'URL',
+  'PHONE',
+];
 
 interface DomainType {
   id: string;
@@ -40,6 +80,33 @@ interface Attribute {
   isRequired: boolean;
   isMultiValued: boolean;
   referenceDomainCode?: string;
+  domainCode?: string;
+  displayFormat?: string;
+  listValues?: string[];
+  validationRules?: any;
+  defaultValue?: string;
+  displaySection?: string;
+  displayGroup?: number;
+  isEditable?: boolean;
+  isVisible?: boolean;
+  aggregationType?: string;
+  weightAttributeCode?: string;
+  numericPrecision?: number;
+  unitOfMeasure?: string;
+  referenceListCode?: string;
+}
+
+interface TemplateAttribute {
+  attributeId: string;
+  attribute: {
+    attributeCode: string;
+    attributeName: string;
+    dataType: string;
+  };
+  isRequired: boolean;
+  precedenceRank: number;
+  displayOrder: number;
+  displayLabel?: string;
 }
 
 interface Template {
@@ -49,6 +116,8 @@ interface Template {
   domainCode: string;
   description?: string;
   isActive: boolean;
+  applicabilityRules?: any;
+  attributes?: TemplateAttribute[];
 }
 
 interface RelationshipType {
@@ -59,6 +128,7 @@ interface RelationshipType {
   childDomainCode?: string;
   description?: string;
   isActive: boolean;
+  isRequired?: boolean;
 }
 
 interface EntityIdentifierDefinition {
@@ -71,6 +141,25 @@ interface EntityIdentifierDefinition {
   isPrimary: boolean;
   description?: string;
   isActive: boolean;
+}
+
+interface IntersectionMember {
+  id?: string;
+  domainCode: string;
+  memberRole: string;
+  isRequired: boolean;
+  displayOrder: number;
+}
+
+interface IntersectionType {
+  id: string;
+  intersectionCode: string;
+  intersectionName: string;
+  description?: string;
+  isActive: boolean;
+  members: IntersectionMember[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 // Drill-in view for a single entity type. Everything that used to sit in a
@@ -88,6 +177,8 @@ export default function EntityTypeDetailPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [relationshipTypes, setRelationshipTypes] = useState<RelationshipType[]>([]);
   const [identifiers, setIdentifiers] = useState<EntityIdentifierDefinition[]>([]);
+  const [intersectionTypes, setIntersectionTypes] = useState<IntersectionType[]>([]);
+  const [referenceLists, setReferenceLists] = useState<{ id: string; listCode: string; listName: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
@@ -96,34 +187,58 @@ export default function EntityTypeDetailPage() {
   const [showCreateTemplateModal, setShowCreateTemplateModal] = useState(false);
   const [showCreateRelationshipModal, setShowCreateRelationshipModal] = useState(false);
   const [showCreateIdentifierModal, setShowCreateIdentifierModal] = useState(false);
+  const [showCreateIntersectionModal, setShowCreateIntersectionModal] = useState(false);
+  const [editingIntersection, setEditingIntersection] = useState<IntersectionType | null>(null);
+  const [editingAttribute, setEditingAttribute] = useState<Attribute | null>(null);
+  const [editAttributeForm, setEditAttributeForm] = useState<Partial<Attribute>>({});
+  const [editingRelationship, setEditingRelationship] = useState<RelationshipType | null>(null);
+  const [editingIdentifier, setEditingIdentifier] = useState<EntityIdentifierDefinition | null>(null);
+  const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('attributes');
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const domainsResult = await graphqlClient.query(DOMAIN_TYPES_QUERY, {}).toPromise();
+      const domainsResult = await graphqlClient.query(DOMAIN_TYPES_QUERY, {}, { requestPolicy: 'network-only' }).toPromise();
       const domains: DomainType[] = domainsResult.data?.domainTypes || [];
       setAllDomainTypes(domains);
       const found = domains.find(d => d.domainCode === domainCode) || null;
       setDomain(found);
       setNotFound(!found);
 
-      const attrsResult = await graphqlClient.query(ATTRIBUTE_REGISTER_QUERY, {}).toPromise();
+      const attrsResult = await graphqlClient.query(ATTRIBUTE_REGISTER_QUERY, { domainCode }, { requestPolicy: 'network-only' }).toPromise();
+      console.log('[EntityDetailPage] Attributes query result:', {
+        domainCode,
+        data: attrsResult.data,
+        error: attrsResult.error?.message,
+        attributeCount: attrsResult.data?.attributeRegister?.length
+      });
       setAttributes(attrsResult.data?.attributeRegister || []);
 
       const templatesResult = await graphqlClient
-        .query(DOMAIN_TEMPLATES_QUERY, { domainCode })
+        .query(DOMAIN_TEMPLATES_QUERY, { domainCode }, { requestPolicy: 'network-only' })
         .toPromise();
       setTemplates(templatesResult.data?.domainTemplates || []);
 
-      const relationshipsResult = await graphqlClient.query(RELATIONSHIP_TYPES_QUERY, {}).toPromise();
+      const relationshipsResult = await graphqlClient.query(RELATIONSHIP_TYPES_QUERY, {}, { requestPolicy: 'network-only' }).toPromise();
       setRelationshipTypes(relationshipsResult.data?.relationshipTypes || []);
 
       const identifiersResult = await graphqlClient
-        .query(ENTITY_IDENTIFIER_DEFINITIONS_QUERY, { domainCode })
+        .query(ENTITY_IDENTIFIER_DEFINITIONS_QUERY, { domainCode }, { requestPolicy: 'network-only' })
         .toPromise();
       setIdentifiers(identifiersResult.data?.entityIdentifierDefinitions || []);
+
+      const intersectionsResult = await graphqlClient.query(INTERSECTION_TYPES_QUERY, {}, { requestPolicy: 'network-only' }).toPromise();
+      const allIntersections: IntersectionType[] = intersectionsResult.data?.intersectionTypes || [];
+      // Filter to show intersection types that match this domain code or include this domain as a member
+      setIntersectionTypes(allIntersections.filter(it => 
+        it.intersectionCode === domainCode || it.members.some(m => m.domainCode === domainCode)
+      ));
+
+      // Fetch reference lists for the attribute edit form
+      const refListsResult = await graphqlClient.query(REFERENCE_LISTS_QUERY, {}, { requestPolicy: 'network-only' }).toPromise();
+      setReferenceLists(refListsResult.data?.referenceLists || []);
     } catch (error) {
       console.error('Error loading entity type:', error);
     } finally {
@@ -189,11 +304,108 @@ export default function EntityTypeDetailPage() {
 
   const handleCreateAttribute = async (data: any) => {
     try {
-      await graphqlClient.mutation(CREATE_ATTRIBUTE_MUTATION, { input: data }).toPromise();
+      await graphqlClient.mutation(CREATE_ATTRIBUTE_MUTATION, { input: { ...data, domainCode } }).toPromise();
       setShowCreateAttributeModal(false);
       loadData();
     } catch (error) {
       console.error('Error creating attribute:', error);
+    }
+  };
+
+  const handleDeleteAttribute = async (attr: Attribute) => {
+    if (!window.confirm(`Delete attribute "${attr.attributeName}" (${attr.attributeCode})?`)) return;
+    try {
+      const result = await graphqlClient
+        .mutation(DELETE_ATTRIBUTE_MUTATION, { id: attr.id })
+        .toPromise();
+      const errors = result.data?.deleteAttribute?.errors;
+      if (errors && errors.length > 0) {
+        alert(errors[0].message);
+        return;
+      }
+      loadData();
+    } catch (error: any) {
+      console.error('Error deleting attribute:', error);
+      alert(error?.message || 'Failed to delete attribute');
+    }
+  };
+
+  const handleEditAttribute = (attr: Attribute) => {
+    setEditingAttribute(attr);
+    setEditAttributeForm({
+      attributeName: attr.attributeName || '',
+      dataType: attr.dataType || 'STRING',
+      description: attr.description || '',
+      unitOfMeasure: attr.unitOfMeasure || '',
+      displayFormat: attr.displayFormat || '',
+      listValues: attr.listValues || [],
+      isMultiValued: attr.isMultiValued || false,
+      validationRules: attr.validationRules || {},
+      defaultValue: attr.defaultValue || '',
+      displaySection: attr.displaySection || 'General',
+      displayGroup: attr.displayGroup || 0,
+      isEditable: attr.isEditable ?? true,
+      isVisible: attr.isVisible ?? true,
+      aggregationType: attr.aggregationType || 'NONE',
+      weightAttributeCode: attr.weightAttributeCode || '',
+      numericPrecision: attr.numericPrecision,
+      referenceListCode: attr.referenceListCode || '',
+    });
+  };
+
+  const handleCancelEditAttribute = () => {
+    setEditingAttribute(null);
+    setEditAttributeForm({});
+  };
+
+  const handleSaveEditAttribute = async () => {
+    if (!editingAttribute) return;
+
+    try {
+      const result = await graphqlClient
+        .mutation(UPDATE_ATTRIBUTE_MUTATION, {
+          input: {
+            id: editingAttribute.id,
+            attributeName: editAttributeForm.attributeName || null,
+            dataType: editAttributeForm.dataType || 'STRING',
+            description: editAttributeForm.description || null,
+            unitOfMeasure: editAttributeForm.unitOfMeasure || null,
+            displayFormat: editAttributeForm.displayFormat || null,
+            listValues: editAttributeForm.listValues || [],
+            isMultiValued: editAttributeForm.isMultiValued ?? false,
+            validationRules: editAttributeForm.validationRules || {},
+            defaultValue: editAttributeForm.defaultValue || null,
+            displaySection: editAttributeForm.displaySection || 'General',
+            displayGroup: editAttributeForm.displayGroup || 0,
+            isEditable: editAttributeForm.isEditable ?? true,
+            isVisible: editAttributeForm.isVisible ?? true,
+            aggregationType: editAttributeForm.aggregationType || 'NONE',
+            weightAttributeCode: editAttributeForm.aggregationType === 'WEIGHTED_AVG' 
+              ? (editAttributeForm.weightAttributeCode || null)
+              : null,
+            numericPrecision: editAttributeForm.numericPrecision,
+            referenceListCode: editAttributeForm.referenceListCode || null,
+          },
+        })
+        .toPromise();
+
+      if (result.data?.updateAttributeDefinition?.success) {
+        setEditingAttribute(null);
+        setEditAttributeForm({});
+        loadData();
+      } else {
+        const errors = result.data?.updateAttributeDefinition?.errors;
+        if (errors && errors.length > 0) {
+          alert(errors[0].message);
+        } else if (result.error) {
+          alert(`GraphQL Error: ${result.error.message}`);
+        } else {
+          alert('Failed to update attribute - no success flag returned');
+        }
+      }
+    } catch (error: any) {
+      console.error('Error updating attribute:', error);
+      alert(error?.message || 'Failed to update attribute');
     }
   };
 
@@ -205,6 +417,117 @@ export default function EntityTypeDetailPage() {
     } catch (error) {
       console.error('Error creating template:', error);
     }
+  };
+
+  const handleUpdateTemplate = async (data: { templateName?: string; description?: string; isActive?: boolean; applicabilityRules?: any }) => {
+    if (!editingTemplate) return;
+    try {
+      const result = await graphqlClient
+        .mutation(UPDATE_TEMPLATE_MUTATION, { id: editingTemplate.id, input: data })
+        .toPromise();
+      const errors = result.data?.updateTemplate?.errors;
+      if (errors && errors.length > 0) {
+        alert(errors[0].message);
+        return;
+      }
+      if (result.data?.updateTemplate?.template) {
+        setEditingTemplate(result.data.updateTemplate.template);
+      }
+      loadData();
+    } catch (error: any) {
+      console.error('Error updating template:', error);
+      alert(error?.message || 'Failed to update template');
+    }
+  };
+
+  const handleAssignAttributeToTemplate = async (attributeId: string, isRequired: boolean, displayOrder: number, displayLabel?: string) => {
+    if (!editingTemplate) return;
+    try {
+      const result = await graphqlClient
+        .mutation(ASSIGN_ATTRIBUTE_TO_TEMPLATE_MUTATION, {
+          input: {
+            templateId: editingTemplate.id,
+            attributeId,
+            isRequired,
+            displayOrder,
+            displayLabel,
+          },
+        })
+        .toPromise();
+      const errors = result.data?.assignAttributeToTemplate?.errors;
+      if (errors && errors.length > 0) {
+        alert(errors[0].message);
+        return;
+      }
+      loadData();
+    } catch (error: any) {
+      console.error('Error assigning attribute:', error);
+      alert(error?.message || 'Failed to assign attribute');
+    }
+  };
+
+  const handleUnassignAttributeFromTemplate = async (attributeId: string) => {
+    if (!editingTemplate) return;
+    try {
+      const result = await graphqlClient
+        .mutation(UNASSIGN_ATTRIBUTE_FROM_TEMPLATE_MUTATION, {
+          templateId: editingTemplate.id,
+          attributeId,
+        })
+        .toPromise();
+      const errors = result.data?.unassignAttributeFromTemplate?.errors;
+      if (errors && errors.length > 0) {
+        alert(errors[0].message);
+        return;
+      }
+      loadData();
+    } catch (error: any) {
+      console.error('Error unassigning attribute:', error);
+      alert(error?.message || 'Failed to unassign attribute');
+    }
+  };
+
+  const handleSaveAttributes = async (changes: { added: string[]; removed: string[]; reordered: string[]; aliases: Record<string, string | undefined> }) => {
+    if (!editingTemplate) return;
+    try {
+      for (const attrId of changes.removed) {
+        await graphqlClient.mutation(UNASSIGN_ATTRIBUTE_FROM_TEMPLATE_MUTATION, {
+          templateId: editingTemplate.id, attributeId: attrId,
+        }).toPromise();
+      }
+      const currentAttrs = editingTemplate.attributes || [];
+      const existingCount = currentAttrs.length - changes.removed.length;
+      for (let i = 0; i < changes.added.length; i++) {
+        await graphqlClient.mutation(ASSIGN_ATTRIBUTE_TO_TEMPLATE_MUTATION, {
+          input: {
+            templateId: editingTemplate.id,
+            attributeId: changes.added[i],
+            isRequired: false,
+            displayOrder: existingCount + i + 1,
+          },
+        }).toPromise();
+      }
+      if (changes.reordered.length > 0) {
+        await graphqlClient.mutation(REORDER_TEMPLATE_ATTRIBUTES_MUTATION, {
+          input: { templateId: editingTemplate.id, attributeIds: changes.reordered },
+        }).toPromise();
+      }
+      for (const [attrId, label] of Object.entries(changes.aliases)) {
+        await graphqlClient.mutation(UPDATE_TEMPLATE_ATTRIBUTE_MUTATION, {
+          input: { templateId: editingTemplate.id, attributeId: attrId, displayLabel: label },
+        }).toPromise();
+      }
+      loadData();
+    } catch (error: any) {
+      console.error('Error saving attributes:', error);
+      alert(error?.message || 'Failed to save attributes');
+    }
+  };
+
+  const handleDeleteTemplate = async (template: Template) => {
+    if (!window.confirm(`Delete template "${template.templateName}" (${template.templateCode})?`)) return;
+    // No delete template mutation exists yet; inform user
+    alert('Template deletion is not yet supported. Please remove all attributes first.');
   };
 
   const handleCreateRelationshipType = async (data: any) => {
@@ -222,6 +545,25 @@ export default function EntityTypeDetailPage() {
     } catch (error: any) {
       console.error('Error creating relationship type:', error);
       alert(error?.message || 'Failed to create relationship type');
+    }
+  };
+
+  const handleUpdateRelationshipType = async (data: any) => {
+    if (!editingRelationship) return;
+    try {
+      const result = await graphqlClient
+        .mutation(UPDATE_RELATIONSHIP_TYPE_MUTATION, { input: { id: editingRelationship.id, ...data } })
+        .toPromise();
+      const errors = result.data?.updateRelationshipType?.errors;
+      if (errors && errors.length > 0) {
+        alert(errors[0].message);
+        return;
+      }
+      setEditingRelationship(null);
+      loadData();
+    } catch (error: any) {
+      console.error('Error updating relationship type:', error);
+      alert(error?.message || 'Failed to update relationship type');
     }
   };
 
@@ -261,6 +603,25 @@ export default function EntityTypeDetailPage() {
     }
   };
 
+  const handleUpdateEntityIdentifier = async (data: any) => {
+    if (!editingIdentifier) return;
+    try {
+      const result = await graphqlClient
+        .mutation(UPDATE_ENTITY_IDENTIFIER_MUTATION, { input: { id: editingIdentifier.id, ...data } })
+        .toPromise();
+      const errors = result.data?.updateEntityIdentifier?.errors;
+      if (errors && errors.length > 0) {
+        alert(errors[0].message);
+        return;
+      }
+      setEditingIdentifier(null);
+      loadData();
+    } catch (error: any) {
+      console.error('Error updating identifier:', error);
+      alert(error?.message || 'Failed to update identifier');
+    }
+  };
+
   const handleDeleteEntityIdentifier = async (identifier: EntityIdentifierDefinition) => {
     if (!window.confirm(`Delete identifier "${identifier.identifierName}" (${identifier.identifierCode})?`)) return;
     try {
@@ -276,6 +637,60 @@ export default function EntityTypeDetailPage() {
     } catch (error: any) {
       console.error('Error deleting identifier:', error);
       alert(error?.message || 'Failed to delete identifier');
+    }
+  };
+
+  const handleCreateIntersectionType = async (data: any) => {
+    try {
+      const result = await graphqlClient
+        .mutation(CREATE_INTERSECTION_TYPE_MUTATION, { input: data })
+        .toPromise();
+      const errors = result.data?.createIntersectionType?.errors;
+      if (errors && errors.length > 0) {
+        alert(errors[0].message);
+        return;
+      }
+      setShowCreateIntersectionModal(false);
+      loadData();
+    } catch (error: any) {
+      console.error('Error creating intersection type:', error);
+      alert(error?.message || 'Failed to create intersection type');
+    }
+  };
+
+  const handleUpdateIntersectionType = async (data: any) => {
+    try {
+      const result = await graphqlClient
+        .mutation(UPDATE_INTERSECTION_TYPE_MUTATION, { input: data })
+        .toPromise();
+      const errors = result.data?.updateIntersectionType?.errors;
+      if (errors && errors.length > 0) {
+        alert(errors[0].message);
+        return;
+      }
+      setEditingIntersection(null);
+      loadData();
+    } catch (error: any) {
+      console.error('Error updating intersection type:', error);
+      alert(error?.message || 'Failed to update intersection type');
+    }
+  };
+
+  const handleDeleteIntersectionType = async (it: IntersectionType) => {
+    if (!window.confirm(`Delete intersection type "${it.intersectionName}" (${it.intersectionCode})?`)) return;
+    try {
+      const result = await graphqlClient
+        .mutation(DELETE_INTERSECTION_TYPE_MUTATION, { id: it.id })
+        .toPromise();
+      const errors = result.data?.deleteIntersectionType?.errors;
+      if (errors && errors.length > 0) {
+        alert(errors[0].message);
+        return;
+      }
+      loadData();
+    } catch (error: any) {
+      console.error('Error deleting intersection type:', error);
+      alert(error?.message || 'Failed to delete intersection type');
     }
   };
 
@@ -314,9 +729,21 @@ export default function EntityTypeDetailPage() {
     rel => rel.parentDomainCode === domain.domainCode || rel.childDomainCode === domain.domainCode
   );
 
-  const domainAttributes = attributes.filter(a =>
-    !a.referenceDomainCode || a.referenceDomainCode === domain.domainCode
-  );
+  // Attributes are now pre-filtered by domain_code from the GraphQL query.
+  // Sort: attributes assigned to templates first, then the rest.
+  const domainAttributes = [...attributes].sort((a, b) => {
+    const aInTemplate = templates.some(t => 
+      t.domainCode === domain.domainCode && 
+      t.attributes?.some(attr => attr.attributeId === a.id)
+    );
+    const bInTemplate = templates.some(t => 
+      t.domainCode === domain.domainCode && 
+      t.attributes?.some(attr => attr.attributeId === b.id)
+    );
+    if (aInTemplate && !bInTemplate) return -1;
+    if (!aInTemplate && bInTemplate) return 1;
+    return a.attributeCode.localeCompare(b.attributeCode);
+  });
 
   return (
     <div className="view-fade">
@@ -404,6 +831,11 @@ export default function EntityTypeDetailPage() {
           isActive={activeTab === 'identifiers'}
           onClick={() => setActiveTab('identifiers')}
         />
+        <TabButton
+          label={`Intersection Types (${intersectionTypes.length})`}
+          isActive={activeTab === 'intersections'}
+          onClick={() => setActiveTab('intersections')}
+        />
       </div>
 
       {/* Tab Content */}
@@ -426,7 +858,28 @@ export default function EntityTypeDetailPage() {
                       <span className="mono">{attr.attributeCode}</span>
                       <span>Type: {attr.dataType}</span>
                       {attr.isMultiValued && <span>Multi-valued</span>}
+                      {attr.referenceListCode && (
+                        <span style={{ color: 'var(--accent-2)' }}>
+                          📋 {attr.referenceListCode}
+                        </span>
+                      )}
                     </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      className="btn"
+                      style={{ fontSize: '12px', padding: '4px 10px' }}
+                      onClick={() => handleEditAttribute(attr)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn"
+                      style={{ color: 'var(--red)', fontSize: '12px', padding: '4px 10px' }}
+                      onClick={() => handleDeleteAttribute(attr)}
+                    >
+                      Delete
+                    </button>
                   </div>
                 </div>
               ))}
@@ -448,12 +901,32 @@ export default function EntityTypeDetailPage() {
               {templates.map(template => (
                 <div key={template.id} style={rowStyle}>
                   <div>
-                    <div style={{ fontSize: '14px', fontWeight: 500 }}>{template.templateName}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500 }}>{template.templateName}</span>
+                      {!template.isActive && (
+                        <span style={{ fontSize: '10px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>Inactive</span>
+                      )}
+                    </div>
                     {template.description && (
                       <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginTop: '2px' }}>{template.description}</div>
                     )}
+                    <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: 'var(--ink-3)', marginTop: '4px' }}>
+                      <span className="mono">{template.templateCode}</span>
+                      <span>{template.attributes?.length || 0} attributes</span>
+                      {template.applicabilityRules && Object.keys(template.applicabilityRules).length > 0 && (
+                        <span style={{ color: 'var(--accent)' }}>Has applicability rules</span>
+                      )}
+                    </div>
                   </div>
-                  <span className="mono" style={{ fontSize: '11px', color: 'var(--ink-3)' }}>{template.templateCode}</span>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      className="btn"
+                      style={{ fontSize: '12px', padding: '4px 10px' }}
+                      onClick={() => setEditingTemplate(template)}
+                    >
+                      Edit
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -479,17 +952,32 @@ export default function EntityTypeDetailPage() {
                     <span style={{ fontSize: '12px', color: 'var(--ink-3)' }}>
                       {rel.parentDomainCode || '—'} → {rel.childDomainCode || '—'}
                     </span>
+                    {rel.isRequired && (
+                      <span style={{ fontSize: '10px', color: 'var(--red)', textTransform: 'uppercase', fontWeight: 600 }}>Required</span>
+                    )}
+                    {!rel.isRequired && rel.parentDomainCode && (
+                      <span style={{ fontSize: '10px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>Optional</span>
+                    )}
                     {!rel.isActive && (
                       <span style={{ fontSize: '10px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>Inactive</span>
                     )}
                   </div>
-                  <button
-                    className="btn"
-                    style={{ color: 'var(--red)', fontSize: '12px', padding: '4px 10px' }}
-                    onClick={() => handleDeleteRelationshipType(rel)}
-                  >
-                    Delete
-                  </button>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      className="btn"
+                      style={{ fontSize: '12px', padding: '4px 10px' }}
+                      onClick={() => setEditingRelationship(rel)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn"
+                      style={{ color: 'var(--red)', fontSize: '12px', padding: '4px 10px' }}
+                      onClick={() => handleDeleteRelationshipType(rel)}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -530,18 +1018,82 @@ export default function EntityTypeDetailPage() {
                       </span>
                     )}
                   </div>
-                  <button
-                    className="btn"
-                    style={{ color: 'var(--red)', fontSize: '12px', padding: '4px 10px' }}
-                    onClick={() => handleDeleteEntityIdentifier(identifier)}
-                  >
-                    Delete
-                  </button>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      className="btn"
+                      style={{ fontSize: '12px', padding: '4px 10px' }}
+                      onClick={() => setEditingIdentifier(identifier)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn"
+                      style={{ color: 'var(--red)', fontSize: '12px', padding: '4px 10px' }}
+                      onClick={() => handleDeleteEntityIdentifier(identifier)}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           ) : (
             <EmptyNote text="No identifier definitions yet." />
+          )}
+        </Section>
+      )}
+
+      {/* Intersection Types Tab */}
+      {activeTab === 'intersections' && (
+        <Section
+          title={`Intersection Types (${intersectionTypes.length})`}
+          subtitle="Composite entity schemas where this entity type participates as a member"
+          action={<button className="btn" onClick={() => setShowCreateIntersectionModal(true)}>+ Intersection Type</button>}
+          last
+        >
+          {intersectionTypes.length > 0 ? (
+            <div style={{ display: 'grid', gap: '8px' }}>
+              {intersectionTypes.map(it => (
+                <div key={it.id} style={rowStyle}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+                    <span className="mono" style={{ fontSize: '12px', color: 'var(--ink-3)' }}>{it.intersectionCode}</span>
+                    <span style={{ fontSize: '13px', fontWeight: 500 }}>{it.intersectionName}</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginLeft: '8px' }}>
+                      {it.members.sort((a, b) => a.displayOrder - b.displayOrder).map((m, idx) => (
+                        <span key={idx} style={{
+                          fontSize: '11px',
+                          padding: '2px 8px',
+                          background: m.isRequired ? '#fef3c7' : '#f3f4f6',
+                          border: `1px solid ${m.isRequired ? '#f59e0b' : '#d1d5db'}`,
+                          borderRadius: '4px',
+                          color: m.isRequired ? '#92400e' : '#374151',
+                        }}>
+                          {m.memberRole} ({m.domainCode}){m.isRequired && <span style={{ marginLeft: '4px', color: '#dc2626' }}>●</span>}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      className="btn"
+                      style={{ fontSize: '12px', padding: '4px 10px' }}
+                      onClick={() => setEditingIntersection(it)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn"
+                      style={{ color: 'var(--red)', fontSize: '12px', padding: '4px 10px' }}
+                      onClick={() => handleDeleteIntersectionType(it)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyNote text={`No intersection types defined for ${domain.domainName} yet.`} />
           )}
         </Section>
       )}
@@ -566,6 +1118,237 @@ export default function EntityTypeDetailPage() {
           onClose={() => setShowCreateAttributeModal(false)}
           onSubmit={handleCreateAttribute}
         />
+      )}
+
+      {/* Edit Attribute Modal */}
+      {editingAttribute && (
+        <ModalOverlay onClose={handleCancelEditAttribute}>
+          <div style={{ background: 'white', borderRadius: '8px', padding: '24px', maxWidth: '600px', width: '100%', maxHeight: '80vh', overflow: 'auto' }}>
+            <h2 style={{ fontSize: '20px', fontWeight: 600, marginBottom: '16px' }}>
+              Edit Attribute: {editingAttribute.attributeName}
+            </h2>
+            <div style={{ display: 'grid', gap: '12px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Attribute Name</label>
+                  <input
+                    type="text"
+                    value={editAttributeForm.attributeName || ''}
+                    onChange={e => setEditAttributeForm({ ...editAttributeForm, attributeName: e.target.value })}
+                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Data Type</label>
+                  <select
+                    value={editAttributeForm.dataType || 'STRING'}
+                    onChange={e => setEditAttributeForm({ ...editAttributeForm, dataType: e.target.value })}
+                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px', background: 'white' }}
+                  >
+                    {VALID_DATA_TYPES.map(dt => (
+                      <option key={dt} value={dt}>{dt}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Description</label>
+                <textarea
+                  value={editAttributeForm.description || ''}
+                  onChange={e => setEditAttributeForm({ ...editAttributeForm, description: e.target.value })}
+                  style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px', minHeight: '60px' }}
+                />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Unit of Measure</label>
+                  <input
+                    type="text"
+                    value={editAttributeForm.unitOfMeasure || ''}
+                    onChange={e => setEditAttributeForm({ ...editAttributeForm, unitOfMeasure: e.target.value })}
+                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
+                    placeholder="e.g., USD, kg, miles"
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Display Format</label>
+                  <input
+                    type="text"
+                    value={editAttributeForm.displayFormat || ''}
+                    onChange={e => setEditAttributeForm({ ...editAttributeForm, displayFormat: e.target.value })}
+                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
+                    placeholder="e.g., currency, percentage, date"
+                  />
+                </div>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Default Value</label>
+                <input
+                  type="text"
+                  value={editAttributeForm.defaultValue || ''}
+                  onChange={e => setEditAttributeForm({ ...editAttributeForm, defaultValue: e.target.value })}
+                  style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Display Section</label>
+                <input
+                  type="text"
+                  value={editAttributeForm.displaySection || ''}
+                  onChange={e => setEditAttributeForm({ ...editAttributeForm, displaySection: e.target.value })}
+                  style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
+                  placeholder="e.g., General, Pricing, Details"
+                />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 500 }}>
+                  <input
+                    type="checkbox"
+                    checked={editAttributeForm.isMultiValued || false}
+                    onChange={e => setEditAttributeForm({ ...editAttributeForm, isMultiValued: e.target.checked })}
+                  />
+                  Multi-valued
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 500 }}>
+                  <input
+                    type="checkbox"
+                    checked={editAttributeForm.isEditable ?? true}
+                    onChange={e => setEditAttributeForm({ ...editAttributeForm, isEditable: e.target.checked })}
+                  />
+                  Editable
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 500 }}>
+                  <input
+                    type="checkbox"
+                    checked={editAttributeForm.isVisible ?? true}
+                    onChange={e => setEditAttributeForm({ ...editAttributeForm, isVisible: e.target.checked })}
+                  />
+                  Visible
+                </label>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Numeric Precision</label>
+                  <input
+                    type="number"
+                    value={editAttributeForm.numericPrecision || ''}
+                    onChange={e => setEditAttributeForm({ ...editAttributeForm, numericPrecision: e.target.value ? parseInt(e.target.value) : undefined })}
+                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px' }}
+                    placeholder="e.g., 2"
+                  />
+                </div>
+              </div>
+              {/* Reference List Link */}
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>
+                  Reference List <span style={{ fontWeight: 400, color: '#6b7280', fontSize: '11px' }}>(for normalizing imported values)</span>
+                </label>
+                <select
+                  value={editAttributeForm.referenceListCode || ''}
+                  onChange={e => {
+                    const listCode = e.target.value;
+                    setEditAttributeForm({ 
+                      ...editAttributeForm, 
+                      referenceListCode: listCode,
+                      dataType: listCode ? 'REFERENCE_LIST' : editAttributeForm.dataType,
+                    });
+                  }}
+                  style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px', background: 'white' }}
+                >
+                  <option value="">— None (free text) —</option>
+                  {referenceLists.map(rl => (
+                    <option key={rl.listCode} value={rl.listCode}>
+                      {rl.listName} ({rl.listCode})
+                    </option>
+                  ))}
+                </select>
+                {editAttributeForm.referenceListCode && (
+                  <div style={{ fontSize: '11px', color: '#059669', marginTop: '4px' }}>
+                    ✓ Imported values will be normalized against this list's canonical values and synonyms
+                  </div>
+                )}
+              </div>
+              {/* Aggregation Type and Weight Attribute Code */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Aggregation Type</label>
+                  <select
+                    value={editAttributeForm.aggregationType || 'NONE'}
+                    onChange={e => {
+                      const newAgg = e.target.value;
+                      setEditAttributeForm({ 
+                        ...editAttributeForm, 
+                        aggregationType: newAgg,
+                        // Clear weight attribute if not using weighted average
+                        weightAttributeCode: newAgg === 'WEIGHTED_AVG' ? editAttributeForm.weightAttributeCode : ''
+                      });
+                    }}
+                    style={{ width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px', background: 'white' }}
+                  >
+                    <option value="NONE">None</option>
+                    <option value="MIN">Min</option>
+                    <option value="MAX">Max</option>
+                    <option value="SUM">Sum</option>
+                    <option value="AVG">Average</option>
+                    <option value="WEIGHTED_AVG">Weighted Average</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>Weight Attribute Code</label>
+                  <select
+                    value={editAttributeForm.weightAttributeCode || ''}
+                    onChange={e => setEditAttributeForm({ ...editAttributeForm, weightAttributeCode: e.target.value })}
+                    disabled={editAttributeForm.aggregationType !== 'WEIGHTED_AVG'}
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid var(--ink-4)', 
+                      borderRadius: '4px', 
+                      fontSize: '14px', 
+                      background: editAttributeForm.aggregationType !== 'WEIGHTED_AVG' ? '#f3f4f6' : 'white',
+                      color: editAttributeForm.aggregationType !== 'WEIGHTED_AVG' ? '#9ca3af' : 'inherit'
+                    }}
+                  >
+                    <option value="">-- Select weight attribute --</option>
+                    {attributes
+                      .filter(attr => NUMERIC_DATA_TYPES.includes(attr.dataType))
+                      .map(attr => (
+                        <option key={attr.id} value={attr.attributeCode}>
+                          {attr.attributeName} ({attr.attributeCode})
+                        </option>
+                      ))
+                    }
+                  </select>
+                  {editAttributeForm.aggregationType !== 'WEIGHTED_AVG' && (
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '4px' }}>
+                      Only available when Aggregation Type is "Weighted Average"
+                    </div>
+                  )}
+                  {editAttributeForm.aggregationType === 'WEIGHTED_AVG' && 
+                   attributes.filter(attr => NUMERIC_DATA_TYPES.includes(attr.dataType)).length === 0 && (
+                    <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px' }}>
+                      No numeric attributes found
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                <button
+                  className="btn"
+                  onClick={handleSaveEditAttribute}
+                  style={{ background: '#2563eb', color: 'white', padding: '8px 16px', border: 'none', borderRadius: '4px', fontWeight: 600, cursor: 'pointer' }}
+                >
+                  Save
+                </button>
+                <button
+                  className="btn"
+                  onClick={handleCancelEditAttribute}
+                  style={{ padding: '8px 16px' }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalOverlay>
       )}
 
       {/* Create Template Modal (domain fixed to this entity type) */}
@@ -596,9 +1379,70 @@ export default function EntityTypeDetailPage() {
         <CreateIdentifierModal
           fixedDomainCode={domain.domainCode}
           fixedDomainName={domain.domainName}
-          attributes={attributes}
+          attributes={domainAttributes}
           onClose={() => setShowCreateIdentifierModal(false)}
           onSubmit={handleCreateEntityIdentifier}
+        />
+      )}
+
+      {/* Create Intersection Type Modal */}
+      {showCreateIntersectionModal && (
+        <IntersectionTypeForm
+          mode="create"
+          domainTypes={allDomainTypes.map(d => ({ domainCode: d.domainCode, domainName: d.domainName }))}
+          prefillDomain={domain.domainCode}
+          onClose={() => setShowCreateIntersectionModal(false)}
+          onSubmit={handleCreateIntersectionType}
+        />
+      )}
+
+      {/* Edit Intersection Type Modal */}
+      {editingIntersection && (
+        <IntersectionTypeForm
+          mode="edit"
+          initialData={editingIntersection}
+          domainTypes={allDomainTypes.map(d => ({ domainCode: d.domainCode, domainName: d.domainName }))}
+          onClose={() => setEditingIntersection(null)}
+          onSubmit={handleUpdateIntersectionType}
+        />
+      )}
+
+      {/* Edit Relationship Type Modal */}
+      {editingRelationship && (
+        <ModalOverlay onClose={() => setEditingRelationship(null)}>
+          <RelationshipTypeForm
+            mode="edit"
+            initialData={editingRelationship}
+            domainOptions={allDomainTypes.map(d => ({ domainCode: d.domainCode, domainName: d.domainName }))}
+            onCancel={() => setEditingRelationship(null)}
+            onSubmit={handleUpdateRelationshipType}
+          />
+        </ModalOverlay>
+      )}
+
+      {/* Edit Entity Identifier Modal */}
+      {editingIdentifier && (
+        <ModalOverlay onClose={() => setEditingIdentifier(null)}>
+          <EntityIdentifierDefinitionForm
+            mode="edit"
+            initialData={editingIdentifier}
+            availableAttributes={domainAttributes}
+            onCancel={() => setEditingIdentifier(null)}
+            onSubmit={handleUpdateEntityIdentifier}
+          />
+        </ModalOverlay>
+      )}
+
+      {/* Edit Template Modal (comprehensive editor) */}
+      {editingTemplate && (
+        <TemplateEditorModal
+          template={editingTemplate}
+          domainCode={domain.domainCode}
+          domainName={domain.domainName}
+          allAttributes={attributes}
+          onClose={() => setEditingTemplate(null)}
+          onUpdateTemplate={handleUpdateTemplate}
+          onSaveAttributes={handleSaveAttributes}
         />
       )}
     </div>
@@ -1340,3 +2184,936 @@ function CreateIdentifierModal({
     </div>
   );
 }
+
+// Intersection Type Form Modal
+function IntersectionTypeForm({
+  mode,
+  initialData,
+  domainTypes,
+  prefillDomain,
+  onClose,
+  onSubmit,
+}: {
+  mode: 'create' | 'edit';
+  initialData?: IntersectionType;
+  domainTypes: { domainCode: string; domainName: string }[];
+  prefillDomain?: string;
+  onClose: () => void;
+  onSubmit: (data: any) => void;
+}) {
+  const [formData, setFormData] = useState({
+    intersectionCode: initialData?.intersectionCode || '',
+    intersectionName: initialData?.intersectionName || '',
+    description: initialData?.description || '',
+    members: initialData?.members || (prefillDomain ? [{ domainCode: prefillDomain, memberRole: '', isRequired: true, displayOrder: 0 }] : []),
+  });
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const handleChange = (field: string, value: any) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    if (errors[field]) setErrors(prev => ({ ...prev, [field]: '' }));
+  };
+
+  const handleMemberChange = (index: number, field: string, value: any) => {
+    const newMembers = [...formData.members];
+    newMembers[index] = { ...newMembers[index], [field]: value };
+    setFormData(prev => ({ ...prev, members: newMembers }));
+  };
+
+  const addMember = () => {
+    setFormData(prev => ({
+      ...prev,
+      members: [...prev.members, { domainCode: '', memberRole: '', isRequired: false, displayOrder: prev.members.length }],
+    }));
+  };
+
+  const removeMember = (index: number) => {
+    setFormData(prev => ({ ...prev, members: prev.members.filter((_, i) => i !== index) }));
+  };
+
+  const validate = () => {
+    const newErrors: Record<string, string> = {};
+    if (!formData.intersectionCode) newErrors.intersectionCode = 'Required';
+    if (!formData.intersectionName) newErrors.intersectionName = 'Required';
+    if (formData.members.length === 0) newErrors.members = 'At least one member required';
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (validate()) {
+      onSubmit({
+        ...(mode === 'edit' ? { id: initialData?.id } : {}),
+        intersectionName: formData.intersectionName,
+        description: formData.description,
+        members: formData.members.map((m: any, i: number) => ({
+          domainCode: m.domainCode,
+          memberRole: m.memberRole,
+          isRequired: m.isRequired ?? true,
+          displayOrder: m.displayOrder ?? i,
+        })),
+      });
+    }
+  };
+
+  return (
+    <div
+      className="overlay"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        background: 'rgba(0,0,0,0.5)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px'
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--bg)',
+          borderRadius: '12px',
+          width: '100%',
+          maxWidth: '700px',
+          maxHeight: '90vh',
+          overflow: 'auto',
+          border: '1px solid var(--line)'
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <form onSubmit={handleSubmit}>
+          <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--line)' }}>
+            <div style={{ fontSize: '18px', fontWeight: 600 }}>
+              {mode === 'create' ? 'Create Intersection Type' : 'Edit Intersection Type'}
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginTop: '4px' }}>
+              Define which entity domains compose this composite entity
+            </div>
+          </div>
+
+          <div style={{ padding: '24px' }}>
+            <div style={{ display: 'grid', gap: '16px' }}>
+              <div className="field">
+                <label>Intersection Code *</label>
+                <input
+                  type="text"
+                  className={`text-input ${errors.intersectionCode ? 'error' : ''}`}
+                  value={formData.intersectionCode}
+                  onChange={e => handleChange('intersectionCode', e.target.value.toUpperCase())}
+                  placeholder="e.g., POSITION, LOAN"
+                  disabled={mode === 'edit'}
+                  required
+                />
+                {errors.intersectionCode && <span style={{ color: 'var(--red)', fontSize: '11px' }}>{errors.intersectionCode}</span>}
+                <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '4px' }}>
+                  Unique identifier (uppercase)
+                </div>
+              </div>
+
+              <div className="field">
+                <label>Intersection Name *</label>
+                <input
+                  type="text"
+                  className={`text-input ${errors.intersectionName ? 'error' : ''}`}
+                  value={formData.intersectionName}
+                  onChange={e => handleChange('intersectionName', e.target.value)}
+                  placeholder="e.g., Position, Loan"
+                  required
+                />
+                {errors.intersectionName && <span style={{ color: 'var(--red)', fontSize: '11px' }}>{errors.intersectionName}</span>}
+              </div>
+
+              <div className="field">
+                <label>Description</label>
+                <textarea
+                  className="text-input"
+                  value={formData.description}
+                  onChange={e => handleChange('description', e.target.value)}
+                  placeholder="What is this composite entity?"
+                  rows={2}
+                />
+              </div>
+
+              <div className="field">
+                <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Members *</span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={addMember}
+                    style={{ fontSize: '11px', padding: '4px 10px' }}
+                  >
+                    + Add Member
+                  </button>
+                </label>
+                {errors.members && <span style={{ color: 'var(--red)', fontSize: '11px' }}>{errors.members}</span>}
+
+                {formData.members.length === 0 ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: 'var(--ink-3)', fontSize: '13px' }}>
+                    No members defined. Click "+ Add Member" to add entity domains.
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: '12px', marginTop: '8px' }}>
+                    {formData.members.map((member, index) => (
+                      <div
+                        key={index}
+                        style={{
+                          padding: '12px',
+                          background: 'var(--bg)',
+                          border: '1px solid var(--line)',
+                          borderRadius: '6px',
+                        }}
+                      >
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '12px', alignItems: 'end' }}>
+                          <div>
+                            <label style={{ fontSize: '11px', color: 'var(--ink-3)' }}>Domain *</label>
+                            <select
+                              className="select"
+                              value={member.domainCode}
+                              onChange={(e) => handleMemberChange(index, 'domainCode', e.target.value)}
+                            >
+                              <option value="">Select domain...</option>
+                              {domainTypes.map(d => (
+                                <option key={d.domainCode} value={d.domainCode}>{d.domainName}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label style={{ fontSize: '11px', color: 'var(--ink-3)' }}>Role *</label>
+                            <input
+                              type="text"
+                              className="text-input"
+                              value={member.memberRole}
+                              onChange={(e) => handleMemberChange(index, 'memberRole', e.target.value.toLowerCase())}
+                              placeholder="e.g., fund, security"
+                            />
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingBottom: '8px' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={member.isRequired}
+                                onChange={(e) => handleMemberChange(index, 'isRequired', e.target.checked)}
+                              />
+                              Required
+                            </label>
+                            <button
+                              type="button"
+                              className="btn"
+                              style={{ fontSize: '11px', padding: '4px 8px', color: 'var(--red)' }}
+                              onClick={() => removeMember(index)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div style={{
+            padding: '16px 24px',
+            borderTop: '1px solid var(--line)',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '8px'
+          }}>
+            <button type="button" className="btn" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btn btn-primary">
+              {mode === 'create' ? 'Create' : 'Save'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+
+// ============== TEMPLATE EDITOR MODAL ==============
+// Comprehensive editor for a template: metadata, applicability rules, and attribute assignments.
+
+interface ApplicabilityCondition {
+  attributeCode: string;
+  operator: 'eq' | 'neq' | 'in' | 'not_in' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'exists';
+  value: string;
+}
+
+interface ApplicabilityRules {
+  conditions: ApplicabilityCondition[];
+  logic: 'AND' | 'OR';
+}
+
+function TemplateEditorModal({
+  template,
+  domainCode,
+  domainName,
+  allAttributes,
+  onClose,
+  onUpdateTemplate,
+  onSaveAttributes,
+}: {
+  template: Template;
+  domainCode: string;
+  domainName: string;
+  allAttributes: Attribute[];
+  onClose: () => void;
+  onUpdateTemplate: (data: { templateName?: string; description?: string; isActive?: boolean; applicabilityRules?: any }) => void;
+  onSaveAttributes: (changes: { added: string[]; removed: string[]; reordered: string[]; aliases: Record<string, string | undefined> }) => void;
+}) {
+  const [activeSection, setActiveSection] = useState<'details' | 'rules' | 'attributes' | 'sourcePrefs'>('details');
+  const [templateName, setTemplateName] = useState(template.templateName);
+  const [description, setDescription] = useState(template.description || '');
+  const [isActive, setIsActive] = useState(template.isActive);
+  const [rules, setRules] = useState<ApplicabilityRules>(
+    template.applicabilityRules && Object.keys(template.applicabilityRules).length > 0
+      ? template.applicabilityRules
+      : { conditions: [], logic: 'AND' }
+  );
+
+  const currentAttributes = template.attributes || [];
+  const assignedAttributeIds = new Set(currentAttributes.map(a => a.attributeId));
+  const availableAttributes = allAttributes.filter(a => !assignedAttributeIds.has(a.id));
+
+  const handleSaveDetails = () => {
+    onUpdateTemplate({ templateName, description, isActive });
+  };
+
+  const handleSaveRules = () => {
+    onUpdateTemplate({ applicabilityRules: rules });
+  };
+
+  const addCondition = () => {
+    setRules(prev => ({
+      ...prev,
+      conditions: [...prev.conditions, { attributeCode: '', operator: 'eq', value: '' }],
+    }));
+  };
+
+  const updateCondition = (index: number, field: keyof ApplicabilityCondition, value: string) => {
+    setRules(prev => {
+      const newConditions = [...prev.conditions];
+      newConditions[index] = { ...newConditions[index], [field]: value };
+      return { ...prev, conditions: newConditions };
+    });
+  };
+
+  const removeCondition = (index: number) => {
+    setRules(prev => ({
+      ...prev,
+      conditions: prev.conditions.filter((_, i) => i !== index),
+    }));
+  };
+
+  const handleDeleteTemplate = async (template: Template) => {
+    if (!window.confirm(`Delete template "${template.templateName}" (${template.templateCode})?`)) return;
+    alert('Template deletion is not yet supported. Please remove all attributes first.');
+  };
+
+  return (
+    <TemplateEditorOverlay
+      template={template}
+      domainName={domainName}
+      activeSection={activeSection}
+      setActiveSection={setActiveSection}
+      onClose={onClose}
+    >
+      {activeSection === 'details' && (
+        <TemplateDetailsSection
+          templateName={templateName}
+          setTemplateName={setTemplateName}
+          description={description}
+          setDescription={setDescription}
+          isActive={isActive}
+          setIsActive={setIsActive}
+          onSave={handleSaveDetails}
+        />
+      )}
+      {activeSection === 'rules' && (
+        <TemplateRulesSection
+          rules={rules}
+          setRules={setRules}
+          allAttributes={allAttributes}
+          addCondition={addCondition}
+          updateCondition={updateCondition}
+          removeCondition={removeCondition}
+          onSave={handleSaveRules}
+        />
+      )}
+      {activeSection === 'attributes' && (
+        <TemplateAttributesSection
+          currentAttributes={currentAttributes}
+          availableAttributes={availableAttributes}
+          onSave={onSaveAttributes}
+          onCancel={() => setActiveSection('details')}
+        />
+      )}
+      {activeSection === 'sourcePrefs' && (
+        <TemplateSourcePrefsSection
+          template={template}
+          currentAttributes={currentAttributes}
+        />
+      )}
+    </TemplateEditorOverlay>
+  );
+}
+
+function TemplateEditorOverlay({
+  template,
+  domainName,
+  activeSection,
+  setActiveSection,
+  onClose,
+  children,
+}: {
+  template: Template;
+  domainName: string;
+  activeSection: string;
+  setActiveSection: (s: 'details' | 'rules' | 'attributes' | 'sourcePrefs') => void;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="overlay"
+      style={{
+        position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+        background: 'rgba(0,0,0,0.5)', zIndex: 1000,
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px 20px',
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--bg)', borderRadius: '12px', width: '100%', maxWidth: '1400px',
+          border: '1px solid var(--line)', height: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--line)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: '18px', fontWeight: 600 }}>Edit Template</div>
+              <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginTop: '4px' }}>
+                <span className="mono">{template.templateCode}</span> · {domainName}
+              </div>
+            </div>
+            <button className="btn" onClick={onClose} style={{ fontSize: '18px', padding: '4px 10px' }}>×</button>
+          </div>
+          <div style={{ display: 'flex', gap: '4px', marginTop: '16px' }}>
+            {(['details', 'rules', 'attributes', 'sourcePrefs'] as const).map(section => (
+              <button
+                key={section}
+                onClick={() => setActiveSection(section)}
+                style={{
+                  padding: '8px 16px', fontSize: '12px',
+                  fontWeight: activeSection === section ? 600 : 400,
+                  color: activeSection === section ? 'var(--ink)' : 'var(--ink-3)',
+                  background: 'none', border: 'none',
+                  borderBottom: activeSection === section ? '2px solid var(--accent)' : '2px solid transparent',
+                  cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.5px',
+                }}
+              >
+                {section === 'details' ? 'Details' : section === 'rules' ? 'Applicability Rules' : section === 'attributes' ? 'Attributes' : 'Source Preferences'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ padding: '24px', overflowY: 'auto', flex: 1 }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function TemplateDetailsSection({
+  templateName, setTemplateName, description, setDescription, isActive, setIsActive, onSave,
+}: {
+  templateName: string;
+  setTemplateName: (v: string) => void;
+  description: string;
+  setDescription: (v: string) => void;
+  isActive: boolean;
+  setIsActive: (v: boolean) => void;
+  onSave: () => void;
+}) {
+  return (
+    <div style={{ display: 'grid', gap: '16px' }}>
+      <div className="field">
+        <label>Template Name</label>
+        <input
+          type="text"
+          className="text-input"
+          value={templateName}
+          onChange={e => setTemplateName(e.target.value)}
+          placeholder="e.g., Open-End Fund, Corporate Bond"
+        />
+      </div>
+      <div className="field">
+        <label>Description</label>
+        <textarea
+          className="text-input"
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          placeholder="What is this template for?"
+          rows={3}
+        />
+      </div>
+      <div className="field">
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={isActive}
+            onChange={e => setIsActive(e.target.checked)}
+            style={{ width: '16px', height: '16px' }}
+          />
+          <span>Active</span>
+        </label>
+        <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '4px' }}>
+          Inactive templates are hidden from entity creation forms
+        </div>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '8px' }}>
+        <button className="btn btn-primary" onClick={onSave}>Save Details</button>
+      </div>
+    </div>
+  );
+}
+
+
+function TemplateRulesSection({
+  rules, setRules, allAttributes, addCondition, updateCondition, removeCondition, onSave,
+}: {
+  rules: ApplicabilityRules;
+  setRules: (r: ApplicabilityRules) => void;
+  allAttributes: Attribute[];
+  addCondition: () => void;
+  updateCondition: (index: number, field: keyof ApplicabilityCondition, value: string) => void;
+  removeCondition: (index: number) => void;
+  onSave: () => void;
+}) {
+  return (
+    <div style={{ display: 'grid', gap: '16px' }}>
+      <div style={{ fontSize: '12px', color: 'var(--ink-3)', lineHeight: '1.5' }}>
+        Define which records this template applies to. Conditions are evaluated against entity attributes
+        when assigning templates. Leave empty to apply to all records of this type.
+      </div>
+      {rules.conditions.length > 1 && (
+        <div className="field">
+          <label>Combine conditions with</label>
+          <select
+            className="select"
+            value={rules.logic}
+            onChange={e => setRules({ ...rules, logic: e.target.value as 'AND' | 'OR' })}
+          >
+            <option value="AND">ALL conditions must match (AND)</option>
+            <option value="OR">ANY condition can match (OR)</option>
+          </select>
+        </div>
+      )}
+      {rules.conditions.map((condition, idx) => (
+        <div
+          key={idx}
+          style={{
+            display: 'grid', gridTemplateColumns: '1fr 120px 1fr auto', gap: '8px', alignItems: 'end',
+            padding: '12px', background: 'var(--surface, #fafafa)', border: '1px solid var(--line)', borderRadius: '6px',
+          }}
+        >
+          <div>
+            <label style={{ fontSize: '11px', color: 'var(--ink-3)' }}>Attribute</label>
+            <select
+              className="select"
+              value={condition.attributeCode}
+              onChange={e => updateCondition(idx, 'attributeCode', e.target.value)}
+              style={{ fontSize: '12px' }}
+            >
+              <option value="">Select attribute...</option>
+              {allAttributes.map(a => (
+                <option key={a.id} value={a.attributeCode}>{a.attributeName} ({a.attributeCode})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: '11px', color: 'var(--ink-3)' }}>Operator</label>
+            <select
+              className="select"
+              value={condition.operator}
+              onChange={e => updateCondition(idx, 'operator', e.target.value)}
+              style={{ fontSize: '12px' }}
+            >
+              <option value="eq">equals</option>
+              <option value="neq">not equals</option>
+              <option value="in">in list</option>
+              <option value="not_in">not in list</option>
+              <option value="gt">greater than</option>
+              <option value="lt">less than</option>
+              <option value="gte">&ge;</option>
+              <option value="lte">&le;</option>
+              <option value="contains">contains</option>
+              <option value="exists">exists</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: '11px', color: 'var(--ink-3)' }}>Value</label>
+            <input
+              type="text"
+              className="text-input"
+              value={condition.value}
+              onChange={e => updateCondition(idx, 'value', e.target.value)}
+              placeholder={condition.operator === 'in' || condition.operator === 'not_in' ? 'val1, val2, val3' : 'Value'}
+              style={{ fontSize: '12px' }}
+            />
+          </div>
+          <button
+            className="btn"
+            style={{ color: 'var(--red)', fontSize: '11px', padding: '6px 8px' }}
+            onClick={() => removeCondition(idx)}
+            title="Remove condition"
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', paddingTop: '8px' }}>
+        <button className="btn" onClick={addCondition} style={{ fontSize: '12px' }}>+ Add Condition</button>
+        <button className="btn btn-primary" onClick={onSave}>Save Rules</button>
+      </div>
+    </div>
+  );
+}
+
+
+function TemplateAttributesSection({
+  currentAttributes, availableAttributes, onSave, onCancel,
+}: {
+  currentAttributes: TemplateAttribute[];
+  availableAttributes: Attribute[];
+  onSave: (changes: { added: string[]; removed: string[]; reordered: string[]; aliases: Record<string, string | undefined> }) => void;
+  onCancel?: () => void;
+}) {
+  const pickerAvailable: PickerAttribute[] = availableAttributes.map(a => ({
+    id: a.id,
+    attributeCode: a.attributeCode,
+    attributeName: a.attributeName,
+    dataType: a.dataType,
+    description: a.description,
+  }));
+
+  return (
+    <TemplateAttributePicker
+      availableAttributes={pickerAvailable}
+      selectedAttributes={currentAttributes}
+      onSave={onSave}
+      onCancel={onCancel}
+    />
+  );
+}
+
+
+function TemplateSourcePrefsSection({
+  template,
+  currentAttributes,
+}: {
+  template: Template;
+  currentAttributes: TemplateAttribute[];
+}) {
+  const [attributeChains, setAttributeChains] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadChains();
+  }, [template.id]);
+
+  const loadChains = async () => {
+    setLoading(true);
+    try {
+      const chains: any[] = [];
+      for (const attr of currentAttributes) {
+        const attrCode = attr.attribute?.attributeCode || attr.attributeCode;
+        const attrName = attr.attribute?.attributeName || attr.attributeName;
+        const chainResult = await graphqlQuery<{ templatePrecedenceChain: any }>(
+          TEMPLATE_PRECEDENCE_CHAIN_QUERY,
+          { templateId: template.id, attributeCode: attrCode }
+        );
+        chains.push({
+          attributeCode: attrCode,
+          attributeName: attrName,
+          chain: chainResult.data?.templatePrecedenceChain?.chain || ['MANUAL'],
+          chainVersion: chainResult.data?.templatePrecedenceChain?.chainVersion || 1,
+        });
+      }
+      setAttributeChains(chains);
+    } catch (error) {
+      console.error('Error loading chains:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleChainUpdated = (attrCode: string, newChain: string[]) => {
+    setAttributeChains(prev =>
+      prev.map(c =>
+        c.attributeCode === attrCode ? { ...c, chain: newChain } : c
+      )
+    );
+  };
+
+  if (loading) {
+    return <div style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-3)' }}>Loading source preferences...</div>;
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: '16px' }}>
+      <div style={{ fontSize: '12px', color: 'var(--ink-3)', lineHeight: '1.5' }}>
+        Configure which data sources take priority for each attribute. The system uses a 4-tier waterfall:
+        Manual Override (Tier 1) always wins, followed by Conditional Rules (Tier 2), Template Default Chain (Tier 3),
+        and Global Source Registry (Tier 4) as fallback.
+      </div>
+
+      {attributeChains.map(attr => (
+        <SourceChainEditor
+          key={attr.attributeCode}
+          attributeCode={attr.attributeCode}
+          attributeName={attr.attributeName}
+          chain={attr.chain}
+          chainVersion={attr.chainVersion}
+          templateId={template.id}
+          onChainUpdated={handleChainUpdated}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SourceChainEditor({
+  attributeCode,
+  attributeName,
+  chain,
+  chainVersion,
+  templateId,
+  onChainUpdated,
+}: {
+  attributeCode: string;
+  attributeName: string;
+  chain: string[];
+  chainVersion: number;
+  templateId: string;
+  onChainUpdated: (attrCode: string, newChain: string[]) => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draftChain, setDraftChain] = useState<string[]>(chain.filter(c => c !== 'MANUAL'));
+  const [saving, setSaving] = useState(false);
+
+  const sourceColors: Record<string, string> = {
+    BLOOMBERG: '#c2410c',
+    WSO: '#6d28d9',
+    DEALCLOUD: '#0369a1',
+    ALLVUE: '#047857',
+    SPCIQ: '#be185d',
+    MANUAL: '#b45309',
+    DERIVED: '#475569',
+  };
+
+  const allSources = ['BLOOMBERG', 'WSO', 'DEALCLOUD', 'ALLVUE', 'SPCIQ'];
+
+  const moveItem = (fromIdx: number, toIdx: number) => {
+    setDraftChain(prev => {
+      const next = [...prev];
+      const [item] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, item);
+      return next;
+    });
+  };
+
+  const removeItem = (idx: number) => {
+    setDraftChain(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const addSource = (sourceCode: string) => {
+    if (!draftChain.includes(sourceCode)) {
+      setDraftChain(prev => [...prev, sourceCode]);
+    }
+  };
+
+  const saveChain = async () => {
+    setSaving(true);
+    try {
+      const result = await graphqlMutation<{ updateTemplatePrecedenceChain: any }>(
+        UPDATE_TEMPLATE_PRECEDENCE_CHAIN_MUTATION,
+        { templateId, attributeCode, chain: draftChain }
+      );
+      if (result.data?.updateTemplatePrecedenceChain?.success) {
+        const r = result.data.updateTemplatePrecedenceChain;
+        alert(`✅ Chain saved (v${r.chainVersion}). ${r.entitiesResolved} entities re-resolved.`);
+        onChainUpdated(attributeCode, ['MANUAL', ...draftChain]);
+        setIsEditing(false);
+      } else {
+        const err = result.data?.updateTemplatePrecedenceChain?.errors?.[0];
+        alert(`❌ Failed: ${err?.message || 'Unknown error'}`);
+      }
+    } catch (error: any) {
+      alert(`❌ Error: ${error.message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{
+      border: '1px solid var(--line)',
+      borderRadius: '8px',
+      padding: '16px',
+      background: 'var(--surface, #fafafa)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: '14px' }}>{attributeName}</div>
+          <div style={{ fontSize: '11px', color: 'var(--ink-3)', fontFamily: 'monospace' }}>
+            {attributeCode} · v{chainVersion}
+          </div>
+        </div>
+        {!isEditing ? (
+          <button
+            className="btn"
+            onClick={() => { setIsEditing(true); setDraftChain(chain.filter(c => c !== 'MANUAL')); }}
+            style={{ fontSize: '12px' }}
+          >
+            Edit Chain
+          </button>
+        ) : (
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              className="btn"
+              onClick={() => setIsEditing(false)}
+              style={{ fontSize: '12px' }}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={saveChain}
+              disabled={saving || draftChain.length === 0}
+              style={{ fontSize: '12px' }}
+            >
+              {saving ? 'Saving...' : 'Save & Re-resolve'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '6px',
+          padding: '8px 12px', borderRadius: '6px',
+          border: '2px dashed #b4530960', background: '#b4530908',
+        }}>
+          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#b45309' }} />
+          <span style={{ fontSize: '12px', fontWeight: 600, color: '#b45309' }}>Manual Override</span>
+          <span style={{ fontSize: '9px', color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>always #1</span>
+        </div>
+        <span style={{ color: 'var(--ink-3)' }}>→</span>
+
+        {draftChain.map((srcCode, idx) => {
+          const color = sourceColors[srcCode] || '#6b7280';
+          return (
+            <div key={srcCode} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '6px',
+                padding: '8px 12px', borderRadius: '6px',
+                border: `1px solid ${color}40`, background: `${color}0a`,
+                position: 'relative',
+              }}>
+                {isEditing && (
+                  <div style={{
+                    position: 'absolute', top: '-8px', right: '-8px',
+                    display: 'flex', gap: '2px', opacity: 0.8,
+                  }}>
+                    {idx > 0 && (
+                      <button
+                        onClick={() => moveItem(idx, idx - 1)}
+                        style={{
+                          width: '16px', height: '16px', borderRadius: '50%',
+                          background: 'white', border: '1px solid #e5e7eb',
+                          fontSize: '10px', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}
+                      >
+                        ↑
+                      </button>
+                    )}
+                    {idx < draftChain.length - 1 && (
+                      <button
+                        onClick={() => moveItem(idx, idx + 1)}
+                        style={{
+                          width: '16px', height: '16px', borderRadius: '50%',
+                          background: 'white', border: '1px solid #e5e7eb',
+                          fontSize: '10px', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}
+                      >
+                        ↓
+                      </button>
+                    )}
+                    <button
+                      onClick={() => removeItem(idx)}
+                      style={{
+                        width: '16px', height: '16px', borderRadius: '50%',
+                        background: 'white', border: '1px solid #fecaca',
+                        fontSize: '10px', color: '#ef4444', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: color }} />
+                <span style={{ fontSize: '12px', fontWeight: 500, color }}>{srcCode}</span>
+                <span style={{ fontSize: '9px', color: 'var(--ink-3)' }}>#{idx + 2}</span>
+              </div>
+              {idx < draftChain.length - 1 && <span style={{ color: 'var(--ink-3)' }}>→</span>}
+            </div>
+          );
+        })}
+      </div>
+
+      {isEditing && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px' }}>
+          <span style={{ fontSize: '11px', color: 'var(--ink-3)' }}>Add source:</span>
+          {allSources.filter(s => !draftChain.includes(s)).map(srcCode => {
+            const color = sourceColors[srcCode] || '#6b7280';
+            return (
+              <button
+                key={srcCode}
+                onClick={() => addSource(srcCode)}
+                style={{
+                  padding: '4px 8px', fontSize: '11px', borderRadius: '4px',
+                  border: `1px dashed ${color}40`, color, background: 'transparent',
+                  cursor: 'pointer',
+                }}
+              >
+                + {srcCode}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+

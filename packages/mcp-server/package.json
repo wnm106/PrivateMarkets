@@ -1,5 +1,5 @@
 {
-  "name": "@meridian-mdm/mcp-server",
+  "name": "@tapestrai/mcp-server",
   "version": "0.1.0",
   "private": true,
   "main": "./src/server.ts",
@@ -17,6 +17,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@supabase/supabase-js": "^2.39.0",
+    "@tapestrai/graphql": "*",
     "dotenv": "^16.4.0",
     "zod": "^3.22.0",
     "zod-to-json-schema": "^3.22.0"

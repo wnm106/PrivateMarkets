@@ -119,6 +119,9 @@ type RelationshipType {
   childDomainCode: String
   description: String
   isActive: Boolean!
+  isRequired: Boolean!
+  cardinality: String!
+  compositeKey: [String!]!
 }
 
 type CreateRelationshipResult {
