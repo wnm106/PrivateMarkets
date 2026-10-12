@@ -2539,31 +2539,31 @@ function TemplateSourcePrefsSection({
   const loadChains = async () => {
     setLoading(true);
     try {
-      const register = await graphqlQuery<{ attributeRegister: Attribute[] }>(
+      const register = await graphqlQuery<{ attributeRegister: Attribute[] }, { domainCode: string }>(
         ATTRIBUTE_REGISTER_QUERY,
         { domainCode: template.domainCode },
       );
       const globalByCode = new Map(
         (register.data?.attributeRegister || []).map((attr) => [attr.attributeCode, attr.defaultPrecedenceChain || []]),
       );
-      const chains: any[] = [];
-      for (const attr of currentAttributes) {
+      const chains = await Promise.all(currentAttributes.map(async (attr) => {
         const attrCode = attr.attribute?.attributeCode || (attr as any).attributeCode;
         const attrName = attr.attribute?.attributeName || (attr as any).attributeName;
-        const chainResult = await graphqlQuery<{ templatePrecedenceChain: any }>(
+        const chainResult = await graphqlQuery<{ templatePrecedenceChain: any }, { templateId: string; attributeCode: string }>(
           TEMPLATE_PRECEDENCE_CHAIN_QUERY,
           { templateId: template.id, attributeCode: attrCode }
         );
         const override = chainResult.data?.templatePrecedenceChain;
-        chains.push({
+        const globalChain = globalByCode.get(attrCode) || [];
+        return {
           attributeCode: attrCode,
           attributeName: attrName,
-          globalChain: globalByCode.get(attrCode) || [],
+          globalChain,
           hasOverride: Boolean(override),
-          chain: override?.chain || ['MANUAL', ...(globalByCode.get(attrCode) || [])],
+          chain: override?.chain || ['MANUAL', ...globalChain],
           chainVersion: override?.chainVersion || 0,
-        });
-      }
+        };
+      }));
       setAttributeChains(chains);
     } catch (error) {
       console.error('Error loading chains:', error);
