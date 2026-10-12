@@ -67,6 +67,7 @@ type Query {
   complianceEvaluationRuns(ruleId: ID, first: Int): [ComplianceEvaluationRun!]!
   complianceEvaluationRun(id: ID!): ComplianceEvaluationRun
   complianceResults(filter: ComplianceResultFilter, pagination: PaginationInput): ComplianceEvaluationResultConnection!
+  compliancePopulationPreview(input: CompliancePopulationPreviewInput!): CompliancePopulationPreview!
 
   # Reference List (Controlled Vocabulary) queries
   referenceLists(domainCode: String, isActive: Boolean): [ReferenceList!]!

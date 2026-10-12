@@ -420,6 +420,9 @@ type ComplianceAttributeDimension {
   offsetAmount: Int
   snapTo: CompliancePeriodSnap
   knowledgeMode: ComplianceKnowledgeMode
+  # Hops from the entity being tested to the entity that holds the attribute.
+  # Empty = read the attribute on the entity itself.
+  relationshipPath: [ComplianceRollupHop!]!
 }
 
 input ComplianceAttributeDimensionInput {
@@ -428,6 +431,7 @@ input ComplianceAttributeDimensionInput {
   offsetAmount: Int
   snapTo: CompliancePeriodSnap
   knowledgeMode: ComplianceKnowledgeMode
+  relationshipPath: [ComplianceRollupHopInput!]
 }
 
 type ComplianceRollupHop {
@@ -662,6 +666,28 @@ input EvaluateComplianceRuleInput {
   asOfDate: Date!
   knowledgeDate: DateTime
   sourceScope: String
+}
+
+# Draft filter drill-down: which records of a domain qualify before the rule is saved.
+input CompliancePopulationPreviewInput {
+  domainCode: String!
+  conditions: [ComplianceRuleConditionInput!]!
+  offset: Int
+  limit: Int
+}
+
+type CompliancePopulationRow {
+  entityId: ID!
+  entityCode: String!
+  entityName: String
+  values: JSON!
+}
+
+type CompliancePopulationPreview {
+  total: Int!
+  scanned: Int!
+  truncated: Boolean!
+  rows: [CompliancePopulationRow!]!
 }
 
 # -------------------- Results --------------------
@@ -2007,6 +2033,7 @@ type Query {
   complianceEvaluationRuns(ruleId: ID, first: Int): [ComplianceEvaluationRun!]!
   complianceEvaluationRun(id: ID!): ComplianceEvaluationRun
   complianceResults(filter: ComplianceResultFilter, pagination: PaginationInput): ComplianceEvaluationResultConnection!
+  compliancePopulationPreview(input: CompliancePopulationPreviewInput!): CompliancePopulationPreview!
 
   # Reference List queries
   referenceLists(domainCode: String, isActive: Boolean): [ReferenceListSummary!]!

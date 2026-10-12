@@ -1632,6 +1632,7 @@ const COMPLIANCE_DIMENSION_FIELDS = `
   offsetAmount
   snapTo
   knowledgeMode
+  relationshipPath { ${COMPLIANCE_ROLLUP_HOP_FIELDS} }
 `;
 
 const COMPLIANCE_CONDITION_FIELDS = `
