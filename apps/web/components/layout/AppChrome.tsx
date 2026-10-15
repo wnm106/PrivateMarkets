@@ -2,6 +2,7 @@
 
 import { usePathname } from 'next/navigation';
 import { TopBar } from './TopBar';
+import { AppSidebar } from './AppSidebar';
 import { SourceLegend } from './SourceLegend';
 import { ChatPanel } from './ChatPanel';
 import { ImpersonationBanner } from './ImpersonationBanner';
@@ -21,9 +22,10 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
       {/* The assistant is a flex sibling of the page content, so opening it
           compresses the page rather than overlaying it. */}
       <div className="app-shell">
+        <AppSidebar />
         <div className="app-shell-main">
           <TopBar />
-          <SourceLegend />
+          {pathname !== '/' && <SourceLegend />}
           <main className="main">{children}</main>
         </div>
         <ChatPanel />

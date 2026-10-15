@@ -483,6 +483,7 @@ async function insertEntityAttributes(
   const attrMap = new Map((attrDefs || []).map((a: any) => [a.attribute_code, a]));
 
   const { data: source } = await supabase
+    .schema('entity_instances')
     .from('source_registry')
     .select('id')
     .eq('source_code', 'IMPORT')
@@ -552,6 +553,7 @@ async function updateEntityAttributes(
   const attrMap = new Map((attrDefs || []).map((a: any) => [a.attribute_code, a]));
 
   const { data: source } = await supabase
+    .schema('entity_instances')
     .from('source_registry')
     .select('id')
     .eq('source_code', 'IMPORT')
@@ -582,16 +584,18 @@ async function updateEntityAttributes(
       }
     }
 
-    // Close existing record
-    await supabase
-      .from('entity_attribute_values')
-      .update({
-        valid_to: new Date().toISOString().split('T')[0],
-        system_to: new Date().toISOString(),
-      })
-      .eq('entity_id', entityId)
-      .eq('attribute_id', attr.id)
-      .eq('system_to', '9999-12-31 23:59:59');
+    if (source?.id) {
+      await supabase
+        .from('entity_attribute_values')
+        .update({
+          valid_to: new Date().toISOString().split('T')[0],
+          system_to: new Date().toISOString(),
+        })
+        .eq('entity_id', entityId)
+        .eq('attribute_id', attr.id)
+        .eq('source_id', source.id)
+        .eq('system_to', '9999-12-31 23:59:59');
+    }
 
     // Insert new record
     await supabase.from('entity_attribute_values').insert({

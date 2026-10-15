@@ -1,12 +1,15 @@
 import { FormulaEngine, DerivationContext } from '../lib/formula-engine';
 import { SupabaseClient } from '@supabase/supabase-js';
+import { Context } from '../context';
+import { withClientNames } from './schema-scope';
 
 export const metadataResolvers = {
   Query: {
     /**
      * Get all attributes, optionally filtered by domain
      */
-    attributeRegister: async (_: any, args: { domainCode?: string; includeDerived?: boolean }, { supabase }: { supabase: SupabaseClient }) => {
+    attributeRegister: async (_: any, args: { domainCode?: string; includeDerived?: boolean }, context: Context) => {
+      const { supabase } = context;
       console.log('[attributeRegister] Called with args:', args);
       
       // Use RPC function to bypass PostgREST schema cache for aggregation fields
@@ -77,7 +80,7 @@ export const metadataResolvers = {
           );
         }
         
-        return attributes;
+        return withClientNames(context, attributes);
       }
 
       // RPC returns JSONB array, parse it
@@ -146,10 +149,11 @@ export const metadataResolvers = {
 
       console.log('[attributeRegister] Returning filtered count:', filtered.length);
       const withChains = await attachPrecedenceMetadata(supabase, filtered);
-      return withChains.map(mapAttributeDefinition);
+      return withClientNames(context, withChains.map(mapAttributeDefinition));
     },
 
-    domainTemplates: async (_: any, args: { domainCode?: string }, { supabase }: { supabase: SupabaseClient }) => {
+    domainTemplates: async (_: any, args: { domainCode?: string }, context: Context) => {
+      const { supabase } = context;
       let query = supabase
         .from('domain_templates')
         .select('*')
@@ -197,7 +201,7 @@ export const metadataResolvers = {
         .in('template_id', templateIds);
       const sectionById = new Map<string, any>((sections || []).map((section: any) => [section.id, section]));
 
-      return templates.map((t: any) => ({
+      return withClientNames(context, templates.map((t: any) => ({
         id: t.id,
         templateCode: t.template_code,
         domainCode: t.domain_code,
@@ -205,6 +209,7 @@ export const metadataResolvers = {
         description: t.description,
         isActive: t.is_active,
         applicabilityRules: t.applicability_rules || {},
+        clientId: t.client_id ?? null,
         attributes: (assignmentsByTemplate.get(t.id) || []).map((a: any) => ({
           attributeId: a.attribute_id,
           attribute: mapAttributeDefinition(a.attribute_register),
@@ -215,7 +220,7 @@ export const metadataResolvers = {
           sectionCode: sectionById.get(a.section_id)?.section_code || null,
           sectionName: sectionById.get(a.section_id)?.section_name || null,
         })),
-      }));
+      })));
     },
 
     /**
@@ -563,6 +568,7 @@ function mapAttributeDefinition(row: any) {
     isVisible: row.is_visible !== false,
     // Reference list link
     referenceListCode: row.reference_list_code || null,
+    clientId: row.client_id ?? null,
     // Aggregation and precision
     aggregationType: row.aggregation_type || 'NONE',
     weightAttributeCode: row.weight_attribute_code,

@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
+import { domainHref } from '@/lib/domain-routes';
 
 interface DomainTypeRecord {
   id: string;
@@ -16,336 +17,465 @@ interface EntityDomainCard {
   key: string;
   domainCode: string;
   name: string;
-  icon: string;
   count: number;
-  color: string;
   desc: string;
+}
+
+interface ExceptionRow {
+  id: string;
+  entityId: string;
+  entityName: string;
+  domainCode: string;
+  exceptionMessage: string;
+  severity: string;
+  status: string;
+  detectedAt: string;
+}
+
+interface SourceRow {
+  id: string;
+  sourceName: string;
+  isActive: boolean;
+  updatedAt: string;
+  createdAt: string;
 }
 
 interface DashboardStats {
   totalRecords: number;
-  avgQuality: number;
+  qualityPercent: number | null;
   openExceptions: number;
   highPriorityExceptions: number;
   sourcesConnected: number;
   totalSources: number;
   entities: EntityDomainCard[];
+  exceptions: ExceptionRow[];
+  activity: ActivityItem[];
 }
 
-// Presentation (route slug / icon glyph / accent color) for domain codes we
-// know about. This is purely cosmetic — the list of cards itself always
-// comes from the live `domainTypes` query, not from this map. Any domain
-// type not listed here still renders, with a sensible generated fallback,
-// so newly-created domain types show up immediately without a code change.
-const DOMAIN_PRESENTATION: Record<string, { route: string; icon: string; color: string }> = {
-  FUND: { route: 'funds', icon: 'F', color: '#1b3a4b' },
-  ISSUER: { route: 'issuers', icon: 'I', color: '#6d28d9' },
-  SECURITY: { route: 'securities', icon: 'S', color: '#c2410c' },
-  DEAL: { route: 'deals', icon: 'D', color: '#047857' },
-  INVESTOR: { route: 'investors', icon: 'V', color: '#be185d' },
-  PRICE: { route: 'prices', icon: 'P', color: '#9a9a93' },
-  POSITION: { route: 'positions', icon: 'P', color: '#0369a1' },
+interface ActivityItem {
+  id: string;
+  title: string;
+  detail: string;
+  at: string;
+  href?: string;
+  tone: 'ok' | 'warn' | 'info';
+}
+
+const EMPTY: DashboardStats = {
+  totalRecords: 0,
+  qualityPercent: null,
+  openExceptions: 0,
+  highPriorityExceptions: 0,
+  sourcesConnected: 0,
+  totalSources: 0,
+  entities: [],
+  exceptions: [],
+  activity: [],
 };
 
-function presentationFor(domainCode: string) {
-  return (
-    DOMAIN_PRESENTATION[domainCode] || {
-      route: `${domainCode.toLowerCase()}s`,
-      icon: domainCode.charAt(0).toUpperCase(),
-      color: '#5a5a55',
-    }
-  );
+const STATUS_LABEL: Record<string, string> = {
+  OPEN: 'Open',
+  IN_REVIEW: 'Review',
+  RESOLVED: 'Resolved',
+  WAIVED: 'Waived',
+  FALSE_POSITIVE: 'False positive',
+};
+
+function relativeTime(iso: string) {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const minutes = Math.round((Date.now() - then) / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
 }
 
 export default function LandingPage() {
-  const [stats, setStats] = useState<DashboardStats>({
-    totalRecords: 0,
-    avgQuality: 0,
-    openExceptions: 0,
-    highPriorityExceptions: 0,
-    sourcesConnected: 0,
-    totalSources: 0,
-    entities: [],
-  });
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState('');
+  const [stats, setStats] = useState<DashboardStats>(EMPTY);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
     async function fetchDashboardData() {
       try {
-        // Entity domain cards are driven entirely by what's configured in
-        // Admin > Entity Type Management (metadata_register.domain_types),
-        // not by a hardcoded list.
-        const domainTypesResult = await graphqlQuery<
-          { domainTypes: DomainTypeRecord[] },
-          Record<string, never>
-        >(`query { domainTypes { id domainCode domainName description isActive } }`);
-
-        const activeDomains = (domainTypesResult.data?.domainTypes || []).filter(
-          (d) => d.isActive
-        );
-
-        // Fetch a record count per domain via the generic `entities` query,
-        // aliased so every domain's count comes back in a single request.
-        const counts: Record<string, number> = {};
-        if (activeDomains.length > 0) {
-          if (activeDomains.length > 0) {
-            const countsQuery = `
-              query {
-                ${activeDomains
-                  .map(
-                    (d, i) =>
-                      `d${i}: entities(filter: { domainCode: "${d.domainCode}" }, pagination: { first: 1 }) { totalCount }`
-                  )
-                  .join('\n')}
+        const [domainsResult, opsResult] = await Promise.all([
+          graphqlQuery<
+            {
+              domainTypes: DomainTypeRecord[];
+              domainRecordCounts: Array<{ domainCode: string; totalCount: number }>;
+              dataSources: SourceRow[];
+            },
+            Record<string, never>
+          >(
+            `query {
+              domainTypes { id domainCode domainName description isActive }
+              domainRecordCounts { domainCode totalCount }
+              dataSources { id sourceName isActive updatedAt createdAt }
+            }`,
+            {},
+            'network-only'
+          ),
+          graphqlQuery<
+            {
+              openExceptions: { totalCount: number; edges: Array<{ node: ExceptionRow }> };
+              highExceptions: { totalCount: number };
+              criticalExceptions: { totalCount: number };
+            },
+            Record<string, never>
+          >(
+            `query {
+              openExceptions: dqExceptions(filter: { status: OPEN }, pagination: { first: 8 }) {
+                totalCount
+                edges {
+                  node {
+                    id
+                    entityId
+                    entityName
+                    domainCode
+                    exceptionMessage
+                    severity
+                    status
+                    detectedAt
+                  }
+                }
               }
-            `;
-            const countsResult = await graphqlQuery<
-              Record<string, { totalCount: number } | undefined>,
-              Record<string, never>
-            >(countsQuery);
+              highExceptions: dqExceptions(filter: { status: OPEN, severity: HIGH }, pagination: { first: 1 }) {
+                totalCount
+              }
+              criticalExceptions: dqExceptions(filter: { status: OPEN, severity: CRITICAL }, pagination: { first: 1 }) {
+                totalCount
+              }
+            }`,
+            {},
+            'network-only'
+          ),
+        ]);
 
-            activeDomains.forEach((d, i) => {
-              counts[d.domainCode] = countsResult.data?.[`d${i}`]?.totalCount || 0;
-            });
-          }
+        const activeDomains = (domainsResult.data?.domainTypes || []).filter((domain) => domain.isActive);
+        const counts: Record<string, number> = {};
+        for (const row of domainsResult.data?.domainRecordCounts || []) {
+          counts[row.domainCode] = row.totalCount || 0;
         }
-
-        // Fetch DQ exceptions
-        const exceptionsQuery = `
-          query {
-            dqExceptions(filter: { status: { equals: OPEN } }) {
-              totalCount
-            }
-          }
-        `;
-
-        const exceptionsResult = await graphqlQuery<any, Record<string, never>>(exceptionsQuery);
-
-        const entities: EntityDomainCard[] = activeDomains.map((d) => {
-          const presentation = presentationFor(d.domainCode);
+        const names: Record<string, string> = {};
+        const entities: EntityDomainCard[] = activeDomains.map((domain) => {
+          names[domain.domainCode] = domain.domainName;
           return {
-            key: presentation.route,
-            domainCode: d.domainCode,
-            name: d.domainName,
-            icon: presentation.icon,
-            color: presentation.color,
-            desc: d.description || '',
-            count: counts[d.domainCode] || 0,
+            key: domainHref(domain.domainCode),
+            domainCode: domain.domainCode,
+            name: domain.domainName,
+            desc: domain.description || '',
+            count: counts[domain.domainCode] || 0,
           };
         });
 
-        const totalRecords = entities.reduce((sum, e) => sum + e.count, 0);
-        const openExceptions = exceptionsResult.data?.dqExceptions?.totalCount || 0;
+        const sources = domainsResult.data?.dataSources || [];
+        const exceptions = (opsResult.data?.openExceptions?.edges || []).map((edge) => edge.node);
+        const activity: ActivityItem[] = [
+          ...exceptions.map((row) => ({
+            id: `ex-${row.id}`,
+            title: row.exceptionMessage,
+            detail: `${row.entityName} · ${names[row.domainCode] || row.domainCode}`,
+            at: row.detectedAt,
+            href: `${domainHref(row.domainCode)}/${row.entityId}`,
+            tone: row.severity === 'HIGH' || row.severity === 'CRITICAL' ? 'warn' as const : 'info' as const,
+          })),
+          ...sources.map((source) => ({
+            id: `src-${source.id}`,
+            title: source.isActive ? 'Source connected' : 'Source inactive',
+            detail: source.sourceName,
+            at: source.updatedAt || source.createdAt,
+            href: '/admin/sources',
+            tone: source.isActive ? 'ok' as const : 'warn' as const,
+          })),
+        ]
+          .filter((item) => item.at)
+          .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+          .slice(0, 6);
 
+        if (cancelled) return;
         setStats({
-          totalRecords,
-          avgQuality: 0, // Not configured yet
-          openExceptions,
-          highPriorityExceptions: 0,
-          sourcesConnected: 0, // Not configured yet
-          totalSources: 0,
+          totalRecords: entities.reduce((sum, entity) => sum + entity.count, 0),
+          qualityPercent: null,
+          openExceptions: opsResult.data?.openExceptions?.totalCount || 0,
+          highPriorityExceptions:
+            (opsResult.data?.highExceptions?.totalCount || 0) +
+            (opsResult.data?.criticalExceptions?.totalCount || 0),
+          sourcesConnected: sources.filter((source) => source.isActive).length,
+          totalSources: sources.length,
           entities,
+          exceptions,
+          activity,
         });
       } catch (error) {
         console.error('Failed to fetch dashboard data:', error);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
     fetchDashboardData();
+
+    graphqlQuery<{ dataQualityDashboard: { summary: { qualityPercent: number | null } } }, Record<string, never>>(
+      `query { dataQualityDashboard { summary { qualityPercent } } }`,
+      {},
+      'network-only'
+    ).then((result) => {
+      const quality = result.data?.dataQualityDashboard?.summary?.qualityPercent;
+      if (!cancelled && typeof quality === 'number') {
+        setStats((current) => ({ ...current, qualityPercent: quality }));
+      }
+    }).catch(() => {
+      /* Quality is optional on the overview. The rest of the page still renders. */
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  const needle = query.trim().toLowerCase();
+  const domains = useMemo(() => {
+    if (!needle) return stats.entities;
+    return stats.entities.filter((entity) =>
+      `${entity.name} ${entity.domainCode} ${entity.desc}`.toLowerCase().includes(needle)
+    );
+  }, [needle, stats.entities]);
+
+  const exceptions = useMemo(() => {
+    if (!needle) return stats.exceptions;
+    return stats.exceptions.filter((row) =>
+      `${row.entityName} ${row.domainCode} ${row.exceptionMessage}`.toLowerCase().includes(needle)
+    );
+  }, [needle, stats.exceptions]);
+
+  const domainName = (code: string) => stats.entities.find((entity) => entity.domainCode === code)?.name || code;
+  const sourcesHealthy = stats.totalSources > 0 && stats.sourcesConnected === stats.totalSources;
+
   return (
-    <div className="view-fade">
-      {/* Hero Section */}
-      <div className="hero">
-        <div>
-          <div className="hero-eyebrow">Master Data Management</div>
-          <h1 className="hero-title">
-            One <em>source of truth</em>,
-            <br />
-            across every system.
-          </h1>
-          <p className="hero-sub">
-            Select an entity domain to manage golden records, configure source precedence, and monitor data quality. All domains share the same lineage, normalization, and exception framework.
-          </p>
-        </div>
-        <div className="search-box">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5a5a55" strokeWidth="2">
+    <div className="view-fade home">
+      <header className="home-hero">
+        <h1 className="home-title">
+          One <em>trusted</em> record. Every system.
+        </h1>
+        <p className="home-sub">
+          Golden records, source precedence, and data quality for private credit and asset management.
+        </p>
+        <label className="home-search">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
             <circle cx="11" cy="11" r="7" />
             <path d="m20 20-3.5-3.5" />
           </svg>
-          <input placeholder="Search by CUSIP, fund, issuer, deal…" />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Filter domains and open exceptions"
+            aria-label="Search domains and open exceptions"
+          />
           <span className="kbd">⌘K</span>
-        </div>
-      </div>
+        </label>
+      </header>
 
-      {/* Stat Strip */}
-      <div className="stat-strip">
-        <div className="stat">
-          <div className="stat-label">Total Records</div>
-          <div className="stat-val">{loading ? '—' : stats.totalRecords.toLocaleString()}</div>
-          <div className="stat-sub">
-            across {stats.entities.length} entity domain{stats.entities.length === 1 ? '' : 's'}
+      <section className="home-kpis" aria-label="Overview">
+        <article className="home-kpi">
+          <div className="home-kpi-icon tone-blue" aria-hidden>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6l-7-3z" />
+            </svg>
           </div>
-        </div>
-        <div className="stat">
-          <div className="stat-label">Avg Data Quality</div>
-          <div className="stat-val">
-            {loading ? '—' : stats.avgQuality > 0 ? `${stats.avgQuality.toFixed(1)}%` : 'Not configured'}
+          <div>
+            <div className="home-kpi-label">Golden Records</div>
+            <div className="home-kpi-value">{loading ? '—' : stats.totalRecords.toLocaleString()}</div>
+            <div className="home-kpi-sub">
+              across {stats.entities.length} entity domain{stats.entities.length === 1 ? '' : 's'}
+            </div>
           </div>
-          <div className="stat-sub">
-            {stats.avgQuality > 0 ? <span className="up">▲ 1.8</span> : 'Set up DQ rules to track'}
+        </article>
+        <article className="home-kpi">
+          <div className="home-kpi-icon tone-blue" aria-hidden>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6l-7-3z" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
           </div>
-        </div>
-        <div className="stat">
-          <div className="stat-label">Open Exceptions</div>
-          <div className="stat-val">{loading ? '—' : stats.openExceptions}</div>
-          <div className="stat-sub">
-            {stats.highPriorityExceptions > 0 ? (
-              <span className="warn">{stats.highPriorityExceptions} high priority</span>
-            ) : (
-              'No active exceptions'
-            )}
+          <div>
+            <div className="home-kpi-label">Match Confidence</div>
+            <div className="home-kpi-value">
+              {loading ? '—' : stats.qualityPercent != null ? `${stats.qualityPercent.toFixed(1)}%` : '—'}
+            </div>
+            <div className="home-kpi-sub">
+              {stats.qualityPercent != null ? 'From active quality rules' : 'Not configured yet'}
+            </div>
           </div>
-        </div>
-        <div className="stat">
-          <div className="stat-label">Sources Connected</div>
-          <div className="stat-val">
-            {loading ? '—' : stats.sourcesConnected > 0 ? `${stats.sourcesConnected} / ${stats.totalSources}` : 'Not configured'}
+        </article>
+        <article className="home-kpi">
+          <div className="home-kpi-icon tone-red" aria-hidden>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M12 4 3.5 19h17L12 4z" />
+              <path d="M12 10v4M12 17h.01" />
+            </svg>
           </div>
-          <div className="stat-sub">
-            {stats.sourcesConnected > 0 ? 'last sync 06:14 EST' : 'Configure source registry'}
+          <div>
+            <div className="home-kpi-label">Needs Review</div>
+            <div className="home-kpi-value">{loading ? '—' : stats.openExceptions.toLocaleString()}</div>
+            <div className="home-kpi-sub">
+              {stats.highPriorityExceptions > 0 ? (
+                <span className="warn">{stats.highPriorityExceptions} high priority</span>
+              ) : (
+                'No high-severity items'
+              )}
+            </div>
           </div>
-        </div>
-      </div>
+        </article>
+        <article className="home-kpi">
+          <div className="home-kpi-icon tone-green" aria-hidden>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M21 12a9 9 0 1 1-2.6-6.3" />
+              <path d="M21 4v5h-5" />
+            </svg>
+          </div>
+          <div>
+            <div className="home-kpi-label">Source Health</div>
+            <div className="home-kpi-value">
+              {loading ? '—' : stats.totalSources > 0 ? `${stats.sourcesConnected}/${stats.totalSources}` : '—'}
+            </div>
+            <div className="home-kpi-sub">
+              {stats.totalSources === 0
+                ? 'No sources connected'
+                : sourcesHealthy
+                  ? <span className="up">All feeds current</span>
+                  : `${stats.totalSources - stats.sourcesConnected} inactive`}
+            </div>
+          </div>
+        </article>
+      </section>
 
-      {/* Entity Domains Section */}
-      <div className="section-title">
-        <h2>Entity Domains</h2>
-        <span className="hint">Click any domain to manage its records</span>
-      </div>
-
-      <div className="entity-grid">
-        {!loading && stats.entities.length === 0 && (
-          <div style={{ color: 'var(--ink-3)', fontSize: '13px', padding: '8px 0' }}>
-            No entity domains defined yet.{' '}
-            <Link href="/admin/entities" style={{ color: 'var(--accent)' }}>
-              Create one in Entity Type Management
-            </Link>
-            .
-          </div>
-        )}
-        {stats.entities.map((entity) => {
-          return (
-            <Link key={entity.key} href={`/${entity.key}`}>
-              <div className="entity-card" style={{ '--card-accent': entity.color } as React.CSSProperties}>
-                <div className="entity-head-block">
-                  <div className="entity-name-header">{entity.name}</div>
-                  <div className="entity-count-inline">
-                    <strong>{loading ? '—' : entity.count.toLocaleString()}</strong> records
-                  </div>
-                </div>
-                <div className="entity-desc">{entity.desc}</div>
-                <div className="entity-footer">
-                  <div className="entity-quality">
-                    <div className="lbl">Status</div>
-                    <div className="val" style={{ color: entity.count > 0 ? 'var(--green)' : 'var(--ink-3)' }}>
-                      {entity.count > 0 ? 'Active' : 'Empty'}
-                    </div>
-                  </div>
-                </div>
+      <section>
+        <div className="home-section-title">
+          <h2>Entity Domains</h2>
+          <Link href="/admin/entities">Manage domains</Link>
+        </div>
+        <div className="home-domains">
+          {!loading && domains.length === 0 && (
+            <div className="home-empty">
+              {needle ? 'No domains match that search.' : 'No entity domains defined yet.'}{' '}
+              {!needle && <Link href="/admin/entities">Create one in Entity Type Management</Link>}
+            </div>
+          )}
+          {domains.map((entity) => (
+            <Link key={entity.domainCode} href={entity.key} className="home-domain">
+              <div className="home-domain-top">
+                <span className="home-domain-mark" aria-hidden>{entity.name.charAt(0)}</span>
+                <span className="home-domain-name">{entity.name}</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                  <path d="m9 6 6 6-6 6" />
+                </svg>
               </div>
+              <div className="home-domain-count">{loading ? '—' : entity.count.toLocaleString()}</div>
+              <div className="home-domain-desc">{entity.desc || 'Entity domain'}</div>
+              <span className={`home-pill ${entity.count > 0 ? 'is-active' : ''}`}>
+                {entity.count > 0 ? 'Active' : 'Empty'}
+              </span>
             </Link>
-          );
-        })}
-      </div>
+          ))}
+          {!needle && (
+            <Link href="/admin/entities" className="home-domain home-domain-add">
+              <span className="home-domain-plus" aria-hidden>+</span>
+              <span>Add entity domain</span>
+              <span className="home-domain-hint">e.g. Covenants, Amortization, Capital Call</span>
+            </Link>
+          )}
+        </div>
+      </section>
 
-      {/* Cross-Cutting Tools */}
-      <div className="section-title">
-        <h2>Cross-Cutting Tools</h2>
-      </div>
+      <section className="home-lower">
+        <div className="home-panel">
+          <div className="home-section-title">
+            <h2>
+              Exception Queue
+              {!loading && stats.openExceptions > 0 && <span className="home-count">{stats.openExceptions}</span>}
+            </h2>
+            <Link href="/quality">View all</Link>
+          </div>
+          {exceptions.length === 0 ? (
+            <div className="home-empty">{loading ? 'Loading exceptions…' : 'No open exceptions.'}</div>
+          ) : (
+            <div className="home-table-wrap">
+              <table className="home-table">
+                <thead>
+                  <tr>
+                    <th>Entity</th>
+                    <th>Domain</th>
+                    <th>Issue</th>
+                    <th>Detected</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {exceptions.map((row) => (
+                    <tr key={row.id}>
+                      <td className="home-entity">{row.entityName}</td>
+                      <td>{domainName(row.domainCode)}</td>
+                      <td>{row.exceptionMessage}</td>
+                      <td className="home-muted">{relativeTime(row.detectedAt)}</td>
+                      <td>
+                        <span className={`home-status status-${row.status.toLowerCase()}`}>
+                          {STATUS_LABEL[row.status] || row.status}
+                        </span>
+                      </td>
+                      <td>
+                        <Link href={`${domainHref(row.domainCode)}/${row.entityId}`}>View</Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
 
-      <div className="nav-row">
-        <Link href="/precedence">
-          <div className="nav-card">
-            <div className="nav-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M3 6h18M3 12h18M3 18h12" />
-                <circle cx="5" cy="6" r="1.5" fill="currentColor" />
-                <circle cx="5" cy="12" r="1.5" fill="currentColor" />
-                <circle cx="5" cy="18" r="1.5" fill="currentColor" />
-              </svg>
-            </div>
-            <div>
-              <div className="nav-title">Precedence Rules</div>
-              <div className="nav-desc">Field-level source priority with conditional logic.</div>
-            </div>
+        <div className="home-panel">
+          <div className="home-section-title">
+            <h2>Recent Activity</h2>
+            <Link href="/quality">View all</Link>
           </div>
-        </Link>
-        <Link href="/quality">
-          <div className="nav-card">
-            <div className="nav-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M3 3v18h18" />
-                <path d="m7 14 4-4 4 4 5-5" />
-              </svg>
-            </div>
-            <div>
-              <div className="nav-title">Data Quality Framework</div>
-              <div className="nav-desc">Availability, quality, and trajectory across all domains.</div>
-            </div>
-          </div>
-        </Link>
-        <Link href="/lists">
-          <div className="nav-card">
-            <div className="nav-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M12 2 2 7l10 5 10-5-10-5Z" />
-                <path d="m2 17 10 5 10-5" />
-                <path d="m2 12 10 5 10-5" />
-              </svg>
-            </div>
-            <div>
-              <div className="nav-title">Standardized Value Lists</div>
-              <div className="nav-desc">Controlled vocabularies for types, seniority, ratings, and more.</div>
-            </div>
-          </div>
-        </Link>
-        <Link href="/intersections">
-          <div className="nav-card">
-            <div className="nav-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <circle cx="6" cy="6" r="3" />
-                <circle cx="18" cy="6" r="3" />
-                <circle cx="6" cy="18" r="3" />
-                <circle cx="18" cy="18" r="3" />
-                <path d="M8.5 7.5 15.5 16.5" />
-                <path d="M15.5 7.5 8.5 16.5" />
-              </svg>
-            </div>
-            <div>
-              <div className="nav-title">Composite Entities</div>
-              <div className="nav-desc">Intersection framework for N-ary entity combinations with bi-temporal tracking.</div>
-            </div>
-          </div>
-        </Link>
-        <Link href="/imports">
-          <div className="nav-card">
-            <div className="nav-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M12 3v12" />
-                <path d="m7 10 5 5 5-5" />
-                <path d="M4 21h16" />
-              </svg>
-            </div>
-            <div>
-              <div className="nav-title">Position File Load</div>
-              <div className="nav-desc">Map a flat file onto Issuer, Fund, Security, and Position, then load parents first.</div>
-            </div>
-          </div>
-        </Link>
-      </div>
+          {stats.activity.length === 0 ? (
+            <div className="home-empty">{loading ? 'Loading activity…' : 'No recent activity.'}</div>
+          ) : (
+            <ul className="home-activity">
+              {stats.activity.map((item) => (
+                <li key={item.id}>
+                  <span className={`home-activity-dot tone-${item.tone}`} aria-hidden />
+                  <div>
+                    <Link href={item.href || '/quality'}>{item.title}</Link>
+                    <div className="home-muted">{item.detail}</div>
+                  </div>
+                  <time className="home-muted">{relativeTime(item.at)}</time>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

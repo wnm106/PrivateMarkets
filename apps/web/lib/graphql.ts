@@ -1,4 +1,5 @@
 import { Client, cacheExchange, fetchExchange } from '@urql/core';
+import { readBrowserAccessToken } from '@/lib/auth-token';
 
 const graphqlEndpoint = process.env.NEXT_PUBLIC_GRAPHQL_ENDPOINT || '/api/graphql';
 
@@ -6,7 +7,7 @@ export const graphqlClient = new Client({
   url: graphqlEndpoint,
   exchanges: [cacheExchange, fetchExchange],
   fetchOptions: () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const token = readBrowserAccessToken();
     return {
       headers: {
         authorization: token ? `Bearer ${token}` : '',
@@ -120,6 +121,7 @@ export const ENTITY_QUERY = `
         relationshipType
         relationshipCode
         isPrimary
+        members { entityId entityCode entityName domainCode }
       }
       childRelationships {
         childEntityId
@@ -129,6 +131,7 @@ export const ENTITY_QUERY = `
         relationshipType
         relationshipCode
         isPrimary
+        members { entityId entityCode entityName domainCode }
       }
       metadata
       createdAt
@@ -188,6 +191,19 @@ export const UPDATE_ATTRIBUTE_VALUE_MUTATION = `
   }
 `;
 
+export const DELETE_COMPETING_SOURCE_MUTATION = `
+  mutation DeleteCompetingSource($input: DeleteCompetingSourceInput!) {
+    deleteCompetingSource(input: $input) {
+      success
+      errors {
+        field
+        message
+        code
+      }
+    }
+  }
+`;
+
 export const ADD_COMPETING_SOURCE_MUTATION = `
   mutation AddCompetingSource($input: AddCompetingSourceInput!) {
     addCompetingSource(input: $input) {
@@ -233,6 +249,8 @@ export const ATTRIBUTE_REGISTER_QUERY = `
       numericPrecision
       referenceListCode
       defaultPrecedenceChain
+      clientId
+      clientName
     }
   }
 `;
@@ -247,6 +265,8 @@ export const DOMAIN_TEMPLATES_QUERY = `
       description
       isActive
       applicabilityRules
+      clientId
+      clientName
       attributes {
         attributeId
         attribute {
@@ -266,8 +286,8 @@ export const DOMAIN_TEMPLATES_QUERY = `
 `;
 
 export const FIELD_LINEAGE_QUERY = `
-  query FieldLineage($entityId: ID!, $asOfDate: Date) {
-    fieldLineage(entityId: $entityId, asOfDate: $asOfDate) {
+  query FieldLineage($entityId: ID!, $asOfDate: Date, $knowledgeDate: DateTime) {
+    fieldLineage(entityId: $entityId, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate) {
       attributeCode
       attributeName
       currentValue
@@ -379,6 +399,8 @@ export const RELATIONSHIP_TYPES_QUERY = `
       compositeKey
       description
       isActive
+      clientId
+      clientName
     }
   }
 `;
@@ -548,6 +570,8 @@ export const DOMAIN_TYPES_QUERY = `
       isActive
       createdAt
       updatedAt
+      clientId
+      clientName
     }
   }
 `;
@@ -626,6 +650,8 @@ export const CREATE_RELATIONSHIP_TYPE_MUTATION = `
         childDomainCode
         description
         isActive
+        clientId
+        clientName
       }
       errors {
         field
@@ -694,6 +720,8 @@ export const CREATE_DOMAIN_TYPE_MUTATION = `
         isActive
         createdAt
         updatedAt
+        clientId
+        clientName
       }
       errors {
         field
@@ -715,6 +743,8 @@ export const UPDATE_DOMAIN_TYPE_MUTATION = `
         isActive
         createdAt
         updatedAt
+        clientId
+        clientName
       }
       errors {
         field
@@ -754,6 +784,8 @@ export const CREATE_ATTRIBUTE_MUTATION = `
         isMultiValued
         referenceDomainCode
         defaultPrecedenceRank
+        clientId
+        clientName
       }
       errors {
         field
@@ -1396,6 +1428,80 @@ export const TRIGGER_DATA_LOADER_MUTATION = `
         field
         message
         code
+      }
+    }
+  }
+`;
+
+export const DATA_QUALITY_DASHBOARD_QUERY = `
+  query DataQualityDashboard($domainCode: String, $fromDate: Date, $toDate: Date) {
+    dataQualityDashboard(domainCode: $domainCode, fromDate: $fromDate, toDate: $toDate) {
+      fromDate
+      toDate
+      domains
+      summary {
+        entityCount
+        requiredSlots
+        populatedSlots
+        missingSlots
+        entitiesMissingRequired
+        availabilityPercent
+        rulesEvaluated
+        passingChecks
+        failingChecks
+        entitiesFailingRules
+        qualityPercent
+        changedAttributeCount
+        changedEntityCount
+        attributeChangeCount
+        clearEntityCount
+      }
+      availability {
+        attributeCode
+        attributeName
+        domainCode
+        requiredCount
+        missingCount
+        availabilityPercent
+        missingEntities { id entityCode entityName domainCode }
+      }
+      quality {
+        ruleId
+        ruleCode
+        ruleName
+        ruleType
+        severity
+        domainCode
+        ruleExpression
+        evaluated
+        evaluationMessage
+        entityCount
+        failingCount
+        passingCount
+        failingEntities { id entityCode entityName domainCode message actualValue }
+      }
+      trajectory {
+        attributeCode
+        attributeName
+        domainCode
+        changeCount
+        changes { id entityCode entityName domainCode previousValue currentValue }
+      }
+      entities {
+        id
+        entityCode
+        entityName
+        domainCode
+        requiredCount
+        missingCount
+        availabilityPercent
+        missingAttributes { attributeCode attributeName }
+        ruleCount
+        failingRuleCount
+        qualityPercent
+        failingRules { ruleId ruleCode ruleName severity message actualValue }
+        changeCount
+        changes { attributeCode attributeName previousValue currentValue }
       }
     }
   }
@@ -2172,6 +2278,42 @@ export const ADD_REFERENCE_LIST_VALUE_MUTATION = `
   }
 `;
 
+export const UPDATE_REFERENCE_LIST_MUTATION = `
+  mutation UpdateReferenceList($input: UpdateReferenceListInput!) {
+    updateReferenceList(input: $input) {
+      referenceList { id listCode listName description isActive }
+      errors { field message code }
+    }
+  }
+`;
+
+export const DELETE_REFERENCE_LIST_MUTATION = `
+  mutation DeleteReferenceList($id: ID!) {
+    deleteReferenceList(id: $id) {
+      success
+      errors { field message code }
+    }
+  }
+`;
+
+export const UPDATE_REFERENCE_LIST_VALUE_MUTATION = `
+  mutation UpdateReferenceListValue($input: UpdateReferenceListValueInput!) {
+    updateReferenceListValue(input: $input) {
+      value { id valueCode valueLabel synonyms isActive displayOrder }
+      errors { field message code }
+    }
+  }
+`;
+
+export const DELETE_REFERENCE_LIST_VALUE_MUTATION = `
+  mutation DeleteReferenceListValue($id: ID!) {
+    deleteReferenceListValue(id: $id) {
+      success
+      errors { field message code }
+    }
+  }
+`;
+
 export const ADD_VALUE_SYNONYMS_MUTATION = `
   mutation AddValueSynonyms($input: AddSynonymsInput!) {
     addValueSynonyms(input: $input) {
@@ -2182,9 +2324,124 @@ export const ADD_VALUE_SYNONYMS_MUTATION = `
 `;
 
 export const REMOVE_VALUE_SYNONYMS_MUTATION = `
-  mutation RemoveValueSynonyms($input: RemoveSynonymsInput!) {
+  mutation RemoveValueSynonyms($input: AddSynonymsInput!) {
     removeValueSynonyms(input: $input) {
       value { id valueCode valueLabel synonyms }
+      errors { field message code }
+    }
+  }
+`;
+
+const RECONCILIATION_RUN_FIELDS = `
+  id
+  anchorEntityId
+  anchorEntityCode
+  anchorEntityName
+  domainCode
+  asOfDate
+  compareAsOfDate
+  status
+  stageIndex
+  assignedTo
+  openBreakCount
+  decidedAt
+  decisionNotes
+  createdAt
+  definition {
+    id
+    definitionCode
+    definitionName
+    description
+    domainCode
+    compareMode
+    grain
+    stages
+  }
+  identities { code name calculated compareValue variance passed message }
+`;
+
+const RECONCILIATION_LINE_FIELDS = `
+  lines {
+    id
+    lineEntityId
+    lineCode
+    lineName
+    attributeCode
+    attributeName
+    breakKind
+    cells { key label value numeric }
+    goldenValue
+    variance
+    isBreak
+    status
+    resolutionSourceCode
+    resolutionValue
+    resolutionNotes
+  }
+`;
+
+export const RECONCILIATION_DEFINITIONS_QUERY = `
+  query ReconciliationDefinitions {
+    reconciliationDefinitions {
+      id
+      definitionCode
+      definitionName
+      description
+      domainCode
+      compareMode
+      grain
+      stages
+    }
+  }
+`;
+
+export const RECONCILIATION_RUNS_QUERY = `
+  query ReconciliationRuns {
+    reconciliationRuns(first: 40) {
+      ${RECONCILIATION_RUN_FIELDS}
+    }
+  }
+`;
+
+export const RECONCILIATION_RUN_QUERY = `
+  query ReconciliationRun($id: ID!) {
+    reconciliationRun(id: $id) {
+      ${RECONCILIATION_RUN_FIELDS}
+      ${RECONCILIATION_LINE_FIELDS}
+    }
+  }
+`;
+
+export const OPEN_RECONCILIATION_RUN_MUTATION = `
+  mutation OpenReconciliationRun($input: OpenReconciliationRunInput!) {
+    openReconciliationRun(input: $input) {
+      run {
+        ${RECONCILIATION_RUN_FIELDS}
+      }
+      errors { field message code }
+    }
+  }
+`;
+
+export const RESOLVE_RECONCILIATION_LINE_MUTATION = `
+  mutation ResolveReconciliationLine($input: ResolveReconciliationLineInput!) {
+    resolveReconciliationLine(input: $input) {
+      run {
+        ${RECONCILIATION_RUN_FIELDS}
+        ${RECONCILIATION_LINE_FIELDS}
+      }
+      errors { field message code }
+    }
+  }
+`;
+
+export const DECIDE_RECONCILIATION_RUN_MUTATION = `
+  mutation DecideReconciliationRun($input: DecideReconciliationRunInput!) {
+    decideReconciliationRun(input: $input) {
+      run {
+        ${RECONCILIATION_RUN_FIELDS}
+        ${RECONCILIATION_LINE_FIELDS}
+      }
       errors { field message code }
     }
   }

@@ -1,12 +1,23 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { sources, type SourceKey, getFieldDrilldown, type FieldDrilldown } from '@/lib/data';
+import { useEffect, useRef, useState } from 'react';
+import { sources, type SourceKey, type FieldDrilldown } from '@/lib/data';
 import { graphqlQuery } from '@/lib/graphql';
+
+const NUMERIC_TYPES = new Set(['NUMBER', 'CURRENCY', 'PERCENTAGE', 'INTEGER', 'DECIMAL', 'FLOAT', 'NUMERIC']);
+
+export function formatAttributeValue(value: string, dataType?: string): string {
+  if (!value || value === '—') return value || '—';
+  if (!dataType || !NUMERIC_TYPES.has(dataType.toUpperCase())) return value;
+  const parsed = Number(value.replace(/,/g, ''));
+  if (!Number.isFinite(parsed)) return value;
+  return parsed.toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
 
 export interface FieldData {
   label: string;
   attributeCode?: string;
+  dataType?: string;
   value: string;
   source: SourceKey;
   conflict?: boolean;
@@ -34,13 +45,13 @@ interface SourceAttributedFieldRowProps {
   onSourceChange?: (label: string, newSource: SourceKey) => void;
   onValueChange?: (label: string, newValue: string) => void;
   onAddSourceValue?: (attributeCode: string, source: SourceKey, value: string) => void;
+  onDeleteSourceValue?: (attributeCode: string, sourceCode: string) => void;
+  asOfDate?: string;
 }
 
-export function SourceAttributedFieldRow({ field, onDrilldown, onSourceChange, onValueChange, onAddSourceValue }: SourceAttributedFieldRowProps) {
+export function SourceAttributedFieldRow({ field, onDrilldown, onAddSourceValue, onDeleteSourceValue, asOfDate }: SourceAttributedFieldRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const [editingSource, setEditingSource] = useState(false);
-  const [editingValue, setEditingValue] = useState(false);
-  const [editValue, setEditValue] = useState(field.value);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [showAddSource, setShowAddSource] = useState(false);
   const [newSource, setNewSource] = useState<SourceKey>('manual');
   const [newSourceValue, setNewSourceValue] = useState('');
@@ -111,7 +122,19 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onSourceChange, o
           };
         }),
       }
-    : getFieldDrilldown(field.label, field.source, field.value);
+    : {
+        rule: 'No other source values are stored for this attribute.',
+        candidates: [
+          {
+            src: field.source,
+            value: field.value,
+            updated: '—',
+            synced: '—',
+            reliability: null,
+            status: 'winner' as const,
+          },
+        ],
+      };
 
   const borderColor = src.hex;
 
@@ -127,101 +150,35 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onSourceChange, o
           {field.standardized && <span className="std-icon" title="Standardized via list mapping">S</span>}
         </div>
         <div className="sa-field-value-cell">
-          {editingValue ? (
-            <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-              <input
-                className="text-input"
-                style={{ fontSize: '13px', padding: '2px 6px', minWidth: '120px' }}
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    onValueChange?.(field.attributeCode || field.label, editValue);
-                    setEditingValue(false);
-                  } else if (e.key === 'Escape') {
-                    setEditValue(field.value);
-                    setEditingValue(false);
-                  }
-                }}
-                onBlur={() => {
-                  if (editValue !== field.value) {
-                    onValueChange?.(field.attributeCode || field.label, editValue);
-                  }
-                  setEditingValue(false);
-                }}
-                autoFocus
-              />
-            </div>
-          ) : (
-            <>
-              <span
-                className={`sa-field-value ${field.conflict ? 'conflict' : ''}`}
-                style={{ cursor: 'pointer' }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditValue(field.value);
-                  setEditingValue(true);
-                }}
-                title="Click to edit value"
-              >
-                {field.value}
-              </span>
-              {field.conflict && <span className="conflict-badge">CONFLICT</span>}
-              {field.alt && field.alt > 0 && (
-                <span className="alt-count" title={`${field.alt} alternative value(s) available`}>±{field.alt}</span>
-              )}
-            </>
+          <span className={`sa-field-value ${field.conflict ? 'conflict' : ''}`}>
+            {formatAttributeValue(field.value, field.dataType)}
+          </span>
+          {field.conflict && <span className="conflict-badge">CONFLICT</span>}
+          {field.alt && field.alt > 0 && (
+            <span className="alt-count" title={`${field.alt} alternative value(s) available`}>±{field.alt}</span>
           )}
         </div>
         <div className="sa-field-source-cell">
-          {editingSource ? (
-            <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-              <select
-                className="select"
-                style={{ fontSize: '11px', padding: '2px 6px', minWidth: '100px' }}
-                value={field.source}
-                onChange={(e) => {
-                  const newSource = e.target.value as SourceKey;
-                  onSourceChange?.(field.attributeCode || field.label, newSource);
-                  setEditingSource(false);
-                }}
-                onBlur={() => setEditingSource(false)}
-                autoFocus
-              >
-                {availableSources.map(([key, s]) => (
-                  <option key={key} value={key}>{s.name}</option>
-                ))}
-              </select>
-            </div>
-          ) : (
-            <span
-              className="src-pill"
-              style={{
-                color: '#fff',
-                background: src.hex,
-                cursor: 'pointer',
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setEditingSource(true);
-              }}
-              title="Click to change source"
-            >
-              {src.name}
-              {field.precedenceRank !== undefined && (
-                <span style={{ marginLeft: '4px', fontSize: '9px', opacity: 0.8 }}>
-                  (P{field.precedenceRank})
-                </span>
-              )}
-            </span>
-          )}
+          <span
+            className="src-pill"
+            style={{ color: '#fff', background: src.hex }}
+            title="Golden source, derived from the source values"
+          >
+            {src.name}
+            {field.precedenceRank !== undefined && (
+              <span style={{ marginLeft: '4px', fontSize: '9px', opacity: 0.8 }}>
+                (P{field.precedenceRank})
+              </span>
+            )}
+          </span>
           <button
             className="sa-edit-btn"
             onClick={(e) => {
               e.stopPropagation();
+              setExpanded((open) => !open);
               onDrilldown?.(field.label);
             }}
-            title="View lineage / drilldown"
+            title="Show source values"
           >
             ⌄
           </button>
@@ -279,7 +236,17 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onSourceChange, o
                     </span>
                   </div>
                   <div className={`sa-drill-td sa-drill-value ${c.muted ? 'muted' : ''} ${c.divergent ? 'divergent' : ''}`}>
-                    {c.muted ? '— Not covered' : c.value}
+                    {c.muted || !c.value || c.value === '—' ? (
+                      '— Not covered'
+                    ) : (
+                      <SourceValueEditor
+                        value={c.value}
+                        dataType={field.dataType}
+                        onSave={onAddSourceValue && field.attributeCode
+                          ? (next) => onAddSourceValue(field.attributeCode || field.label, c.src, next)
+                          : undefined}
+                      />
+                    )}
                   </div>
                   <div className="sa-drill-td sa-drill-updated">
                     {c.updated && c.updated !== '—' ? (
@@ -303,6 +270,30 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onSourceChange, o
                     {c.status === 'no-data' && <span className="sa-status-badge no-data">NO DATA</span>}
                     {c.status === 'skipped' && <span className="sa-status-badge skipped">SKIPPED</span>}
                     {c.status === 'applied' && <span className="sa-status-badge applied">APPLIED</span>}
+                    {onDeleteSourceValue && c.value && c.value !== '—' && (
+                      pendingDelete === String(c.src) ? (
+                        <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex', gap: '6px', marginLeft: '8px', alignItems: 'center' }}>
+                          <button
+                            className="btn btn-sm"
+                            onClick={() => onDeleteSourceValue(field.attributeCode || field.label, String(c.src))}
+                          >
+                            End as of {asOfDate || 'today'}
+                          </button>
+                          <button className="btn btn-sm" onClick={() => setPendingDelete(null)}>Cancel</button>
+                        </span>
+                      ) : (
+                        <button
+                          className="btn btn-sm"
+                          style={{ marginLeft: '8px' }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingDelete(String(c.src));
+                          }}
+                        >
+                          Delete
+                        </button>
+                      )
+                    )}
                   </div>
                 </div>
               );
@@ -400,5 +391,78 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onSourceChange, o
         </div>
       )}
     </>
+  );
+}
+
+function SourceValueEditor({
+  value,
+  dataType,
+  onSave,
+}: {
+  value: string;
+  dataType?: string;
+  onSave?: (value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const skipCommit = useRef(false);
+
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+
+  const display = formatAttributeValue(value, dataType);
+  if (!onSave) return <>{display}</>;
+
+  const commit = () => {
+    if (skipCommit.current) {
+      skipCommit.current = false;
+      return;
+    }
+    const numeric = Boolean(dataType && NUMERIC_TYPES.has(dataType.toUpperCase()));
+    const next = (numeric ? draft.replace(/,/g, '') : draft).trim();
+    const current = (numeric ? value.replace(/,/g, '') : value).trim();
+    setEditing(false);
+    if (next && next !== current) onSave(next);
+  };
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="sa-source-value"
+        title="Edit this source value"
+        onClick={(event) => {
+          event.stopPropagation();
+          setDraft(value);
+          setEditing(true);
+        }}
+      >
+        {display}
+      </button>
+    );
+  }
+
+  return (
+    <input
+      className="text-input"
+      style={{ fontSize: '12px', padding: '4px 6px', minWidth: '120px' }}
+      value={draft}
+      autoFocus
+      aria-label="Source value"
+      onClick={(event) => event.stopPropagation()}
+      onChange={(event) => setDraft(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.currentTarget.blur();
+        }
+        if (event.key === 'Escape') {
+          skipCommit.current = true;
+          setDraft(value);
+          setEditing(false);
+        }
+      }}
+      onBlur={commit}
+    />
   );
 }

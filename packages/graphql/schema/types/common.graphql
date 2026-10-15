@@ -102,6 +102,8 @@ type FieldLineage {
   competingValues: [SourceValue!]!
   resolutionRule: String
   lastUpdated: DateTime!
+  # True while a materialized calc that owns this attribute is waiting to be recomputed.
+  calcDirty: Boolean!
 }
 
 # Attribute Definition with Derived Attribute Support
@@ -115,6 +117,9 @@ type AttributeDefinition {
   isRequired: Boolean!
   isMultiValued: Boolean!
   referenceDomainCode: String
+  domainCode: String
+  clientId: ID
+  clientName: String
   defaultPrecedenceRank: Int!
   
   # Derived attribute fields
@@ -158,4 +163,53 @@ type DerivationResult {
   derivationType: String!
   dependencies: [String!]!
   evaluatedAt: DateTime!
+}
+
+type CalcInput {
+  inputRole: String!
+  attributeCode: String!
+  traversal: String!
+  relationshipCodes: [String!]!
+}
+
+type CalcDefinition {
+  id: ID!
+  attributeCode: String!
+  domainCode: String!
+  calcKind: String!
+  evaluationMode: String!
+  timeImpact: String!
+  outputGrain: String!
+  expression: JSON
+  aggregateFn: String
+  seriesFn: String
+  derivationDependencies: [String!]!
+  inputs: [CalcInput!]!
+}
+
+type CalculatedAttributeState {
+  entityId: ID!
+  attributeCode: String!
+  dirty: Boolean!
+  status: String
+  windowStart: Date
+  windowEnd: Date
+}
+
+type ProcessCalculatedAttributesResult {
+  processed: Int!
+  failed: Int!
+  pending: Int!
+}
+
+type ExpressionFunction {
+  id: ID!
+  code: String!
+  name: String!
+  category: String!
+  returnType: String!
+  description: String!
+  signature: String!
+  example: JSON!
+  callable: Boolean!
 }

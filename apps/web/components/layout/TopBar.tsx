@@ -1,82 +1,118 @@
 'use client';
 
-import { useTemporalStore } from '@/lib/store';
+import { useTemporalStore, type Persona } from '@/lib/store';
 import Image from 'next/image';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { AsOfDatePicker } from './AsOfDatePicker';
-import { UserMenu } from './UserMenu';
-import { BrandLogo } from './BrandLogo';
+
+const PERSONAS: { id: Persona; label: string }[] = [
+  { id: 'steward', label: 'Data Steward' },
+  { id: 'ops', label: 'Operations Analyst' },
+  { id: 'governance', label: 'Governance Lead' },
+];
+
+const CRUMB_LABELS: Record<string, string> = {
+  funds: 'Funds',
+  issuers: 'Issuers',
+  securities: 'Securities',
+  deals: 'Deals',
+  investors: 'Investors',
+  positions: 'Positions',
+  prices: 'Prices',
+  precedence: 'Precedence Rules',
+  quality: 'Data Quality',
+  reconcile: 'Reconcile',
+  lists: 'Value Lists',
+  intersections: 'Composite Entities',
+  imports: 'Position File Load',
+  profile: 'Profile',
+  resolve: 'Resolve',
+  admin: 'Admin',
+  entities: 'Entity Management',
+  sources: 'Data Sources',
+  attributes: 'Attributes',
+  'expression-functions': 'Expression Functions',
+  templates: 'Templates',
+  layouts: 'Display Layouts',
+  'dq-rules': 'DQ Rules',
+  compliance: 'Compliance',
+  dashboards: 'Dashboards',
+  narratives: 'Narratives',
+  tenancy: 'Clients, Users & Roles',
+  new: 'New',
+  edit: 'Edit',
+};
+
+function crumbLabel(segment: string) {
+  if (CRUMB_LABELS[segment]) return CRUMB_LABELS[segment];
+  if (segment.length > 18) return 'Record';
+  return segment
+    .split('-')
+    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
+    .join(' ');
+}
 
 export function TopBar() {
-  const { persona, setPersona, chatOpen, toggleChat } = useTemporalStore();
+  const pathname = usePathname() || '/';
+  const { persona, setPersona, chatOpen, toggleChat, asOfDate } = useTemporalStore();
   const [showAdminMenu, setShowAdminMenu] = useState(false);
+  const [showPersonaMenu, setShowPersonaMenu] = useState(false);
+  const [live, setLive] = useState(true);
   const menuRef = useRef<HTMLDivElement>(null);
+  const personaRef = useRef<HTMLDivElement>(null);
 
-  // Close the admin dropdown when clicking outside of it
   const handleClickOutside = useCallback((event: MouseEvent) => {
-    if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-      setShowAdminMenu(false);
-    }
+    const target = event.target as Node;
+    if (menuRef.current && !menuRef.current.contains(target)) setShowAdminMenu(false);
+    if (personaRef.current && !personaRef.current.contains(target)) setShowPersonaMenu(false);
   }, []);
 
   useEffect(() => {
-    if (showAdminMenu) {
+    if (showAdminMenu || showPersonaMenu) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showAdminMenu, handleClickOutside]);
+  }, [showAdminMenu, showPersonaMenu, handleClickOutside]);
+
+  useEffect(() => {
+    setLive(asOfDate === new Date().toISOString().split('T')[0]);
+  }, [asOfDate]);
+
+  const crumbs = pathname === '/'
+    ? [{ href: '/', label: 'Master Data' }, { href: '/', label: 'Overview' }]
+    : [
+        { href: '/', label: 'Master Data' },
+        ...pathname.split('/').filter(Boolean).reduce<Array<{ href: string; label: string }>>((items, segment) => {
+          const prev = items.length ? items[items.length - 1].href : '';
+          items.push({ href: `${prev}/${segment}`, label: crumbLabel(segment) });
+          return items;
+        }, []),
+      ];
+
+  const personaLabel = PERSONAS.find((item) => item.id === persona)?.label || 'Operations Analyst';
 
   return (
     <div className="topbar">
-      <div style={{ display: 'flex', alignItems: 'center' }}>
-        <Link href="/" style={{ textDecoration: 'none' }}>
-          <div className="brand">
-            <BrandLogo />
-            <div className="brand-sub">Master Data · v2.4</div>
-          </div>
-        </Link>
-        <div className="role-tabs">
-          <button
-            className={`role-tab ${persona === 'steward' ? 'active' : ''}`}
-            onClick={() => setPersona('steward')}
-          >
-            Data Steward
-          </button>
-          <button
-            className={`role-tab ${persona === 'ops' ? 'active' : ''}`}
-            onClick={() => setPersona('ops')}
-          >
-            Operations Analyst
-          </button>
-          <button
-            className={`role-tab ${persona === 'governance' ? 'active' : ''}`}
-            onClick={() => setPersona('governance')}
-          >
-            Governance Lead
-          </button>
-        </div>
-      </div>
-      <div className="topbar-right" style={{ position: 'relative', zIndex: 1000 }}>
-        <button
-          className={`chat-launcher ${chatOpen ? 'active' : ''}`}
-          onClick={toggleChat}
-          aria-label={chatOpen ? 'Close assistant' : 'Open assistant'}
-          aria-expanded={chatOpen}
-          title={chatOpen ? 'Close assistant' : 'Open assistant'}
-        >
-          <Image
-            className="chat-launcher-avatar"
-            src="/tapestraichat-icon.png"
-            alt=""
-            width={26}
-            height={26}
-            unoptimized
-          />
-          <span className="chat-launcher-label">Chat</span>
-        </button>
+      <nav className="topbar-crumbs" aria-label="Breadcrumb">
+        {crumbs.map((crumb, index) => {
+          const last = index === crumbs.length - 1;
+          return (
+            <span key={`${crumb.href}-${crumb.label}`} className="topbar-crumb">
+              {index > 0 && <span className="topbar-crumb-sep">/</span>}
+              {last ? (
+                <span className="topbar-crumb-current">{crumb.label}</span>
+              ) : (
+                <Link href={crumb.href}>{crumb.label}</Link>
+              )}
+            </span>
+          );
+        })}
+      </nav>
+      <div className="topbar-right">
         <AsOfDatePicker />
         <div ref={menuRef} style={{ position: 'relative' }}>
           <button
@@ -171,6 +207,20 @@ export function TopBar() {
                     Statement Studio
                   </div>
                 </Link>
+                <Link href="/admin/expression-functions" onClick={() => setShowAdminMenu(false)}>
+                  <div style={{
+                    padding: '12px 16px',
+                    color: 'var(--ink-2)',
+                    textDecoration: 'none',
+                    fontSize: '14px',
+                    borderBottom: '1px solid var(--line)'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    Expression functions
+                  </div>
+                </Link>
                 <Link href="/admin/templates" onClick={() => setShowAdminMenu(false)}>
                   <div style={{
                     padding: '12px 16px',
@@ -183,6 +233,20 @@ export function TopBar() {
                   onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
                     Templates
+                  </div>
+                </Link>
+                <Link href="/admin/layouts" onClick={() => setShowAdminMenu(false)}>
+                  <div style={{
+                    padding: '12px 16px',
+                    color: 'var(--ink-2)',
+                    textDecoration: 'none',
+                    fontSize: '14px',
+                    borderBottom: '1px solid var(--line)'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    Display layouts
                   </div>
                 </Link>
                 <Link href="/admin/dq-rules" onClick={() => setShowAdminMenu(false)}>
@@ -257,10 +321,57 @@ export function TopBar() {
               </div>
           )}
         </div>
-        <div className="status-pill">
-          <span className="status-dot"></span>All systems healthy
+        <div className={`status-pill ${live ? '' : 'is-historical'}`}>
+          <span className="status-dot"></span>{live ? 'Live' : 'Historical'}
         </div>
-        <UserMenu />
+        <div ref={personaRef} style={{ position: 'relative' }}>
+          <button
+            type="button"
+            className="persona-btn"
+            onClick={() => setShowPersonaMenu(!showPersonaMenu)}
+            aria-haspopup="menu"
+            aria-expanded={showPersonaMenu}
+          >
+            {personaLabel}
+            <span aria-hidden>▾</span>
+          </button>
+          {showPersonaMenu && (
+            <div className="persona-menu" role="menu">
+              {PERSONAS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={persona === item.id}
+                  className={persona === item.id ? 'active' : ''}
+                  onClick={() => {
+                    setPersona(item.id);
+                    setShowPersonaMenu(false);
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <button
+          className={`chat-launcher ${chatOpen ? 'active' : ''}`}
+          onClick={toggleChat}
+          aria-label={chatOpen ? 'Close assistant' : 'Open assistant'}
+          aria-expanded={chatOpen}
+          title={chatOpen ? 'Close assistant' : 'Open assistant'}
+        >
+          <Image
+            className="chat-launcher-avatar"
+            src="/tapestraichat-icon.png"
+            alt=""
+            width={26}
+            height={26}
+            unoptimized
+          />
+          <span className="chat-launcher-label">Chat</span>
+        </button>
       </div>
     </div>
   );

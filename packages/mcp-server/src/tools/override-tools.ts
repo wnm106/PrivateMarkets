@@ -3,7 +3,7 @@ import { ToolDefinition } from '../lib/types';
 
 const submitManualOverride: ToolDefinition = {
   name: 'submit_manual_override',
-  description: 'Submit a manual override for a specific entity attribute. This creates a new golden record with highest precedence.',
+  description: 'Store a manual source value for an entity attribute. The saved golden source follows template, then attribute, then data-source precedence.',
   category: 'override',
   inputSchema: {
     type: 'object',
@@ -26,17 +26,18 @@ const submitManualOverride: ToolDefinition = {
     if (!attrDef) throw new Error(`Attribute not found: ${args.attributeCode}`);
 
     const { data: manualSource } = await supabase
+      .schema('entity_instances')
       .from('source_registry')
       .select('id')
       .eq('source_code', 'MANUAL')
       .single();
 
-    // Close existing records
     await supabase
       .from('entity_attribute_values')
       .update({ system_to: new Date().toISOString() })
       .eq('entity_id', args.entityId)
       .eq('attribute_id', attrDef.id)
+      .eq('source_id', manualSource?.id)
       .eq('valid_to', '9999-12-31')
       .eq('system_to', '9999-12-31 23:59:59');
 

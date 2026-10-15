@@ -20,20 +20,25 @@ type Query {
   
   # Metadata queries
   domainTypes: [DomainTypeRecord!]!
+  domainRecordCounts: [DomainRecordCount!]!
   attributeRegister(domainCode: String): [AttributeDefinition!]!
   domainTemplates(domainCode: String): [Template!]!
+  calcDefinitions: [CalcDefinition!]!
+  calculatedAttributeStates(entityId: ID!): [CalculatedAttributeState!]!
+  expressionFunctions(category: String): [ExpressionFunction!]!
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
   
   # Lineage and temporal queries
-  fieldLineage(entityId: ID!, asOfDate: Date): [FieldLineage!]!
+  fieldLineage(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime): [FieldLineage!]!
   temporalHistory(entityId: ID!, attributeCode: String!, fromDate: Date!, toDate: Date!): [TemporalValue!]!
   
   # DQ queries
   dqRule(id: ID!): DQRule
   dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
   dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
+  dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date): DataQualityDashboard!
   
   # Source queries
   dataSources(type: String, isActive: Boolean): [DataSource!]!
@@ -82,6 +87,10 @@ type Query {
   narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON, asOfDate: String, knowledgeDate: String): DataQueryResponse!
   gridQuery(input: GridQueryInput!): GridResult!
+
+  reconciliationDefinitions(domainCode: String): [ReconciliationDefinition!]!
+  reconciliationRuns(status: String, first: Int): [ReconciliationRun!]!
+  reconciliationRun(id: ID!): ReconciliationRun
 }
 
 type Mutation {
@@ -105,6 +114,7 @@ type Mutation {
   deleteDomainType(id: ID!): DeleteDomainTypeResult!
   createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
   updateAttributeDefinition(input: UpdateAttributeDefinitionInput!): UpdateAttributeDefinitionResult!
+  processCalculatedAttributes(limit: Int): ProcessCalculatedAttributesResult!
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
   assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
   
@@ -191,6 +201,10 @@ type Mutation {
   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
   deleteNarrative(id: ID!): DeleteNarrativeResult!
+
+  openReconciliationRun(input: OpenReconciliationRunInput!): ReconciliationRunResult!
+  resolveReconciliationLine(input: ResolveReconciliationLineInput!): ReconciliationRunResult!
+  decideReconciliationRun(input: DecideReconciliationRunInput!): ReconciliationRunResult!
 }
 
 # Root Subscription Type
@@ -279,6 +293,8 @@ type Template {
   templateName: String!
   description: String
   isActive: Boolean!
+  clientId: ID
+  clientName: String
   attributes: [TemplateAttribute!]!
 }
 
@@ -866,6 +882,7 @@ input CreateRelationshipTypeInput {
   isActive: Boolean
   cardinality: String
   compositeKey: [String!]
+  clientId: ID
 }
 
 input UpdateRelationshipTypeInput {

@@ -37,6 +37,7 @@ import {
   REORDER_TEMPLATE_ATTRIBUTES_MUTATION,
 } from '@/lib/graphql';
 import { RelationshipTypeForm } from '@/components/forms/RelationshipTypeForm';
+import { SchemaScopeBadge, SchemaScopeField } from '@/components/admin/SchemaScopeField';
 import { EntityIdentifierDefinitionForm } from '@/components/forms/EntityIdentifierDefinitionForm';
 import { TemplateAttributePicker, type PickerAttribute } from '@/components/forms/TemplateAttributePicker';
 import { AttributeExpandPanel } from '@/components/admin/AttributeExpandPanel';
@@ -49,6 +50,8 @@ interface DomainType {
   domainName: string;
   description?: string;
   isActive: boolean;
+  clientId?: string | null;
+  clientName?: string | null;
 }
 
 interface Attribute {
@@ -75,6 +78,8 @@ interface Attribute {
   unitOfMeasure?: string;
   referenceListCode?: string;
   defaultPrecedenceChain?: string[];
+  clientId?: string | null;
+  clientName?: string | null;
 }
 
 interface TemplateAttribute {
@@ -99,6 +104,8 @@ interface Template {
   isActive: boolean;
   applicabilityRules?: any;
   attributes?: TemplateAttribute[];
+  clientId?: string | null;
+  clientName?: string | null;
 }
 
 interface RelationshipType {
@@ -110,6 +117,8 @@ interface RelationshipType {
   description?: string;
   isActive: boolean;
   isRequired?: boolean;
+  clientId?: string | null;
+  clientName?: string | null;
 }
 
 interface EntityIdentifierDefinition {
@@ -289,7 +298,16 @@ export default function EntityTypeDetailPage() {
 
   const handleCreateAttribute = async (data: any) => {
     try {
-      await graphqlClient.mutation(CREATE_ATTRIBUTE_MUTATION, { input: { ...data, domainCode } }).toPromise();
+      const result = await graphqlClient.mutation(CREATE_ATTRIBUTE_MUTATION, { input: { ...data, domainCode } }).toPromise();
+      const errors = result.data?.createAttribute?.errors;
+      if (errors && errors.length > 0) {
+        window.alert(errors[0].message);
+        return;
+      }
+      if (result.error) {
+        window.alert(result.error.message);
+        return;
+      }
       setShowCreateAttributeModal(false);
       loadData();
     } catch (error) {
@@ -317,7 +335,16 @@ export default function EntityTypeDetailPage() {
 
   const handleCreateTemplate = async (data: any) => {
     try {
-      await graphqlClient.mutation(CREATE_TEMPLATE_MUTATION, { input: data }).toPromise();
+      const result = await graphqlClient.mutation(CREATE_TEMPLATE_MUTATION, { input: data }).toPromise();
+      const errors = result.data?.createTemplate?.errors;
+      if (errors && errors.length > 0) {
+        window.alert(errors[0].message);
+        return;
+      }
+      if (result.error) {
+        window.alert(result.error.message);
+        return;
+      }
       setShowCreateTemplateModal(false);
       loadData();
     } catch (error) {
@@ -670,6 +697,7 @@ export default function EntityTypeDetailPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <div className="page-title">{domain.domainName}</div>
               <span className="mono" style={{ fontSize: '12px', color: 'var(--ink-3)' }}>{domain.domainCode}</span>
+              <SchemaScopeBadge clientId={domain.clientId} clientName={domain.clientName} />
               {!domain.isActive && (
                 <span style={{
                   fontSize: '10px',
@@ -763,20 +791,48 @@ export default function EntityTypeDetailPage() {
                     ...rowStyle,
                     flexDirection: 'column',
                     alignItems: 'stretch',
-                    gap: expanded ? '12px' : 0,
-                    cursor: 'pointer',
-                    borderColor: expanded ? 'var(--accent, #2563eb)' : 'var(--line)',
+                    gap: 0,
+                    padding: 0,
+                    overflow: 'hidden',
+                    borderColor: expanded ? 'var(--accent)' : 'var(--line)',
+                    background: expanded ? 'var(--surface)' : rowStyle.background,
+                    boxShadow: expanded ? 'var(--shadow-sm)' : undefined,
                   }}
-                  onClick={() => setExpandedAttributeId(expanded ? null : attr.id)}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '12px 16px',
+                      cursor: 'pointer',
+                      background: expanded ? 'var(--bg-alt)' : 'transparent',
+                      borderBottom: expanded ? '1px solid var(--line-strong)' : 'none',
+                      borderLeft: expanded ? '3px solid var(--accent)' : '3px solid transparent',
+                    }}
+                    onClick={() => setExpandedAttributeId(expanded ? null : attr.id)}
+                  >
                     <div>
-                      <div style={{ fontSize: '14px', fontWeight: 500 }}>
+                      {expanded && (
+                        <div style={{
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          letterSpacing: '0.08em',
+                          textTransform: 'uppercase',
+                          color: 'var(--accent-2)',
+                          marginBottom: '2px',
+                        }}>
+                          Editing attribute
+                        </div>
+                      )}
+                      <div style={{ fontSize: expanded ? '16px' : '14px', fontWeight: expanded ? 600 : 500, color: 'var(--ink)' }}>
                         {expanded ? '▾' : '▸'} {attr.attributeName}
                         {attr.isRequired && <span style={{ color: 'var(--red)', marginLeft: '4px' }}>*</span>}
                       </div>
                       <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: 'var(--ink-3)', marginTop: '2px', flexWrap: 'wrap' }}>
                         <span className="mono">{attr.attributeCode}</span>
+                        <SchemaScopeBadge clientId={attr.clientId} clientName={attr.clientName} />
                         <span>Type: {attr.dataType}</span>
                         {attr.isMultiValued && <span>Multi-valued</span>}
                         {attr.referenceListCode && (
@@ -801,13 +857,15 @@ export default function EntityTypeDetailPage() {
                     </button>
                   </div>
                   {expanded && (
-                    <AttributeExpandPanel
-                      attribute={attr}
-                      weightAttributes={attributes}
-                      referenceLists={referenceLists}
-                      onSaved={() => { void refreshAttributes(); }}
-                      onCancel={() => setExpandedAttributeId(null)}
-                    />
+                    <div style={{ padding: '16px', background: 'var(--bg)' }}>
+                      <AttributeExpandPanel
+                        attribute={attr}
+                        weightAttributes={attributes}
+                        referenceLists={referenceLists}
+                        onSaved={() => { void refreshAttributes(); }}
+                        onCancel={() => setExpandedAttributeId(null)}
+                      />
+                    </div>
                   )}
                 </div>
                 );
@@ -832,6 +890,7 @@ export default function EntityTypeDetailPage() {
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500 }}>{template.templateName}</span>
+                      <SchemaScopeBadge clientId={template.clientId} clientName={template.clientName} />
                       {!template.isActive && (
                         <span style={{ fontSize: '10px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>Inactive</span>
                       )}
@@ -878,6 +937,7 @@ export default function EntityTypeDetailPage() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <span className="mono" style={{ fontSize: '12px', color: 'var(--ink-3)' }}>{rel.relationshipCode}</span>
                     <span style={{ fontSize: '13px', fontWeight: 500 }}>{rel.relationshipName}</span>
+                    <SchemaScopeBadge clientId={rel.clientId} clientName={rel.clientName} />
                     <span style={{ fontSize: '12px', color: 'var(--ink-3)' }}>
                       {rel.parentDomainCode || '—'} → {rel.childDomainCode || '—'}
                     </span>
@@ -1044,6 +1104,7 @@ export default function EntityTypeDetailPage() {
       {showCreateAttributeModal && (
         <CreateAttributeModal
           domainTypes={allDomainTypes}
+          owner={domain.clientId ? { id: domain.clientId, name: domain.clientName || 'This client' } : null}
           onClose={() => setShowCreateAttributeModal(false)}
           onSubmit={handleCreateAttribute}
         />
@@ -1054,6 +1115,7 @@ export default function EntityTypeDetailPage() {
         <CreateTemplateModal
           fixedDomainCode={domain.domainCode}
           fixedDomainName={domain.domainName}
+          owner={domain.clientId ? { id: domain.clientId, name: domain.clientName || 'This client' } : null}
           onClose={() => setShowCreateTemplateModal(false)}
           onSubmit={handleCreateTemplate}
         />
@@ -1066,6 +1128,7 @@ export default function EntityTypeDetailPage() {
             mode="create"
             initialData={{ parentDomainCode: domain.domainCode }}
             domainOptions={allDomainTypes.map(d => ({ domainCode: d.domainCode, domainName: d.domainName }))}
+            owner={domain.clientId ? { id: domain.clientId, name: domain.clientName || 'This client' } : null}
             onCancel={() => setShowCreateRelationshipModal(false)}
             onSubmit={handleCreateRelationshipType}
           />
@@ -1411,10 +1474,12 @@ function EditDomainModal({
 // Create Attribute Modal
 function CreateAttributeModal({
   domainTypes,
+  owner,
   onClose,
   onSubmit
 }: {
   domainTypes: DomainType[];
+  owner?: { id: string; name: string } | null;
   onClose: () => void;
   onSubmit: (data: any) => void;
 }) {
@@ -1425,7 +1490,8 @@ function CreateAttributeModal({
     description: '',
     referenceDomainCode: '',
     isRequired: false,
-    isMultiValued: false
+    isMultiValued: false,
+    clientId: null as string | null,
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1560,6 +1626,11 @@ function CreateAttributeModal({
                   Multi-valued
                 </label>
               </div>
+              <SchemaScopeField
+                value={formData.clientId}
+                owner={owner}
+                onChange={(clientId) => setFormData(prev => ({ ...prev, clientId }))}
+              />
             </div>
           </div>
 
@@ -1584,18 +1655,21 @@ function CreateAttributeModal({
 function CreateTemplateModal({
   fixedDomainCode,
   fixedDomainName,
+  owner,
   onClose,
   onSubmit
 }: {
   fixedDomainCode: string;
   fixedDomainName: string;
+  owner?: { id: string; name: string } | null;
   onClose: () => void;
   onSubmit: (data: any) => void;
 }) {
   const [formData, setFormData] = useState({
     templateCode: '',
     templateName: '',
-    description: ''
+    description: '',
+    clientId: null as string | null,
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1678,6 +1752,11 @@ function CreateTemplateModal({
                   rows={3}
                 />
               </div>
+              <SchemaScopeField
+                value={formData.clientId}
+                owner={owner}
+                onChange={(clientId) => setFormData(prev => ({ ...prev, clientId }))}
+              />
             </div>
           </div>
 

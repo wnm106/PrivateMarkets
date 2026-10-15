@@ -219,7 +219,10 @@ export function EntityAttributeTable({
         const seen = new Set<string>();
         const cols = attrs
           .filter((a) => {
-            if (!a.attributeCode || seen.has(a.attributeCode)) return false;
+            // The grid reserves "<alias>.<attribute>" for attributes reached through a
+            // declared lookup, so a dotted code is not addressable as a plain column and
+            // fails the whole query. Related columns come from `related` instead.
+            if (!a.attributeCode || a.attributeCode.includes('.') || seen.has(a.attributeCode)) return false;
             seen.add(a.attributeCode);
             return true;
           })

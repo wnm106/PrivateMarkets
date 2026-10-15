@@ -9,6 +9,7 @@ import {
   DOMAIN_TEMPLATES_QUERY,
   CREATE_DOMAIN_TYPE_MUTATION,
 } from '@/lib/graphql';
+import { SchemaScopeBadge, SchemaScopeField } from '@/components/admin/SchemaScopeField';
 
 interface DomainType {
   id: string;
@@ -16,6 +17,8 @@ interface DomainType {
   domainName: string;
   description?: string;
   isActive: boolean;
+  clientId?: string | null;
+  clientName?: string | null;
 }
 
 interface Attribute {
@@ -63,7 +66,16 @@ export default function EntityManagementPage() {
 
   const handleCreateDomain = async (data: any) => {
     try {
-      await graphqlClient.mutation(CREATE_DOMAIN_TYPE_MUTATION, { input: data }).toPromise();
+      const result = await graphqlClient.mutation(CREATE_DOMAIN_TYPE_MUTATION, { input: data }).toPromise();
+      const errors = result.data?.createDomainType?.errors;
+      if (errors && errors.length > 0) {
+        window.alert(errors[0].message);
+        return;
+      }
+      if (result.error) {
+        window.alert(result.error.message);
+        return;
+      }
       setShowCreateDomainModal(false);
       loadData();
     } catch (error) {
@@ -149,8 +161,11 @@ export default function EntityManagementPage() {
                   <div style={{ fontSize: '16px', fontWeight: 600, marginBottom: '4px' }}>
                     {domain.domainName}
                   </div>
-                  <div className="mono" style={{ fontSize: '11px', color: 'var(--ink-3)' }}>
-                    {domain.domainCode}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div className="mono" style={{ fontSize: '11px', color: 'var(--ink-3)' }}>
+                      {domain.domainCode}
+                    </div>
+                    <SchemaScopeBadge clientId={domain.clientId} clientName={domain.clientName} />
                   </div>
                 </div>
                 <div
@@ -208,7 +223,8 @@ function CreateDomainModal({ onClose, onSubmit }: { onClose: () => void; onSubmi
   const [formData, setFormData] = useState({
     domainCode: '',
     domainName: '',
-    description: ''
+    description: '',
+    clientId: null as string | null,
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -291,6 +307,10 @@ function CreateDomainModal({ onClose, onSubmit }: { onClose: () => void; onSubmi
                   rows={3}
                 />
               </div>
+              <SchemaScopeField
+                value={formData.clientId}
+                onChange={(clientId) => setFormData(prev => ({ ...prev, clientId }))}
+              />
             </div>
           </div>
 

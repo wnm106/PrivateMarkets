@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { DomainKey } from '@/lib/mock-data'; // Only keeping DomainKey type, removing function imports
 import { graphqlQuery, DOMAIN_TEMPLATES_QUERY, RELATIONSHIP_TYPES_QUERY, ENTITIES_QUERY } from '@/lib/graphql';
+import { SchemaScopeField } from '@/components/admin/SchemaScopeField';
 
 interface EntityFormProps {
   domain: DomainKey;
@@ -76,6 +77,7 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
     sources: [] as string[],
     parentRelationships: [] as RelationshipEntry[],
     childRelationships: [] as RelationshipEntry[],
+    clientId: null as string | null,
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -147,6 +149,15 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
       </div>
       <div className="builder-body">
         <div className="form-grid">
+          {mode === 'create' && (
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <SchemaScopeField
+                value={formData.clientId}
+                allowGlobal={false}
+                onChange={(clientId) => handleChange('clientId', clientId)}
+              />
+            </div>
+          )}
           <div className="field">
             <label>Entity Code *</label>
             <input

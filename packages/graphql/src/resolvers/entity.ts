@@ -1,4 +1,7 @@
 import { Context } from '../context';
+import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePosition, storedRuleLabel } from '../lib/attribute-sequence';
+import { dirtyAttributeCodes } from './calculation';
+import { resolveSchemaClientId, withClientNames } from './schema-scope';
 
 export const entityResolvers = {
   Query: {
@@ -105,7 +108,7 @@ export const entityResolvers = {
         throw error;
       }
       
-      return mapEntityRow(data);
+      return attachCompositeMembers(mapEntityRow(data), context);
     },
     
     // Queries for entity management
@@ -163,6 +166,30 @@ export const entityResolvers = {
       })) || [];
     },
 
+    domainRecordCounts: async (_: any, __: any, context: Context) => {
+      const { data: domains, error: domainError } = await context.supabase
+        .from('domain_types')
+        .select('domain_code')
+        .eq('is_active', true);
+
+      if (domainError) throw domainError;
+
+      return Promise.all((domains || []).map(async (domain: { domain_code: string }) => {
+        const { count, error } = await context.supabase
+          .from('master_entities')
+          .select('id', { count: 'exact', head: true })
+          .eq('domain_code', domain.domain_code)
+          .eq('is_active', true);
+
+        if (error) throw error;
+
+        return {
+          domainCode: domain.domain_code,
+          totalCount: count || 0,
+        };
+      }));
+    },
+
     domainTypes: async (_: any, __: any, context: Context) => {
       const { data, error } = await context.supabase
         .from('domain_types')
@@ -173,12 +200,13 @@ export const entityResolvers = {
           description,
           is_active,
           created_at,
-          updated_at
+          updated_at,
+          client_id
         `);
 
       if (error) throw error;
 
-      return data?.map((item: any) => ({
+      const rows = data?.map((item: any) => ({
         id: item.id,
         domainCode: item.domain_code,
         domainName: item.domain_name,
@@ -186,7 +214,9 @@ export const entityResolvers = {
         isActive: item.is_active,
         createdAt: item.created_at,
         updatedAt: item.updated_at,
+        clientId: item.client_id ?? null,
       })) || [];
+      return withClientNames(context, rows);
     },
     
     // Domain-specific convenience queries - delegate to entities with domainCode filter
@@ -241,7 +271,7 @@ export const entityResolvers = {
       
       if (error) throw error;
       
-      return (data || []).map((row: any) => ({
+      const rows = (data || []).map((row: any) => ({
         id: row.id,
         relationshipCode: row.relationship_code,
         relationshipName: row.relationship_name,
@@ -252,7 +282,9 @@ export const entityResolvers = {
         description: row.description,
         isActive: row.is_active,
         isRequired: row.is_required || false,
+        clientId: row.client_id ?? null,
       }));
+      return withClientNames(context, rows);
     },
   },
   
@@ -260,42 +292,77 @@ export const entityResolvers = {
     lineage: async (entity: any, _: any, context: Context) => {
       const { data, error } = await context.supabase
         .from('entity_attribute_values')
-        .select(`
-          *,
-          attribute_register!inner(attribute_code, attribute_name),
-          source_registry!inner(source_code, source_name, precedence_rank)
-        `)
+        .select('*')
         .eq('entity_id', entity.id)
         .eq('valid_to', '9999-12-31')
         .eq('system_to', '9999-12-31 23:59:59');
       
       if (error) throw error;
+
+      const attributeIds = [...new Set((data || []).map((row: any) => row.attribute_id).filter(Boolean))];
+      const sourceIds = [...new Set((data || []).map((row: any) => row.source_id).filter(Boolean))];
+      const [{ data: attributes, error: attributeError }, { data: sourceRows, error: sourceError }] = await Promise.all([
+        attributeIds.length
+          ? context.supabase.from('attribute_register').select('id, attribute_code, attribute_name').in('id', attributeIds)
+          : Promise.resolve({ data: [], error: null }),
+        sourceIds.length
+          ? context.supabase.schema('entity_instances').from('source_registry').select('id, source_code, source_name').in('id', sourceIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (attributeError) throw attributeError;
+      if (sourceError) throw sourceError;
+      const attributeById = new Map((attributes || []).map((attribute: any) => [attribute.id, attribute]));
+      const sourceById = new Map((sourceRows || []).map((source: any) => [source.id, source]));
+      const rows = (data || []).map((row: any) => ({
+        ...row,
+        attribute_code: attributeById.get(row.attribute_id)?.attribute_code,
+        attribute_name: attributeById.get(row.attribute_id)?.attribute_name,
+        source_code: sourceById.get(row.source_id)?.source_code,
+        source_name: sourceById.get(row.source_id)?.source_name,
+      })).filter((row: any) => row.attribute_code && row.source_code);
       
       // Group by attribute
       const byAttribute = new Map<string, any[]>();
-      (data || []).forEach((row: any) => {
-        const code = row.attribute_register.attribute_code;
+      rows.forEach((row: any) => {
+        const code = row.attribute_code;
         if (!byAttribute.has(code)) byAttribute.set(code, []);
         byAttribute.get(code)!.push(row);
       });
       
+      const sequences = await loadAttributeSequences(context.supabase, entity.id, [...byAttribute.keys()]);
+      const dirty = await dirtyAttributeCodes(context, entity.id);
+
       return Array.from(byAttribute.entries()).map(([code, values]) => {
-        const winningRecord = values.find(v => v.golden_value !== null && v.golden_value !== undefined && v.golden_value !== '') || values[0];
+        const sequence = sequences.get(code) ?? { chain: [], tier: 'source' as const };
+        const winningRecord = pickPersistedWinner(values);
+        const ordered = [
+          ...(winningRecord ? [winningRecord] : []),
+          ...values
+            .filter((row: any) => row !== winningRecord)
+            .sort((a: any, b: any) =>
+              sequencePosition(a.source_code, sequence.chain, a.precedence_rank ?? 999) -
+              sequencePosition(b.source_code, sequence.chain, b.precedence_rank ?? 999)
+            ),
+        ];
         return {
           attributeCode: code,
-          attributeName: winningRecord.attribute_register.attribute_name,
-          currentValue: winningRecord.golden_value,
-          competingValues: values.map((v: any) => ({
-            source: v.source_registry.source_code,
-            sourceName: v.source_registry.source_name,
-            value: v.golden_value,
-            precedenceRank: v.precedence_rank,
-            validFrom: v.valid_from,
-            validTo: v.valid_to,
-            confidenceScore: v.confidence_score,
-          })),
-          resolutionRule: winningRecord.resolution_rule_applied,
-          lastUpdated: winningRecord.system_from,
+          attributeName: winningRecord?.attribute_name,
+          currentValue: winningRecord?.golden_value ?? null,
+          competingValues: ordered.map((v: any) => {
+            const sequenceIndex = sequence.chain.indexOf(v.source_code);
+            return {
+              source: v.source_code,
+              sourceName: v.source_name,
+              value: v.golden_value,
+              precedenceRank: sequenceIndex >= 0 ? sequenceIndex + 1 : v.precedence_rank,
+              validFrom: v.valid_from,
+              validTo: v.valid_to,
+              confidenceScore: v.confidence_score,
+            };
+          }),
+          resolutionRule: storedRuleLabel(winningRecord?.resolution_rule_applied) || sequenceLabel(sequence),
+          lastUpdated: winningRecord?.system_from,
+          calcDirty: dirty.has(code),
         };
       });
     },
@@ -322,6 +389,8 @@ export const entityResolvers = {
           templateId = template?.id;
         }
         
+        const clientId = await resolveSchemaClientId(context, input.clientId, { required: true });
+
         // Insert into master_entities
         const { data: entity, error: entityError } = await context.supabase
           .from('master_entities')
@@ -331,6 +400,7 @@ export const entityResolvers = {
             domain_code: input.domainCode,
             template_id: templateId,
             description: input.description,
+            client_id: clientId,
             created_by: userId,
           })
           .select()
@@ -349,6 +419,7 @@ export const entityResolvers = {
             
             if (attr) {
               const { data: source } = await context.supabase
+                .schema('entity_instances')
                 .from('source_registry')
                 .select('id')
                 .eq('source_code', 'MANUAL')
@@ -423,16 +494,28 @@ export const entityResolvers = {
       const userId = context.user?.id;
       
       try {
-        // Update master_entities
+        const patch: Record<string, unknown> = {
+          updated_by: userId,
+          updated_at: new Date().toISOString(),
+        };
+        if (typeof input.entityName === 'string') {
+          const entityName = input.entityName.trim();
+          if (!entityName) {
+            return {
+              entity: null,
+              errors: [{ field: 'entityName', message: 'Entity name is required', code: 'VALIDATION' }],
+            };
+          }
+          patch.entity_name = entityName;
+        }
+        if (input.description !== undefined) patch.description = input.description;
+        if (typeof input.isActive === 'boolean') patch.is_active = input.isActive;
+
+        // Update master_entities. Only fields present on the input are written,
+        // so an attribute save does not clear the name.
         const { data: entity, error: entityError } = await context.supabase
           .from('master_entities')
-          .update({
-            entity_name: input.entityName,
-            description: input.description,
-            is_active: input.isActive,
-            updated_by: userId,
-            updated_at: new Date().toISOString(),
-          })
+          .update(patch)
           .eq('id', input.id)
           .select()
           .single();
@@ -449,14 +532,26 @@ export const entityResolvers = {
               .single();
             
             if (attr) {
-              const { data: source } = await context.supabase
+              const raw = value && typeof value === 'object' && 'value' in value
+                ? (value as { value: unknown }).value
+                : value;
+              const text = typeof raw === 'string' ? raw : typeof raw === 'number' ? String(raw) : null;
+              if (!text) continue;
+
+              const { data: source, error: sourceError } = await context.supabase
+                .schema('entity_instances')
                 .from('source_registry')
                 .select('id')
                 .eq('source_code', 'MANUAL')
                 .single();
-              
-              // Close existing record
-              await context.supabase
+              if (sourceError || !source?.id) throw sourceError || new Error('Manual source is not registered');
+
+              const numeric = typeof raw === 'number'
+                ? raw
+                : Number.isFinite(Number(text)) ? Number(text) : null;
+
+              // Replace only the manual source. Other sources stay, and the preference trigger stamps the winner.
+              const { error: closeError } = await context.supabase
                 .from('entity_attribute_values')
                 .update({
                   valid_to: new Date().toISOString().split('T')[0],
@@ -464,19 +559,22 @@ export const entityResolvers = {
                 })
                 .eq('entity_id', input.id)
                 .eq('attribute_id', attr.id)
+                .eq('source_id', source.id)
                 .eq('system_to', '9999-12-31 23:59:59');
-              
+              if (closeError) throw closeError;
+
               // Insert new record
-              await context.supabase.from('entity_attribute_values').insert({
+              const { error: insertError } = await context.supabase.from('entity_attribute_values').insert({
                 entity_id: input.id,
                 attribute_id: attr.id,
-                source_id: source?.id,
-                golden_value: typeof value === 'string' ? value : null,
-                golden_value_numeric: typeof value === 'number' ? value : null,
+                source_id: source.id,
+                golden_value: text,
+                golden_value_numeric: numeric,
                 valid_from: new Date().toISOString().split('T')[0],
                 precedence_rank: attr.default_precedence_rank,
                 created_by: userId,
               });
+              if (insertError) throw insertError;
             }
           }
         }
@@ -710,6 +808,7 @@ export const entityResolvers = {
       const { input } = args;
       
       try {
+        const clientId = await resolveSchemaClientId(context, input.clientId, { required: false });
         const { data, error } = await context.supabase
           .from('attribute_register')
           .insert({
@@ -723,6 +822,7 @@ export const entityResolvers = {
             is_multi_valued: input.isMultiValued ?? false,
             reference_domain_code: input.referenceDomainCode,
             domain_code: input.domainCode,
+            client_id: clientId,
           })
           .select()
           .single();
@@ -741,6 +841,7 @@ export const entityResolvers = {
             isMultiValued: data.is_multi_valued,
             referenceDomainCode: data.reference_domain_code,
             defaultPrecedenceRank: data.default_precedence_rank,
+            clientId: data.client_id ?? null,
           },
           errors: [],
         };
@@ -760,6 +861,7 @@ export const entityResolvers = {
       const { input } = args;
       
       try {
+        const clientId = await resolveSchemaClientId(context, input.clientId, { required: false });
         const { data, error } = await context.supabase
           .from('domain_templates')
           .insert({
@@ -767,6 +869,7 @@ export const entityResolvers = {
             domain_code: input.domainCode,
             template_name: input.templateName,
             description: input.description,
+            client_id: clientId,
           })
           .select()
           .single();
@@ -781,6 +884,7 @@ export const entityResolvers = {
             templateName: data.template_name,
             description: data.description,
             isActive: data.is_active,
+            clientId: data.client_id ?? null,
             attributes: [],
           },
           errors: [],
@@ -1037,12 +1141,14 @@ export const entityResolvers = {
       const { input } = args;
 
       try {
+        const clientId = await resolveSchemaClientId(context, input.clientId, { required: false });
         const { data, error } = await context.supabase
           .from('domain_types')
           .insert({
             domain_code: input.domainCode,
             domain_name: input.domainName,
             description: input.description,
+            client_id: clientId,
           })
           .select()
           .single();
@@ -1058,6 +1164,7 @@ export const entityResolvers = {
             isActive: data.is_active,
             createdAt: data.created_at,
             updatedAt: data.updated_at,
+            clientId: data.client_id ?? null,
           },
           errors: [],
         };
@@ -1098,6 +1205,7 @@ export const entityResolvers = {
             isActive: data.is_active,
             createdAt: data.created_at,
             updatedAt: data.updated_at,
+            clientId: data.client_id ?? null,
           },
           errors: [],
         };
@@ -1186,6 +1294,7 @@ export const entityResolvers = {
             cardinality: input.cardinality || 'ONE_TO_ONE',
             composite_key: input.compositeKey || [],
             description: input.description,
+            client_id: await resolveSchemaClientId(context, input.clientId, { required: false }),
           })
           .select()
           .single();
@@ -1203,6 +1312,7 @@ export const entityResolvers = {
             compositeKey: data.composite_key,
             description: data.description,
             isActive: data.is_active,
+            clientId: data.client_id ?? null,
           },
           errors: [],
         };
@@ -1427,6 +1537,7 @@ function mapParentRelationship(rel: any): any {
     relationshipType: rel.relationship_type,
     relationshipCode: rel.relationship_code,
     isPrimary: rel.is_primary,
+    members: [],
   };
 }
 
@@ -1443,7 +1554,72 @@ function mapChildRelationship(rel: any): any {
     relationshipType: rel.relationship_type,
     relationshipCode: rel.relationship_code,
     isPrimary: rel.is_primary,
+    members: [],
   };
+}
+
+// A position's own name does not say which fund and security it joins.
+// For related entities whose domain is an intersection type, attach those constituents.
+async function attachCompositeMembers(entity: any, context: Context): Promise<any> {
+  const relationships = [...(entity.parentRelationships || []), ...(entity.childRelationships || [])];
+  for (const relationship of relationships) relationship.members = relationship.members || [];
+  if (relationships.length === 0) return entity;
+
+  const { data: types, error: typeError } = await context.supabase
+    .from('intersection_types')
+    .select('intersection_code, intersection_type_members(domain_code, display_order)')
+    .eq('is_active', true);
+  if (typeError) throw typeError;
+
+  const orderByDomain = new Map<string, Map<string, number>>();
+  for (const type of types || []) {
+    const order = new Map<string, number>();
+    for (const member of type.intersection_type_members || []) {
+      order.set(member.domain_code, member.display_order ?? 0);
+    }
+    orderByDomain.set(type.intersection_code, order);
+  }
+  if (orderByDomain.size === 0) return entity;
+
+  const compositeIds = [...new Set(relationships.flatMap((relationship) => {
+    const related = [
+      { id: relationship.parentEntityId, domain: relationship.parentDomainCode },
+      { id: relationship.childEntityId, domain: relationship.childDomainCode },
+    ];
+    return related.filter((item) => item.id && orderByDomain.has(item.domain)).map((item) => item.id as string);
+  }))];
+  if (compositeIds.length === 0) return entity;
+
+  const membersById = new Map<string, Array<{ entityId: string; entityCode: string; entityName: string; domainCode: string }>>();
+  for (let index = 0; index < compositeIds.length; index += 100) {
+    const { data: rows, error } = await context.supabase
+      .from('entity_master')
+      .select('entity_id, domain_code, parent_relationships')
+      .in('entity_id', compositeIds.slice(index, index + 100));
+    if (error) throw error;
+    for (const row of rows || []) {
+      const order = orderByDomain.get(row.domain_code) || new Map<string, number>();
+      const members = (row.parent_relationships || [])
+        .map((parent: any) => ({
+          entityId: parent.parent_entity_id,
+          entityCode: parent.parent_entity_code,
+          entityName: parent.parent_entity_name,
+          domainCode: parent.parent_domain_code,
+        }))
+        .filter((member: { entityId: string; entityName: string }) => member.entityId && member.entityName)
+        .sort((a: { domainCode: string }, b: { domainCode: string }) =>
+          (order.get(a.domainCode) ?? 999) - (order.get(b.domainCode) ?? 999)
+        );
+      membersById.set(row.entity_id, members);
+    }
+  }
+
+  for (const relationship of relationships) {
+    relationship.members = membersById.get(relationship.parentEntityId)
+      || membersById.get(relationship.childEntityId)
+      || [];
+  }
+  return entity;
 }
 
 function mapEntityRow(row: any): any {

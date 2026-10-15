@@ -25,6 +25,7 @@ export default function InvestorsPage() {
           domainCode: 'INVESTOR',
           templateCode: formData.template,
           description: formData.description || '',
+          clientId: formData.clientId || null,
           attributes: formData.attributes || {},
           parentRelationships: toRelationshipInputs(formData.parentRelationships, 'parent'),
           childRelationships: toRelationshipInputs(formData.childRelationships, 'child'),

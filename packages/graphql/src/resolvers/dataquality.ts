@@ -27,6 +27,16 @@ export const dataQualityResolvers = {
       return mapDQRuleRow(data);
     },
     
+    dataQualityDashboard: async (_: any, args: { domainCode?: string | null; fromDate?: string | null; toDate?: string | null }, context: Context) => {
+      const { data, error } = await context.supabase.rpc('data_quality_dashboard', {
+        p_domain_code: args.domainCode || null,
+        p_from_date: args.fromDate || null,
+        p_to_date: args.toDate || null,
+      });
+      if (error) throw error;
+      return data;
+    },
+
     dqExceptions: async (_: any, args: any, context: Context) => {
       const { filter, pagination } = args;
       

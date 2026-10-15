@@ -3,7 +3,7 @@
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { graphqlQuery, graphqlMutation, ENTITY_QUERY, FIELD_LINEAGE_QUERY, ATTRIBUTE_REGISTER_QUERY, UPDATE_ENTITY_MUTATION, ADD_COMPETING_SOURCE_MUTATION, DATA_SOURCE_QUERY } from '@/lib/graphql';
+import { graphqlQuery, graphqlMutation, ENTITY_QUERY, FIELD_LINEAGE_QUERY, ATTRIBUTE_REGISTER_QUERY, UPDATE_ENTITY_MUTATION, ADD_COMPETING_SOURCE_MUTATION, DELETE_COMPETING_SOURCE_MUTATION, DATA_SOURCE_QUERY } from '@/lib/graphql';
 import { GoldenRecordHeader } from '@/components/detail/GoldenRecordHeader';
 import { GoldenRecordSections, type TemplateAttribute, type LineageData } from '@/components/detail/GoldenRecordSections';
 import { SourceContributionPanel } from '@/components/detail/SourceContributionPanel';
@@ -25,8 +25,10 @@ export default function DynamicEntityDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lineageData, setLineageData] = useState<LineageData[]>([]);
+  const [lineageLoaded, setLineageLoaded] = useState(false);
   const [templateAttributes, setTemplateAttributes] = useState<TemplateAttribute[]>([]);
   const asOfDate = useTemporalStore(state => state.asOfDate);
+  const knowledgeDate = useTemporalStore(state => state.knowledgeDate);
 
   // Compute derived data
   const conflicts: ConflictData[] = [];
@@ -38,7 +40,13 @@ export default function DynamicEntityDetailPage() {
 
   if (entity) {
     const attrs = entity.attributes || {};
-    const attrEntries = Object.entries(attrs);
+    const assignedCodes = new Set(templateAttributes.map((attribute) => attribute.attributeCode));
+    const attrEntries = Object.entries(attrs).filter(([key]) =>
+      assignedCodes.size === 0 || assignedCodes.has(key)
+    );
+    const scopedLineage = lineageData.filter((lineage) =>
+      assignedCodes.size === 0 || assignedCodes.has(lineage.attributeCode)
+    );
     if (attrEntries.length > 0) {
       const filledCount = attrEntries.filter(([_, v]) => {
         const val = v && typeof v === 'object' && 'value' in v ? v.value : v;
@@ -48,7 +56,7 @@ export default function DynamicEntityDetailPage() {
     }
 
     const sourceCounts = new Map<string, { name: string; count: number }>();
-    lineageData.forEach((ld) => {
+    scopedLineage.forEach((ld) => {
       ld.competingValues?.forEach((cv) => {
         const srcKey = typeof cv.source === 'string' ? cv.source.toLowerCase() : 'manual';
         const srcInfo = sources[srcKey as SourceKey] || sources.manual;
@@ -58,7 +66,7 @@ export default function DynamicEntityDetailPage() {
       });
     });
 
-    const totalFields = lineageData.length || attrEntries.length || 1;
+    const totalFields = scopedLineage.length || attrEntries.length || 1;
     sourceContributions.push(
       ...Array.from(sourceCounts.entries()).map(([key, val]) => ({
         source: key,
@@ -69,7 +77,7 @@ export default function DynamicEntityDetailPage() {
       }))
     );
 
-    lineageData.forEach((ld) => {
+    scopedLineage.forEach((ld) => {
       const distinctValues = new Set(
         (ld.competingValues || [])
           .filter((cv) => cv.value && cv.value !== '—' && cv.value !== '')
@@ -116,18 +124,17 @@ export default function DynamicEntityDetailPage() {
           setEntity(data.entity);
 
           if (data.entity.id) {
-            const lineageResult = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string }>(
+            const lineageResult = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
               FIELD_LINEAGE_QUERY,
-              { entityId: data.entity.id, asOfDate }
+              { entityId: data.entity.id, asOfDate, knowledgeDate }
             );
-            if (lineageResult.data?.fieldLineage) {
-              setLineageData(lineageResult.data.fieldLineage);
-            }
+            setLineageData(lineageResult.data?.fieldLineage ?? []);
+            setLineageLoaded(true);
           }
 
           const entityDomainCode = data.entity.domainCode;
           const attrResult = await graphqlQuery<
-            { attributeRegister: Array<{ attributeCode: string; attributeName: string; isRequired: boolean; displaySection: string; displayGroup: number; isVisible: boolean }> },
+            { attributeRegister: Array<{ attributeCode: string; attributeName: string; dataType: string; isRequired: boolean; displaySection: string; displayGroup: number; isVisible: boolean }> },
             { domainCode: string }
           >(
             ATTRIBUTE_REGISTER_QUERY,
@@ -136,9 +143,10 @@ export default function DynamicEntityDetailPage() {
           if (attrResult.data?.attributeRegister) {
             const mappedAttributes: TemplateAttribute[] = attrResult.data.attributeRegister
               .filter((a) => a.isVisible !== false)
-              .map((a) => ({
+              .              map((a) => ({
                 attributeCode: a.attributeCode,
                 attributeName: a.attributeName,
+                dataType: a.dataType,
                 required: a.isRequired || false,
                 displaySection: a.displaySection || 'General',
                 sortOrder: a.displayGroup || 0,
@@ -158,7 +166,19 @@ export default function DynamicEntityDetailPage() {
     if (id) {
       fetchEntity();
     }
-  }, [id, asOfDate]);
+  }, [id, asOfDate, knowledgeDate]);
+
+  const handleRename = async (entityName: string) => {
+    if (!entity) return;
+    const result = await graphqlMutation<
+      { updateEntity: { entity: { entityName: string } | null; errors: Array<{ message: string }> } },
+      { input: { id: string; entityName: string } }
+    >(UPDATE_ENTITY_MUTATION, { input: { id: entity.id, entityName } });
+    const saveError = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
+    const savedName = result.data?.updateEntity?.entity?.entityName;
+    if (saveError || !savedName) throw new Error(saveError || 'Could not save name');
+    setEntity({ ...entity, entityName: savedName });
+  };
 
   const handleAddAttribute = async (attributeCode: string, value: string, source: SourceKey) => {
     if (!entity) return;
@@ -167,7 +187,12 @@ export default function DynamicEntityDetailPage() {
       [attributeCode]: { value, source: sources[source]?.name || source, source_code: source.toUpperCase() },
     };
     try {
-      await graphqlMutation(UPDATE_ENTITY_MUTATION, { input: { id: entity.id, attributes: updatedAttributes } });
+      const result = await graphqlMutation<{ updateEntity: { errors: Array<{ message: string }> } }, { input: { id: string; attributes: Record<string, string> } }>(
+        UPDATE_ENTITY_MUTATION,
+        { input: { id: entity.id, attributes: { [attributeCode]: value } } }
+      );
+      const saveError = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
+      if (saveError) throw new Error(saveError);
       setEntity({ ...entity, attributes: updatedAttributes });
     } catch (err) { console.error('Failed to add attribute:', err); }
   };
@@ -239,9 +264,9 @@ export default function DynamicEntityDetailPage() {
       if (result.data?.addCompetingSource?.success) {
         // Refresh lineage data to show the new competing value (bypass cache)
         if (entity.id) {
-          const lineageResult = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string }>(
+          const lineageResult = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
             FIELD_LINEAGE_QUERY,
-            { entityId: entity.id, asOfDate },
+            { entityId: entity.id, asOfDate, knowledgeDate },
             'network-only'
           );
           if (lineageResult.data?.fieldLineage) {
@@ -253,6 +278,45 @@ export default function DynamicEntityDetailPage() {
       }
     } catch (err) { 
       console.error('Failed to add source value:', err); 
+    }
+  };
+
+  const handleDeleteSourceValue = async (attributeCode: string, sourceCode: string) => {
+    if (!entity) return;
+    try {
+      const sourceResult = await graphqlQuery<{ dataSource: { id: string } }, { code: string }>(
+        DATA_SOURCE_QUERY,
+        { code: sourceCode.toUpperCase() },
+        'network-only'
+      );
+      const sourceId = sourceResult.data?.dataSource?.id;
+      if (!sourceId) throw new Error(`Source ${sourceCode} is not registered`);
+
+      const result = await graphqlMutation<{ deleteCompetingSource: { success: boolean; errors: Array<{ message: string }> } }, { input: { entityId: string; attributeCode: string; sourceId: string; asOfDate: string } }>(
+        DELETE_COMPETING_SOURCE_MUTATION,
+        { input: { entityId: entity.id, attributeCode, sourceId, asOfDate } }
+      );
+      const deleteError = result.error?.message || result.data?.deleteCompetingSource?.errors?.[0]?.message;
+      if (deleteError || !result.data?.deleteCompetingSource?.success) throw new Error(deleteError || 'Delete failed');
+
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+      const [entityResult, lineageResult] = await Promise.all([
+        graphqlQuery<{ entity: EntityData }, { id?: string; entityCode?: string; asOfDate: string }>(
+          ENTITY_QUERY,
+          isUUID ? { id, asOfDate } : { entityCode: id, asOfDate },
+          'network-only'
+        ),
+        graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
+          FIELD_LINEAGE_QUERY,
+          { entityId: entity.id, asOfDate, knowledgeDate },
+          'network-only'
+        ),
+      ]);
+      if (entityResult.data?.entity) setEntity(entityResult.data.entity);
+      setLineageData(lineageResult.data?.fieldLineage ?? []);
+      setLineageLoaded(true);
+    } catch (err) {
+      console.error('Failed to delete source value:', err);
     }
   };
 
@@ -300,6 +364,7 @@ export default function DynamicEntityDetailPage() {
         listPath={`/${domain}`}
         listLabel={domainConfig.name}
         accentColor={domainConfig.color}
+        onRename={handleRename}
       />
 
       <div className="detail-layout">
@@ -312,6 +377,9 @@ export default function DynamicEntityDetailPage() {
             onSourceChange={handleSourceChange}
             onValueChange={handleValueChange}
             onAddSourceValue={handleAddSourceValue}
+            onDeleteSourceValue={handleDeleteSourceValue}
+            asOfDate={asOfDate}
+            lineageLoaded={lineageLoaded}
           />
         </div>
 

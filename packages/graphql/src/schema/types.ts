@@ -30,6 +30,14 @@ export interface EntityRelationship {
   relationshipType: string;
   relationshipCode: string;
   isPrimary: boolean;
+  members: RelationshipMember[];
+}
+
+export interface RelationshipMember {
+  entityId: string;
+  entityCode: string;
+  entityName: string;
+  domainCode: string;
 }
 
 export interface EntityConnection {

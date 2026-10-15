@@ -13,6 +13,9 @@ import { complianceResolvers } from './compliance';
 import { referenceListResolvers } from './referencelist';
 import { reportingResolvers } from './reporting';
 import { statementTemplateResolvers } from './statement-template';
+import { displayLayoutResolvers } from './display-layout';
+import { calculationResolvers } from './calculation';
+import { reconciliationResolvers } from './reconciliation';
 
 export const resolvers = {
   Query: {
@@ -29,6 +32,9 @@ export const resolvers = {
     ...complianceResolvers.Query,
     ...referenceListResolvers.Query,
     ...reportingResolvers.Query,
+    ...displayLayoutResolvers.Query,
+    ...calculationResolvers.Query,
+    ...reconciliationResolvers.Query,
     // Only attributeRegister/domainTemplates are declared in the schema today.
     // The rest of metadataResolvers.Query (derivedAttributes, evaluateDerivedAttribute,
     // evaluateDerivedAttributesBatch) depends on the derived-attributes migration
@@ -53,6 +59,9 @@ export const resolvers = {
     ...complianceResolvers.Mutation,
     ...referenceListResolvers.Mutation,
     ...reportingResolvers.Mutation,
+    ...displayLayoutResolvers.Mutation,
+    ...calculationResolvers.Mutation,
+    ...reconciliationResolvers.Mutation,
     updateAttributeDefinition: metadataResolvers.Mutation.updateAttributeDefinition,
     deleteAttribute: metadataResolvers.Mutation.deleteAttribute,
     applyStatementTemplate: statementTemplateResolvers.Mutation.applyStatementTemplate,
@@ -60,7 +69,10 @@ export const resolvers = {
   
   Subscription: {},
   
-  Entity: entityResolvers.Entity,
+  Entity: {
+    ...entityResolvers.Entity,
+    ...calculationResolvers.Entity,
+  },
   Template: statementTemplateResolvers.Template,
   DataConnection: dataConnectionResolvers.DataConnection,
   ComplianceRule: complianceResolvers.ComplianceRule,

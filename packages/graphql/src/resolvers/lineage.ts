@@ -1,51 +1,122 @@
 import { Context } from '../context';
+import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePosition, storedRuleLabel } from '../lib/attribute-sequence';
+import { dirtyAttributeCodes } from './calculation';
+
+const OPEN_SYSTEM_TO = '9999-12-31 23:59:59';
+
+function dateOnly(value: string): string {
+  return String(value).slice(0, 10);
+}
+
+function dayBefore(isoDate: string): string {
+  const [year, month, day] = dateOnly(isoDate).split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+/** A past knowledge date or timestamp. Today, or a time that has not arrived, means current knowledge. */
+function knowledgeCutoff(knowledgeDate?: string | null): string | null {
+  if (!knowledgeDate) return null;
+  const trimmed = knowledgeDate.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (trimmed >= today) return null;
+    return `${trimmed}T23:59:59.999Z`;
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime()) || parsed.getTime() >= Date.now() - 1000) return null;
+  return parsed.toISOString();
+}
+
+async function attachAttributeSources(context: Context, rows: any[]) {
+  if (rows.length === 0) return [];
+  const attributeIds = [...new Set(rows.map((row) => row.attribute_id).filter(Boolean))];
+  const sourceIds = [...new Set(rows.map((row) => row.source_id).filter(Boolean))];
+  const [{ data: attributes, error: attributeError }, { data: sources, error: sourceError }] = await Promise.all([
+    context.supabase.from('attribute_register').select('id, attribute_code, attribute_name').in('id', attributeIds),
+    context.supabase.schema('entity_instances').from('source_registry').select('id, source_code, source_name').in('id', sourceIds),
+  ]);
+  if (attributeError) throw attributeError;
+  if (sourceError) throw sourceError;
+  const attributeById = new Map((attributes || []).map((attribute: any) => [attribute.id, attribute]));
+  const sourceById = new Map((sources || []).map((source: any) => [source.id, source]));
+  return rows.map((row) => {
+    const attribute = attributeById.get(row.attribute_id);
+    const source = sourceById.get(row.source_id);
+    return {
+      ...row,
+      attribute_code: attribute?.attribute_code,
+      attribute_name: attribute?.attribute_name,
+      source_code: source?.source_code,
+      source_name: source?.source_name,
+    };
+  }).filter((row) => row.attribute_code && row.source_code);
+}
 
 export const lineageResolvers = {
   Query: {
-    fieldLineage: async (_: any, args: { entityId: string; asOfDate?: string }, context: Context) => {
+    fieldLineage: async (_: any, args: { entityId: string; asOfDate?: string; knowledgeDate?: string }, context: Context) => {
       const asOf = args.asOfDate || new Date().toISOString().split('T')[0];
+      const knownAt = knowledgeCutoff(args.knowledgeDate);
       
-      const { data, error } = await context.supabase
+      let query = context.supabase
         .from('entity_attribute_values')
-        .select(`
-          *,
-          attribute_register!inner(id, attribute_code, attribute_name),
-          source_registry!inner(id, source_code, source_name, precedence_rank)
-        `)
+        .select('*')
         .eq('entity_id', args.entityId)
         .lte('valid_from', asOf)
-        .gte('valid_to', asOf)
-        .eq('system_to', '9999-12-31 23:59:59')
-        .order('precedence_rank', { ascending: true });
+        .gte('valid_to', asOf);
+      query = knownAt
+        ? query.lte('system_from', knownAt).gt('system_to', knownAt)
+        : query.eq('system_to', OPEN_SYSTEM_TO);
+      const { data, error } = await query.order('precedence_rank', { ascending: true });
       
       if (error) throw error;
+
+      const rows = await attachAttributeSources(context, data || []);
       
       const byAttribute = new Map<string, any[]>();
-      (data || []).forEach((row: any) => {
-        const code = row.attribute_register.attribute_code;
+      rows.forEach((row: any) => {
+        const code = row.attribute_code;
         if (!byAttribute.has(code)) byAttribute.set(code, []);
         byAttribute.get(code)!.push(row);
       });
       
+      const sequences = await loadAttributeSequences(context.supabase, args.entityId, [...byAttribute.keys()]);
+      const dirty = await dirtyAttributeCodes(context, args.entityId);
+
       return Array.from(byAttribute.entries()).map(([code, values]) => {
-        // Find the first record with a non-null, non-empty golden_value
-        const winningRecord = values.find(v => v.golden_value !== null && v.golden_value !== undefined && v.golden_value !== '') || values[0];
+        const sequence = sequences.get(code) ?? { chain: [], tier: 'source' as const };
+        const winningRecord = pickPersistedWinner(values);
+        const ordered = [
+          ...(winningRecord ? [winningRecord] : []),
+          ...values
+            .filter((row) => row !== winningRecord)
+            .sort((a, b) =>
+              sequencePosition(a.source_code, sequence.chain, a.precedence_rank ?? 999) -
+              sequencePosition(b.source_code, sequence.chain, b.precedence_rank ?? 999)
+            ),
+        ];
         
         return {
           attributeCode: code,
-          attributeName: winningRecord.attribute_register.attribute_name,
-          currentValue: winningRecord.golden_value,
-          competingValues: values.map((v: any) => ({
-            source: v.source_registry.source_code,
-            sourceName: v.source_registry.source_name,
-            value: v.golden_value,
-            precedenceRank: v.precedence_rank,
-            validFrom: v.valid_from,
-            validTo: v.valid_to,
-            confidenceScore: v.confidence_score,
-          })),
-          resolutionRule: winningRecord.resolution_rule_applied,
-          lastUpdated: winningRecord.system_from,
+          attributeName: winningRecord?.attribute_name,
+          currentValue: winningRecord?.golden_value ?? null,
+          competingValues: ordered.map((v: any) => {
+            const sequenceIndex = sequence.chain.indexOf(v.source_code);
+            return {
+              source: v.source_code,
+              sourceName: v.source_name,
+              value: v.golden_value,
+              precedenceRank: sequenceIndex >= 0 ? sequenceIndex + 1 : v.precedence_rank,
+              validFrom: v.valid_from,
+              validTo: v.valid_to,
+              confidenceScore: v.confidence_score,
+            };
+          }),
+          resolutionRule: storedRuleLabel(winningRecord?.resolution_rule_applied) || sequenceLabel(sequence),
+          lastUpdated: winningRecord?.system_from,
+          calcDirty: dirty.has(code),
         };
       });
     },
@@ -99,12 +170,13 @@ export const lineageResolvers = {
         
         if (!attrDef) throw new Error(`Attribute not found: ${input.attributeCode}`);
         
-        // Close existing current record
+        // Replace only this source. The preference trigger keeps the other sources and stamps the winner.
         await context.supabase
           .from('entity_attribute_values')
           .update({ system_to: new Date().toISOString() })
           .eq('entity_id', input.entityId)
           .eq('attribute_id', attrDef.id)
+          .eq('source_id', input.sourceId)
           .eq('valid_to', '9999-12-31')
           .eq('system_to', '9999-12-31 23:59:59');
         
@@ -167,19 +239,20 @@ export const lineageResolvers = {
         
         if (!attrDef) throw new Error(`Attribute not found: ${input.attributeCode}`);
         
-        // Get manual source
         const { data: manualSource } = await context.supabase
+          .schema('entity_instances')
           .from('source_registry')
           .select('id')
           .eq('source_code', 'MANUAL')
           .single();
         
-        // Close existing records
+        // Replace only the manual source. Precedence is resolved and stored by the database trigger.
         await context.supabase
           .from('entity_attribute_values')
           .update({ system_to: new Date().toISOString() })
           .eq('entity_id', input.entityId)
           .eq('attribute_id', attrDef.id)
+          .eq('source_id', manualSource?.id)
           .eq('valid_to', '9999-12-31')
           .eq('system_to', '9999-12-31 23:59:59');
         
@@ -190,7 +263,6 @@ export const lineageResolvers = {
             entity_id: input.entityId,
             attribute_id: attrDef.id,
             source_id: manualSource?.id,
-            golden_source_id: manualSource?.id,
             golden_value: input.value,
             valid_from: input.validFrom || new Date().toISOString().split('T')[0],
             valid_to: '9999-12-31',
@@ -199,10 +271,6 @@ export const lineageResolvers = {
             precedence_rank: 1,
             is_manual_override: true,
             override_reason: input.overrideReason,
-            resolution_rule_applied: 'MANUAL_OVERRIDE',
-            resolution_version: 0,
-            resolved_at: new Date().toISOString(),
-            competing_values: JSON.stringify([{ source: 'MANUAL', value: input.value, rank: 1 }]),
             created_by: userId,
           })
           .select()
@@ -232,7 +300,15 @@ export const lineageResolvers = {
         const validFrom = input.validFrom || new Date().toISOString().split('T')[0];
         const now = new Date().toISOString();
 
-        // Expire the currently active record for this entity/attribute/source combination
+        const { data: sourceRow, error: sourceLookupError } = await context.supabase
+          .schema('entity_instances')
+          .from('source_registry')
+          .select('id, source_code, precedence_rank')
+          .eq('id', input.sourceId)
+          .single();
+        if (sourceLookupError || !sourceRow) throw sourceLookupError || new Error('Source not found');
+
+        // A new value for this source versions that source only. Other sources stay current.
         const { error: expireError } = await context.supabase
           .from('entity_attribute_values')
           .update({
@@ -241,89 +317,104 @@ export const lineageResolvers = {
           })
           .eq('entity_id', input.entityId)
           .eq('attribute_id', attrDef.id)
-          .eq('source_id', input.sourceId)
+          .eq('source_id', sourceRow.id)
           .eq('valid_to', '9999-12-31')
           .eq('system_to', '9999-12-31 23:59:59');
 
-        if (expireError) {
-          console.error('Error expiring prior record:', expireError);
-        }
+        if (expireError) throw expireError;
 
-        // Insert the new value
         const { data, error } = await context.supabase
           .from('entity_attribute_values')
           .insert({
             entity_id: input.entityId,
             attribute_id: attrDef.id,
-            source_id: input.sourceId,
+            source_id: sourceRow.id,
             golden_value: input.value,
             valid_from: validFrom,
             valid_to: '9999-12-31',
             system_from: now,
             system_to: '9999-12-31 23:59:59',
-            precedence_rank: attrDef.default_precedence_rank,
-            is_manual_override: false,
+            precedence_rank: sourceRow.precedence_rank ?? attrDef.default_precedence_rank,
+            is_manual_override: sourceRow.source_code === 'MANUAL',
             created_by: userId,
           })
           .select()
           .single();
-        
+
         if (error) throw error;
 
-        // ── TRIGGER: Re-resolve golden source after new source value ──
-        // Look up entity's domain and template for the 4-tier waterfall
-        try {
-          const { data: entity } = await context.supabase
-            .from('master_entities')
-            .select('id, domain_code, template_id')
-            .eq('id', input.entityId)
-            .single();
-
-          if (entity) {
-            // Import and call the golden source resolver
-            const { evaluatePrecedence } = await import('../lib/rule-engine');
-            const result = await evaluatePrecedence(
-              context.supabase, input.entityId, input.attributeCode,
-              entity.domain_code, entity.template_id
-            );
-
-            // Look up winning source_id
-            const { data: winningSource } = await context.supabase
-              .from('source_registry').select('id').eq('source_code', result.winningSource).single();
-
-            const winningCandidate = result.allCandidates.find(c => c.source === result.winningSource);
-
-            // Close existing golden record and persist new one
-            await context.supabase.from('entity_attribute_values')
-              .update({ system_to: now })
-              .eq('entity_id', input.entityId).eq('attribute_id', attrDef.id)
-              .eq('valid_to', '9999-12-31').eq('system_to', '9999-12-31 23:59:59')
-              .neq('id', data.id); // Don't close the source record we just inserted
-
-            await context.supabase.from('entity_attribute_values').insert({
-              entity_id: input.entityId, attribute_id: attrDef.id,
-              source_id: winningSource?.id || null,
-              golden_source_id: winningSource?.id || null,
-              golden_value: winningCandidate?.value || null,
-              valid_from: validFrom, valid_to: '9999-12-31',
-              system_from: now, system_to: '9999-12-31 23:59:59',
-              precedence_rank: winningCandidate?.rank || 999,
-              is_manual_override: result.winningSource === 'MANUAL',
-              resolution_rule_applied: result.appliedRule?.ruleCode || null,
-              resolution_version: result.resolutionVersion,
-              resolved_at: now,
-              competing_values: JSON.stringify(result.allCandidates),
-              created_by: userId,
-            });
-          }
-        } catch (resolveErr) {
-          // Non-fatal: golden resolution failed but source value was saved
-          console.error('Golden source re-resolution failed:', resolveErr);
-        }
-        
         return { success: true, attributeValueId: data.id, errors: [] };
       } catch (error: any) {
         return { success: false, attributeValueId: null, errors: [{ field: '', message: error.message, code: 'ADD_SOURCE_FAILED' }] };
+      }
+    },
+
+    deleteCompetingSource: async (_: any, args: { input: any }, context: Context) => {
+      const { input } = args;
+      const asOf = input.asOfDate || new Date().toISOString().split('T')[0];
+      const now = new Date().toISOString();
+
+      try {
+        const { data: attrDef } = await context.supabase
+          .from('attribute_register')
+          .select('id')
+          .eq('attribute_code', input.attributeCode)
+          .single();
+        if (!attrDef) throw new Error(`Attribute not found: ${input.attributeCode}`);
+
+        const { data: current, error: currentError } = await context.supabase
+          .from('entity_attribute_values')
+          .select('*')
+          .eq('entity_id', input.entityId)
+          .eq('attribute_id', attrDef.id)
+          .eq('source_id', input.sourceId)
+          .lte('valid_from', asOf)
+          .gte('valid_to', asOf)
+          .eq('system_to', OPEN_SYSTEM_TO)
+          .maybeSingle();
+        if (currentError) throw currentError;
+        if (!current) throw new Error('No current source value covers that as-of date');
+
+        // Close what we believe right now. A knowledge date before this moment still sees the value.
+        const { error: closeError } = await context.supabase
+          .from('entity_attribute_values')
+          .update({ system_to: now })
+          .eq('id', current.id);
+        if (closeError) throw closeError;
+
+        // Keep the value visible for as-of dates before the deletion date.
+        const started = dateOnly(current.valid_from);
+        if (started < asOf) {
+          const ended = dayBefore(asOf);
+          if (ended >= started) {
+            const { error: insertError } = await context.supabase.from('entity_attribute_values').insert({
+              entity_id: current.entity_id,
+              attribute_id: current.attribute_id,
+              source_id: current.source_id,
+              golden_value: current.golden_value,
+              golden_value_jsonb: current.golden_value_jsonb,
+              golden_value_numeric: current.golden_value_numeric,
+              golden_value_date: current.golden_value_date,
+              golden_value_timestamp: current.golden_value_timestamp,
+              golden_value_boolean: current.golden_value_boolean,
+              valid_from: started,
+              valid_to: ended,
+              system_from: now,
+              system_to: OPEN_SYSTEM_TO,
+              precedence_rank: current.precedence_rank,
+              confidence_score: current.confidence_score,
+              is_manual_override: current.is_manual_override,
+              override_reason: current.override_reason,
+              metadata: current.metadata,
+              created_by: context.user?.id,
+            });
+            if (insertError) throw insertError;
+          }
+        }
+
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        return { success: false, errors: [{ field: '', message: error.message, code: 'DELETE_SOURCE_FAILED' }] };
       }
     },
   },

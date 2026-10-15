@@ -106,6 +106,8 @@ type FieldLineage {
   competingValues: [SourceValue!]!
   resolutionRule: String
   lastUpdated: DateTime!
+  # True while a materialized calc that owns this attribute is waiting to be recomputed.
+  calcDirty: Boolean!
 }
 
 # Attribute Definition with Derived Attribute Support
@@ -120,6 +122,8 @@ type AttributeDefinition {
   isMultiValued: Boolean!
   referenceDomainCode: String
   domainCode: String
+  clientId: ID
+  clientName: String
   defaultPrecedenceRank: Int!
   
   # Derived attribute fields
@@ -163,6 +167,55 @@ type DerivationResult {
   derivationType: String!
   dependencies: [String!]!
   evaluatedAt: DateTime!
+}
+
+type CalcInput {
+  inputRole: String!
+  attributeCode: String!
+  traversal: String!
+  relationshipCodes: [String!]!
+}
+
+type CalcDefinition {
+  id: ID!
+  attributeCode: String!
+  domainCode: String!
+  calcKind: String!
+  evaluationMode: String!
+  timeImpact: String!
+  outputGrain: String!
+  expression: JSON
+  aggregateFn: String
+  seriesFn: String
+  derivationDependencies: [String!]!
+  inputs: [CalcInput!]!
+}
+
+type CalculatedAttributeState {
+  entityId: ID!
+  attributeCode: String!
+  dirty: Boolean!
+  status: String
+  windowStart: Date
+  windowEnd: Date
+}
+
+type ProcessCalculatedAttributesResult {
+  processed: Int!
+  failed: Int!
+  pending: Int!
+}
+
+type ExpressionFunction {
+  id: ID!
+  code: String!
+  name: String!
+  category: String!
+  returnType: String!
+  description: String!
+  signature: String!
+  example: JSON!
+  callable: Boolean!
 }
 
 # File: dataquality.graphql
@@ -299,6 +352,132 @@ type UpdateDQRuleResult {
 type ResolveDQExceptionResult {
   success: Boolean!
   errors: [MutationError!]!
+}
+
+type DataQualityDashboard {
+  fromDate: Date!
+  toDate: Date!
+  domains: [String!]!
+  summary: DataQualitySummary!
+  availability: [AttributeAvailability!]!
+  quality: [RuleQuality!]!
+  trajectory: [AttributeTrajectory!]!
+  entities: [EntityQualityResult!]!
+}
+
+type DataQualitySummary {
+  entityCount: Int!
+  requiredSlots: Int!
+  populatedSlots: Int!
+  missingSlots: Int!
+  entitiesMissingRequired: Int!
+  availabilityPercent: Float
+  rulesEvaluated: Int!
+  passingChecks: Int!
+  failingChecks: Int!
+  entitiesFailingRules: Int!
+  qualityPercent: Float
+  changedAttributeCount: Int!
+  changedEntityCount: Int!
+  attributeChangeCount: Int!
+  clearEntityCount: Int!
+}
+
+type QualityEntityRef {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+}
+
+type AttributeAvailability {
+  attributeCode: String!
+  attributeName: String!
+  domainCode: String
+  requiredCount: Int!
+  missingCount: Int!
+  availabilityPercent: Float
+  missingEntities: [QualityEntityRef!]!
+}
+
+type RuleFailure {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  message: String
+  actualValue: String
+}
+
+type RuleQuality {
+  ruleId: ID!
+  ruleCode: String!
+  ruleName: String!
+  ruleType: String!
+  severity: String!
+  domainCode: String
+  ruleExpression: String!
+  evaluated: Boolean!
+  evaluationMessage: String
+  entityCount: Int!
+  failingCount: Int!
+  passingCount: Int!
+  failingEntities: [RuleFailure!]!
+}
+
+type AttributeChange {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  previousValue: String
+  currentValue: String
+}
+
+type AttributeTrajectory {
+  attributeCode: String!
+  attributeName: String!
+  domainCode: String
+  changeCount: Int!
+  changes: [AttributeChange!]!
+}
+
+type MissingAttribute {
+  attributeCode: String!
+  attributeName: String!
+}
+
+type EntityRuleFailure {
+  ruleId: ID!
+  ruleCode: String!
+  ruleName: String!
+  severity: String!
+  message: String
+  actualValue: String
+}
+
+type EntityAttributeChange {
+  attributeCode: String!
+  attributeName: String!
+  previousValue: String
+  currentValue: String
+}
+
+type EntityQualityResult {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  requiredCount: Int!
+  missingCount: Int!
+  availabilityPercent: Float
+  missingAttributes: [MissingAttribute!]!
+  ruleCount: Int!
+  failingRuleCount: Int!
+  qualityPercent: Float
+  failingRules: [EntityRuleFailure!]!
+  changeCount: Int!
+  changes: [EntityAttributeChange!]!
 }
 
 # File: compliance.graphql
@@ -856,6 +1035,9 @@ type Entity {
   
   # Lineage
   lineage: [FieldLineage!]
+
+  # Materialized calculations for this entity, including whether a recalc is pending.
+  calculatedAttributes: [CalculatedAttributeState!]!
   
   # Metadata
   metadata: JSONObject
@@ -875,6 +1057,15 @@ type EntityRelationship {
   relationshipType: String!
   relationshipCode: String!
   isPrimary: Boolean!
+  # Constituents of a composite related entity, such as a position's fund and security.
+  members: [RelationshipMember!]!
+}
+
+type RelationshipMember {
+  entityId: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
 }
 
 type EntityConnection {
@@ -913,6 +1104,7 @@ input CreateEntityInput {
   domainCode: String!
   templateCode: String
   description: String
+  clientId: ID
   attributes: JSONObject!
   parentRelationships: [EntityRelationshipInput!]
   childRelationships: [EntityRelationshipInput!]
@@ -959,6 +1151,8 @@ type RelationshipType {
   isRequired: Boolean!
   cardinality: String!
   compositeKey: [String!]!
+  clientId: ID
+  clientName: String
 }
 
 type CreateRelationshipResult {
@@ -988,6 +1182,7 @@ input CreateDomainTypeInput {
   domainCode: String!
   domainName: String!
   description: String
+  clientId: ID
 }
 
 type CreateDomainTypeResult {
@@ -1006,6 +1201,7 @@ input CreateAttributeInput {
   isMultiValued: Boolean
   referenceDomainCode: String
   domainCode: String
+  clientId: ID
 }
 
 type CreateAttributeResult {
@@ -1018,6 +1214,7 @@ input CreateTemplateInput {
   domainCode: String!
   templateName: String!
   description: String
+  clientId: ID
 }
 
 type CreateTemplateResult {
@@ -1087,6 +1284,15 @@ type DomainTypeRecord {
   isActive: Boolean!
   createdAt: DateTime!
   updatedAt: DateTime!
+  clientId: ID
+  clientName: String
+}
+
+# Active-record count for one entity type. Counted from master entities,
+# not the aggregated read projection, so large domains stay fast.
+type DomainRecordCount {
+  domainCode: String!
+  totalCount: Int!
 }
 
 # Domain Type mutation inputs and results
@@ -1972,21 +2178,28 @@ type Query {
   
   # Metadata queries
   domainTypes: [DomainTypeRecord!]!
+  domainRecordCounts: [DomainRecordCount!]!
   attributeRegister(domainCode: String): [AttributeDefinition!]!
   domainTemplates(domainCode: String): [Template!]!
   previewStatementTemplate(input: PreviewStatementTemplateInput!): PreviewStatementTemplateResult!
+  calcDefinitions: [CalcDefinition!]!
+  calculatedAttributeStates(entityId: ID!): [CalculatedAttributeState!]!
+  expressionFunctions(category: String): [ExpressionFunction!]!
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
   
   # Lineage and temporal queries
-  fieldLineage(entityId: ID!, asOfDate: Date): [FieldLineage!]!
+  fieldLineage(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime): [FieldLineage!]!
   temporalHistory(entityId: ID!, attributeCode: String!, fromDate: Date!, toDate: Date!): [TemporalValue!]!
+  entityDisplay(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime, controls: JSON): EntityDisplay!
+  displayLayouts(domainCode: String): [DisplayLayout!]!
   
   # DQ queries
   dqRule(id: ID!): DQRule
   dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
   dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
+  dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date): DataQualityDashboard!
   
   # Source queries
   dataSources(type: String, isActive: Boolean): [DataSource!]!
@@ -2052,6 +2265,10 @@ type Query {
   narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON, asOfDate: String, knowledgeDate: String): DataQueryResponse!
   gridQuery(input: GridQueryInput!): GridResult!
+
+  reconciliationDefinitions(domainCode: String): [ReconciliationDefinition!]!
+  reconciliationRuns(status: String, first: Int): [ReconciliationRun!]!
+  reconciliationRun(id: ID!): ReconciliationRun
 }
 
 type Mutation {
@@ -2069,6 +2286,7 @@ type Mutation {
   splitValidTime(input: SplitValidTimeInput!): SplitValidTimeResult!
   submitManualOverride(input: ManualOverrideInput!): ManualOverrideResult!
   addCompetingSource(input: AddCompetingSourceInput!): AddCompetingSourceResult!
+  deleteCompetingSource(input: DeleteCompetingSourceInput!): DeleteCompetingSourceResult!
   
   # Metadata mutations
   createDomainType(input: CreateDomainTypeInput!): CreateDomainTypeResult!
@@ -2076,14 +2294,18 @@ type Mutation {
   deleteDomainType(id: ID!): DeleteDomainTypeResult!
   createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
   updateAttributeDefinition(input: UpdateAttributeDefinitionInput!): UpdateAttributeDefinitionResult!
+  processCalculatedAttributes(limit: Int): ProcessCalculatedAttributesResult!
   deleteAttribute(id: ID!): MutationResult!
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
   updateTemplate(id: ID!, input: UpdateTemplateInput!): UpdateTemplateResult!
   assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
   updateTemplateAttribute(input: UpdateTemplateAttributeInput!): UpdateTemplateAttributeResult!
-  unassignAttributeFromTemplate(templateId: ID!, attributeId: ID!): MutationResult!
   reorderTemplateAttributes(input: ReorderTemplateAttributesInput!): ReorderTemplateAttributesResult!
+  unassignAttributeFromTemplate(templateId: ID!, attributeId: ID!): MutationResult!
   applyStatementTemplate(input: ApplyStatementTemplateInput!): ApplyStatementTemplateResult!
+  upsertDisplayLayout(input: UpsertDisplayLayoutInput!): UpsertDisplayLayoutResult!
+  upsertEntityTemplateBinding(input: UpsertEntityTemplateBindingInput!): UpsertEntityTemplateBindingResult!
+  saveDisplayValue(input: SaveDisplayValueInput!): SaveDisplayValueResult!
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
@@ -2186,6 +2408,10 @@ type Mutation {
   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
   deleteNarrative(id: ID!): DeleteNarrativeResult!
+
+  openReconciliationRun(input: OpenReconciliationRunInput!): ReconciliationRunResult!
+  resolveReconciliationLine(input: ResolveReconciliationLineInput!): ReconciliationRunResult!
+  decideReconciliationRun(input: DecideReconciliationRunInput!): ReconciliationRunResult!
 }
 
 # Root Subscription Type
@@ -2259,24 +2485,21 @@ type AddCompetingSourceResult {
   errors: [MutationError!]!
 }
 
+input DeleteCompetingSourceInput {
+  entityId: ID!
+  attributeCode: String!
+  sourceId: ID!
+  asOfDate: Date
+}
+
+type DeleteCompetingSourceResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
 # Metadata Types
 input UpdateAttributeDefinitionInput {
   id: ID!
-  attributeName: String
-  description: String
-  dataType: String
-  unitOfMeasure: String
-  isRequired: Boolean
-  isMultiValued: Boolean
-  referenceDomainCode: String
-  defaultPrecedenceRank: Int
-  isDerived: Boolean
-  derivationType: String
-  derivationFormula: String
-  derivationDependencies: [String!]
-  formulaLanguage: String
-  isTimeVarying: Boolean
-  timeDimension: String
   displayFormat: String
   listValues: [String!]
   validationRules: JSON
@@ -2288,8 +2511,6 @@ input UpdateAttributeDefinitionInput {
   aggregationType: String
   weightAttributeCode: String
   numericPrecision: Int
-  referenceListCode: String
-  domainCode: String
 }
 
 type UpdateAttributeDefinitionResult {
@@ -2306,6 +2527,8 @@ type Template {
   description: String
   isActive: Boolean!
   applicabilityRules: JSON
+  clientId: ID
+  clientName: String
   attributes: [TemplateAttribute!]!
   sections: [TemplateSection!]
   aliases: [AttributeAlias!]
@@ -2428,6 +2651,147 @@ type ApplyStatementTemplateResult {
   template: Template
   aliasCount: Int!
   sectionCount: Int!
+  errors: [MutationError!]!
+}
+
+type DisplayParameterOption {
+  value: String!
+  label: String!
+  sets: JSON
+}
+
+type DisplayParameter {
+  name: String!
+  label: String
+  type: String
+  binds: String
+  multi: Boolean
+  defaultValue: String
+  options: [DisplayParameterOption!]!
+}
+
+type DisplayPeriod {
+  key: String!
+  grain: String!
+  label: String!
+  periodStart: String!
+  periodEnd: String!
+  entityId: ID
+}
+
+type DisplayCell {
+  periodKey: String!
+  basis: String!
+  value: String
+  readOnly: Boolean!
+  entityId: ID
+  periodStart: String!
+  periodEnd: String!
+  periodGrain: String!
+}
+
+type DisplaySeriesRow {
+  attributeCode: String!
+  attributeName: String!
+  reportingGrain: String
+  periodRollup: String!
+  cells: [DisplayCell!]!
+}
+
+type ResolvedDisplayLayout {
+  id: ID!
+  layoutCode: String!
+  layoutName: String!
+  htmlTemplate: String!
+  timeMode: String!
+  seriesAxis: String!
+  relationshipCode: String
+  parameters: [DisplayParameter!]!
+  effectiveControls: JSON!
+  periods: [DisplayPeriod!]!
+  rows: [DisplaySeriesRow!]!
+}
+
+type EntityDisplay {
+  fiscalYearEndMonth: Int!
+  layouts: [ResolvedDisplayLayout!]!
+}
+
+type DisplayLayout {
+  id: ID!
+  layoutCode: String!
+  layoutName: String!
+  description: String
+  domainCode: String!
+  ownerDomainCode: String
+  relationshipCode: String
+  scope: String!
+  ownerEntityId: ID
+  htmlTemplate: String!
+  timeMode: String!
+  seriesAxis: String!
+  defaultViewGrain: String
+  allowedViewGrains: [String!]!
+  seriesWindow: Int!
+  parameters: JSON!
+  isActive: Boolean!
+}
+
+input UpsertDisplayLayoutInput {
+  id: ID
+  layoutCode: String!
+  layoutName: String!
+  description: String
+  domainCode: String!
+  ownerDomainCode: String
+  relationshipCode: String
+  scope: String
+  ownerEntityId: ID
+  htmlTemplate: String!
+  timeMode: String
+  seriesAxis: String
+  defaultViewGrain: String
+  allowedViewGrains: [String!]
+  seriesWindow: Int
+  parameters: JSON
+  isActive: Boolean
+}
+
+type UpsertDisplayLayoutResult {
+  success: Boolean!
+  layout: DisplayLayout
+  errors: [MutationError!]!
+}
+
+input UpsertEntityTemplateBindingInput {
+  id: ID
+  ownerEntityId: ID!
+  relationshipCode: String
+  dataTemplateId: ID
+  layoutId: ID!
+  validFrom: Date
+  validTo: Date
+}
+
+type UpsertEntityTemplateBindingResult {
+  success: Boolean!
+  id: ID
+  errors: [MutationError!]!
+}
+
+input SaveDisplayValueInput {
+  entityId: ID!
+  attributeCode: String!
+  value: String!
+  periodStart: Date!
+  periodEnd: Date!
+  periodGrain: String
+  statementBasis: String
+}
+
+type SaveDisplayValueResult {
+  success: Boolean!
+  id: ID
   errors: [MutationError!]!
 }
 
@@ -3069,6 +3433,7 @@ input CreateRelationshipTypeInput {
   isActive: Boolean
   cardinality: String
   compositeKey: [String!]
+  clientId: ID
 }
 
 input UpdateRelationshipTypeInput {
@@ -3390,6 +3755,102 @@ type DeleteNarrativeResult {
 #   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
 #   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
 #   deleteNarrative(id: ID!): DeleteNarrativeResult!
+
+type ReconciliationCell {
+  key: String!
+  label: String!
+  value: String
+  numeric: Float
+}
+
+type ReconciliationIdentity {
+  code: String!
+  name: String!
+  calculated: Float
+  compareValue: Float
+  variance: Float
+  passed: Boolean!
+  message: String
+}
+
+type ReconciliationDefinition {
+  id: ID!
+  definitionCode: String!
+  definitionName: String!
+  description: String
+  domainCode: String!
+  compareMode: String!
+  grain: String!
+  relationshipCode: String
+  relationshipDirection: String!
+  measures: JSON!
+  identityChecks: JSON!
+  stages: [String!]!
+  isActive: Boolean!
+}
+
+type ReconciliationLine {
+  id: ID!
+  lineEntityId: ID!
+  lineCode: String!
+  lineName: String!
+  attributeCode: String!
+  attributeName: String!
+  breakKind: String!
+  cells: [ReconciliationCell!]!
+  goldenValue: String
+  variance: Float
+  isBreak: Boolean!
+  status: String!
+  resolutionSourceCode: String
+  resolutionValue: String
+  resolutionNotes: String
+}
+
+type ReconciliationRun {
+  id: ID!
+  definition: ReconciliationDefinition!
+  anchorEntityId: ID!
+  anchorEntityCode: String!
+  anchorEntityName: String!
+  domainCode: String!
+  asOfDate: Date!
+  compareAsOfDate: Date
+  status: String!
+  stageIndex: Int!
+  assignedTo: String
+  identities: [ReconciliationIdentity!]!
+  lines: [ReconciliationLine!]!
+  openBreakCount: Int!
+  decidedAt: DateTime
+  decisionNotes: String
+  createdAt: DateTime!
+}
+
+input OpenReconciliationRunInput {
+  definitionCode: String!
+  entityId: ID!
+  asOfDate: Date!
+  compareAsOfDate: Date
+}
+
+input ResolveReconciliationLineInput {
+  lineId: ID!
+  status: String!
+  sourceCode: String
+  notes: String
+}
+
+input DecideReconciliationRunInput {
+  runId: ID!
+  decision: String!
+  notes: String
+}
+
+type ReconciliationRunResult {
+  run: ReconciliationRun
+  errors: [MutationError!]!
+}
 
 
 `;

@@ -132,3 +132,129 @@ type ResolveDQExceptionResult {
   success: Boolean!
   errors: [MutationError!]!
 }
+
+type DataQualityDashboard {
+  fromDate: Date!
+  toDate: Date!
+  domains: [String!]!
+  summary: DataQualitySummary!
+  availability: [AttributeAvailability!]!
+  quality: [RuleQuality!]!
+  trajectory: [AttributeTrajectory!]!
+  entities: [EntityQualityResult!]!
+}
+
+type DataQualitySummary {
+  entityCount: Int!
+  requiredSlots: Int!
+  populatedSlots: Int!
+  missingSlots: Int!
+  entitiesMissingRequired: Int!
+  availabilityPercent: Float
+  rulesEvaluated: Int!
+  passingChecks: Int!
+  failingChecks: Int!
+  entitiesFailingRules: Int!
+  qualityPercent: Float
+  changedAttributeCount: Int!
+  changedEntityCount: Int!
+  attributeChangeCount: Int!
+  clearEntityCount: Int!
+}
+
+type QualityEntityRef {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+}
+
+type AttributeAvailability {
+  attributeCode: String!
+  attributeName: String!
+  domainCode: String
+  requiredCount: Int!
+  missingCount: Int!
+  availabilityPercent: Float
+  missingEntities: [QualityEntityRef!]!
+}
+
+type RuleFailure {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  message: String
+  actualValue: String
+}
+
+type RuleQuality {
+  ruleId: ID!
+  ruleCode: String!
+  ruleName: String!
+  ruleType: String!
+  severity: String!
+  domainCode: String
+  ruleExpression: String!
+  evaluated: Boolean!
+  evaluationMessage: String
+  entityCount: Int!
+  failingCount: Int!
+  passingCount: Int!
+  failingEntities: [RuleFailure!]!
+}
+
+type AttributeChange {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  previousValue: String
+  currentValue: String
+}
+
+type AttributeTrajectory {
+  attributeCode: String!
+  attributeName: String!
+  domainCode: String
+  changeCount: Int!
+  changes: [AttributeChange!]!
+}
+
+type MissingAttribute {
+  attributeCode: String!
+  attributeName: String!
+}
+
+type EntityRuleFailure {
+  ruleId: ID!
+  ruleCode: String!
+  ruleName: String!
+  severity: String!
+  message: String
+  actualValue: String
+}
+
+type EntityAttributeChange {
+  attributeCode: String!
+  attributeName: String!
+  previousValue: String
+  currentValue: String
+}
+
+type EntityQualityResult {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  requiredCount: Int!
+  missingCount: Int!
+  availabilityPercent: Float
+  missingAttributes: [MissingAttribute!]!
+  ruleCount: Int!
+  failingRuleCount: Int!
+  qualityPercent: Float
+  failingRules: [EntityRuleFailure!]!
+  changeCount: Int!
+  changes: [EntityAttributeChange!]!
+}

@@ -1,5 +1,12 @@
 // Shared types for entity detail pages
 
+export interface RelationshipMember {
+  entityId: string;
+  entityCode: string;
+  entityName: string;
+  domainCode: string;
+}
+
 export interface AttributeValue {
   value: any;
   source?: string;
@@ -25,6 +32,7 @@ export interface EntityData {
     relationshipType: string;
     relationshipCode: string;
     isPrimary: boolean;
+    members?: RelationshipMember[];
   }>;
   childRelationships: Array<{
     childEntityId: string;
@@ -34,6 +42,7 @@ export interface EntityData {
     relationshipType: string;
     relationshipCode: string;
     isPrimary: boolean;
+    members?: RelationshipMember[];
   }>;
   metadata?: Record<string, any>;
   createdAt: string;

@@ -1,4 +1,5 @@
 import type { DataQuerySpec, DataQueryResult } from '@tapestrai/graphql/src/lib/data-query-engine';
+import { readBrowserAccessToken } from '@/lib/auth-token';
 
 export type { DataQuerySpec, DataQueryResult };
 
@@ -191,7 +192,7 @@ export interface GridResultPayload {
 // ---------------------------------------------------------------------------
 
 export function authHeaders(): Record<string, string> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+  const token = readBrowserAccessToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 

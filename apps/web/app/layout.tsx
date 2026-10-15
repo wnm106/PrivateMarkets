@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { IBM_Plex_Sans, IBM_Plex_Mono, Outfit } from 'next/font/google';
 import { AppChrome } from '@/components/layout/AppChrome';
 import { AuthSync } from '@/components/auth/AuthSync';
+import { SignedOutGate } from '@/components/auth/SignedOutGate';
 import '../styles/globals.css';
 
 const ibmPlexSans = IBM_Plex_Sans({
@@ -40,6 +41,7 @@ export default function RootLayout({
     <html lang="en" className={`${ibmPlexSans.variable} ${brandDisplay.variable} ${ibmPlexMono.variable}`}>
       <body>
         <AuthSync />
+        <SignedOutGate />
         <AppChrome>{children}</AppChrome>
       </body>
     </html>
