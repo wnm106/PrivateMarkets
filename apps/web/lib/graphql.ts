@@ -258,6 +258,8 @@ export const DOMAIN_TEMPLATES_QUERY = `
         precedenceRank
         displayOrder
         displayLabel
+        sectionCode
+        sectionName
       }
     }
   }

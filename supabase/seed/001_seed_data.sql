@@ -95,3 +95,23 @@ SELECT
     row_number() OVER ()
 FROM metadata_register.attribute_register
 WHERE attribute_code IN ('DEAL_DATE', 'DEAL_TYPE', 'DEAL_VALUE', 'STATUS');
+
+-- Statement wording that already means a canonical attribute.
+INSERT INTO metadata_register.attribute_aliases (attribute_id, alias_label, alias_code, domain_code, match_kind, confidence)
+SELECT attribute_id, alias_label, alias_code, domain_code, 'semantic', 0.960
+FROM (
+  SELECT id AS attribute_id, 'Ending NAV' AS alias_label, 'ENDING_NAV' AS alias_code, 'FUND' AS domain_code
+  FROM metadata_register.attribute_register WHERE attribute_code = 'NAV'
+  UNION ALL
+  SELECT id, 'Net Assets', 'NET_ASSETS', 'FUND' FROM metadata_register.attribute_register WHERE attribute_code = 'NAV'
+  UNION ALL
+  SELECT id, 'Valuation Date', 'VALUATION_DATE', 'FUND' FROM metadata_register.attribute_register WHERE attribute_code = 'NAV_DATE'
+  UNION ALL
+  SELECT id, 'Total AUM', 'TOTAL_AUM', 'FUND' FROM metadata_register.attribute_register WHERE attribute_code = 'AUM'
+) seeded
+WHERE NOT EXISTS (
+  SELECT 1 FROM metadata_register.attribute_aliases existing
+  WHERE existing.alias_code = seeded.alias_code
+    AND existing.domain_code = seeded.domain_code
+    AND existing.template_id IS NULL
+);

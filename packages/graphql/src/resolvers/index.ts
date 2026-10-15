@@ -12,6 +12,7 @@ import { tenancyResolvers } from './tenancy';
 import { complianceResolvers } from './compliance';
 import { referenceListResolvers } from './referencelist';
 import { reportingResolvers } from './reporting';
+import { statementTemplateResolvers } from './statement-template';
 
 export const resolvers = {
   Query: {
@@ -35,6 +36,7 @@ export const resolvers = {
     // and isn't exposed in typeDefs.ts, so it's intentionally left out here.
     attributeRegister: metadataResolvers.Query.attributeRegister,
     domainTemplates: metadataResolvers.Query.domainTemplates,
+    previewStatementTemplate: statementTemplateResolvers.Query.previewStatementTemplate,
   },
   
   Mutation: {
@@ -53,11 +55,13 @@ export const resolvers = {
     ...reportingResolvers.Mutation,
     updateAttributeDefinition: metadataResolvers.Mutation.updateAttributeDefinition,
     deleteAttribute: metadataResolvers.Mutation.deleteAttribute,
+    applyStatementTemplate: statementTemplateResolvers.Mutation.applyStatementTemplate,
   },
   
   Subscription: {},
   
   Entity: entityResolvers.Entity,
+  Template: statementTemplateResolvers.Template,
   DataConnection: dataConnectionResolvers.DataConnection,
   ComplianceRule: complianceResolvers.ComplianceRule,
   ComplianceEvaluationRun: complianceResolvers.ComplianceEvaluationRun,

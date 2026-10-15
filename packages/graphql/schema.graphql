@@ -1944,6 +1944,7 @@ type Query {
   domainTypes: [DomainTypeRecord!]!
   attributeRegister(domainCode: String): [AttributeDefinition!]!
   domainTemplates(domainCode: String): [Template!]!
+  previewStatementTemplate(input: PreviewStatementTemplateInput!): PreviewStatementTemplateResult!
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
@@ -2043,6 +2044,7 @@ type Mutation {
   updateTemplate(id: ID!, input: UpdateTemplateInput!): UpdateTemplateResult!
   assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
   unassignAttributeFromTemplate(templateId: ID!, attributeId: ID!): MutationResult!
+  applyStatementTemplate(input: ApplyStatementTemplateInput!): ApplyStatementTemplateResult!
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
@@ -2242,7 +2244,10 @@ type Template {
   templateName: String!
   description: String
   isActive: Boolean!
+  applicabilityRules: JSON
   attributes: [TemplateAttribute!]!
+  sections: [TemplateSection!]
+  aliases: [AttributeAlias!]
 }
 
 type TemplateAttribute {
@@ -2252,6 +2257,117 @@ type TemplateAttribute {
   precedenceRank: Int!
   displayOrder: Int!
   displayLabel: String
+  sectionCode: String
+  sectionName: String
+}
+
+type TemplateSection {
+  id: ID!
+  sectionCode: String!
+  sectionName: String!
+  displayOrder: Int!
+  description: String
+}
+
+type AttributeAlias {
+  id: ID!
+  aliasLabel: String!
+  aliasCode: String!
+  matchKind: String!
+  confidence: Float!
+  domainCode: String
+  attributeCode: String!
+  attributeName: String!
+}
+
+input StatementSourceInput {
+  sourceName: String!
+  sourceKind: String!
+  text: String!
+}
+
+input PreviewStatementTemplateInput {
+  domainCode: String!
+  statementKind: String
+  sources: [StatementSourceInput!]!
+}
+
+type StatementLineDraft {
+  attributeCode: String!
+  attributeName: String!
+  dataType: String!
+  displayOrder: Int!
+  displayLabel: String!
+  matchKind: String!
+  confidence: Float!
+  isNew: Boolean!
+  required: Boolean!
+  aliases: [String!]!
+  sampleValue: String
+  sources: [String!]!
+}
+
+type StatementSectionDraft {
+  sectionCode: String!
+  sectionName: String!
+  displayOrder: Int!
+  lines: [StatementLineDraft!]!
+}
+
+type StatementCatalogAttribute {
+  attributeCode: String!
+  attributeName: String!
+  dataType: String!
+}
+
+type PreviewStatementTemplateResult {
+  sections: [StatementSectionDraft!]!
+  warnings: [String!]!
+  catalog: [StatementCatalogAttribute!]!
+}
+
+input ApplyStatementLineInput {
+  attributeCode: String!
+  attributeName: String!
+  dataType: String!
+  displayOrder: Int!
+  displayLabel: String!
+  matchKind: String!
+  isNew: Boolean!
+  required: Boolean!
+  aliases: [String!]
+}
+
+input ApplyStatementSectionInput {
+  sectionCode: String!
+  sectionName: String!
+  displayOrder: Int!
+  lines: [ApplyStatementLineInput!]!
+}
+
+input ApplyStatementSourceInput {
+  sourceName: String!
+  sourceKind: String!
+  excerpt: String
+}
+
+input ApplyStatementTemplateInput {
+  templateCode: String!
+  templateName: String!
+  domainCode: String!
+  description: String
+  statementKind: String!
+  entityCode: String
+  existingTemplateId: ID
+  sections: [ApplyStatementSectionInput!]!
+  sources: [ApplyStatementSourceInput!]
+}
+
+type ApplyStatementTemplateResult {
+  template: Template
+  aliasCount: Int!
+  sectionCount: Int!
+  errors: [MutationError!]!
 }
 
 # Entity Identifier Definition Type

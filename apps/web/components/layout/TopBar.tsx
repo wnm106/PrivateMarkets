@@ -157,6 +157,20 @@ export function TopBar() {
                     Attributes
                   </div>
                 </Link>
+                <Link href="/admin/templates/studio" onClick={() => setShowAdminMenu(false)}>
+                  <div style={{
+                    padding: '12px 16px',
+                    color: 'var(--ink-2)',
+                    textDecoration: 'none',
+                    fontSize: '14px',
+                    borderBottom: '1px solid var(--line)'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    Statement Studio
+                  </div>
+                </Link>
                 <Link href="/admin/templates" onClick={() => setShowAdminMenu(false)}>
                   <div style={{
                     padding: '12px 16px',
