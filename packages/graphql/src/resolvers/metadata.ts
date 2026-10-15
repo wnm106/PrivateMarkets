@@ -191,6 +191,12 @@ export const metadataResolvers = {
         assignmentsByTemplate.get(a.template_id)!.push(a);
       });
 
+      const { data: sections } = await supabase
+        .from('template_sections')
+        .select('id, template_id, section_code, section_name, display_order, description')
+        .in('template_id', templateIds);
+      const sectionById = new Map<string, any>((sections || []).map((section: any) => [section.id, section]));
+
       return templates.map((t: any) => ({
         id: t.id,
         templateCode: t.template_code,
@@ -206,6 +212,8 @@ export const metadataResolvers = {
           precedenceRank: a.precedence_rank,
           displayOrder: a.display_order,
           displayLabel: a.display_label,
+          sectionCode: sectionById.get(a.section_id)?.section_code || null,
+          sectionName: sectionById.get(a.section_id)?.section_name || null,
         })),
       }));
     },

@@ -10,6 +10,7 @@ interface Template {
   name: string;
   domain: string;
   description: string;
+  statementKind?: string;
   attributes: Array<{
     attributeId: string;
     attributeCode: string;
@@ -42,7 +43,9 @@ interface GraphQLTemplate {
     precedenceRank: number;
     displayOrder: number;
     displayLabel?: string;
+    sectionName?: string | null;
   }>;
+  applicabilityRules?: { statementKind?: string; entityCode?: string | null };
 }
 
 interface DomainConfig {
@@ -77,12 +80,13 @@ export default function TemplatesPage() {
             name: gqlTpl.templateName,
             domain: gqlTpl.domainCode.toLowerCase(),
             description: gqlTpl.description || '',
+            statementKind: gqlTpl.applicabilityRules?.statementKind,
             attributes: gqlTpl.attributes.map(attr => ({
               attributeId: attr.attributeId,
               attributeCode: attr.attribute.attributeCode,
               attributeName: attr.attribute.attributeName,
               required: attr.isRequired,
-              displaySection: attr.displayLabel || 'General',
+              displaySection: attr.sectionName || 'General',
               sortOrder: attr.displayOrder,
             })),
             entityCount: 0, // GraphQL doesn't return this, default to 0
@@ -162,8 +166,8 @@ export default function TemplatesPage() {
           </div>
         </div>
         <div className="page-actions">
-          <button className="btn">Export</button>
-          <button className="btn btn-primary" onClick={() => setShowCreateForm(true)}>+ New Template</button>
+          <Link href="/admin/templates/studio"><button className="btn btn-primary">Build from statements</button></Link>
+          <button className="btn" onClick={() => setShowCreateForm(true)}>+ New Template</button>
         </div>
       </div>
 
@@ -228,7 +232,7 @@ export default function TemplatesPage() {
                   letterSpacing: '0.5px',
                   border: '1px solid var(--line)',
                 }}>
-                  {tpl.domain}
+                  {tpl.statementKind ? `${tpl.statementKind} · ` : ''}{tpl.domain}
                 </span>
               </div>
               <div style={{ fontSize: '12px', color: 'var(--ink-3)', lineHeight: 1.5, marginBottom: '14px', minHeight: '34px' }}>

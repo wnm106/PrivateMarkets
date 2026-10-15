@@ -32,6 +32,7 @@ export interface AttributeMetadata {
   isRequired: boolean;
   referenceDomainCode?: string;
   listValues?: string[];
+  aliasLabels?: string[];
 }
 
 /**
@@ -117,6 +118,7 @@ async function fetchTargetAttributes(
   let query = supabase
     .from('attribute_register')
     .select(`
+      id,
       attribute_code,
       attribute_name,
       data_type,
@@ -147,6 +149,8 @@ async function fetchTargetAttributes(
 
   if (error) throw error;
 
+  const aliasLabels = await loadAliasLabels(supabase, (data || []).map((attr: any) => attr.id));
+
   return (data || []).map((attr: any) => ({
     attributeCode: attr.attribute_code,
     attributeName: attr.attribute_name,
@@ -155,7 +159,32 @@ async function fetchTargetAttributes(
     isRequired: attr.is_required,
     referenceDomainCode: attr.reference_domain_code,
     listValues: attr.list_values,
+    aliasLabels: aliasLabels.get(attr.id) || [],
   }));
+}
+
+async function loadAliasLabels(supabase: SupabaseClient, attributeIds: string[]): Promise<Map<string, string[]>> {
+  const labels = new Map<string, string[]>();
+  const ids = attributeIds.filter(Boolean);
+  if (ids.length === 0) return labels;
+  const { data, error } = await supabase
+    .from('attribute_aliases')
+    .select('attribute_id, alias_label, is_active')
+    .eq('is_active', true)
+    .in('attribute_id', ids);
+  if (error) return labels;
+  for (const alias of data || []) {
+    const list = labels.get(alias.attribute_id) || [];
+    list.push(alias.alias_label);
+    labels.set(alias.attribute_id, list);
+  }
+  return labels;
+}
+
+function matchesStoredAlias(sourceName: string, aliasLabels?: string[]): boolean {
+  if (!aliasLabels?.length) return false;
+  const source = normalizeFieldName(sourceName);
+  return aliasLabels.some((alias) => normalizeFieldName(alias) === source);
 }
 
 /**
@@ -227,6 +256,8 @@ function calculateMappingConfidence(
     score += 0.5;
   } else if (sourceNormalized === targetNameNormalized) {
     score += 0.45;
+  } else if (matchesStoredAlias(sourceField.name, targetAttr.aliasLabels)) {
+    score = Math.max(score, 0.93);
   }
 
   // 2. Semantic similarity (substring, contains, etc.)
@@ -363,6 +394,10 @@ function determineMappingType(sourceField: ParsedField, targetAttr: AttributeMet
     return 'exact';
   }
 
+  if (matchesStoredAlias(sourceField.name, targetAttr.aliasLabels)) {
+    return 'semantic';
+  }
+
   if (sourceNormalized.includes(targetNormalized) || targetNormalized.includes(sourceNormalized)) {
     return 'pattern';
   }
@@ -379,6 +414,10 @@ function generateMappingNotes(
   confidence: number
 ): string {
   const notes: string[] = [];
+
+  if (matchesStoredAlias(sourceField.name, targetAttr.aliasLabels)) {
+    notes.push('Matched a stored attribute alias');
+  }
 
   if (confidence >= 0.9) {
     notes.push('High confidence match');
