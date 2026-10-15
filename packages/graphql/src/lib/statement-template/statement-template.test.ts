@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildStatementTemplate, retargetLine } from './build';
-import { statementEntityType } from './entities';
+import { isDomainCode, statementKindCode } from './entities';
 import { labelMatchesAlias } from './normalize';
 import { parseStatementSource, visionJsonToStatementText } from './parse';
 import type { CatalogAttribute } from './types';
@@ -212,12 +212,17 @@ describe('buildStatementTemplate', () => {
   });
 });
 
-describe('statementEntityType', () => {
-  it('accepts funds and companies only', () => {
-    expect(statementEntityType('fund')).toMatchObject({ domainCode: 'FUND', statementKind: 'NAV' });
-    expect(statementEntityType('ISSUER')).toMatchObject({ domainCode: 'ISSUER', statementKind: 'FINANCIAL', domainName: 'Company' });
-    expect(statementEntityType('SECURITY')).toBeUndefined();
-    expect(statementEntityType('DEAL')).toBeUndefined();
+describe('statement domains', () => {
+  it('accepts every domain code and keeps statement shape separate', () => {
+    expect(isDomainCode('FUND')).toBe(true);
+    expect(isDomainCode('issuer')).toBe(true);
+    expect(isDomainCode('SECURITY')).toBe(true);
+    expect(isDomainCode('DEAL')).toBe(true);
+    expect(isDomainCode('POSITION')).toBe(true);
+    expect(isDomainCode('')).toBe(false);
+    expect(statementKindCode('nav')).toBe('NAV');
+    expect(statementKindCode('loan tape')).toBe('LOAN_TAPE');
+    expect(statementKindCode('')).toBe('CUSTOM');
   });
 });
 

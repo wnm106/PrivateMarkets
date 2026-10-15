@@ -1,17 +1,26 @@
-export interface StatementEntityType {
-  domainCode: 'FUND' | 'ISSUER';
-  /** Name shown in the studio. Issuers are the company records. */
-  domainName: string;
-  statementKind: 'NAV' | 'FINANCIAL';
-  statementLabel: string;
+/**
+ * Statement shape is metadata about the document, not a restriction on which
+ * entity type may use the studio. Every domain in the registry is eligible.
+ */
+export const STATEMENT_SHAPES = [
+  { code: 'NAV', label: 'NAV statement' },
+  { code: 'FINANCIAL', label: 'Financial statement' },
+  { code: 'CUSTOM', label: 'Custom statement' },
+] as const;
+
+const DOMAIN_CODE = /^[A-Z][A-Z0-9_]{0,49}$/;
+const KIND_CODE = /^[A-Z][A-Z0-9_]{0,40}$/;
+
+export function normalizeDomainCode(value: string | null | undefined): string {
+  return String(value || '').trim().toUpperCase();
 }
 
-export const STATEMENT_ENTITY_TYPES: readonly StatementEntityType[] = [
-  { domainCode: 'FUND', domainName: 'Fund', statementKind: 'NAV', statementLabel: 'NAV statement' },
-  { domainCode: 'ISSUER', domainName: 'Company', statementKind: 'FINANCIAL', statementLabel: 'Financial statement' },
-];
+export function isDomainCode(value: string | null | undefined): boolean {
+  return DOMAIN_CODE.test(normalizeDomainCode(value));
+}
 
-export function statementEntityType(domainCode: string | null | undefined): StatementEntityType | undefined {
-  const code = String(domainCode || '').trim().toUpperCase();
-  return STATEMENT_ENTITY_TYPES.find((entityType) => entityType.domainCode === code);
+/** Unknown shapes stay usable so a new document type does not need a code change. */
+export function statementKindCode(value: string | null | undefined): string {
+  const code = String(value || '').trim().toUpperCase().replace(/[\s-]+/g, '_').replace(/[^A-Z0-9_]/g, '');
+  return KIND_CODE.test(code) ? code : 'CUSTOM';
 }

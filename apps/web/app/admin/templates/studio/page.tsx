@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
-import { graphqlQuery, graphqlMutation, ENTITIES_QUERY } from '@/lib/graphql';
+import { graphqlQuery, graphqlMutation, DOMAIN_TYPES_QUERY, ENTITIES_QUERY } from '@/lib/graphql';
 import { authHeaders } from '@/lib/reporting';
 import { retargetLine } from '@tapestrai/graphql/src/lib/statement-template/build';
-import { STATEMENT_ENTITY_TYPES, statementEntityType } from '@tapestrai/graphql/src/lib/statement-template/entities';
+import { STATEMENT_SHAPES, statementKindCode } from '@tapestrai/graphql/src/lib/statement-template/entities';
 import type { CatalogAttribute } from '@tapestrai/graphql/src/lib/statement-template/types';
 
 type SourceKind = 'image' | 'file' | 'paste';
@@ -51,6 +51,11 @@ interface PreparedSource {
 interface EntityOption {
   entityCode: string;
   entityName: string;
+}
+
+interface DomainOption {
+  domainCode: string;
+  domainName: string;
 }
 
 const PREVIEW_QUERY = `
@@ -113,12 +118,14 @@ function move<T>(items: T[], index: number, direction: -1 | 1): T[] {
 }
 
 export default function StatementStudioPage() {
+  const [domains, setDomains] = useState<DomainOption[]>([]);
   const [entities, setEntities] = useState<EntityOption[]>([]);
-  const [domainCode, setDomainCode] = useState<(typeof STATEMENT_ENTITY_TYPES)[number]['domainCode']>('FUND');
+  const [domainCode, setDomainCode] = useState('');
+  const [statementKind, setStatementKind] = useState('CUSTOM');
   const [scope, setScope] = useState<'domain' | 'entity'>('domain');
   const [entityCode, setEntityCode] = useState('');
-  const [templateName, setTemplateName] = useState('Fund NAV statement');
-  const [templateCode, setTemplateCode] = useState('FUND_NAV_STATEMENT');
+  const [templateName, setTemplateName] = useState('');
+  const [templateCode, setTemplateCode] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
   const [codeTouched, setCodeTouched] = useState(false);
   const [description, setDescription] = useState('');
@@ -132,15 +139,30 @@ export default function StatementStudioPage() {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState<{ templateCode: string; aliasCount: number; sectionCount: number } | null>(null);
 
-  const entityType = statementEntityType(domainCode) ?? STATEMENT_ENTITY_TYPES[0];
+  const domainName = domains.find((domain) => domain.domainCode === domainCode)?.domainName || domainCode || 'Entity';
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const requested = statementEntityType(params.get('domain'));
-    if (requested) setDomainCode(requested.domainCode);
+    const requestedDomain = String(params.get('domain') || '').trim().toUpperCase();
+    if (requestedDomain) setDomainCode(requestedDomain);
+    if (params.get('kind')) setStatementKind(statementKindCode(params.get('kind')));
   }, []);
 
   useEffect(() => {
+    graphqlQuery<{ domainTypes: Array<{ domainCode: string; domainName: string; isActive: boolean }> }, Record<string, never>>(DOMAIN_TYPES_QUERY)
+      .then((result) => {
+        const active = (result.data?.domainTypes || []).filter((domain) => domain.isActive !== false);
+        setDomains(active);
+        setDomainCode((current) => current || active[0]?.domainCode || '');
+      })
+      .catch(() => setDomains([]));
+  }, []);
+
+  useEffect(() => {
+    if (!domainCode) {
+      setEntities([]);
+      return;
+    }
     graphqlQuery<{ entities: { edges: Array<{ node: EntityOption }> } }, { filter: { domainCode: string; isActive: boolean }; pagination: { first: number } }>(ENTITIES_QUERY, {
       filter: { domainCode, isActive: true },
       pagination: { first: 100 },
@@ -150,11 +172,12 @@ export default function StatementStudioPage() {
   }, [domainCode]);
 
   useEffect(() => {
-    if (nameTouched) return;
-    const nextName = `${entityType.domainName} ${entityType.statementLabel}`;
+    if (nameTouched || !domainCode) return;
+    const shape = STATEMENT_SHAPES.find((item) => item.code === statementKind);
+    const nextName = shape && statementKind !== 'CUSTOM' ? `${domainName} ${shape.label}` : `${domainName} statement`;
     setTemplateName(nextName);
     if (!codeTouched) setTemplateCode(codeFromName(nextName));
-  }, [entityType, nameTouched, codeTouched]);
+  }, [domainCode, domainName, statementKind, nameTouched, codeTouched]);
 
   const lineCount = useMemo(
     () => sections.reduce((sum, section) => sum + section.lines.length, 0),
@@ -250,8 +273,8 @@ export default function StatementStudioPage() {
         previewStatementTemplate: { sections: DraftSection[]; warnings: string[]; catalog: CatalogEntry[] };
       }, { input: Record<string, unknown> }>(PREVIEW_QUERY, {
         input: {
-          domainCode: entityType.domainCode,
-          statementKind: entityType.statementKind,
+          domainCode,
+          statementKind,
           sources: withText.map((source) => ({
             sourceName: source.sourceName,
             sourceKind: source.sourceKind,
@@ -328,9 +351,9 @@ export default function StatementStudioPage() {
         input: {
           templateCode,
           templateName,
-          domainCode: entityType.domainCode,
+          domainCode,
           description: description || null,
-          statementKind: entityType.statementKind,
+          statementKind,
           entityCode: scope === 'entity' ? entityCode || null : null,
           sections: sections.filter((section) => section.lines.length > 0).map((section) => ({
             sectionCode: section.sectionCode,
@@ -385,7 +408,7 @@ export default function StatementStudioPage() {
         <div>
           <div className="page-title">Statement studio</div>
           <div className="page-meta">
-            For funds and companies only. Supply a fund NAV statement or a company financial statement. The studio aggregates the sections and keeps an alias when a line is another name for an attribute you already have.
+            For any entity type. Supply the statements that entity uses — a fund NAV, a company financial statement, a security tape, or another shape. The studio aggregates the sections and keeps an alias when a line is another name for an attribute you already have.
           </div>
         </div>
       </div>
@@ -408,20 +431,50 @@ export default function StatementStudioPage() {
           <div className="form-grid">
             <div className="field" style={{ gridColumn: '1 / -1' }}>
               <label htmlFor="statement-domain">Entity type</label>
+              {domains.length > 0 ? (
+                <select
+                  id="statement-domain"
+                  className="select"
+                  value={domainCode}
+                  onChange={(event) => {
+                    setDomainCode(event.target.value);
+                    setEntityCode('');
+                  }}
+                >
+                  {domains.map((option) => (
+                    <option key={option.domainCode} value={option.domainCode}>{option.domainName}</option>
+                  ))}
+                  {domainCode && !domains.some((option) => option.domainCode === domainCode) && (
+                    <option value={domainCode}>{domainCode}</option>
+                  )}
+                </select>
+              ) : (
+                <input
+                  id="statement-domain"
+                  className="text-input mono"
+                  value={domainCode}
+                  placeholder="Domain code"
+                  onChange={(event) => {
+                    setDomainCode(event.target.value.toUpperCase());
+                    setEntityCode('');
+                  }}
+                />
+              )}
+            </div>
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label htmlFor="statement-kind">Statement shape</label>
               <select
-                id="statement-domain"
+                id="statement-kind"
                 className="select"
-                value={entityType.domainCode}
-                onChange={(event) => {
-                  const next = statementEntityType(event.target.value);
-                  if (!next) return;
-                  setDomainCode(next.domainCode);
-                  setEntityCode('');
-                }}
+                value={statementKind}
+                onChange={(event) => setStatementKind(event.target.value)}
               >
-                {STATEMENT_ENTITY_TYPES.map((option) => (
-                  <option key={option.domainCode} value={option.domainCode}>{option.domainName} — {option.statementLabel}</option>
+                {STATEMENT_SHAPES.map((shape) => (
+                  <option key={shape.code} value={shape.code}>{shape.label}</option>
                 ))}
+                {!STATEMENT_SHAPES.some((shape) => shape.code === statementKind) && (
+                  <option value={statementKind}>{statementKind.replace(/_/g, ' ')}</option>
+                )}
               </select>
             </div>
             <div className="field" style={{ gridColumn: '1 / -1' }}>
@@ -429,7 +482,7 @@ export default function StatementStudioPage() {
               <div style={{ display: 'flex', gap: '14px', marginTop: '6px' }}>
                 <label style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                   <input type="radio" name="scope" checked={scope === 'domain'} onChange={() => setScope('domain')} />
-                  Any {entityType.domainName.toLowerCase()}
+                  Any {domainName.toLowerCase()}
                 </label>
                 <label style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                   <input type="radio" name="scope" checked={scope === 'entity'} onChange={() => setScope('entity')} />

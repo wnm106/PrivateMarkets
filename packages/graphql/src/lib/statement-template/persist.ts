@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadStatementCatalog } from './catalog';
-import { statementEntityType } from './entities';
+import { isDomainCode, normalizeDomainCode, statementKindCode } from './entities';
 import { labelsEquivalent, toAttributeCode } from './normalize';
 import type { StatementSourceKind } from './types';
 
@@ -66,21 +66,34 @@ function fail(field: string, message: string, code = 'INVALID'): ApplyStatementT
   return { template: null, aliasCount: 0, sectionCount: 0, errors: [{ field, message, code }] };
 }
 
+/** A statement template may target any active domain in the registry. */
+export async function requireDomain(supabase: SupabaseClient, domainCode: string | null | undefined): Promise<string | null> {
+  const code = normalizeDomainCode(domainCode);
+  if (!isDomainCode(code)) return null;
+  const { data, error } = await supabase
+    .from('domain_types')
+    .select('domain_code')
+    .eq('domain_code', code)
+    .eq('is_active', true)
+    .maybeSingle();
+  if (error || !data) return null;
+  return code;
+}
+
 export async function applyStatementTemplate(
   supabase: SupabaseClient,
   input: ApplyStatementTemplateInput,
 ): Promise<ApplyStatementTemplateOutput> {
   const templateCode = String(input.templateCode || '').trim().toUpperCase().replace(/[\s-]+/g, '_').replace(/[^A-Z0-9_]/g, '');
   const templateName = String(input.templateName || '').trim();
-  const entityType = statementEntityType(input.domainCode);
-  const domainCode = entityType?.domainCode || '';
-  const statementKind = entityType?.statementKind || '';
+  const domainCode = await requireDomain(supabase, input.domainCode);
+  const statementKind = statementKindCode(input.statementKind);
   const entityCode = String(input.entityCode || '').trim();
   const sections = input.sections || [];
 
   if (!ATTRIBUTE_CODE.test(templateCode)) return fail('templateCode', 'Template code must start with a letter and use only letters, numbers, and underscores.');
   if (!templateName) return fail('templateName', 'Template name is required.');
-  if (!entityType) return fail('domainCode', 'Statement templates are for funds and companies only.');
+  if (!domainCode) return fail('domainCode', 'Choose an entity type.');
   if (sections.length === 0 || sections.every((section) => (section.lines || []).length === 0)) {
     return fail('sections', 'Add at least one section with a line before saving.');
   }
@@ -101,7 +114,7 @@ export async function applyStatementTemplate(
     logic: 'AND',
   };
   const description = String(input.description || '').trim()
-    || `${entityType.statementLabel} template aggregated from ${(input.sources || []).length || sections.length} source${(input.sources || []).length === 1 ? '' : 's'}.`;
+    || `${statementKind.replace(/_/g, ' ').toLowerCase()} statement template aggregated from ${(input.sources || []).length || sections.length} source${(input.sources || []).length === 1 ? '' : 's'}.`;
 
   const template = await upsertTemplate(supabase, {
     existingTemplateId: input.existingTemplateId || null,
