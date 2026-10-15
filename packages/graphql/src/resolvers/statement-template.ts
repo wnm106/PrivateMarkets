@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { buildStatementTemplate } from '../lib/statement-template/build';
 import { loadStatementCatalog } from '../lib/statement-template/catalog';
+import { statementEntityType } from '../lib/statement-template/entities';
 import { applyStatementTemplate } from '../lib/statement-template/persist';
 import type { StatementSource } from '../lib/statement-template/types';
 
@@ -72,15 +73,16 @@ export const statementTemplateResolvers = {
   Query: {
     previewStatementTemplate: async (_: unknown, args: { input: any }, context: { supabase: SupabaseClient }) => {
       const input = args.input || {};
-      const domainCode = String(input.domainCode || '').trim().toUpperCase();
-      if (!domainCode) throw new Error('Choose the entity type these statements describe.');
+      const entityType = statementEntityType(input.domainCode);
+      if (!entityType) throw new Error('Statement templates are for funds and companies only.');
+      const domainCode = entityType.domainCode;
       const sources: StatementSource[] = (input.sources || []).map((source: any) => ({
         sourceName: String(source.sourceName || 'Statement'),
         sourceKind: source.sourceKind === 'image' || source.sourceKind === 'file' ? source.sourceKind : 'paste',
         text: String(source.text || ''),
       }));
       const catalog = await loadStatementCatalog(context.supabase, domainCode);
-      return buildStatementTemplate(sources, catalog, { statementKind: input.statementKind });
+      return buildStatementTemplate(sources, catalog, { statementKind: entityType.statementKind });
     },
   },
 

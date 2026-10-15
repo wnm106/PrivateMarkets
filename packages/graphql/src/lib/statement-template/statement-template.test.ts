@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildStatementTemplate, retargetLine } from './build';
+import { statementEntityType } from './entities';
 import { labelMatchesAlias } from './normalize';
 import { parseStatementSource, visionJsonToStatementText } from './parse';
 import type { CatalogAttribute } from './types';
@@ -208,6 +209,15 @@ describe('buildStatementTemplate', () => {
     const manual = retargetLine(asNew, fundCatalog[2]);
     expect(manual).toMatchObject({ attributeCode: 'NAV_CURRENCY', matchKind: 'manual', isNew: false });
     expect(manual.aliases).toContain('Ending NAV');
+  });
+});
+
+describe('statementEntityType', () => {
+  it('accepts funds and companies only', () => {
+    expect(statementEntityType('fund')).toMatchObject({ domainCode: 'FUND', statementKind: 'NAV' });
+    expect(statementEntityType('ISSUER')).toMatchObject({ domainCode: 'ISSUER', statementKind: 'FINANCIAL', domainName: 'Company' });
+    expect(statementEntityType('SECURITY')).toBeUndefined();
+    expect(statementEntityType('DEAL')).toBeUndefined();
   });
 });
 

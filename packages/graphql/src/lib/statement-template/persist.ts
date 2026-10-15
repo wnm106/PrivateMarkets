@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadStatementCatalog } from './catalog';
+import { statementEntityType } from './entities';
 import { labelsEquivalent, toAttributeCode } from './normalize';
 import type { StatementSourceKind } from './types';
 
@@ -71,15 +72,15 @@ export async function applyStatementTemplate(
 ): Promise<ApplyStatementTemplateOutput> {
   const templateCode = String(input.templateCode || '').trim().toUpperCase().replace(/[\s-]+/g, '_').replace(/[^A-Z0-9_]/g, '');
   const templateName = String(input.templateName || '').trim();
-  const domainCode = String(input.domainCode || '').trim().toUpperCase();
-  const statementKind = String(input.statementKind || 'CUSTOM').trim().toUpperCase();
+  const entityType = statementEntityType(input.domainCode);
+  const domainCode = entityType?.domainCode || '';
+  const statementKind = entityType?.statementKind || '';
   const entityCode = String(input.entityCode || '').trim();
   const sections = input.sections || [];
 
   if (!ATTRIBUTE_CODE.test(templateCode)) return fail('templateCode', 'Template code must start with a letter and use only letters, numbers, and underscores.');
   if (!templateName) return fail('templateName', 'Template name is required.');
-  if (!domainCode) return fail('domainCode', 'Choose the entity type this template belongs to.');
-  if (!['NAV', 'FINANCIAL', 'CUSTOM'].includes(statementKind)) return fail('statementKind', 'Statement kind must be NAV, FINANCIAL, or CUSTOM.');
+  if (!entityType) return fail('domainCode', 'Statement templates are for funds and companies only.');
   if (sections.length === 0 || sections.every((section) => (section.lines || []).length === 0)) {
     return fail('sections', 'Add at least one section with a line before saving.');
   }
@@ -100,7 +101,7 @@ export async function applyStatementTemplate(
     logic: 'AND',
   };
   const description = String(input.description || '').trim()
-    || `${statementKind === 'NAV' ? 'NAV statement' : statementKind === 'FINANCIAL' ? 'Financial statement' : 'Statement'} template aggregated from ${(input.sources || []).length || sections.length} source${(input.sources || []).length === 1 ? '' : 's'}.`;
+    || `${entityType.statementLabel} template aggregated from ${(input.sources || []).length || sections.length} source${(input.sources || []).length === 1 ? '' : 's'}.`;
 
   const template = await upsertTemplate(supabase, {
     existingTemplateId: input.existingTemplateId || null,
