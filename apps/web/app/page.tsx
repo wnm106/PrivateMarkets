@@ -267,6 +267,23 @@ export default function LandingPage() {
       </div>
 
       <div className="nav-row">
+        <Link href="/merge">
+          <div className="nav-card">
+            <div className="nav-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <circle cx="7" cy="8" r="3" />
+                <circle cx="17" cy="8" r="3" />
+                <path d="M10 8h4" />
+                <path d="M12 11v3" />
+                <path d="M8 20c.6-2 2.2-3 4-3s3.4 1 4 3" />
+              </svg>
+            </div>
+            <div>
+              <div className="nav-title">Entity Resolution</div>
+              <div className="nav-desc">Match exact keys and fuzzy names across entity types, then merge without flattening the relationship graph.</div>
+            </div>
+          </div>
+        </Link>
         <Link href="/precedence">
           <div className="nav-card">
             <div className="nav-icon">

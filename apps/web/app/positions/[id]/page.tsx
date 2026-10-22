@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { graphqlQuery, graphqlMutation, INTERSECTION_QUERY, ENTITY_QUERY, FIELD_LINEAGE_QUERY, ATTRIBUTE_REGISTER_QUERY, ADD_COMPETING_SOURCE_MUTATION } from '@/lib/graphql';
 import { GoldenRecordHeader } from '@/components/detail/GoldenRecordHeader';
+import { EntityGraphPanel } from '@/components/detail/EntityGraphPanel';
 import { GoldenRecordSections, type TemplateAttribute, type LineageData } from '@/components/detail/GoldenRecordSections';
 import { SourceContributionPanel } from '@/components/detail/SourceContributionPanel';
 import { ActiveConflictsPanel } from '@/components/detail/ActiveConflictsPanel';
@@ -42,6 +43,7 @@ export default function PositionDetailPage() {
   const domainConfig = getDomainConfig('positions');
   const asOfDate = useTemporalStore(state => state.asOfDate);
   const [entity, setEntity] = useState<EntityData | null>(null);
+  const [isMasterEntity, setIsMasterEntity] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lineageData, setLineageData] = useState<LineageData[]>([]);
@@ -109,6 +111,7 @@ export default function PositionDetailPage() {
           setLoading(false);
           return;
         }
+        setIsMasterEntity(true);
         setEntity(loaded);
         if (attrResult.data?.attributeRegister) {
           const mappedAttributes: TemplateAttribute[] = attrResult.data.attributeRegister
@@ -127,6 +130,7 @@ export default function PositionDetailPage() {
       }
       if (ixResult.error) { setError(ixResult.error.message || 'Failed to load position'); setLoading(false); return; }
       const ix = ixResult.data.intersection;
+      setIsMasterEntity(false);
       setEntity({
         id: ix.id, entityCode: ix.intersectionCode, entityName: ix.intersectionCode,
         domainCode: 'POSITION', domainName: 'Position', templateName: ix.intersectionTypeName,
@@ -190,11 +194,12 @@ export default function PositionDetailPage() {
   }
   return (
     <div className="view-fade">
-      <GoldenRecordHeader id={entity.entityCode} name={entity.entityName} type={entity.templateName || entity.domainName || 'Position'} status={entity.isActive ? 'Active' : 'Inactive'} lastReviewed={lastReviewedText} quality={qualityScore} conflicts={conflicts.length} entityPath={`/positions/${id}`} listPath="/positions" listLabel="Positions" accentColor={domainConfig.color} />
+      <GoldenRecordHeader id={entity.entityCode} name={entity.entityName} type={entity.templateName || entity.domainName || 'Position'} status={entity.isActive ? 'Active' : 'Inactive'} lastReviewed={lastReviewedText} quality={qualityScore} conflicts={conflicts.length} entityPath={`/positions/${id}`} listPath="/positions" listLabel="Positions" accentColor={domainConfig.color} mergeHref={isMasterEntity ? `/merge?entity=${entity.id}` : undefined} />
       <div className="detail-layout">
         <div><GoldenRecordSections entity={entity} templateAttributes={templateAttributes} lineageData={lineageData} onAddAttribute={handleAddAttribute} onSourceChange={handleSourceChange} onValueChange={handleValueChange} onAddSourceValue={handleAddSourceValue} /></div>
         <div><SourceContributionPanel sources={sourceContributions} /><ActiveConflictsPanel conflicts={conflicts} entityId={id} /><ActivityFeedPanel activities={activities} /></div>
       </div>
+      {isMasterEntity && <EntityGraphPanel entityId={entity.id} />}
     </div>
   );
 }

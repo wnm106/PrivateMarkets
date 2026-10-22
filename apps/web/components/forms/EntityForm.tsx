@@ -132,10 +132,12 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
   const selectedTemplate = templates.find(t => t.templateCode === formData.template);
   const templateAttributes = (selectedTemplate?.attributes || []).slice().sort((a, b) => a.displayOrder - b.displayOrder);
 
-  // Relationship types that plausibly involve this entity type on either side
-  const relevantRelationshipTypes = relationshipTypes.filter(
-    r => r.parentDomainCode === domainCode || r.childDomainCode === domainCode
-  );
+  // A blank parent or child domain means the relationship can connect any entity type,
+  // so beneficial-ownership, counterparty, and facility edges are offered everywhere.
+  const relevantRelationshipTypes = relationshipTypes.filter((r) => {
+    if (!r.parentDomainCode || !r.childDomainCode) return true;
+    return r.parentDomainCode === domainCode || r.childDomainCode === domainCode;
+  });
 
   return (
     <div className="builder-card">

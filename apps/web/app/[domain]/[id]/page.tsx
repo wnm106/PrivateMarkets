@@ -10,6 +10,7 @@ import { SourceContributionPanel } from '@/components/detail/SourceContributionP
 import { ActiveConflictsPanel } from '@/components/detail/ActiveConflictsPanel';
 import { ActivityFeedPanel } from '@/components/detail/ActivityFeedPanel';
 import { EntityReports } from '@/components/reporting/EntityReports';
+import { EntityGraphPanel } from '@/components/detail/EntityGraphPanel';
 import { sources, type SourceKey } from '@/lib/data';
 import { getDomainConfig, type DomainKey } from '@/lib/mock-data';
 import { useTemporalStore } from '@/lib/store';
@@ -300,6 +301,7 @@ export default function DynamicEntityDetailPage() {
         listPath={`/${domain}`}
         listLabel={domainConfig.name}
         accentColor={domainConfig.color}
+        mergeHref={`/merge?entity=${entity.id}`}
       />
 
       <div className="detail-layout">
@@ -323,6 +325,7 @@ export default function DynamicEntityDetailPage() {
       </div>
 
       <EntityReports domainCode={entity.domainCode} entityId={entity.id} asOfDate={asOfDate} />
+      <EntityGraphPanel entityId={entity.id} />
     </div>
   );
 }
