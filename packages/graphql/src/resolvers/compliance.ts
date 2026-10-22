@@ -731,19 +731,20 @@ async function fetchAttributeValues(
   const attributeIds = [...codeById.keys()];
   if (!attributeIds.length) return;
 
+  // winning_attribute_values seeks idx_eav_entity_attr_source_asof once per
+  // (entity, attribute, source) instead of scanning every historical slice.
   const chunk = 200;
   for (let i = 0; i < ids.length; i += chunk) {
     const slice = ids.slice(i, i + chunk);
     const { data, error } = await supabase
       .schema('golden_master')
-      .from('entity_attribute_values')
-      .select('entity_id, attribute_id, golden_value, precedence_rank')
-      .in('entity_id', slice)
-      .in('attribute_id', attributeIds)
-      .lte('valid_from', asOf)
-      .gte('valid_to', asOf)
-      .lte('system_from', now)
-      .gte('system_to', now);
+      .rpc('winning_attribute_values', {
+        p_entity_ids: slice,
+        p_attribute_ids: attributeIds,
+        p_as_of: asOf,
+        p_knowledge: now,
+        p_require_text: false,
+      });
     if (error) throw new Error(`Failed to load attribute values: ${error.message}`);
     for (const row of data || []) {
       const code = codeById.get(row.attribute_id);
