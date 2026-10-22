@@ -117,7 +117,7 @@ position_metrics          -- Calculated metrics
 Rule engine and exception tracking:
 
 ```sql
-dq_rules                  -- Rule definitions
+dq_rules                  -- Rule definitions. rule_expression is true for failing records.
 dq_exceptions             -- Exception instances
 ```
 

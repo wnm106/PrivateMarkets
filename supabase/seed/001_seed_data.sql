@@ -40,6 +40,19 @@ INSERT INTO metadata_register.attribute_register (attribute_code, attribute_name
     ('STATUS', 'Status', 'STRING', 'Deal status', FALSE, 100)
 ON CONFLICT (attribute_code) DO NOTHING;
 
+-- Link seeded DQ rules to the attribute their failure predicate reads.
+-- Migrations run before this seed, so attribute ids are not available there.
+UPDATE data_quality.dq_rules AS r
+SET attribute_id = ar.id
+FROM metadata_register.attribute_register AS ar
+WHERE r.attribute_id IS NULL
+  AND (
+    (r.rule_code = 'FUND_NAV_NOT_NULL' AND ar.attribute_code = 'NAV')
+    OR (r.rule_code = 'SECURITY_ISIN_FORMAT' AND ar.attribute_code = 'ISIN')
+    OR (r.rule_code = 'DEAL_DATE_NOT_FUTURE' AND ar.attribute_code = 'DEAL_DATE')
+    OR (r.rule_code = 'PRICE_NOT_NEGATIVE' AND ar.attribute_code = 'PRICE')
+  );
+
 -- Seed: Source Registry
 -- Already inserted in migration 00003
 
