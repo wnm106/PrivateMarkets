@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
-import { domainHref } from '@/lib/domain-routes';
+import { domainColor, domainHref } from '@/lib/domain-routes';
 
 interface DomainTypeRecord {
   id: string;
@@ -17,6 +17,7 @@ interface EntityDomainCard {
   key: string;
   domainCode: string;
   name: string;
+  color: string;
   count: number;
   desc: string;
 }
@@ -180,7 +181,8 @@ export default function LandingPage() {
           return {
             key: domainHref(domain.domainCode),
             domainCode: domain.domainCode,
-            name: domain.domainName,
+            name: domain.domainName || domain.domainCode,
+            color: domainColor(domain.domainCode),
             desc: domain.description || '',
             count: counts[domain.domainCode] || 0,
           };
@@ -385,9 +387,14 @@ export default function LandingPage() {
             </div>
           )}
           {domains.map((entity) => (
-            <Link key={entity.domainCode} href={entity.key} className="home-domain">
+            <Link
+              key={entity.domainCode}
+              href={entity.key}
+              className="home-domain"
+              style={{ '--card-accent': entity.color } as React.CSSProperties}
+            >
               <div className="home-domain-top">
-                <span className="home-domain-mark" aria-hidden>{entity.name.charAt(0)}</span>
+                <span className="home-domain-mark" aria-hidden>{entity.domainCode.charAt(0)}</span>
                 <span className="home-domain-name">{entity.name}</span>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
                   <path d="m9 6 6 6-6 6" />

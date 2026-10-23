@@ -8,6 +8,7 @@ import {
   UPDATE_ATTRIBUTE_MUTATION,
   UPDATE_ATTRIBUTE_PRECEDENCE_MUTATION,
 } from '@/lib/graphql';
+import { CalculationWorkspace, type CalculationSpec } from '@/components/admin/CalcExpressionEditor';
 
 const NUMERIC_DATA_TYPES = ['NUMBER', 'INTEGER', 'DECIMAL', 'FLOAT', 'CURRENCY', 'PERCENTAGE', 'PERCENT'];
 const VALID_DATA_TYPES = [
@@ -45,6 +46,7 @@ interface ReferenceListOpt {
   listName: string;
 }
 
+
 export function AttributeExpandPanel({
   attribute,
   weightAttributes,
@@ -81,6 +83,34 @@ export function AttributeExpandPanel({
   const [savingFields, setSavingFields] = useState(false);
   const [savingChain, setSavingChain] = useState(false);
   const [message, setMessage] = useState('');
+  const [calculation, setCalculation] = useState<CalculationSpec | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    graphqlQuery<{ calcDefinitions: CalculationSpec[] }>(
+      `query AttributeCalculation {
+        calcDefinitions {
+          id
+          attributeCode
+          domainCode
+          calcKind
+          evaluationMode
+          outputGrain
+          expression
+          aggregateFn
+          seriesFn
+          inputs { inputRole attributeCode traversal relationshipCodes }
+        }
+      }`,
+      {},
+      'network-only',
+    ).then((result) => {
+      if (cancelled) return;
+      const match = (result.data?.calcDefinitions || []).find((item) => item.attributeCode === attribute.attributeCode);
+      setCalculation(match || null);
+    });
+    return () => { cancelled = true; };
+  }, [attribute.attributeCode]);
 
   useEffect(() => {
     graphqlQuery<{ dataSources: Array<{ sourceCode: string; precedenceRank: number }> }, { isActive: boolean }>(
@@ -254,6 +284,17 @@ export function AttributeExpandPanel({
       <div style={{ display: 'flex', gap: '8px' }}>
         <button className="btn btn-primary" type="button" onClick={saveFields} disabled={savingFields}>{savingFields ? 'Saving…' : 'Save attribute'}</button>
         <button className="btn" type="button" onClick={onCancel}>Close</button>
+      </div>
+
+      <div style={{ borderTop: '1px solid var(--line)', paddingTop: '14px' }}>
+        <div style={{ fontWeight: 600, fontSize: '13px' }}>Calculation</div>
+        {calculation ? (
+          <CalculationWorkspace spec={calculation} onSaved={setCalculation} />
+        ) : (
+          <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginTop: '6px' }}>
+            This attribute is not calculated. Its value comes from a source.
+          </div>
+        )}
       </div>
 
       <div style={{ borderTop: '1px solid var(--line)', paddingTop: '14px' }}>

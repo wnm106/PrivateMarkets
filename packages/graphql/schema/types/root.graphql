@@ -24,6 +24,7 @@ type Query {
   attributeRegister(domainCode: String): [AttributeDefinition!]!
   domainTemplates(domainCode: String): [Template!]!
   calcDefinitions: [CalcDefinition!]!
+  calcBreakdown(entityId: ID!, attributeCode: String!, asOfDate: Date): CalcBreakdown
   calculatedAttributeStates(entityId: ID!): [CalculatedAttributeState!]!
   expressionFunctions(category: String): [ExpressionFunction!]!
   # Entity Management queries
@@ -32,6 +33,7 @@ type Query {
   
   # Lineage and temporal queries
   fieldLineage(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime): [FieldLineage!]!
+  entityActivity(entityId: ID!, knowledgeDate: DateTime, attributeCode: String, limit: Int): [AttributeActivity!]!
   temporalHistory(entityId: ID!, attributeCode: String!, fromDate: Date!, toDate: Date!): [TemporalValue!]!
   
   # DQ queries
@@ -39,6 +41,7 @@ type Query {
   dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
   dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
   dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date): DataQualityDashboard!
+  staleAttributes(domainCode: String, olderThanDays: Int, asOfDate: Date): StaleAttributeReport!
   
   # Source queries
   dataSources(type: String, isActive: Boolean): [DataSource!]!
@@ -107,6 +110,7 @@ type Mutation {
   updateAttribute(input: UpdateAttributeInput!): UpdateAttributeResult!
   splitValidTime(input: SplitValidTimeInput!): SplitValidTimeResult!
   submitManualOverride(input: ManualOverrideInput!): ManualOverrideResult!
+  clearManualOverride(input: ClearManualOverrideInput!): ClearManualOverrideResult!
   
   # Metadata mutations
   createDomainType(input: CreateDomainTypeInput!): CreateDomainTypeResult!
@@ -115,13 +119,16 @@ type Mutation {
   createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
   updateAttributeDefinition(input: UpdateAttributeDefinitionInput!): UpdateAttributeDefinitionResult!
   processCalculatedAttributes(limit: Int): ProcessCalculatedAttributesResult!
+  updateCalcExpression(id: ID!, expression: JSON!, operands: [CalcOperandInput!]): UpdateCalcExpressionResult!
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
   assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
   updateTemplateSourcePreference(input: UpdateTemplateSourcePreferenceInput!): UpdateTemplateSourcePreferenceResult!
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
+  updateDQRule(input: UpdateDQRuleInput!): UpdateDQRuleResult!
   resolveDQException(input: ResolveDQExceptionInput!): ResolveDQExceptionResult!
+  recordDQDisposition(input: RecordDQDispositionInput!): RecordDQDispositionResult!
   
   # Intersection mutations
   createIntersectionType(input: CreateIntersectionTypeInput!): CreateIntersectionTypeResult!
@@ -245,6 +252,17 @@ input ManualOverrideInput {
   value: String!
   validFrom: Date!
   overrideReason: String!
+}
+
+input ClearManualOverrideInput {
+  entityId: ID!
+  attributeCode: String!
+  asOf: Date
+}
+
+type ClearManualOverrideResult {
+  success: Boolean!
+  errors: [MutationError!]!
 }
 
 type UpdateAttributeResult {

@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { DomainKey } from '@/lib/mock-data'; // Only keeping DomainKey type, removing function imports
+import { domainCodeFromRoute } from '@/lib/domain-routes';
 import { graphqlQuery, DOMAIN_TEMPLATES_QUERY, RELATIONSHIP_TYPES_QUERY, ENTITIES_QUERY } from '@/lib/graphql';
+import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
 import { SchemaScopeField } from '@/components/admin/SchemaScopeField';
 
 interface EntityFormProps {
-  domain: DomainKey;
+  domain: string;
   mode: 'create' | 'edit';
   initialData?: any;
   onSubmit: (data: any) => void;
@@ -50,19 +51,8 @@ interface RelationshipEntry {
   validFrom: string;
 }
 
-// Maps the lowercase-plural route keys used across the app to the real,
-// singular uppercase domain_code values stored in metadata_register.domain_types.
-const DOMAIN_KEY_TO_CODE: Record<string, string> = {
-  funds: 'FUND',
-  issuers: 'ISSUER',
-  securities: 'SECURITY',
-  deals: 'DEAL',
-  investors: 'INVESTOR',
-  positions: 'POSITION',
-};
-
 export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: EntityFormProps) {
-  const domainCode = DOMAIN_KEY_TO_CODE[domain] || domain.toUpperCase();
+  const domainCode = domainCodeFromRoute(domain);
 
   const [templates, setTemplates] = useState<DomainTemplate[]>([]);
   const [relationshipTypes, setRelationshipTypes] = useState<RelationshipType[]>([]);
@@ -227,28 +217,13 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
                     {tplAttr.displayLabel || tplAttr.attribute.attributeName}
                     {tplAttr.isRequired && <span style={{ color: 'var(--red)', marginLeft: '4px' }}>*</span>}
                   </label>
-                  {tplAttr.attribute.dataType === 'FLOAT' || tplAttr.attribute.dataType === 'INTEGER' || tplAttr.attribute.dataType === 'NUMBER' ? (
-                    <input
-                      className="text-input mono"
-                      type="number"
-                      value={formData.attributes[tplAttr.attribute.attributeCode] || ''}
-                      onChange={(e) => handleAttributeChange(tplAttr.attribute.attributeCode, e.target.value)}
-                    />
-                  ) : tplAttr.attribute.dataType === 'DATE' ? (
-                    <input
-                      className="text-input mono"
-                      type="date"
-                      value={formData.attributes[tplAttr.attribute.attributeCode] || ''}
-                      onChange={(e) => handleAttributeChange(tplAttr.attribute.attributeCode, e.target.value)}
-                    />
-                  ) : (
-                    <input
-                      className="text-input"
-                      value={formData.attributes[tplAttr.attribute.attributeCode] || ''}
-                      onChange={(e) => handleAttributeChange(tplAttr.attribute.attributeCode, e.target.value)}
-                      placeholder={`Enter ${(tplAttr.displayLabel || tplAttr.attribute.attributeName).toLowerCase()}`}
-                    />
-                  )}
+                  <AttributeValueInput
+                    attributeCode={tplAttr.attribute.attributeCode}
+                    dataType={tplAttr.attribute.dataType}
+                    value={formData.attributes[tplAttr.attribute.attributeCode] || ''}
+                    onChange={(value) => handleAttributeChange(tplAttr.attribute.attributeCode, value)}
+                    placeholder={`Enter ${(tplAttr.displayLabel || tplAttr.attribute.attributeName).toLowerCase()}`}
+                  />
                 </div>
               ))}
             </div>

@@ -4,6 +4,7 @@ import Image from 'next/image';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { sendGeminiMessage, ChatMessage, ChatContext } from '@/lib/gemini';
 import { markdownToHtml } from '@/lib/markdown';
+import { CHAT_VOICES, readStoredChatVoice } from '@/lib/chat-voice';
 import { useTemporalStore } from '@/lib/store';
 import {
   ChatConversation,
@@ -28,6 +29,11 @@ import {
   subscribeDesigner,
   type DesignerBridgeState,
 } from '@/lib/designer-bridge';
+import {
+  getViewContext,
+  subscribeViewContext,
+  type ViewFocus,
+} from '@/lib/view-context';
 
 /** A file the user has staged but not yet sent. */
 interface StagedAttachment {
@@ -79,6 +85,9 @@ function extractProposals(text: string): Array<{ raw: string; value: Record<stri
 export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const isOpen = useTemporalStore((state) => state.chatOpen);
   const setChatOpen = useTemporalStore((state) => state.setChatOpen);
+  const asOfDate = useTemporalStore((state) => state.asOfDate);
+  const chatVoice = useTemporalStore((state) => state.chatVoice);
+  const setChatVoice = useTemporalStore((state) => state.setChatVoice);
 
   const [messages, setMessages] = useState<PanelMessage[]>([]);
   const [input, setInput] = useState('');
@@ -93,6 +102,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const [staged, setStaged] = useState<StagedAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [designer, setDesigner] = useState<DesignerBridgeState>(() => getDesignerState());
+  const [viewFocus, setViewFocus] = useState<ViewFocus | null>(() => getViewContext().focus);
   const [appliedProposals, setAppliedProposals] = useState<Record<string, boolean>>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -110,24 +120,60 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
     };
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = subscribeViewContext((next) => setViewFocus(next.focus));
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // The stored choice is read after mount so the server render stays on the default.
+  useEffect(() => {
+    setChatVoice(readStoredChatVoice());
+  }, [setChatVoice]);
+
   const activeDesigner = designer.active;
   // An explicit profile wins; otherwise a designer on the page promotes the
   // default chat into report-designer mode.
   const effectiveToolContext = toolContext ?? (activeDesigner ? 'report-designer' : context?.toolContext);
 
+  const screenLabel = activeDesigner
+    ? `Designing a ${activeDesigner.kind}`
+    : viewFocus
+      ? `${viewFocus.activity === 'editing' ? 'Editing' : viewFocus.activity === 'creating' ? 'Creating' : 'Viewing'} ${viewFocus.label}`
+      : context?.page || 'Contextual MDM copilot';
+
   const requestContext: ChatContext = useMemo(
     () => ({
       ...context,
+      asOfDate,
       toolContext: effectiveToolContext,
+      ...(viewFocus
+        ? {
+            domainCode: viewFocus.domainCode || context?.domainCode,
+            entityCode: viewFocus.entityCode || context?.entityCode,
+            entityId: viewFocus.entityId || context?.entityId,
+            view: {
+              activity: viewFocus.activity,
+              kind: viewFocus.kind,
+              label: viewFocus.label,
+              summary: viewFocus.summary,
+              id: viewFocus.id,
+              snapshot: viewFocus.snapshot,
+            },
+          }
+        : {}),
       ...(activeDesigner
         ? {
             page: context?.page ?? `${activeDesigner.kind} designer`,
             domainCode: activeDesigner.domainCode,
             entityCode: activeDesigner.sampleEntityCode,
           }
-        : {}),
+        : viewFocus?.label && context?.page && !context.page.includes(viewFocus.label)
+          ? { page: `${context.page} · ${viewFocus.label}` }
+          : {}),
     }),
-    [context, effectiveToolContext, activeDesigner]
+    [context, effectiveToolContext, activeDesigner, viewFocus, asOfDate]
   );
 
   /** Draft the assistant should iterate on, when a designer is open. */
@@ -277,6 +323,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
         conversationId: conversationId ?? undefined,
         attachmentIds: sentAttachmentIds,
         designerDraft,
+        voice: chatVoice,
       });
 
       setMessages((prev) => [
@@ -430,10 +477,10 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
             height={36}
             unoptimized
           />
-          <div>
+          <div className="chat-header-copy">
             <div className="chat-header-name">tapestr.ai Assistant</div>
-            <div className="chat-header-sub">
-              {activeDesigner ? `Designing a ${activeDesigner.kind}` : 'Contextual MDM copilot'}
+            <div className="chat-header-sub" title={screenLabel}>
+              {screenLabel}
             </div>
           </div>
         </div>
@@ -462,6 +509,29 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
             ✕
           </button>
         </div>
+      </div>
+
+      <div className="chat-voice">
+        <div className="chat-voice-kicker">Voice</div>
+        <div className="chat-voice-switch" role="radiogroup" aria-label="Assistant voice">
+          {CHAT_VOICES.map((voice) => {
+            const selected = chatVoice === voice.id;
+            return (
+              <button
+                key={voice.id}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                className={`chat-voice-option${selected ? ' is-on' : ''}`}
+                title={voice.hint}
+                onClick={() => setChatVoice(voice.id)}
+              >
+                {voice.label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="chat-voice-hint">{CHAT_VOICES.find((voice) => voice.id === chatVoice)?.hint}</p>
       </div>
 
       {showHistory && (
@@ -560,10 +630,17 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
                   Describe the {activeDesigner.kind} you want, or drop in a screenshot or sample HTML to
                   design against. I inspect the real data model and propose changes you can apply.
                 </>
+              ) : viewFocus ? (
+                <>
+                  You&apos;re {viewFocus.activity === 'editing' ? 'editing' : viewFocus.activity === 'creating' ? 'creating' : 'viewing'}{' '}
+                  {viewFocus.label}
+                  {context?.page ? ` on ${context.page}` : ''}. Ask about it, or anything else in the system.
+                </>
               ) : (
                 <>
-                  Hi! I&apos;m your tapestr.ai MDM assistant. Ask about entities, data quality, lineage —
-                  or attach a screenshot for me to work from.
+                  Hi! I&apos;m your tapestr.ai MDM assistant
+                  {context?.page ? `, and I can see you're on ${context.page}` : ''}. Ask about entities,
+                  data quality, lineage — or attach a screenshot for me to work from.
                 </>
               )}
             </p>

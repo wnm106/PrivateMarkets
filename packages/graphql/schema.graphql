@@ -108,6 +108,18 @@ type FieldLineage {
   calcDirty: Boolean!
 }
 
+# One recorded write of an attribute value, newest first in entityActivity.
+type AttributeActivity {
+  attributeCode: String!
+  attributeName: String!
+  value: String
+  updatedAt: DateTime!
+  updatedBy: String!
+  sourceName: String
+  validFrom: Date!
+  validTo: Date!
+}
+
 # Attribute Definition with Derived Attribute Support
 type AttributeDefinition {
   id: ID!
@@ -189,6 +201,41 @@ type CalcDefinition {
   inputs: [CalcInput!]!
 }
 
+type CalcComponent {
+  attributeCode: String!
+  attributeName: String!
+  role: String!
+  traversal: String!
+  relationshipCodes: [String!]!
+  relationshipNames: [String!]!
+  domainCode: String
+  domainName: String
+  homeDomainCode: String
+  homeDomainName: String
+  entityId: ID
+  entityCode: String
+  entityName: String
+  value: String
+  detail: String
+  calculated: Boolean!
+}
+
+type CalcBreakdown {
+  attributeCode: String!
+  calcKind: String!
+  domainCode: String!
+  expression: JSON
+  value: String
+  truncated: Boolean!
+  components: [CalcComponent!]!
+}
+
+input CalcOperandInput {
+  attributeCode: String!
+  traversal: String!
+  relationshipCodes: [String!]!
+}
+
 type CalculatedAttributeState {
   entityId: ID!
   attributeCode: String!
@@ -202,6 +249,11 @@ type ProcessCalculatedAttributesResult {
   processed: Int!
   failed: Int!
   pending: Int!
+}
+
+type UpdateCalcExpressionResult {
+  definition: CalcDefinition
+  errors: [MutationError!]!
 }
 
 type ExpressionFunction {
@@ -326,6 +378,10 @@ input CreateDQRuleInput {
 input UpdateDQRuleInput {
   id: ID!
   ruleName: String
+  domainCode: DomainType
+  attributeCode: String
+  ruleType: DQRuleType
+  severity: DQSeverity
   "SQL predicate that is true when a record fails this rule."
   ruleExpression: String
   ruleDescription: String
@@ -355,6 +411,27 @@ type ResolveDQExceptionResult {
   errors: [MutationError!]!
 }
 
+type StaleAttribute {
+  entityId: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  attributeCode: String!
+  attributeName: String!
+  sourceCode: String!
+  sourceName: String!
+  value: String
+  receivedAt: DateTime!
+  ageDays: Int!
+}
+
+type StaleAttributeReport {
+  olderThanDays: Int!
+  asOfDate: Date!
+  count: Int!
+  attributes: [StaleAttribute!]!
+}
+
 type DataQualityDashboard {
   fromDate: Date!
   toDate: Date!
@@ -363,6 +440,7 @@ type DataQualityDashboard {
   availability: [AttributeAvailability!]!
   quality: [RuleQuality!]!
   trajectory: [AttributeTrajectory!]!
+  overrideMatches: [OverrideMatch!]!
   entities: [EntityQualityResult!]!
 }
 
@@ -382,6 +460,34 @@ type DataQualitySummary {
   changedEntityCount: Int!
   attributeChangeCount: Int!
   clearEntityCount: Int!
+  availabilityResolvedCount: Int!
+  availabilityIntroducedCount: Int!
+  qualityResolvedCount: Int!
+  qualityIntroducedCount: Int!
+  overrideMatchCount: Int!
+}
+
+type MeasureShift {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  previousValue: String
+  currentValue: String
+}
+
+type OverrideMatch {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  attributeCode: String!
+  attributeName: String!
+  overrideValue: String!
+  overrideReason: String
+  prioritySourceCode: String!
+  prioritySourceName: String!
+  priorityValue: String!
 }
 
 type QualityEntityRef {
@@ -391,6 +497,14 @@ type QualityEntityRef {
   domainCode: String!
 }
 
+type AvailabilityEntity {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  value: String
+}
+
 type AttributeAvailability {
   attributeCode: String!
   attributeName: String!
@@ -398,7 +512,12 @@ type AttributeAvailability {
   requiredCount: Int!
   missingCount: Int!
   availabilityPercent: Float
+  resolvedCount: Int!
+  introducedCount: Int!
   missingEntities: [QualityEntityRef!]!
+  resolvedEntities: [MeasureShift!]!
+  introducedEntities: [MeasureShift!]!
+  entities: [AvailabilityEntity!]
 }
 
 type RuleFailure {
@@ -406,8 +525,19 @@ type RuleFailure {
   entityCode: String!
   entityName: String!
   domainCode: String!
+  attributeCode: String
+  attributeName: String
   message: String
   actualValue: String
+}
+
+type AcceptedException {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  status: String!
+  notes: String
 }
 
 type RuleQuality {
@@ -418,12 +548,21 @@ type RuleQuality {
   severity: String!
   domainCode: String
   ruleExpression: String!
+  ruleDescription: String
+  attributeCode: String
+  attributeName: String
   evaluated: Boolean!
   evaluationMessage: String
   entityCount: Int!
   failingCount: Int!
   passingCount: Int!
+  acceptedCount: Int!
   failingEntities: [RuleFailure!]!
+  acceptedEntities: [AcceptedException!]!
+  resolvedCount: Int!
+  introducedCount: Int!
+  resolvedEntities: [MeasureShift!]!
+  introducedEntities: [MeasureShift!]!
 }
 
 type AttributeChange {
@@ -448,13 +587,40 @@ type MissingAttribute {
   attributeName: String!
 }
 
+type EntityAcceptedRule {
+  ruleId: ID!
+  ruleCode: String!
+  ruleName: String!
+  severity: String!
+  attributeCode: String
+  attributeName: String
+  status: String!
+  notes: String
+}
+
 type EntityRuleFailure {
   ruleId: ID!
   ruleCode: String!
   ruleName: String!
   severity: String!
+  attributeCode: String
+  attributeName: String
   message: String
   actualValue: String
+}
+
+input RecordDQDispositionInput {
+  ruleId: ID!
+  entityId: ID!
+  status: DQExceptionStatus!
+  resolutionNotes: String
+  asOf: Date
+}
+
+type RecordDQDispositionResult {
+  success: Boolean!
+  exceptionId: ID
+  errors: [MutationError!]!
 }
 
 type EntityAttributeChange {
@@ -477,8 +643,14 @@ type EntityQualityResult {
   failingRuleCount: Int!
   qualityPercent: Float
   failingRules: [EntityRuleFailure!]!
+  acceptedRules: [EntityAcceptedRule!]!
   changeCount: Int!
   changes: [EntityAttributeChange!]!
+  availabilityResolvedCount: Int!
+  availabilityIntroducedCount: Int!
+  qualityResolvedCount: Int!
+  qualityIntroducedCount: Int!
+  overrideMatchCount: Int!
 }
 
 # File: compliance.graphql
@@ -2196,6 +2368,7 @@ type Query {
   domainTemplates(domainCode: String): [Template!]!
   previewStatementTemplate(input: PreviewStatementTemplateInput!): PreviewStatementTemplateResult!
   calcDefinitions: [CalcDefinition!]!
+  calcBreakdown(entityId: ID!, attributeCode: String!, asOfDate: Date): CalcBreakdown
   calculatedAttributeStates(entityId: ID!): [CalculatedAttributeState!]!
   expressionFunctions(category: String): [ExpressionFunction!]!
   # Entity Management queries
@@ -2204,6 +2377,7 @@ type Query {
   
   # Lineage and temporal queries
   fieldLineage(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime): [FieldLineage!]!
+  entityActivity(entityId: ID!, knowledgeDate: DateTime, attributeCode: String, limit: Int): [AttributeActivity!]!
   temporalHistory(entityId: ID!, attributeCode: String!, fromDate: Date!, toDate: Date!): [TemporalValue!]!
   entityDisplay(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime, controls: JSON): EntityDisplay!
   displayLayouts(domainCode: String): [DisplayLayout!]!
@@ -2213,6 +2387,7 @@ type Query {
   dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
   dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
   dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date): DataQualityDashboard!
+  staleAttributes(domainCode: String, olderThanDays: Int, asOfDate: Date): StaleAttributeReport!
   
   # Source queries
   dataSources(type: String, isActive: Boolean): [DataSource!]!
@@ -2298,6 +2473,7 @@ type Mutation {
   updateAttribute(input: UpdateAttributeInput!): UpdateAttributeResult!
   splitValidTime(input: SplitValidTimeInput!): SplitValidTimeResult!
   submitManualOverride(input: ManualOverrideInput!): ManualOverrideResult!
+  clearManualOverride(input: ClearManualOverrideInput!): ClearManualOverrideResult!
   addCompetingSource(input: AddCompetingSourceInput!): AddCompetingSourceResult!
   deleteCompetingSource(input: DeleteCompetingSourceInput!): DeleteCompetingSourceResult!
   
@@ -2308,6 +2484,7 @@ type Mutation {
   createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
   updateAttributeDefinition(input: UpdateAttributeDefinitionInput!): UpdateAttributeDefinitionResult!
   processCalculatedAttributes(limit: Int): ProcessCalculatedAttributesResult!
+  updateCalcExpression(id: ID!, expression: JSON!, operands: [CalcOperandInput!]): UpdateCalcExpressionResult!
   deleteAttribute(id: ID!): MutationResult!
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
   updateTemplate(id: ID!, input: UpdateTemplateInput!): UpdateTemplateResult!
@@ -2323,7 +2500,9 @@ type Mutation {
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
+  updateDQRule(input: UpdateDQRuleInput!): UpdateDQRuleResult!
   resolveDQException(input: ResolveDQExceptionInput!): ResolveDQExceptionResult!
+  recordDQDisposition(input: RecordDQDispositionInput!): RecordDQDispositionResult!
   
   # Intersection mutations
   createIntersectionType(input: CreateIntersectionTypeInput!): CreateIntersectionTypeResult!
@@ -2465,6 +2644,17 @@ input ManualOverrideInput {
   value: String!
   validFrom: Date!
   overrideReason: String!
+}
+
+input ClearManualOverrideInput {
+  entityId: ID!
+  attributeCode: String!
+  asOf: Date
+}
+
+type ClearManualOverrideResult {
+  success: Boolean!
+  errors: [MutationError!]!
 }
 
 type UpdateAttributeResult {

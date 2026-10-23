@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { usePublishViewContext } from '@/lib/view-context';
 import Link from 'next/link';
 import { graphqlQuery, DOMAIN_TEMPLATES_QUERY, DOMAIN_TYPES_QUERY } from '@/lib/graphql';
 
@@ -62,6 +63,30 @@ export default function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [domainConfigs, setDomainConfigs] = useState<DomainConfig[]>([]);
   const [loading, setLoading] = useState(true);
+
+  usePublishViewContext(
+    editingTemplate
+      ? {
+          activity: 'editing',
+          kind: 'template',
+          label: editingTemplate.name,
+          id: editingTemplate.id,
+          domainCode: editingTemplate.domain,
+          summary: editingTemplate.description,
+          snapshot: {
+            code: editingTemplate.code,
+            name: editingTemplate.name,
+            domain: editingTemplate.domain,
+            description: editingTemplate.description,
+            attributes: editingTemplate.attributes.map((attribute) => attribute.attributeCode),
+          },
+        }
+      : showCreateForm
+        ? { activity: 'creating', kind: 'template', label: 'New template' }
+        : filterDomain !== 'all'
+          ? { activity: 'viewing', kind: 'templates', label: `${filterDomain} templates`, domainCode: filterDomain }
+          : null
+  );
 
   useEffect(() => {
     const fetchData = async () => {
@@ -266,9 +291,6 @@ export default function TemplatesPage() {
               </div>
               <div style={{ display: 'flex', gap: '6px' }}>
                 <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setEditingTemplate(tpl); }}>Edit</button>
-                <Link href={`/admin/precedence/${tpl.code}`}>
-                  <button className="btn btn-sm" onClick={(e) => e.stopPropagation()}>Precedence</button>
-                </Link>
               </div>
             </div>
           );

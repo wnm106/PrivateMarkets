@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { usePublishViewContext } from '@/lib/view-context';
 import { graphqlClient } from '@/lib/graphql';
 import {
   DATA_SOURCES_QUERY,
@@ -59,14 +60,32 @@ export default function AdminSourcesPage() {
   const [sortField, setSortField] = useState<'precedenceRank' | 'sourceName'>('precedenceRank');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
+  usePublishViewContext(
+    showModal
+      ? {
+          activity: editingSource ? 'editing' : 'creating',
+          kind: 'data-source',
+          label: formData.sourceName || formData.sourceCode || 'Data source',
+          id: editingSource?.id,
+          summary: formData.sourceType,
+          snapshot: { ...formData },
+        }
+      : null
+  );
+
   useEffect(() => { loadSources(); }, []);
 
   const loadSources = async () => {
     setLoading(true); setError(null);
     try {
-      const result = await graphqlClient.query(DATA_SOURCES_QUERY, {}).toPromise();
+      const result = await graphqlClient.query(DATA_SOURCES_QUERY, {}, { requestPolicy: 'network-only' }).toPromise();
       if (result.error) setError(result.error.message);
-      else if (result.data?.dataSources) setSources(result.data.dataSources);
+      else if (result.data?.dataSources) {
+        setSources(result.data.dataSources.map((source: Source) => ({
+          ...source,
+          color: source.color || source.metadata?.color || null,
+        })));
+      }
     } catch (err: any) { setError(err.message); }
     finally { setLoading(false); }
   };
@@ -110,6 +129,7 @@ export default function AdminSourcesPage() {
       }
       setShowModal(false);
       await loadSources();
+      window.dispatchEvent(new Event('sources-updated'));
     } catch (err: any) { setError(err.message); }
   };
 

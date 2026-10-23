@@ -312,6 +312,7 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
   const hits: NormalizationHit[] = [];
   const attributeStats = { created: 0, updated: 0, unchanged: 0 };
   const relationshipStats = { created: 0, matched: 0, failed: 0 };
+  const receivedAt = new Date().toISOString();
   const domainByCode = new Map(map.domains.map((domain) => [domain.domainCode, domain]));
 
   for (const domainCode of order) {
@@ -445,11 +446,18 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
         if (sameSlices.length > 0) {
           let changed = false;
           for (const slice of sameSlices) {
-            if (sameValue(slice, value)) continue;
+            if (sameValue(slice, value)) {
+              const touch = await db.schema('golden_master').from('entity_attribute_values').update({
+                last_received_at: receivedAt,
+              }).eq('id', slice.id);
+              if (touch.error) errors.push(touch.error.message);
+              continue;
+            }
             const update = await db.schema('golden_master').from('entity_attribute_values').update({
               ...value,
               golden_source_id: catalog.sourceId,
               precedence_rank: catalog.precedenceRank,
+              last_received_at: receivedAt,
               metadata: { raw_value: coerced.raw_value, list_code: hit?.listCode || null, match_type: hit?.matchType || null },
             }).eq('id', slice.id);
             if (update.error) errors.push(update.error.message);
@@ -478,6 +486,7 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
           ...value,
           valid_from: asOfDate,
           valid_to: validTo,
+          last_received_at: receivedAt,
           precedence_rank: catalog.precedenceRank,
           metadata: { raw_value: coerced.raw_value, list_code: hit?.listCode || null, match_type: hit?.matchType || null },
         });
@@ -543,7 +552,7 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
   await db.schema('entity_instances').from('feed_lineage').insert({
     source_id: catalog.sourceId,
     feed_batch_id: crypto.randomUUID(),
-    feed_received_at: new Date().toISOString(),
+    feed_received_at: receivedAt,
     feed_processed_at: new Date().toISOString(),
     record_count: rows.length,
     success_count: domainStats.reduce((sum, stats) => sum + stats.created + stats.matched, 0),

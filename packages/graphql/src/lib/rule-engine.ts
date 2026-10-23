@@ -32,6 +32,7 @@ export async function evaluatePrecedence(
       .select("*")
       .eq("entity_id", entityId),
     supabase
+      .schema("metadata_register")
       .from("precedence_rules")
       .select("*, conditions:precedence_rule_conditions(*), chain:precedence_rule_chain(*)")
       .eq("domain_code", domainCode)

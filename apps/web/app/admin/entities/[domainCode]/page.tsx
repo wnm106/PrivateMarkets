@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { usePublishViewContext } from '@/lib/view-context';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -79,6 +80,8 @@ interface Attribute {
   unitOfMeasure?: string;
   referenceListCode?: string;
   defaultPrecedenceChain?: string[];
+  isDerived?: boolean;
+  derivationFormula?: string | null;
   clientId?: string | null;
   clientName?: string | null;
 }
@@ -201,6 +204,104 @@ export default function EntityTypeDetailPage() {
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('attributes');
+
+  const viewFocus = useMemo(() => {
+    if (editingTemplate) {
+      return {
+        activity: 'editing' as const,
+        kind: 'template',
+        label: editingTemplate.templateName,
+        id: editingTemplate.id,
+        domainCode,
+        snapshot: {
+          templateCode: editingTemplate.templateCode,
+          templateName: editingTemplate.templateName,
+          description: editingTemplate.description,
+          attributes: (editingTemplate.attributes || []).map((attribute) => attribute.attribute.attributeCode),
+        },
+      };
+    }
+    if (editingRelationship) {
+      return {
+        activity: 'editing' as const,
+        kind: 'relationship',
+        label: editingRelationship.relationshipName,
+        id: editingRelationship.id,
+        domainCode,
+        snapshot: {
+          relationshipCode: editingRelationship.relationshipCode,
+          parentDomainCode: editingRelationship.parentDomainCode,
+          childDomainCode: editingRelationship.childDomainCode,
+          description: editingRelationship.description,
+        },
+      };
+    }
+    if (editingIdentifier) {
+      return {
+        activity: 'editing' as const,
+        kind: 'identifier',
+        label: editingIdentifier.identifierName,
+        id: editingIdentifier.id,
+        domainCode,
+        snapshot: {
+          identifierCode: editingIdentifier.identifierCode,
+          attributeCodes: editingIdentifier.attributeCodes,
+          isPrimary: editingIdentifier.isPrimary,
+        },
+      };
+    }
+    if (editingIntersection) {
+      return {
+        activity: 'editing' as const,
+        kind: 'intersection',
+        label: editingIntersection.intersectionName,
+        id: editingIntersection.id,
+        domainCode,
+        snapshot: {
+          intersectionCode: editingIntersection.intersectionCode,
+          members: editingIntersection.members.map((member) => ({
+            domainCode: member.domainCode,
+            memberRole: member.memberRole,
+          })),
+        },
+      };
+    }
+    const expanded = attributes.find((attribute) => attribute.id === expandedAttributeId);
+    if (expanded) {
+      return {
+        activity: 'editing' as const,
+        kind: 'attribute',
+        label: expanded.attributeName || expanded.attributeCode,
+        id: expanded.id,
+        domainCode,
+        snapshot: {
+          attributeCode: expanded.attributeCode,
+          dataType: expanded.dataType,
+          description: expanded.description,
+          isDerived: expanded.isDerived,
+          derivationFormula: expanded.derivationFormula,
+          aggregationType: expanded.aggregationType,
+          referenceListCode: expanded.referenceListCode,
+        },
+      };
+    }
+    return {
+      activity: 'viewing' as const,
+      kind: 'entity-type',
+      label: domain?.domainName || domainCode,
+      domainCode,
+      summary: `Configuring ${activeTab}`,
+      snapshot: {
+        domainName: domain?.domainName,
+        description: domain?.description,
+        tab: activeTab,
+      },
+    };
+  }, [
+    editingTemplate, editingRelationship, editingIdentifier, editingIntersection,
+    attributes, expandedAttributeId, domain, domainCode, activeTab,
+  ]);
+  usePublishViewContext(viewFocus);
 
   const refreshAttributes = useCallback(async () => {
     const attrsResult = await graphqlClient.query(ATTRIBUTE_REGISTER_QUERY, { domainCode }, { requestPolicy: 'network-only' }).toPromise();
@@ -855,6 +956,9 @@ export default function EntityTypeDetailPage() {
                           <span style={{ color: 'var(--accent-2)' }}>
                             📋 {attr.referenceListCode}
                           </span>
+                        )}
+                        {attr.isDerived && (
+                          <span style={{ color: 'var(--accent-2)' }}>Calculated</span>
                         )}
                         {sequence.length > 0 && (
                           <span>Sequence: Manual → {sequence.join(' → ')}</span>

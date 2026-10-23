@@ -37,22 +37,24 @@ export function markdownToHtml(markdown: string): string {
   // Links [text](url)
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color: var(--accent-2); text-decoration: underline;">$1</a>');
 
-  // Tables
-  html = html.replace(/^\|(.+)\|$/gm, (match, content) => {
-    const cells = content.split('|').map(cell => cell.trim());
-    const isHeader = cells.some(cell => /^-+$/.test(cell));
-    
-    if (isHeader) {
-      return ''; // Skip separator rows
-    }
-    
-    const row = cells.map(cell => `<td style="padding: 8px; border: 1px solid var(--line);">${cell}</td>`).join('');
-    return `<tr>${row}</tr>`;
+  // Tables. A separator is `| --- |` or an alignment marker such as `|:---|`.
+  html = html.replace(/^\|(.+)\|[ \t]*\r?\n?/gm, (match, content) => {
+    const cells = content.split('|').map((cell: string) => cell.trim());
+    const isSeparator = cells.length > 0 && cells.every((cell: string) => /^:?-+:?$/.test(cell));
+
+    if (isSeparator) return '';
+
+    const row = cells.map((cell: string) => `<td>${cell}</td>`).join('');
+    return `<tr>${row}</tr>\n`;
   });
 
-  // Wrap consecutive table rows in a table
+  // Wrap consecutive rows. The first row is the header. The table sits in a
+  // scroller so wide columns stay intact instead of being crushed to the bubble.
   html = html.replace(/(<tr>.*<\/tr>\n?)+/g, (match) => {
-    return `<table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px;">${match}</table>`;
+    const withHeader = match.replace(/<tr>([\s\S]*?)<\/tr>/, (row) =>
+      row.replace(/<td>/g, '<th>').replace(/<\/td>/g, '</th>')
+    );
+    return `<div class="md-table-scroll"><table>${withHeader.replace(/\s*\n\s*/g, '')}</table></div>`;
   });
 
   // Unordered lists (- or * at start of line)

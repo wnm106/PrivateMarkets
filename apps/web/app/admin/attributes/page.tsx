@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { usePublishViewContext } from '@/lib/view-context';
 import {
   graphqlClient,
   ATTRIBUTE_REGISTER_QUERY,
@@ -68,6 +69,32 @@ export default function AdminAttributesPage() {
   const [showBulkEdit, setShowBulkEdit] = useState(false);
   const [bulkEditForm, setBulkEditForm] = useState<Partial<Attribute>>({});
   const [newListValue, setNewListValue] = useState('');
+  const editingAttribute = attributes.find((attribute) => attribute.id === editingId) || null;
+
+  usePublishViewContext(
+    showBulkEdit
+      ? {
+          activity: 'editing',
+          kind: 'attributes',
+          label: `${selectedIds.size} attributes`,
+          summary: 'Bulk edit',
+          snapshot: { count: selectedIds.size, changes: bulkEditForm },
+        }
+      : editingAttribute
+        ? {
+            activity: 'editing',
+            kind: 'attribute',
+            label: editingAttribute.attributeName || editingAttribute.attributeCode,
+            id: editingAttribute.id,
+            snapshot: {
+              attributeCode: editingAttribute.attributeCode,
+              attributeName: editingAttribute.attributeName,
+              dataType: editingAttribute.dataType,
+              ...editForm,
+            },
+          }
+        : null
+  );
 
   useEffect(() => {
     loadAttributes();

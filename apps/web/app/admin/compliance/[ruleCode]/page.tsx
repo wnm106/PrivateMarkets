@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { usePublishViewContext } from '@/lib/view-context';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -148,6 +149,48 @@ export default function ComplianceRuleDetailPage() {
   const [editMode, setEditMode] = useState(false);
   const [editData, setEditData] = useState<Partial<ComplianceRuleFormData>>({});
   const [savingEdit, setSavingEdit] = useState(false);
+
+  usePublishViewContext(
+    rule
+      ? {
+          activity: editMode ? 'editing' : 'viewing',
+          kind: 'compliance-rule',
+          label: rule.ruleName || rule.ruleCode,
+          id: rule.id,
+          domainCode: rule.anchorDomainCode,
+          summary: rule.description,
+          snapshot: {
+            ruleCode: rule.ruleCode,
+            ruleCategory: rule.ruleCategory,
+            anchorDomainCode: rule.anchorDomainCode,
+            isActive: rule.isActive,
+            appliesToAll: rule.appliesToAll,
+            currentVersion: rule.currentVersion
+              ? {
+                  versionNumber: rule.currentVersion.versionNumber,
+                  baseDomainCode: rule.currentVersion.baseDomainCode,
+                  numeratorAttributeCode: rule.currentVersion.numeratorAttributeCode,
+                  numeratorAggregation: rule.currentVersion.numeratorAggregation,
+                  denominatorAttributeCode: rule.currentVersion.denominatorAttributeCode,
+                  denominatorAggregation: rule.currentVersion.denominatorAggregation,
+                  resultUnit: rule.currentVersion.resultUnit,
+                  resultTransform: rule.currentVersion.resultTransform,
+                  limitDirection: rule.currentVersion.limitDirection,
+                  softLimitValue: rule.currentVersion.softLimitValue,
+                  hardLimitValue: rule.currentVersion.hardLimitValue,
+                  groupByAttributeCode: rule.currentVersion.groupByAttributeCode,
+                }
+              : null,
+            scopes: (rule.scopeAssignments || []).slice(0, 20).map((scope) => ({
+              scopeType: scope.scopeType,
+              entityCode: scope.entityCode,
+              entityName: scope.entityName,
+            })),
+            draft: editMode ? editData : undefined,
+          },
+        }
+      : null
+  );
 
   const fetchRule = async () => {
     setLoading(true);

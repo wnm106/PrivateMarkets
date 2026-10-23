@@ -16,21 +16,44 @@ interface DomainLink {
 }
 
 const TOOLS = [
-  { href: '/precedence', label: 'Precedence Rules', icon: 'list' },
   { href: '/quality', label: 'Data Quality', icon: 'chart' },
+  { href: '/merge', label: 'Entity Resolution', icon: 'nodes' },
   { href: '/reconcile', label: 'Reconcile', icon: 'chart' },
   { href: '/lists', label: 'Value Lists', icon: 'layers' },
   { href: '/intersections', label: 'Composite Entities', icon: 'nodes' },
   { href: '/imports', label: 'Position File Load', icon: 'download' },
 ] as const;
 
+const ADMIN = [
+  { href: '/admin/entities', label: 'Entity Management', icon: 'domains' },
+  { href: '/admin/sources', label: 'Data Sources', icon: 'sources' },
+  { href: '/admin/attributes', label: 'Attributes', icon: 'list' },
+  { href: '/admin/templates/studio', label: 'Statement Studio', icon: 'chart' },
+  { href: '/admin/expression-functions', label: 'Expression Functions', icon: 'list' },
+  { href: '/admin/templates', label: 'Templates', icon: 'layers' },
+  { href: '/admin/layouts', label: 'Display Layouts', icon: 'domains' },
+  { href: '/admin/dq-rules', label: 'DQ Rules', icon: 'alert' },
+  { href: '/admin/compliance', label: 'Compliance Rules', icon: 'list' },
+  { href: '/admin/dashboards', label: 'Dashboards', icon: 'chart' },
+  { href: '/admin/narratives', label: 'Narratives', icon: 'list' },
+  { href: '/admin/tenancy', label: 'Clients, Users & Roles', icon: 'users' },
+] as const;
+
 const COLLAPSED_KEY = 'tapestr-nav-collapsed';
 const TOOLS_KEY = 'tapestr-nav-tools';
 const DOMAINS_KEY = 'tapestr-nav-domains';
+const ADMIN_KEY = 'tapestr-nav-admin';
 
 function navActive(pathname: string, href: string, exact = false) {
   if (exact) return pathname === href;
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function adminLinkActive(pathname: string, href: string) {
+  if (href === '/admin/templates' && (pathname === '/admin/templates/studio' || pathname.startsWith('/admin/templates/studio/'))) {
+    return false;
+  }
+  return navActive(pathname, href);
 }
 
 function NavIcon({ name }: { name: string }) {
@@ -114,6 +137,22 @@ function NavIcon({ name }: { name: string }) {
           <path d="M5 20h14" />
         </svg>
       );
+    case 'gear':
+      return (
+        <svg {...props}>
+          <circle cx="12" cy="12" r="3" />
+          <path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M5.8 5.8l1.6 1.6M16.6 16.6l1.6 1.6M18.2 5.8l-1.6 1.6M7.4 16.6l-1.6 1.6" />
+        </svg>
+      );
+    case 'users':
+      return (
+        <svg {...props}>
+          <circle cx="9" cy="8" r="2.4" />
+          <path d="M4.5 18.5c.6-2.4 2.4-3.7 4.5-3.7s3.9 1.3 4.5 3.7" />
+          <circle cx="16.2" cy="9" r="1.8" />
+          <path d="M15.2 14.8c1.6.3 2.8 1.3 3.4 3.2" />
+        </svg>
+      );
     default:
       return null;
   }
@@ -124,6 +163,7 @@ export function AppSidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(true);
   const [domainsOpen, setDomainsOpen] = useState(true);
+  const [adminOpen, setAdminOpen] = useState(false);
   const [domains, setDomains] = useState<DomainLink[]>([]);
   const [openExceptions, setOpenExceptions] = useState(0);
 
@@ -132,6 +172,7 @@ export function AppSidebar() {
       setCollapsed(localStorage.getItem(COLLAPSED_KEY) === '1');
       setToolsOpen(localStorage.getItem(TOOLS_KEY) !== '0');
       setDomainsOpen(localStorage.getItem(DOMAINS_KEY) !== '0');
+      setAdminOpen(localStorage.getItem(ADMIN_KEY) === '1');
     } catch {
       /* Storage can be unavailable in private modes. */
     }
@@ -186,6 +227,11 @@ export function AppSidebar() {
     load();
   }, [load, pathname]);
 
+  useEffect(() => {
+    const sources = pathname === '/admin/sources' || pathname.startsWith('/admin/sources/');
+    if (pathname.startsWith('/admin') && !sources) setAdminOpen(true);
+  }, [pathname]);
+
   const toggleCollapsed = () => {
     setCollapsed((current) => {
       const next = !current;
@@ -214,6 +260,29 @@ export function AppSidebar() {
       const next = !current;
       try {
         localStorage.setItem(TOOLS_KEY, next ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
+  const toggleAdmin = () => {
+    if (collapsed) {
+      setCollapsed(false);
+      setAdminOpen(true);
+      try {
+        localStorage.setItem(COLLAPSED_KEY, '0');
+        localStorage.setItem(ADMIN_KEY, '1');
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    setAdminOpen((current) => {
+      const next = !current;
+      try {
+        localStorage.setItem(ADMIN_KEY, next ? '1' : '0');
       } catch {
         /* ignore */
       }
@@ -250,6 +319,18 @@ export function AppSidebar() {
         <Link href="/" className={collapsed ? 'sidebar-logo is-mark' : 'sidebar-logo'} title="Home">
           <BrandLogo size={collapsed ? 28 : 30} />
         </Link>
+        <button
+          type="button"
+          className="sidebar-toggle"
+          onClick={toggleCollapsed}
+          aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
+          title={collapsed ? 'Expand menu' : 'Collapse menu'}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+            <path d="M9 4.5v15" />
+          </svg>
+        </button>
       </div>
 
       <nav className="sidebar-nav">
@@ -265,7 +346,7 @@ export function AppSidebar() {
 
         <button
           type="button"
-          className={`sidebar-link sidebar-section ${domainsOpen && !collapsed ? 'open' : ''}`}
+          className={`sidebar-link sidebar-section ${domainsOpen && !collapsed ? 'open' : ''} ${collapsed && domains.some((domain) => navActive(pathname, domain.href)) ? 'active' : ''}`}
           onClick={toggleDomains}
           aria-expanded={!collapsed && domainsOpen}
           title="Domains"
@@ -322,7 +403,7 @@ export function AppSidebar() {
         <div className="sidebar-tools">
           <button
             type="button"
-            className={`sidebar-link sidebar-section ${toolsOpen && !collapsed ? 'open' : ''}`}
+            className={`sidebar-link sidebar-section ${toolsOpen && !collapsed ? 'open' : ''} ${collapsed && TOOLS.some((tool) => navActive(pathname, tool.href)) ? 'active' : ''}`}
             onClick={toggleTools}
             aria-expanded={!collapsed && toolsOpen}
             title="Tools"
@@ -352,6 +433,40 @@ export function AppSidebar() {
             </div>
           )}
         </div>
+
+        <div className="sidebar-tools">
+          <button
+            type="button"
+            className={`sidebar-link sidebar-section ${adminOpen && !collapsed ? 'open' : ''} ${collapsed && ADMIN.some((item) => adminLinkActive(pathname, item.href)) ? 'active' : ''}`}
+            onClick={toggleAdmin}
+            aria-expanded={!collapsed && adminOpen}
+            title="Admin"
+          >
+            <NavIcon name="gear" />
+            {!collapsed && <span className="sidebar-label">Admin</span>}
+            {!collapsed && (
+              <svg className="sidebar-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            )}
+          </button>
+          {!collapsed && adminOpen && (
+            <div className="sidebar-sub">
+              {ADMIN.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`sidebar-sublink ${adminLinkActive(pathname, item.href) ? 'active' : ''}`}
+                  title={item.label}
+                  aria-current={adminLinkActive(pathname, item.href) ? 'page' : undefined}
+                >
+                  <NavIcon name={item.icon} />
+                  <span className="sidebar-label">{item.label}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
       </nav>
 
       <div className="sidebar-footer">
@@ -360,17 +475,6 @@ export function AppSidebar() {
           showLabel={!collapsed}
           anchor={collapsed ? 'side' : 'up-start'}
         />
-        <button
-          type="button"
-          className="sidebar-collapse"
-          onClick={toggleCollapsed}
-          aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-            {collapsed ? <path d="m9 6 6 6-6 6" /> : <path d="m15 6-6 6 6 6" />}
-          </svg>
-          {!collapsed && <span>Collapse</span>}
-        </button>
       </div>
     </aside>
   );

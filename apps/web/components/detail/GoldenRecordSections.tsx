@@ -7,7 +7,10 @@ import { SourceAttributedFieldRow, type FieldData } from './SourceAttributedFiel
 import { sources, type SourceKey } from '@/lib/data';
 import { useTemporalStore } from '@/lib/store';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
+import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
 import { DisplayLayoutView, type ResolvedLayoutView } from './DisplayLayoutView';
+import { EntityReports } from '@/components/reporting/EntityReports';
+import { domainHref } from '@/lib/domain-routes';
 
 export interface TemplateAttribute {
   attributeCode: string;
@@ -16,6 +19,8 @@ export interface TemplateAttribute {
   displaySection: string;
   sortOrder: number;
   dataType?: string;
+  isDerived?: boolean;
+  derivationFormula?: string | null;
 }
 
 export interface LineageData {
@@ -30,6 +35,7 @@ export interface LineageData {
     validFrom: string;
     validTo: string;
     confidenceScore: number | null;
+    receivedAt?: string | null;
   }>;
   resolutionRule: string;
   lastUpdated: string;
@@ -48,6 +54,34 @@ interface GoldenRecordSectionsProps {
   lineageLoaded?: boolean;
 }
 
+const FORMULA_OPS: Record<string, string> = { add: '+', sub: '−', mul: '×', div: '÷' };
+
+function formulaLabel(formula: string | null | undefined): string {
+  if (!formula) return 'Calculated';
+  const text = formula.replace(/^CALC_SPEC:/, '');
+  try {
+    return formatFormula(JSON.parse(text)) || text;
+  } catch {
+    return text;
+  }
+}
+
+function formatFormula(expr: any): string {
+  if (expr == null) return '';
+  if (typeof expr === 'string' || typeof expr === 'number') return String(expr);
+  if (typeof expr.ref === 'string') return expr.ref;
+  if (typeof expr.attributeCode === 'string') return expr.attributeCode;
+  if (typeof expr.op === 'string' && Array.isArray(expr.args)) {
+    const op = FORMULA_OPS[expr.op] || expr.op;
+    return expr.args.map(formatFormula).filter(Boolean).join(` ${op} `);
+  }
+  if (typeof expr.fn === 'string') {
+    const args = Array.isArray(expr.args) ? expr.args.map(formatFormula).filter(Boolean).join(', ') : '';
+    return `${expr.fn}(${args})`;
+  }
+  return '';
+}
+
 const ENTITY_DISPLAY_QUERY = `
   query EntityDisplay($entityId: ID!, $asOfDate: Date, $knowledgeDate: DateTime, $controls: JSON) {
     entityDisplay(entityId: $entityId, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate, controls: $controls) {
@@ -64,6 +98,16 @@ const ENTITY_DISPLAY_QUERY = `
           cells { periodKey basis value readOnly entityId periodStart periodEnd periodGrain }
         }
       }
+    }
+  }
+`;
+
+const DERIVED_ATTRIBUTE_QUERY = `
+  query DerivedAttributes($domainCode: String!) {
+    attributeRegister(domainCode: $domainCode) {
+      attributeCode
+      isDerived
+      derivationFormula
     }
   }
 `;
@@ -89,11 +133,31 @@ export function GoldenRecordSections({
   asOfDate,
   lineageLoaded = false,
 }: GoldenRecordSectionsProps) {
-  const [tab, setTab] = useState<'attributes' | 'relationships'>('attributes');
+  const [tab, setTab] = useState<'attributes' | 'dashboards' | 'relationships'>('attributes');
   const [layouts, setLayouts] = useState<ResolvedLayoutView[]>([]);
   const [controls, setControls] = useState<Record<string, string> | null>(null);
   const [displayVersion, setDisplayVersion] = useState(0);
+  const [derivedFormulas, setDerivedFormulas] = useState<Record<string, string>>({});
   const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+
+  useEffect(() => {
+    const domainCode = entity.domainCode;
+    if (!domainCode) return;
+    let cancelled = false;
+    graphqlQuery<
+      { attributeRegister: Array<{ attributeCode: string; isDerived?: boolean; derivationFormula?: string | null }> },
+      { domainCode: string }
+    >(DERIVED_ATTRIBUTE_QUERY, { domainCode }, 'network-only').then((result) => {
+      if (cancelled) return;
+      const formulas: Record<string, string> = {};
+      for (const attribute of result.data?.attributeRegister || []) {
+        if (!attribute.isDerived && !attribute.derivationFormula) continue;
+        formulas[attribute.attributeCode] = formulaLabel(attribute.derivationFormula);
+      }
+      setDerivedFormulas(formulas);
+    });
+    return () => { cancelled = true; };
+  }, [entity.domainCode]);
 
   useEffect(() => {
     setControls(null);
@@ -155,9 +219,14 @@ export function GoldenRecordSections({
     <div>
       <div style={{ display: 'flex', gap: '4px', borderBottom: '2px solid var(--line)', marginBottom: '16px' }}>
         <SectionTab
-          label={`Attributes (${populatedEntries.length})`}
+          label={`Attributes (${displayEntries.length})`}
           active={tab === 'attributes'}
           onClick={() => setTab('attributes')}
+        />
+        <SectionTab
+          label="Dashboards"
+          active={tab === 'dashboards'}
+          onClick={() => setTab('dashboards')}
         />
         <SectionTab
           label={`Relationships (${relationshipCount})`}
@@ -166,7 +235,9 @@ export function GoldenRecordSections({
         />
       </div>
 
-      {tab === 'relationships' ? (
+      {tab === 'dashboards' ? (
+        <EntityReports domainCode={entity.domainCode} entityId={entity.id} asOfDate={asOfDate} embedded />
+      ) : tab === 'relationships' ? (
         <div>
           <RelationshipList
             title="Parent Relationships"
@@ -256,35 +327,50 @@ export function GoldenRecordSections({
           // Resolve display label from template attributes, fall back to attribute code
           const templateAttr = templateAttributes.find(ta => ta.attributeCode === key);
           const displayLabel = templateAttr?.attributeName || key;
+          const formula = derivedFormulas[key] || (templateAttr?.isDerived ? formulaLabel(templateAttr.derivationFormula) : undefined);
+          const calculated = Boolean(formula);
 
-          // Normalize source_code to a valid SourceKey (lowercase)
-          const normalizedSource = (typeof resolvedSource === 'string' ? resolvedSource.toLowerCase() : 'manual') as SourceKey;
-          const validSource: SourceKey = normalizedSource in sources ? normalizedSource : 'manual';
+          // The formula mark stays on the row. The pill names the source that
+          // actually supplied the number, including a feed stored on a calculated attribute.
+          const normalizedSource = typeof resolvedSource === 'string' && resolvedSource
+            ? resolvedSource.toLowerCase()
+            : (calculated ? 'calculated' : 'manual');
+          const storedSourceName = (
+            lineage?.competingValues?.find((cv) => cv.value === lineage.currentValue)
+            || lineage?.competingValues?.find((cv) => String(cv.source).toLowerCase() === String(resolvedSource).toLowerCase())
+          )?.sourceName;
 
           const fieldData: FieldData = {
             label: displayLabel,
             attributeCode: key,
             dataType: templateAttr?.dataType,
             value: resolvedValue !== null && resolvedValue !== undefined && resolvedValue !== '' ? String(resolvedValue) : '—',
-            source: validSource,
+            source: normalizedSource,
+            calculated,
+            formula,
+            storedSourceName,
             precedenceRank: lineage?.competingValues?.find(cv => {
               const normCv = typeof cv.source === 'string' ? cv.source.toLowerCase() : 'manual';
-              return normCv === validSource;
+              return normCv === normalizedSource;
             })?.precedenceRank,
+            receivedAt: lineage?.competingValues?.find(cv => {
+              const normCv = typeof cv.source === 'string' ? cv.source.toLowerCase() : 'manual';
+              return normCv === normalizedSource;
+            })?.receivedAt,
             competingValues: lineage?.competingValues?.map(cv => {
               const normalizedCvSource = (typeof cv.source === 'string' ? cv.source.toLowerCase() : 'manual');
-              const validCvSource: SourceKey = normalizedCvSource in sources ? normalizedCvSource as SourceKey : 'manual';
               return {
-                source: validCvSource,
+                source: normalizedCvSource,
                 sourceName: cv.sourceName,
                 value: cv.value,
                 precedenceRank: cv.precedenceRank,
                 validFrom: cv.validFrom,
                 validTo: cv.validTo,
                 confidenceScore: cv.confidenceScore,
+                receivedAt: cv.receivedAt,
               };
             }),
-            resolutionRule: lineage?.resolutionRule,
+            resolutionRule: formula || lineage?.resolutionRule,
           };
 
           return (
@@ -297,6 +383,7 @@ export function GoldenRecordSections({
               onAddSourceValue={onAddSourceValue}
               onDeleteSourceValue={onDeleteSourceValue}
               asOfDate={asOfDate}
+              entityId={entity.id}
             />
           );
         })}
@@ -333,14 +420,24 @@ function AvailableAttributeRow({
   onSave,
 }: {
   attribute: TemplateAttribute;
-  onSave: (value: string) => void;
+  onSave: (value: string) => Promise<void> | void;
 }) {
   const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
-  const save = () => {
+  const save = async () => {
     const trimmed = value.trim();
-    if (!trimmed) return;
-    onSave(trimmed);
+    if (!trimmed || saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      await onSave(trimmed);
+    } catch (err: any) {
+      setError(err?.message || 'Could not save the value');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -349,19 +446,22 @@ function AvailableAttributeRow({
         {attribute.attributeName}
         {attribute.required && <span style={{ color: 'var(--red)' }}>*</span>}
       </div>
-      <input
+      <AttributeValueInput
+        attributeCode={attribute.attributeCode}
+        dataType={attribute.dataType}
         className="text-input"
         value={value}
         placeholder="Enter a value"
-        onChange={(event) => setValue(event.target.value)}
+        onChange={setValue}
         onKeyDown={(event) => {
           if (event.key === 'Enter') save();
         }}
         style={{ fontSize: '13px', padding: '6px 8px' }}
       />
-      <button className="btn btn-sm" type="button" onClick={save} disabled={!value.trim()} style={{ justifySelf: 'end' }}>
-        Save
+      <button className="btn btn-sm" type="button" onClick={save} disabled={!value.trim() || saving} style={{ justifySelf: 'end' }}>
+        {saving ? 'Saving…' : 'Save'}
       </button>
+      {error && <div style={{ gridColumn: '1 / -1', color: 'var(--red)', fontSize: '12px' }}>{error}</div>}
     </div>
   );
 }
@@ -418,14 +518,12 @@ function RelationshipList({
       ) : (
         <>
           <div style={relationshipGridStyle}>
+            <span style={relationshipHeadStyle}>Entity</span>
             <span style={relationshipHeadStyle}>Relationship</span>
             <span style={relationshipHeadStyle}>Type</span>
-            <span style={relationshipHeadStyle}>Entity</span>
           </div>
           {rows.map((row) => (
             <div key={row.key} style={{ ...relationshipGridStyle, borderTop: '1px solid var(--line)' }}>
-              <span style={{ fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.type}</span>
-              <span style={{ fontSize: '12px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{row.domain}</span>
               <span style={{ fontSize: '13px', minWidth: 0 }}>
                 {row.members.length > 0 ? (
                   <span style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -455,6 +553,8 @@ function RelationshipList({
                   <>{row.name} <span style={{ color: 'var(--ink-3)' }}>({row.code})</span></>
                 )}
               </span>
+              <span style={{ fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.type}</span>
+              <span style={{ fontSize: '12px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{row.domain}</span>
             </div>
           ))}
         </>
@@ -463,24 +563,13 @@ function RelationshipList({
   );
 }
 
-const DOMAIN_ROUTES: Record<string, string> = {
-  FUND: 'funds',
-  ISSUER: 'issuers',
-  SECURITY: 'securities',
-  DEAL: 'deals',
-  INVESTOR: 'investors',
-  PRICE: 'prices',
-  POSITION: 'positions',
-};
-
 function entityPageHref(domainCode: string, entityId: string): string {
-  const route = DOMAIN_ROUTES[domainCode?.toUpperCase()] || `${(domainCode || 'entity').toLowerCase()}s`;
-  return `/${route}/${entityId}`;
+  return `${domainHref(domainCode || 'entity')}/${entityId}`;
 }
 
 const relationshipGridStyle: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'minmax(220px, 1.1fr) minmax(120px, 160px) minmax(320px, 2fr)',
+  gridTemplateColumns: 'minmax(320px, 2fr) minmax(220px, 1.1fr) minmax(120px, 160px)',
   gap: '16px',
   alignItems: 'center',
   padding: '8px 20px',

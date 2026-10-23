@@ -7,6 +7,10 @@ import {
   UpdatePrecedenceRuleInput,
 } from '../schema/types';
 
+function rulesDb(context: Context) {
+  return context.supabase.schema('metadata_register');
+}
+
 export const precedenceResolvers = {
   Query: {
     precedenceRules: async (
@@ -14,7 +18,7 @@ export const precedenceResolvers = {
       args: { domainCode?: string; attributeCode?: string; isActive?: boolean },
       context: Context
     ) => {
-      let query = context.supabase
+      let query = rulesDb(context)
         .from('precedence_rules')
         .select(`
           *,
@@ -39,14 +43,14 @@ export const precedenceResolvers = {
 
       if (error) {
         console.error('Error fetching precedence rules:', error);
-        throw new Error('Failed to fetch precedence rules');
+        throw new Error(error.message || 'Failed to fetch precedence rules');
       }
 
       return (data || []).map(mapPrecedenceRule);
     },
 
     precedenceRule: async (_: any, args: { id: string }, context: Context) => {
-      const { data, error } = await context.supabase
+      const { data, error } = await rulesDb(context)
         .from('precedence_rules')
         .select(`
           *,
@@ -59,7 +63,7 @@ export const precedenceResolvers = {
       if (error) {
         if (error.code === 'PGRST116') return null;
         console.error('Error fetching precedence rule:', error);
-        throw new Error('Failed to fetch precedence rule');
+        throw new Error(error.message || 'Failed to fetch precedence rule');
       }
 
       return mapPrecedenceRule(data);
@@ -76,7 +80,7 @@ export const precedenceResolvers = {
         const { input } = args;
 
         // Create the rule
-        const { data: ruleData, error: ruleError } = await context.supabase
+        const { data: ruleData, error: ruleError } = await rulesDb(context)
           .from('precedence_rules')
           .insert({
             rule_code: input.ruleCode,
@@ -108,7 +112,7 @@ export const precedenceResolvers = {
             logic_operator: cond.logicOperator || 'AND',
           }));
 
-          const { error: condError } = await context.supabase
+          const { error: condError } = await rulesDb(context)
             .from('precedence_rule_conditions')
             .insert(conditionsToInsert);
 
@@ -124,7 +128,7 @@ export const precedenceResolvers = {
             condition_type: item.conditionType || 'if_value_present',
           }));
 
-          const { error: chainError } = await context.supabase
+          const { error: chainError } = await rulesDb(context)
             .from('precedence_rule_chain')
             .insert(chainToInsert);
 
@@ -132,7 +136,7 @@ export const precedenceResolvers = {
         }
 
         // Fetch the complete rule
-        const { data: completeRule, error: fetchError } = await context.supabase
+        const { data: completeRule, error: fetchError } = await rulesDb(context)
           .from('precedence_rules')
           .select(`
             *,
@@ -179,7 +183,7 @@ export const precedenceResolvers = {
         if (input.isActive !== undefined) updateData.is_active = input.isActive;
         if (input.metadata !== undefined) updateData.metadata = input.metadata;
 
-        const { data: ruleData, error: ruleError } = await context.supabase
+        const { data: ruleData, error: ruleError } = await rulesDb(context)
           .from('precedence_rules')
           .update(updateData)
           .eq('id', id)
@@ -191,7 +195,7 @@ export const precedenceResolvers = {
         // Update conditions if provided
         if (input.conditions !== undefined) {
           // Delete existing conditions
-          await context.supabase
+          await rulesDb(context)
             .from('precedence_rule_conditions')
             .delete()
             .eq('rule_id', id);
@@ -208,7 +212,7 @@ export const precedenceResolvers = {
               logic_operator: cond.logicOperator || 'AND',
             }));
 
-            const { error: condError } = await context.supabase
+            const { error: condError } = await rulesDb(context)
               .from('precedence_rule_conditions')
               .insert(conditionsToInsert);
 
@@ -219,7 +223,7 @@ export const precedenceResolvers = {
         // Update chain if provided
         if (input.chain !== undefined) {
           // Delete existing chain
-          await context.supabase
+          await rulesDb(context)
             .from('precedence_rule_chain')
             .delete()
             .eq('rule_id', id);
@@ -233,7 +237,7 @@ export const precedenceResolvers = {
               condition_type: item.conditionType || 'if_value_present',
             }));
 
-            const { error: chainError } = await context.supabase
+            const { error: chainError } = await rulesDb(context)
               .from('precedence_rule_chain')
               .insert(chainToInsert);
 
@@ -242,7 +246,7 @@ export const precedenceResolvers = {
         }
 
         // Fetch the complete rule
-        const { data: completeRule, error: fetchError } = await context.supabase
+        const { data: completeRule, error: fetchError } = await rulesDb(context)
           .from('precedence_rules')
           .select(`
             *,
@@ -273,7 +277,7 @@ export const precedenceResolvers = {
       context: Context
     ) => {
       try {
-        const { error } = await context.supabase
+        const { error } = await rulesDb(context)
           .from('precedence_rules')
           .delete()
           .eq('id', args.id);
@@ -299,7 +303,7 @@ export const precedenceResolvers = {
         const { attributeCode, chain } = args;
         const sources = (chain || []).filter((code) => code && code !== 'MANUAL');
 
-        const { data: attribute, error: findError } = await context.supabase
+        const { data: attribute, error: findError } = await rulesDb(context)
           .from('attribute_register')
           .select('id, metadata')
           .eq('attribute_code', attributeCode)
@@ -318,13 +322,13 @@ export const precedenceResolvers = {
           defaultPrecedenceChain: sources,
         };
 
-        const withColumn = await context.supabase
+        const withColumn = await rulesDb(context)
           .from('attribute_register')
           .update({ metadata, default_precedence_chain: sources })
           .eq('id', attribute.id);
 
         if (withColumn.error) {
-          const metadataOnly = await context.supabase
+          const metadataOnly = await rulesDb(context)
             .from('attribute_register')
             .update({ metadata })
             .eq('id', attribute.id);
@@ -350,7 +354,7 @@ export const precedenceResolvers = {
         const { ruleId, chain } = args;
 
         // Delete existing chain
-        await context.supabase
+        await rulesDb(context)
           .from('precedence_rule_chain')
           .delete()
           .eq('rule_id', ruleId);
@@ -364,7 +368,7 @@ export const precedenceResolvers = {
             condition_type: 'if_value_present',
           }));
 
-          const { error: chainError } = await context.supabase
+          const { error: chainError } = await rulesDb(context)
             .from('precedence_rule_chain')
             .insert(chainToInsert);
 

@@ -2,8 +2,8 @@
 
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
-import { graphqlQuery, graphqlMutation, ENTITY_QUERY, FIELD_LINEAGE_QUERY, ATTRIBUTE_REGISTER_QUERY, UPDATE_ENTITY_MUTATION, ADD_COMPETING_SOURCE_MUTATION, DELETE_COMPETING_SOURCE_MUTATION, DATA_SOURCE_QUERY } from '@/lib/graphql';
+import { useCallback, useEffect, useState } from 'react';
+import { graphqlQuery, graphqlMutation, ENTITY_QUERY, FIELD_LINEAGE_QUERY, ENTITY_ACTIVITY_QUERY, ATTRIBUTE_REGISTER_QUERY, UPDATE_ENTITY_MUTATION, ADD_COMPETING_SOURCE_MUTATION, DELETE_COMPETING_SOURCE_MUTATION, DATA_SOURCE_QUERY } from '@/lib/graphql';
 import { GoldenRecordHeader } from '@/components/detail/GoldenRecordHeader';
 import { GoldenRecordSections, type TemplateAttribute, type LineageData } from '@/components/detail/GoldenRecordSections';
 import { SourceContributionPanel } from '@/components/detail/SourceContributionPanel';
@@ -14,6 +14,7 @@ import { EntityGraphPanel } from '@/components/detail/EntityGraphPanel';
 import { sources, type SourceKey } from '@/lib/data';
 import { getDomainConfig, type DomainKey } from '@/lib/mock-data';
 import { useTemporalStore } from '@/lib/store';
+import { entityViewFocus, usePublishViewContext } from '@/lib/view-context';
 import type { EntityData, ConflictData, SourceContributionData, ActivityData } from '@/components/detail/types';
 
 export default function DynamicEntityDetailPage() {
@@ -32,9 +33,9 @@ export default function DynamicEntityDetailPage() {
   const knowledgeDate = useTemporalStore(state => state.knowledgeDate);
 
   // Compute derived data
+  const [activities, setActivities] = useState<ActivityData[]>([]);
   const conflicts: ConflictData[] = [];
   const sourceContributions: SourceContributionData[] = [];
-  const activities: ActivityData[] = [];
 
   let qualityScore = 0;
   let lastReviewedText = '—';
@@ -56,14 +57,20 @@ export default function DynamicEntityDetailPage() {
       qualityScore = Math.round((filledCount / attrEntries.length) * 100);
     }
 
-    const sourceCounts = new Map<string, { name: string; count: number }>();
+    const sourceCounts = new Map<string, { name: string; count: number; color: string }>();
     scopedLineage.forEach((ld) => {
       ld.competingValues?.forEach((cv) => {
         const srcKey = typeof cv.source === 'string' ? cv.source.toLowerCase() : 'manual';
-        const srcInfo = sources[srcKey as SourceKey] || sources.manual;
+        const known = sources[srcKey as SourceKey];
         const existing = sourceCounts.get(srcKey);
         if (existing) { existing.count++; }
-        else { sourceCounts.set(srcKey, { name: srcInfo.name, count: 1 }); }
+        else {
+          sourceCounts.set(srcKey, {
+            name: cv.sourceName || known?.name || srcKey,
+            count: 1,
+            color: known?.hex || '#475569',
+          });
+        }
       });
     });
 
@@ -74,7 +81,7 @@ export default function DynamicEntityDetailPage() {
         sourceName: val.name,
         fieldCount: val.count,
         percentage: Math.round((val.count / totalFields) * 100),
-        color: (sources[key as SourceKey] || sources.manual).hex,
+        color: val.color,
       }))
     );
 
@@ -93,17 +100,26 @@ export default function DynamicEntityDetailPage() {
       }
     });
 
-    if (entity.updatedAt) {
-      activities.push({ who: 'System', time: entity.updatedAt, text: `Entity ${entity.entityCode} last updated` });
-    }
-    if (entity.createdAt) {
-      activities.push({ who: 'System', time: entity.createdAt, text: `Entity ${entity.entityCode} created` });
-    }
-
     lastReviewedText = entity.updatedAt
       ? `${Math.max(1, Math.floor((Date.now() - new Date(entity.updatedAt).getTime()) / 86400000))} days ago`
       : '—';
   }
+
+  const loadActivity = useCallback(async (entityId: string) => {
+    const result = await graphqlQuery<
+      { entityActivity: Array<{ attributeCode: string; attributeName: string; value: string | null; updatedAt: string; updatedBy: string; validFrom: string; validTo: string }> },
+      { entityId: string; knowledgeDate: string }
+    >(ENTITY_ACTIVITY_QUERY, { entityId, knowledgeDate }, 'network-only');
+    setActivities((result.data?.entityActivity || []).map((entry) => ({
+      who: entry.updatedBy || 'System',
+      time: entry.updatedAt,
+      attribute: entry.attributeName || entry.attributeCode,
+      value: entry.value ?? '',
+      validFrom: entry.validFrom,
+      validTo: entry.validTo,
+      text: `${entry.attributeName || entry.attributeCode} set to ${entry.value ?? 'cleared'}`,
+    })));
+  }, [knowledgeDate]);
 
   useEffect(() => {
     const fetchEntity = async () => {
@@ -129,13 +145,19 @@ export default function DynamicEntityDetailPage() {
               FIELD_LINEAGE_QUERY,
               { entityId: data.entity.id, asOfDate, knowledgeDate }
             );
-            setLineageData(lineageResult.data?.fieldLineage ?? []);
-            setLineageLoaded(true);
+            if (lineageResult.error || !lineageResult.data?.fieldLineage) {
+              setLineageData([]);
+              setLineageLoaded(false);
+            } else {
+              setLineageData(lineageResult.data.fieldLineage);
+              setLineageLoaded(true);
+            }
+            await loadActivity(data.entity.id);
           }
 
           const entityDomainCode = data.entity.domainCode;
           const attrResult = await graphqlQuery<
-            { attributeRegister: Array<{ attributeCode: string; attributeName: string; dataType: string; isRequired: boolean; displaySection: string; displayGroup: number; isVisible: boolean }> },
+            { attributeRegister: Array<{ attributeCode: string; attributeName: string; dataType: string; isRequired: boolean; displaySection: string; displayGroup: number; isVisible: boolean; isDerived?: boolean; derivationFormula?: string | null }> },
             { domainCode: string }
           >(
             ATTRIBUTE_REGISTER_QUERY,
@@ -151,6 +173,8 @@ export default function DynamicEntityDetailPage() {
                 required: a.isRequired || false,
                 displaySection: a.displaySection || 'General',
                 sortOrder: a.displayGroup || 0,
+                isDerived: a.isDerived === true,
+                derivationFormula: a.derivationFormula,
               }));
             setTemplateAttributes(mappedAttributes);
           }
@@ -167,7 +191,7 @@ export default function DynamicEntityDetailPage() {
     if (id) {
       fetchEntity();
     }
-  }, [id, asOfDate, knowledgeDate]);
+  }, [id, asOfDate, knowledgeDate, loadActivity]);
 
   const handleRename = async (entityName: string) => {
     if (!entity) return;
@@ -181,21 +205,38 @@ export default function DynamicEntityDetailPage() {
     setEntity({ ...entity, entityName: savedName });
   };
 
+  const refreshLineage = async (entityId: string) => {
+    const lineageResult = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
+      FIELD_LINEAGE_QUERY,
+      { entityId, asOfDate, knowledgeDate },
+      'network-only',
+    );
+    if (lineageResult.error || !lineageResult.data?.fieldLineage) {
+      setLineageData([]);
+      setLineageLoaded(false);
+      return;
+    }
+    setLineageData(lineageResult.data.fieldLineage);
+    setLineageLoaded(true);
+    await loadActivity(entityId);
+  };
+
   const handleAddAttribute = async (attributeCode: string, value: string, source: SourceKey) => {
-    if (!entity) return;
-    const updatedAttributes = {
-      ...entity.attributes,
-      [attributeCode]: { value, source: sources[source]?.name || source, source_code: source.toUpperCase() },
-    };
-    try {
-      const result = await graphqlMutation<{ updateEntity: { errors: Array<{ message: string }> } }, { input: { id: string; attributes: Record<string, string> } }>(
-        UPDATE_ENTITY_MUTATION,
-        { input: { id: entity.id, attributes: { [attributeCode]: value } } }
-      );
-      const saveError = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
-      if (saveError) throw new Error(saveError);
-      setEntity({ ...entity, attributes: updatedAttributes });
-    } catch (err) { console.error('Failed to add attribute:', err); }
+    if (!entity) throw new Error('Record is still loading');
+    const result = await graphqlMutation<{ updateEntity: { errors: Array<{ message: string }> } }, { input: { id: string; attributes: Record<string, string> } }>(
+      UPDATE_ENTITY_MUTATION,
+      { input: { id: entity.id, attributes: { [attributeCode]: value } } },
+    );
+    const saveError = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
+    if (saveError) throw new Error(saveError);
+    setEntity({
+      ...entity,
+      attributes: {
+        ...entity.attributes,
+        [attributeCode]: { value, source: sources[source]?.name || source, source_code: source.toUpperCase() },
+      },
+    });
+    await refreshLineage(entity.id);
   };
 
   const handleSourceChange = async (attributeCode: string, newSource: SourceKey) => {
@@ -221,6 +262,7 @@ export default function DynamicEntityDetailPage() {
     try {
       await graphqlMutation(UPDATE_ENTITY_MUTATION, { input: { id: entity.id, attributes: updatedAttributes } });
       setEntity({ ...entity, attributes: updatedAttributes });
+      await loadActivity(entity.id);
     } catch (err) { console.error('Failed to update value:', err); }
   };
 
@@ -262,23 +304,25 @@ export default function DynamicEntityDetailPage() {
       
       console.log('Add competing source result:', result);
       
-      if (result.data?.addCompetingSource?.success) {
-        // Refresh lineage data to show the new competing value (bypass cache)
-        if (entity.id) {
-          const lineageResult = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
-            FIELD_LINEAGE_QUERY,
-            { entityId: entity.id, asOfDate, knowledgeDate },
-            'network-only'
-          );
-          if (lineageResult.data?.fieldLineage) {
-            setLineageData(lineageResult.data.fieldLineage);
-          }
-        }
-      } else {
-        console.error('Failed to add competing source:', result.data?.addCompetingSource?.errors);
+      if (!result.data?.addCompetingSource?.success) {
+        const message = result.data?.addCompetingSource?.errors?.[0]?.message || 'Could not save the value';
+        throw new Error(message);
       }
-    } catch (err) { 
-      console.error('Failed to add source value:', err); 
+
+      if (entity.id) {
+        const lineageResult = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
+          FIELD_LINEAGE_QUERY,
+          { entityId: entity.id, asOfDate, knowledgeDate },
+          'network-only'
+        );
+        if (lineageResult.data?.fieldLineage) {
+          setLineageData(lineageResult.data.fieldLineage);
+        }
+        await loadActivity(entity.id);
+      }
+    } catch (err) {
+      console.error('Failed to add source value:', err);
+      throw err;
     }
   };
 
@@ -314,12 +358,20 @@ export default function DynamicEntityDetailPage() {
         ),
       ]);
       if (entityResult.data?.entity) setEntity(entityResult.data.entity);
-      setLineageData(lineageResult.data?.fieldLineage ?? []);
-      setLineageLoaded(true);
+      if (lineageResult.error || !lineageResult.data?.fieldLineage) {
+        setLineageData([]);
+        setLineageLoaded(false);
+      } else {
+        setLineageData(lineageResult.data.fieldLineage);
+        setLineageLoaded(true);
+      }
+      await loadActivity(entity.id);
     } catch (err) {
       console.error('Failed to delete source value:', err);
     }
   };
+
+  usePublishViewContext(entity ? entityViewFocus(entity) : null);
 
   if (loading) {
     return (

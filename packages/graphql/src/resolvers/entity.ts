@@ -177,26 +177,18 @@ export const entityResolvers = {
     },
 
     domainRecordCounts: async (_: any, __: any, context: Context) => {
-      const { data: domains, error: domainError } = await context.supabase
-        .from('domain_types')
-        .select('domain_code')
-        .eq('is_active', true);
-
+      const [{ data: domains, error: domainError }, { data: counted, error: countError }] = await Promise.all([
+        context.supabase.from('domain_types').select('domain_code').eq('is_active', true),
+        context.supabase.rpc('domain_record_counts'),
+      ]);
       if (domainError) throw domainError;
+      if (countError) throw countError;
 
-      return Promise.all((domains || []).map(async (domain: { domain_code: string }) => {
-        const { count, error } = await context.supabase
-          .from('master_entities')
-          .select('id', { count: 'exact', head: true })
-          .eq('domain_code', domain.domain_code)
-          .eq('is_active', true);
-
-        if (error) throw error;
-
-        return {
-          domainCode: domain.domain_code,
-          totalCount: count || 0,
-        };
+      const counts = new Map<string, number>();
+      for (const row of counted || []) counts.set(row.domain_code, row.total_count || 0);
+      return (domains || []).map((domain: { domain_code: string }) => ({
+        domainCode: domain.domain_code,
+        totalCount: counts.get(domain.domain_code) || 0,
       }));
     },
 
@@ -368,6 +360,7 @@ export const entityResolvers = {
               validFrom: v.valid_from,
               validTo: v.valid_to,
               confidenceScore: v.confidence_score,
+              receivedAt: v.last_received_at || v.system_from,
             };
           }),
           resolutionRule: storedRuleLabel(winningRecord?.resolution_rule_applied) || sequenceLabel(sequence),

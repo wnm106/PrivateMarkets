@@ -46,9 +46,13 @@ function BlockBody({ block }: { block: NarrativeBlock }) {
           <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '13px' }}>
             <thead>
               <tr>
-                {block.columns.map((c, i) => (
-                  <th key={i} style={{ textAlign: 'left', borderBottom: '2px solid var(--line)', padding: '6px 10px', fontWeight: 600 }}>{c}</th>
-                ))}
+                {block.columns.map((c, i) => {
+                  const numeric = block.rows.length > 0 && block.rows.every((row) => row[i] == null || row[i] === '' || typeof row[i] === 'number')
+                    && block.rows.some((row) => typeof row[i] === 'number');
+                  return (
+                    <th key={i} style={{ textAlign: numeric ? 'right' : 'left', borderBottom: '2px solid var(--line)', padding: '6px 10px', fontWeight: 600 }}>{c}</th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>

@@ -1,6 +1,7 @@
 'use client';
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { attributeDisplayKind, tableCellAlign, type TableCellAlign } from '@/lib/attribute-display';
 import { graphqlQuery } from '@/lib/graphql';
 import { ATTRIBUTE_REGISTER_QUERY } from '@/lib/graphql';
 import { GRID_QUERY, type DataQuerySpec, type GridResultPayload } from '@/lib/reporting';
@@ -18,6 +19,7 @@ interface ColInfo {
   code: string;
   name: string;
   kind: 'text' | 'num' | 'date';
+  align: TableCellAlign;
   precision?: number | null;
   aggregation?: string | null;
   builtin?: boolean;
@@ -27,16 +29,20 @@ const PAGE_SIZE = 50;
 const GROUP_LIMIT = 200;
 
 const BUILTINS: ColInfo[] = [
-  { code: 'entity_code', name: 'Code', kind: 'text', builtin: true },
-  { code: 'entity_name', name: 'Name', kind: 'text', builtin: true },
+  { code: 'entity_code', name: 'Code', kind: 'text', align: 'left', builtin: true },
+  { code: 'entity_name', name: 'Name', kind: 'text', align: 'left', builtin: true },
 ];
 
-const kindOf = (dataType: string): ColInfo['kind'] =>
-  ['NUMBER', 'CURRENCY', 'PERCENTAGE', 'INTEGER', 'DECIMAL', 'FLOAT', 'NUMERIC'].includes((dataType || '').toUpperCase())
-    ? 'num'
-    : ['DATE', 'TIMESTAMP', 'DATETIME'].includes((dataType || '').toUpperCase())
-      ? 'date'
-      : 'text';
+function kindOf(dataType: string): ColInfo['kind'] {
+  const kind = attributeDisplayKind({ dataType });
+  if (kind === 'date') return 'date';
+  if (kind === 'text' || kind === 'boolean') return 'text';
+  return 'num';
+}
+
+function columnMeta(dataType: string): Pick<ColInfo, 'kind' | 'align'> {
+  return { kind: kindOf(dataType), align: tableCellAlign(dataType) };
+}
 
 /** "text" -> contains; "=x" exact; "!x" not; numbers/dates: ">5", ">=5", "<5", "a..b", "=5". */
 function parseFilter(field: string, kind: ColInfo['kind'], raw: string) {
@@ -149,7 +155,7 @@ export function DataGrid({ spec, entityId, params, asOfDate, title }: DataGridPr
     BUILTINS.forEach((b) => map.set(b.code, b));
     catalog.forEach((a) =>
       map.set(a.attributeCode, {
-        code: a.attributeCode, name: a.attributeName || a.attributeCode, kind: kindOf(a.dataType),
+        code: a.attributeCode, name: a.attributeName || a.attributeCode, ...columnMeta(a.dataType),
         precision: a.numericPrecision, aggregation: a.aggregationType,
       })
     );
@@ -157,8 +163,8 @@ export function DataGrid({ spec, entityId, params, asOfDate, title }: DataGridPr
       map.set(
         f.code,
         f.attr
-          ? { code: f.code, name: f.name, kind: kindOf(f.attr.dataType), precision: f.attr.numericPrecision, aggregation: f.attr.aggregationType }
-          : { code: f.code, name: f.name, kind: 'text' }
+          ? { code: f.code, name: f.name, ...columnMeta(f.attr.dataType), precision: f.attr.numericPrecision, aggregation: f.attr.aggregationType }
+          : { code: f.code, name: f.name, kind: 'text', align: 'left' as const }
       )
     );
     return map;
@@ -296,7 +302,7 @@ export function DataGrid({ spec, entityId, params, asOfDate, title }: DataGridPr
             <tr>
               {groupBy.length > 0 && <th style={{ ...th, width: 24 }} />}
               {visible.map((c) => (
-                <th key={c} style={th} onClick={() => toggleSort(c)}>
+                <th key={c} style={{ ...th, textAlign: colInfo.get(c)?.align || 'left' }} onClick={() => toggleSort(c)}>
                   {colInfo.get(c)?.name || c}
                   {sort?.field === c ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
                   {colInfo.get(c)?.aggregation && colInfo.get(c)?.aggregation !== 'NONE' ? (
@@ -469,5 +475,11 @@ const btn: React.CSSProperties = { fontSize: 12, padding: '3px 8px', border: '1p
 const chip: React.CSSProperties = { fontSize: 11, background: '#e0e7ef', borderRadius: 10, padding: '2px 8px', display: 'inline-flex', gap: 4, alignItems: 'center' };
 const chipX: React.CSSProperties = { border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 12, lineHeight: 1 };
 function numStyle(col?: ColInfo): React.CSSProperties {
-  return { ...td, textAlign: col?.kind === 'num' ? 'right' : 'left', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
+  const align = col?.align || 'left';
+  return {
+    ...td,
+    textAlign: align,
+    fontVariantNumeric: align === 'right' ? 'tabular-nums' : undefined,
+    whiteSpace: 'nowrap',
+  };
 }

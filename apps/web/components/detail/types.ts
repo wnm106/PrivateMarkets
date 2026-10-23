@@ -67,4 +67,8 @@ export interface ActivityData {
   who: string;
   time: string;
   text: string;
+  attribute?: string;
+  value?: string;
+  validFrom?: string;
+  validTo?: string;
 }

@@ -2,8 +2,8 @@
 
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
-import { graphqlQuery, graphqlMutation, INTERSECTION_QUERY, ENTITY_QUERY, FIELD_LINEAGE_QUERY, ATTRIBUTE_REGISTER_QUERY, UPDATE_ENTITY_MUTATION, ADD_COMPETING_SOURCE_MUTATION, DELETE_COMPETING_SOURCE_MUTATION, DATA_SOURCE_QUERY } from '@/lib/graphql';
+import { useCallback, useEffect, useState } from 'react';
+import { graphqlQuery, graphqlMutation, INTERSECTION_QUERY, ENTITY_QUERY, FIELD_LINEAGE_QUERY, ENTITY_ACTIVITY_QUERY, ATTRIBUTE_REGISTER_QUERY, UPDATE_ENTITY_MUTATION, ADD_COMPETING_SOURCE_MUTATION, DELETE_COMPETING_SOURCE_MUTATION, DATA_SOURCE_QUERY } from '@/lib/graphql';
 import { GoldenRecordHeader } from '@/components/detail/GoldenRecordHeader';
 import { EntityGraphPanel } from '@/components/detail/EntityGraphPanel';
 import { GoldenRecordSections, type TemplateAttribute, type LineageData } from '@/components/detail/GoldenRecordSections';
@@ -13,6 +13,7 @@ import { ActivityFeedPanel } from '@/components/detail/ActivityFeedPanel';
 import { sources, type SourceKey } from '@/lib/data';
 import { getDomainConfig } from '@/lib/mock-data';
 import { useTemporalStore } from '@/lib/store';
+import { entityViewFocus, usePublishViewContext } from '@/lib/view-context';
 import type { EntityData, ConflictData, SourceContributionData, ActivityData } from '@/components/detail/types';
 
 interface IntersectionMember {
@@ -51,9 +52,9 @@ export default function PositionDetailPage() {
   const [lineageLoaded, setLineageLoaded] = useState(false);
   const [templateAttributes, setTemplateAttributes] = useState<TemplateAttribute[]>([]);
   const [canRename, setCanRename] = useState(false);
+  const [activities, setActivities] = useState<ActivityData[]>([]);
   const conflicts: ConflictData[] = [];
   const sourceContributions: SourceContributionData[] = [];
-  const activities: ActivityData[] = [];
   let qualityScore = 0;
   let lastReviewedText = '—';
   if (entity) {
@@ -66,14 +67,20 @@ export default function PositionDetailPage() {
       }).length;
       qualityScore = Math.round((filledCount / attrEntries.length) * 100);
     }
-    const sourceCounts = new Map<string, { name: string; count: number }>();
+    const sourceCounts = new Map<string, { name: string; count: number; color: string }>();
     lineageData.forEach((ld) => {
       ld.competingValues?.forEach((cv) => {
         const srcKey = typeof cv.source === 'string' ? cv.source.toLowerCase() : 'manual';
-        const srcInfo = sources[srcKey as SourceKey] || sources.manual;
+        const known = sources[srcKey as SourceKey];
         const existing = sourceCounts.get(srcKey);
         if (existing) { existing.count++; }
-        else { sourceCounts.set(srcKey, { name: srcInfo.name, count: 1 }); }
+        else {
+          sourceCounts.set(srcKey, {
+            name: cv.sourceName || known?.name || srcKey,
+            count: 1,
+            color: known?.hex || '#475569',
+          });
+        }
       });
     });
     const totalFields = lineageData.length || attrEntries.length || 1;
@@ -81,7 +88,7 @@ export default function PositionDetailPage() {
       ...Array.from(sourceCounts.entries()).map(([key, val]) => ({
         source: key, sourceName: val.name, fieldCount: val.count,
         percentage: Math.round((val.count / totalFields) * 100),
-        color: (sources[key as SourceKey] || sources.manual).hex,
+        color: val.color,
       }))
     );
     lineageData.forEach((ld) => {
@@ -93,6 +100,22 @@ export default function PositionDetailPage() {
       }
     });
   }
+  const loadActivity = useCallback(async (entityId: string) => {
+    const result = await graphqlQuery<
+      { entityActivity: Array<{ attributeCode: string; attributeName: string; value: string | null; updatedAt: string; updatedBy: string; validFrom: string; validTo: string }> },
+      { entityId: string; knowledgeDate: string }
+    >(ENTITY_ACTIVITY_QUERY, { entityId, knowledgeDate }, 'network-only');
+    setActivities((result.data?.entityActivity || []).map((entry) => ({
+      who: entry.updatedBy || 'System',
+      time: entry.updatedAt,
+      attribute: entry.attributeName || entry.attributeCode,
+      value: entry.value ?? '',
+      validFrom: entry.validFrom,
+      validTo: entry.validTo,
+      text: `${entry.attributeName || entry.attributeCode} set to ${entry.value ?? 'cleared'}`,
+    })));
+  }, [knowledgeDate]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -117,6 +140,7 @@ export default function PositionDetailPage() {
         setIsMasterEntity(true);
         setEntity(loaded);
         setCanRename(true);
+        await loadActivity(loaded.id);
         if (attrResult.data?.attributeRegister) {
           const mappedAttributes: TemplateAttribute[] = attrResult.data.attributeRegister
             .filter((a: any) => a.isVisible !== false)
@@ -127,6 +151,8 @@ export default function PositionDetailPage() {
               required: a.isRequired || false,
               displaySection: a.displaySection || 'Position',
               sortOrder: a.displayGroup || 0,
+              isDerived: a.isDerived === true,
+              derivationFormula: a.derivationFormula,
             }));
           setTemplateAttributes(mappedAttributes);
         }
@@ -159,30 +185,77 @@ export default function PositionDetailPage() {
             required: a.isRequired || false,
             displaySection: a.displaySection || 'General',
             sortOrder: a.displayGroup || 0,
+            isDerived: a.isDerived === true,
+            derivationFormula: a.derivationFormula,
           }));
         setTemplateAttributes(mappedAttributes);
       }
       try {
         const lr = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(FIELD_LINEAGE_QUERY, { entityId: ix.id, asOfDate, knowledgeDate }, 'network-only');
-        setLineageData(lr.data?.fieldLineage ?? []);
-        setLineageLoaded(true);
+        if (lr.error || !lr.data?.fieldLineage) {
+          setLineageData([]);
+          setLineageLoaded(false);
+        } else {
+          setLineageData(lr.data.fieldLineage);
+          setLineageLoaded(true);
+        }
+        await loadActivity(ix.id);
       } catch (err) { console.error('Failed to fetch lineage:', err); }
       setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [id, asOfDate, knowledgeDate]);
+  }, [id, asOfDate, knowledgeDate, loadActivity]);
 
-  const handleAddAttribute = async (attributeCode: string) => { console.log('Add attribute:', attributeCode); };
+  const refreshLineage = async (entityId: string) => {
+    const lr = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
+      FIELD_LINEAGE_QUERY,
+      { entityId, asOfDate, knowledgeDate },
+      'network-only',
+    );
+    if (lr.error || !lr.data?.fieldLineage) {
+      setLineageData([]);
+      setLineageLoaded(false);
+      return;
+    }
+    setLineageData(lr.data.fieldLineage);
+    setLineageLoaded(true);
+    await loadActivity(entityId);
+  };
+
+  const handleAddAttribute = async (attributeCode: string, value: string) => {
+    if (!entity?.id) throw new Error('Position is still loading');
+    const result = await graphqlMutation<{ updateEntity: { errors: Array<{ message: string }> } }, { input: { id: string; attributes: Record<string, string> } }>(
+      UPDATE_ENTITY_MUTATION,
+      { input: { id: entity.id, attributes: { [attributeCode]: value } } },
+    );
+    const saveError = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
+    if (saveError) throw new Error(saveError);
+    await refreshLineage(entity.id);
+  };
+
   const handleSourceChange = async (attributeCode: string, sourceId: string) => { console.log('Source change:', attributeCode, sourceId); };
-  const handleValueChange = async (attributeCode: string, value: any) => { console.log('Value change:', attributeCode, value); };
-  const handleAddSourceValue = async (attributeCode: string, sourceId: string, value: any) => {
-    try {
-      const result = await graphqlMutation<{ addCompetingSource: { success: boolean } }, any>(ADD_COMPETING_SOURCE_MUTATION, { input: { entityId: entity?.id, attributeCode, sourceId, value, validFrom: asOfDate } });
-      if (result.data?.addCompetingSource?.success && entity?.id) {
-        const lr = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(FIELD_LINEAGE_QUERY, { entityId: entity.id, asOfDate, knowledgeDate }, 'network-only');
-        if (lr.data?.fieldLineage) setLineageData(lr.data.fieldLineage);
-      }
-    } catch (err) { console.error('Failed to add source value:', err); }
+
+  const handleValueChange = async (attributeCode: string, value: string) => {
+    await handleAddAttribute(attributeCode, value);
+  };
+
+  const handleAddSourceValue = async (attributeCode: string, source: SourceKey, value: string) => {
+    if (!entity?.id) throw new Error('Position is still loading');
+    const sourceCode = String(source).toUpperCase();
+    const sourceResult = await graphqlQuery<{ dataSource: { id: string } }, { code: string }>(
+      DATA_SOURCE_QUERY,
+      { code: sourceCode },
+      'network-only',
+    );
+    const sourceId = sourceResult.data?.dataSource?.id;
+    if (!sourceId) throw new Error(`Source ${sourceCode} is not registered`);
+    const result = await graphqlMutation<{ addCompetingSource: { success: boolean; errors: Array<{ message: string }> } }, { input: { entityId: string; attributeCode: string; sourceId: string; value: string; validFrom: string } }>(
+      ADD_COMPETING_SOURCE_MUTATION,
+      { input: { entityId: entity.id, attributeCode, sourceId, value, validFrom: asOfDate } },
+    );
+    const saveError = result.error?.message || result.data?.addCompetingSource?.errors?.[0]?.message;
+    if (saveError || !result.data?.addCompetingSource?.success) throw new Error(saveError || 'Could not save the value');
+    await refreshLineage(entity.id);
   };
   const handleDeleteSourceValue = async (attributeCode: string, sourceCode: string) => {
     if (!entity?.id) return;
@@ -196,8 +269,14 @@ export default function PositionDetailPage() {
       );
       if (!result.data?.deleteCompetingSource?.success) throw new Error(result.data?.deleteCompetingSource?.errors?.[0]?.message || 'Delete failed');
       const lr = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(FIELD_LINEAGE_QUERY, { entityId: entity.id, asOfDate, knowledgeDate }, 'network-only');
-      setLineageData(lr.data?.fieldLineage ?? []);
-      setLineageLoaded(true);
+      if (lr.error || !lr.data?.fieldLineage) {
+        setLineageData([]);
+        setLineageLoaded(false);
+      } else {
+        setLineageData(lr.data.fieldLineage);
+        setLineageLoaded(true);
+      }
+      await loadActivity(entity.id);
     } catch (err) { console.error('Failed to delete source value:', err); }
   };
   const handleRename = async (entityName: string) => {
@@ -211,6 +290,8 @@ export default function PositionDetailPage() {
     if (saveError || !savedName) throw new Error(saveError || 'Could not save name');
     setEntity({ ...entity, entityName: savedName });
   };
+
+  usePublishViewContext(entity ? entityViewFocus(entity) : null);
 
   if (loading) {
     return (

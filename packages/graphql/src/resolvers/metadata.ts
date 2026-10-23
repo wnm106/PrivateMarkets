@@ -28,10 +28,6 @@ export const metadataResolvers = {
           .select('*')
           .order('attribute_code');
 
-        if (!args.includeDerived) {
-          query = query.or('is_derived.eq.false,is_derived.is.null');
-        }
-
         const { data: fallbackData, error: fallbackError } = await query;
 
         console.log('[attributeRegister] Fallback query result:', { 
@@ -88,10 +84,9 @@ export const metadataResolvers = {
       
       console.log('[attributeRegister] Parsed attributes count:', allAttributes.length);
       
-      // Filter out derived attributes unless explicitly requested
-      let filtered = args.includeDerived 
-        ? allAttributes 
-        : allAttributes.filter((attr: any) => !attr.is_derived);
+      // The catalog RPC omits calculated attributes. Merge them back so a visible
+      // value such as position market value still appears on the entity.
+      let filtered = await withDerivedAttributes(supabase, allAttributes);
 
       // If domainCode is specified, filter to show:
       // 1. Attributes with matching domain_code, OR
@@ -534,6 +529,20 @@ export const metadataResolvers = {
     },
   },
 };
+
+/** Calculated attributes are omitted by get_attributes_with_aggregation. */
+async function withDerivedAttributes(supabase: SupabaseClient, rows: any[]): Promise<any[]> {
+  const { data, error } = await supabase
+    .from('attribute_register')
+    .select('*')
+    .eq('is_derived', true);
+  if (error || !data?.length) return rows;
+  const seen = new Set(rows.map((row) => row.id || row.attribute_code));
+  return [
+    ...rows,
+    ...data.filter((row) => !seen.has(row.id) && !seen.has(row.attribute_code)),
+  ];
+}
 
 /**
  * Map database row to GraphQL AttributeDefinition type

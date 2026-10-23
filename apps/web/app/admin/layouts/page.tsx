@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { usePublishViewContext } from '@/lib/view-context';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 
 const SAMPLE_HTML = `<div class="statement-toolbar">{{control financialType}} {{control viewGrain}} {{control statementBasis}}</div>
@@ -60,6 +61,24 @@ export default function DisplayLayoutsPage() {
     htmlTemplate: SAMPLE_HTML,
   });
   const [binding, setBinding] = useState({ ownerEntityId: '', relationshipCode: '', layoutId: '' });
+
+  usePublishViewContext({
+    activity: form.layoutCode ? 'editing' : 'creating',
+    kind: 'display-layout',
+    label: form.layoutName || form.layoutCode || 'Display layout',
+    domainCode: form.domainCode,
+    snapshot: {
+      layoutCode: form.layoutCode,
+      layoutName: form.layoutName,
+      domainCode: form.domainCode,
+      timeMode: form.timeMode,
+      seriesAxis: form.seriesAxis,
+      defaultViewGrain: form.defaultViewGrain,
+      seriesWindow: form.seriesWindow,
+      relationshipCode: form.relationshipCode,
+      htmlTemplate: form.htmlTemplate,
+    },
+  });
 
   const load = () => {
     graphqlQuery<{ displayLayouts: LayoutRow[] }, Record<string, never>>(LAYOUTS_QUERY, {}).then((result) => {

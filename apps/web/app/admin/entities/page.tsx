@@ -10,6 +10,7 @@ import {
   CREATE_DOMAIN_TYPE_MUTATION,
 } from '@/lib/graphql';
 import { SchemaScopeBadge, SchemaScopeField } from '@/components/admin/SchemaScopeField';
+import { domainColor } from '@/lib/domain-routes';
 
 interface DomainType {
   id: string;
@@ -83,18 +84,6 @@ export default function EntityManagementPage() {
     }
   };
 
-  const getDomainColor = (domainCode: string) => {
-    const colors: Record<string, string> = {
-      FUND: '#1b3a4b',
-      ISSUER: '#6d28d9',
-      SECURITY: '#c2410c',
-      DEAL: '#047857',
-      INVESTOR: '#be185d',
-      POSITION: '#0369a1'
-    };
-    return colors[domainCode] || '#6b7280';
-  };
-
   if (loading) {
     return (
       <div className="view-fade">
@@ -153,7 +142,7 @@ export default function EntityManagementPage() {
                 display: 'block',
                 textDecoration: 'none',
                 color: 'inherit',
-                '--card-accent': getDomainColor(domain.domainCode)
+                '--card-accent': domainColor(domain.domainCode)
               } as React.CSSProperties}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '12px' }}>
@@ -173,7 +162,7 @@ export default function EntityManagementPage() {
                     width: '32px',
                     height: '32px',
                     borderRadius: '6px',
-                    background: getDomainColor(domain.domainCode),
+                    background: domainColor(domain.domainCode),
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',

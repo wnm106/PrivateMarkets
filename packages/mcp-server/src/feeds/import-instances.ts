@@ -252,7 +252,11 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
 }
 
 async function reviewWithModel(assignments: ColumnAssignment[], attributes: AttributeChoice[]): Promise<ColumnAssignment[]> {
-  const key = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
+  const key =
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_AI_API_KEY ||
+    process.env.NEXT_PUBLIC_GEMINI_API_KEY ||
+    '';
   if (!key) return assignments;
   const unmapped = assignments.filter((assignment) => assignment.role === 'ignore');
   if (unmapped.length === 0) return assignments;

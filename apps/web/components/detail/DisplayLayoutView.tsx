@@ -8,6 +8,7 @@ import {
   type DisplayNode,
   type LayoutParameter,
 } from '@tapestrai/graphql/src/lib/display-layout';
+import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
 
 export interface DisplayParameterOption {
   value: string;
@@ -178,6 +179,7 @@ function LayoutNode({
     const cell = findCell(layout, node.attributeCode || '', node.periodKey || '', node.basis || '');
     return (
       <FieldCell
+        attributeCode={node.attributeCode}
         value={cell?.value ?? ''}
         readOnly={!cell || cell.readOnly}
         onSave={async (value) => {
@@ -196,10 +198,12 @@ function LayoutNode({
 }
 
 function FieldCell({
+  attributeCode,
   value,
   readOnly,
   onSave,
 }: {
+  attributeCode?: string;
   value: string;
   readOnly: boolean;
   onSave: (value: string) => Promise<void>;
@@ -208,17 +212,20 @@ function FieldCell({
   const [saving, setSaving] = useState(false);
   useEffect(() => { setDraft(value); }, [value]);
   if (readOnly) return <span>{value || '—'}</span>;
+  const save = (next: string) => {
+    if (next === value || !next.trim()) return;
+    setSaving(true);
+    onSave(next).finally(() => setSaving(false));
+  };
   return (
-    <input
+    <AttributeValueInput
+      attributeCode={attributeCode}
       className="text-input statement-field"
       value={draft}
       disabled={saving}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => {
-        if (draft === value || !draft.trim()) return;
-        setSaving(true);
-        onSave(draft).finally(() => setSaving(false));
-      }}
+      onChange={setDraft}
+      onSelect={save}
+      onBlur={() => save(draft)}
     />
   );
 }

@@ -191,6 +191,15 @@ export const UPDATE_ATTRIBUTE_VALUE_MUTATION = `
   }
 `;
 
+export const CLEAR_MANUAL_OVERRIDE_MUTATION = `
+  mutation ClearManualOverride($input: ClearManualOverrideInput!) {
+    clearManualOverride(input: $input) {
+      success
+      errors { field message code }
+    }
+  }
+`;
+
 export const DELETE_COMPETING_SOURCE_MUTATION = `
   mutation DeleteCompetingSource($input: DeleteCompetingSourceInput!) {
     deleteCompetingSource(input: $input) {
@@ -242,6 +251,8 @@ export const ATTRIBUTE_REGISTER_QUERY = `
       displayGroup
       isEditable
       isVisible
+      isDerived
+      derivationFormula
       isTimeVarying
       timeDimension
       aggregationType
@@ -283,6 +294,21 @@ export const DOMAIN_TEMPLATES_QUERY = `
         defaultPrecedenceChain
         chainVersion
       }
+    }
+  }
+`;
+
+export const ENTITY_ACTIVITY_QUERY = `
+  query EntityActivity($entityId: ID!, $knowledgeDate: DateTime, $attributeCode: String, $limit: Int) {
+    entityActivity(entityId: $entityId, knowledgeDate: $knowledgeDate, attributeCode: $attributeCode, limit: $limit) {
+      attributeCode
+      attributeName
+      value
+      updatedAt
+      updatedBy
+      sourceName
+      validFrom
+      validTo
     }
   }
 `;
@@ -995,6 +1021,8 @@ export const DATA_SOURCES_QUERY = `
       connectionConfig
       precedenceRank
       isActive
+      isProtected
+      color
       metadata
       createdAt
       updatedAt
@@ -1048,6 +1076,8 @@ export const CREATE_DATA_SOURCE_MUTATION = `
         connectionConfig
         precedenceRank
         isActive
+        isProtected
+        color
         metadata
         createdAt
         updatedAt
@@ -1075,6 +1105,8 @@ export const UPDATE_DATA_SOURCE_MUTATION = `
         connectionConfig
         precedenceRank
         isActive
+        isProtected
+        color
         metadata
         createdAt
         updatedAt
@@ -1452,6 +1484,29 @@ export const TRIGGER_DATA_LOADER_MUTATION = `
   }
 `;
 
+export const STALE_ATTRIBUTES_QUERY = `
+  query StaleAttributes($domainCode: String, $olderThanDays: Int, $asOfDate: Date) {
+    staleAttributes(domainCode: $domainCode, olderThanDays: $olderThanDays, asOfDate: $asOfDate) {
+      olderThanDays
+      asOfDate
+      count
+      attributes {
+        entityId
+        entityCode
+        entityName
+        domainCode
+        attributeCode
+        attributeName
+        sourceCode
+        sourceName
+        value
+        receivedAt
+        ageDays
+      }
+    }
+  }
+`;
+
 export const DATA_QUALITY_DASHBOARD_QUERY = `
   query DataQualityDashboard($domainCode: String, $fromDate: Date, $toDate: Date) {
     dataQualityDashboard(domainCode: $domainCode, fromDate: $fromDate, toDate: $toDate) {
@@ -1474,6 +1529,11 @@ export const DATA_QUALITY_DASHBOARD_QUERY = `
         changedEntityCount
         attributeChangeCount
         clearEntityCount
+        availabilityResolvedCount
+        availabilityIntroducedCount
+        qualityResolvedCount
+        qualityIntroducedCount
+        overrideMatchCount
       }
       availability {
         attributeCode
@@ -1482,7 +1542,12 @@ export const DATA_QUALITY_DASHBOARD_QUERY = `
         requiredCount
         missingCount
         availabilityPercent
+        resolvedCount
+        introducedCount
         missingEntities { id entityCode entityName domainCode }
+        resolvedEntities { id entityCode entityName domainCode previousValue currentValue }
+        introducedEntities { id entityCode entityName domainCode previousValue currentValue }
+        entities { id entityCode entityName domainCode value }
       }
       quality {
         ruleId
@@ -1492,12 +1557,21 @@ export const DATA_QUALITY_DASHBOARD_QUERY = `
         severity
         domainCode
         ruleExpression
+        ruleDescription
+        attributeCode
+        attributeName
         evaluated
         evaluationMessage
         entityCount
         failingCount
         passingCount
-        failingEntities { id entityCode entityName domainCode message actualValue }
+        acceptedCount
+        failingEntities { id entityCode entityName domainCode attributeCode attributeName message actualValue }
+        acceptedEntities { id entityCode entityName domainCode status notes }
+        resolvedCount
+        introducedCount
+        resolvedEntities { id entityCode entityName domainCode previousValue currentValue }
+        introducedEntities { id entityCode entityName domainCode previousValue currentValue }
       }
       trajectory {
         attributeCode
@@ -1505,6 +1579,19 @@ export const DATA_QUALITY_DASHBOARD_QUERY = `
         domainCode
         changeCount
         changes { id entityCode entityName domainCode previousValue currentValue }
+      }
+      overrideMatches {
+        id
+        entityCode
+        entityName
+        domainCode
+        attributeCode
+        attributeName
+        overrideValue
+        overrideReason
+        prioritySourceCode
+        prioritySourceName
+        priorityValue
       }
       entities {
         id
@@ -1518,29 +1605,35 @@ export const DATA_QUALITY_DASHBOARD_QUERY = `
         ruleCount
         failingRuleCount
         qualityPercent
-        failingRules { ruleId ruleCode ruleName severity message actualValue }
+        failingRules { ruleId ruleCode ruleName severity attributeCode attributeName message actualValue }
+        acceptedRules { ruleId ruleCode ruleName severity attributeCode attributeName status notes }
         changeCount
         changes { attributeCode attributeName previousValue currentValue }
+        availabilityResolvedCount
+        availabilityIntroducedCount
+        qualityResolvedCount
+        qualityIntroducedCount
+        overrideMatchCount
       }
     }
   }
 `;
 
 export const DQ_RULES_QUERY = `
-  query DQRules($filter: DQRuleFilter, $pagination: PaginationInput) {
-    dqRules(filter: $filter, pagination: $pagination) {
+  query DQRules($filter: DQRuleFilter) {
+    dqRules(filter: $filter) {
       id
-      name
-      description
-      type
-      scope
-      scopeRef
-      scopeLabel
-      threshold
+      ruleCode
+      ruleName
+      domainCode
+      attributeCode
+      ruleType
       severity
-      enabled
-      exceptionCount
-      lastEvaluated
+      ruleExpression
+      ruleDescription
+      thresholdValue
+      isActive
+      autoRemediate
       createdAt
       updatedAt
     }
@@ -1706,30 +1799,28 @@ export const INTERSECTION_QUERY = `
   }
 `;
 
+const DQ_RULE_FIELDS = `
+  id
+  ruleCode
+  ruleName
+  domainCode
+  attributeCode
+  ruleType
+  severity
+  ruleExpression
+  ruleDescription
+  thresholdValue
+  isActive
+  autoRemediate
+  createdAt
+  updatedAt
+`;
+
 export const CREATE_DQ_RULE_MUTATION = `
   mutation CreateDQRule($input: CreateDQRuleInput!) {
     createDQRule(input: $input) {
-      rule {
-        id
-        name
-        description
-        type
-        scope
-        scopeRef
-        scopeLabel
-        threshold
-        severity
-        enabled
-        exceptionCount
-        lastEvaluated
-        createdAt
-        updatedAt
-      }
-      errors {
-        field
-        message
-        code
-      }
+      rule { ${DQ_RULE_FIELDS} }
+      errors { field message code }
     }
   }
 `;
@@ -1737,27 +1828,8 @@ export const CREATE_DQ_RULE_MUTATION = `
 export const UPDATE_DQ_RULE_MUTATION = `
   mutation UpdateDQRule($input: UpdateDQRuleInput!) {
     updateDQRule(input: $input) {
-      rule {
-        id
-        name
-        description
-        type
-        scope
-        scopeRef
-        scopeLabel
-        threshold
-        severity
-        enabled
-        exceptionCount
-        lastEvaluated
-        createdAt
-        updatedAt
-      }
-      errors {
-        field
-        message
-        code
-      }
+      rule { ${DQ_RULE_FIELDS} }
+      errors { field message code }
     }
   }
 `;

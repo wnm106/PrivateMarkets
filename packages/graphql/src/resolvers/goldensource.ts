@@ -1,6 +1,17 @@
 ﻿import { Context } from "../context";
 import { evaluatePrecedence } from "../lib/rule-engine";
 
+const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+
+function receiptIsStale(receivedAt: string | null | undefined, sourceCode: string | null | undefined): boolean {
+  const code = (sourceCode || '').toUpperCase();
+  if (code === 'DERIVED' || code === 'CALCULATED') return false;
+  if (!receivedAt) return false;
+  const time = new Date(receivedAt).getTime();
+  if (Number.isNaN(time)) return false;
+  return Date.now() - time > STALE_AFTER_MS;
+}
+
 /**
  * Golden Source Resolver
  * Handles: resolving/persisting golden source, O(1) reads, batch re-resolution,
@@ -35,7 +46,7 @@ export const goldenSourceResolvers = {
         resolutionVersion: data.resolution_version,
         resolvedAt: data.resolved_at,
         competingValues: data.competing_values || [],
-        isStale: false,
+        isStale: receiptIsStale(data.last_received_at || data.system_from, data.source_registry?.source_code),
       };
     },
 
@@ -59,7 +70,7 @@ export const goldenSourceResolvers = {
         resolutionVersion: row.resolution_version,
         resolvedAt: row.resolved_at,
         competingValues: row.competing_values || [],
-        isStale: false,
+        isStale: receiptIsStale(row.last_received_at || row.system_from, row.source_registry?.source_code),
       }));
     },
 

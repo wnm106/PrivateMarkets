@@ -24,9 +24,14 @@ import {
   MAX_INLINE_TEXT_CHARS,
   isImage,
 } from '@/lib/chat-attachments';
+import { chatVoiceInstruction } from '@/lib/chat-voice';
 
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseAnonKey;
-const geminiApiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
+const geminiApiKey =
+  process.env.GEMINI_API_KEY ||
+  process.env.GOOGLE_AI_API_KEY ||
+  process.env.NEXT_PUBLIC_GEMINI_API_KEY ||
+  '';
 const geminiModel = 'gemini-3.8-flash';
 const MAX_TOOL_ROUNDS = 6;
 /** Cap the stored turn so a huge tool payload can't bloat the transcript. */
@@ -144,9 +149,39 @@ async function loadAttachments(
   return resolved;
 }
 
+const MAX_SCREEN_JSON = 12000;
+
+/** Hint about the open page. It does not change which tools are available. */
+function screenContextBlock(context: Record<string, any> | null | undefined): string {
+  if (!context || typeof context !== 'object') return '';
+  const lines: string[] = [];
+  if (context.page) lines.push(`Page: ${context.page}`);
+  if (context.domainCode) lines.push(`Domain: ${context.domainCode}`);
+  if (context.entityCode) lines.push(`Entity code: ${context.entityCode}`);
+  if (context.entityId) lines.push(`Entity id: ${context.entityId}`);
+  if (context.attributeCode) lines.push(`Attribute: ${context.attributeCode}`);
+  if (context.asOfDate) lines.push(`As-of date: ${context.asOfDate}`);
+
+  const view = context.view;
+  if (view && typeof view === 'object') {
+    const activity = view.activity || 'viewing';
+    lines.push(`Focus: ${activity} ${view.kind || 'item'} "${view.label || ''}"`.trim());
+    if (view.summary) lines.push(`Summary: ${view.summary}`);
+    if (view.id) lines.push(`Focus id: ${view.id}`);
+    if (view.snapshot && typeof view.snapshot === 'object') {
+      let json = JSON.stringify(view.snapshot);
+      if (json.length > MAX_SCREEN_JSON) json = `${json.slice(0, MAX_SCREEN_JSON)}…[truncated]`;
+      lines.push(`Details: ${json}`);
+    }
+  }
+
+  if (!lines.length) return '';
+  return `\n\n## Current screen\nThe user is working in the app as described below. Use this when their question is about this page, record, or configuration, and use these identifiers (entity id, domain, attribute, as-of date) when you call tools. If the question is about something else, do not assume they mean this screen.\n${lines.join('\n')}`;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const { messages, context, toolContext, conversationId, attachmentIds, designerDraft } = await request.json();
+    const { messages, context, toolContext, conversationId, attachmentIds, designerDraft, voice } = await request.json();
     const requestedAttachmentIds: string[] = Array.isArray(attachmentIds) ? attachmentIds : [];
 
     if (!geminiApiKey) {
@@ -158,11 +193,7 @@ export async function POST(request: NextRequest) {
     const auth = await authenticate(request);
 
     const profile = getContextProfile(toolContext);
-    let systemInstruction = profile.systemInstruction;
-
-    if (context?.page) systemInstruction += `\n\nCurrent page: ${context.page}`;
-    if (context?.domainCode) systemInstruction += `\nCurrent domain: ${context.domainCode}`;
-    if (context?.entityCode) systemInstruction += `\nCurrent entity: ${context.entityCode}`;
+    let systemInstruction = profile.systemInstruction + chatVoiceInstruction(voice) + screenContextBlock(context);
 
     // Report designer: give the model the current draft and the query format up front.
     if (profile.name === 'report-designer') {

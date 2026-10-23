@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { usePublishViewContext } from '@/lib/view-context';
 import { dependencyLoadWaves } from '@/lib/feeds/load-order';
 import {
   TRANSFORM_OPTIONS,
@@ -80,6 +81,34 @@ export default function PositionFilePage() {
   const [asOfDate, setAsOfDate] = useState(todayIso());
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  usePublishViewContext(
+    detail
+      ? {
+          activity: 'viewing',
+          kind: 'import-file',
+          label: detail.fileName,
+          id: detail.id,
+          summary: `${detail.status} · ${detail.rowCount} rows`,
+          snapshot: {
+            fileName: detail.fileName,
+            status: detail.status,
+            rowCount: detail.rowCount,
+            asOfDate: detail.asOfDate,
+            sourceCode: queue?.sourceCode,
+            resultSummary: detail.resultSummary,
+            mappedColumns: detail.columnMappings.length,
+          },
+        }
+      : queue
+        ? {
+            activity: 'viewing',
+            kind: 'import',
+            label: queue.name || 'Position file load',
+            summary: `${queue.instances.length} files · ${queue.sourceCode}`,
+          }
+        : null
+  );
 
   const loadWaves = useMemo(() => {
     if (!detail) return [];

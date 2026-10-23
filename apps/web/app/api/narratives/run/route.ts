@@ -4,7 +4,11 @@ import { runDataQueries, summarizeResultsForLLM, validateDataQueries } from '@ta
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://yxougybcfuignxydipes.supabase.co';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const geminiApiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
+const geminiApiKey =
+  process.env.GEMINI_API_KEY ||
+  process.env.GOOGLE_AI_API_KEY ||
+  process.env.NEXT_PUBLIC_GEMINI_API_KEY ||
+  '';
 const DEFAULT_MODEL = 'gemini-2.0-flash';
 
 const OUTPUT_FORMAT_DOC = `

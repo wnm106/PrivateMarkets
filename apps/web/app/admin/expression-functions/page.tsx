@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { usePublishViewContext } from '@/lib/view-context';
 import { graphqlQuery } from '@/lib/graphql';
 
 const FUNCTIONS_QUERY = `
@@ -46,6 +47,18 @@ export default function ExpressionFunctionsPage() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  usePublishViewContext(
+    category
+      ? {
+          activity: 'viewing',
+          kind: 'expression-functions',
+          label: CATEGORIES.find((item) => item.id === category)?.label || category,
+          summary: 'Expression function catalog',
+          snapshot: { category },
+        }
+      : { activity: 'viewing', kind: 'expression-functions', label: 'Expression functions' }
+  );
 
   useEffect(() => {
     graphqlQuery<{ expressionFunctions: ExpressionFunctionRow[] }, Record<string, never>>(FUNCTIONS_QUERY, {})

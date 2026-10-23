@@ -1,4 +1,5 @@
 import type { ChatConversation } from './chat-history';
+import type { ChatVoice } from './chat-voice';
 import { authHeaders } from './reporting';
 
 export interface ChatMessage {
@@ -12,6 +13,21 @@ export interface ChatContext {
   entityCode?: string;
   domainCode?: string;
   entityId?: string;
+  attributeCode?: string;
+  /** As-of date the user is browsing with. */
+  asOfDate?: string;
+  /**
+   * Record or configuration on screen. A hint for the current turn; it does
+   * not narrow which tools the assistant may call.
+   */
+  view?: {
+    activity?: 'viewing' | 'editing' | 'creating';
+    kind: string;
+    label: string;
+    summary?: string;
+    id?: string;
+    snapshot?: Record<string, unknown>;
+  };
   toolContext?: 'entity-explorer' | 'entity-admin' | 'compliance' | 'data-quality' | 'import' | 'lineage' | 'report-designer' | 'general';
   /** Existing thread to append to; omit to let the server start a new one. */
   conversationId?: string;
@@ -19,6 +35,8 @@ export interface ChatContext {
   attachmentIds?: string[];
   /** Current report-designer draft, so the assistant can iterate on it. */
   designerDraft?: Record<string, any>;
+  /** How this reply should be phrased. */
+  voice?: ChatVoice;
 }
 
 export interface ChatResponse {
@@ -49,6 +67,7 @@ export async function sendGeminiMessage(
       conversationId: context?.conversationId,
       attachmentIds: context?.attachmentIds,
       designerDraft: context?.designerDraft,
+      voice: context?.voice,
     }),
   });
 

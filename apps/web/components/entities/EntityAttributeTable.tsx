@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { attributeDisplayKind, type TableCellAlign, tableCellAlign } from '@/lib/attribute-display';
 import { ATTRIBUTE_REGISTER_QUERY, graphqlQuery } from '@/lib/graphql';
 import { GRID_QUERY, type GridResultPayload } from '@/lib/reporting';
 
@@ -34,7 +35,8 @@ interface CatalogAttr {
 interface Col {
   code: string;
   name: string;
-  kind: 'text' | 'num' | 'date';
+  kind: 'text' | 'num' | 'date' | 'bool';
+  align: TableCellAlign;
   listValues: string[];
 }
 
@@ -46,12 +48,17 @@ interface Facet {
 
 type Filter = { field: string; op: string; value?: any };
 
-const kindOf = (dataType: string): Col['kind'] =>
-  ['NUMBER', 'CURRENCY', 'PERCENTAGE', 'INTEGER', 'DECIMAL', 'FLOAT', 'NUMERIC'].includes((dataType || '').toUpperCase())
-    ? 'num'
-    : ['DATE', 'TIMESTAMP', 'DATETIME'].includes((dataType || '').toUpperCase())
-      ? 'date'
-      : 'text';
+function kindOf(dataType: string): Col['kind'] {
+  const kind = attributeDisplayKind({ dataType });
+  if (kind === 'date') return 'date';
+  if (kind === 'boolean') return 'bool';
+  if (kind === 'text') return 'text';
+  return 'num';
+}
+
+function columnMeta(dataType: string): Pick<Col, 'kind' | 'align'> {
+  return { kind: kindOf(dataType), align: tableCellAlign(dataType) };
+}
 
 function errorText(error: any): string {
   if (!error) return '';
@@ -158,12 +165,13 @@ export function EntityAttributeTable({
   const reqId = useRef(0);
 
   const columns = useMemo<Col[]>(() => {
-    const id: Col = { code: 'entity_code', name: 'ID', kind: 'text', listValues: [] };
-    const name: Col = { code: 'entity_name', name: 'Name', kind: 'text', listValues: [] };
+    const id: Col = { code: 'entity_code', name: 'ID', kind: 'text', align: 'left', listValues: [] };
+    const name: Col = { code: 'entity_name', name: 'Name', kind: 'text', align: 'left', listValues: [] };
     const relatedCols: Col[] = stableRelated.map((r) => ({
       code: `${r.alias}.${r.field}`,
       name: r.header,
       kind: 'text',
+      align: 'left',
       listValues: [],
     }));
     return [id, name, ...relatedCols, ...catalog];
@@ -229,7 +237,7 @@ export function EntityAttributeTable({
           .map((a) => ({
             code: a.attributeCode,
             name: a.attributeName || a.attributeCode,
-            kind: kindOf(a.dataType),
+            ...columnMeta(a.dataType),
             listValues: (a.listValues || []).map(String).filter(Boolean),
           }))
           .sort((a, b) => a.name.localeCompare(b.name));
@@ -476,7 +484,7 @@ export function EntityAttributeTable({
             <tr>
               {columns.map((col) => (
                 <th key={col.code} className={col.code === 'entity_code' ? 'sticky-col' : undefined}>
-                  <button type="button" className="attr-sort" onClick={() => toggleSort(col.code)}>
+                  <button type="button" className={`attr-sort align-${col.align}`} onClick={() => toggleSort(col.code)}>
                     {col.name}
                     {sort?.field === col.code ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
                   </button>
@@ -539,7 +547,7 @@ export function EntityAttributeTable({
                       );
                     }
                     return (
-                      <td key={col.code} className={col.kind === 'num' ? 'attr-num' : undefined} title={col.code}>
+                      <td key={col.code} className={`align-${col.align}`} title={col.code}>
                         {text || '—'}
                       </td>
                     );

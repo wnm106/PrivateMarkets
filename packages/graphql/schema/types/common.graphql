@@ -106,6 +106,18 @@ type FieldLineage {
   calcDirty: Boolean!
 }
 
+# One recorded write of an attribute value, newest first in entityActivity.
+type AttributeActivity {
+  attributeCode: String!
+  attributeName: String!
+  value: String
+  updatedAt: DateTime!
+  updatedBy: String!
+  sourceName: String
+  validFrom: Date!
+  validTo: Date!
+}
+
 # Attribute Definition with Derived Attribute Support
 type AttributeDefinition {
   id: ID!
@@ -187,6 +199,41 @@ type CalcDefinition {
   inputs: [CalcInput!]!
 }
 
+type CalcComponent {
+  attributeCode: String!
+  attributeName: String!
+  role: String!
+  traversal: String!
+  relationshipCodes: [String!]!
+  relationshipNames: [String!]!
+  domainCode: String
+  domainName: String
+  homeDomainCode: String
+  homeDomainName: String
+  entityId: ID
+  entityCode: String
+  entityName: String
+  value: String
+  detail: String
+  calculated: Boolean!
+}
+
+type CalcBreakdown {
+  attributeCode: String!
+  calcKind: String!
+  domainCode: String!
+  expression: JSON
+  value: String
+  truncated: Boolean!
+  components: [CalcComponent!]!
+}
+
+input CalcOperandInput {
+  attributeCode: String!
+  traversal: String!
+  relationshipCodes: [String!]!
+}
+
 type CalculatedAttributeState {
   entityId: ID!
   attributeCode: String!
@@ -200,6 +247,11 @@ type ProcessCalculatedAttributesResult {
   processed: Int!
   failed: Int!
   pending: Int!
+}
+
+type UpdateCalcExpressionResult {
+  definition: CalcDefinition
+  errors: [MutationError!]!
 }
 
 type ExpressionFunction {

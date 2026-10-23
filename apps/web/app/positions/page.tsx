@@ -1,68 +1,61 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, useCallback } from 'react';
-import { graphqlQuery, POSITIONS_QUERY } from '@/lib/graphql';
+import { useState } from 'react';
+import { graphqlMutation, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
+import { EntityForm } from '@/components/forms/EntityForm';
+import { EntityAttributeTable, type RelatedAttributeColumn } from '@/components/entities/EntityAttributeTable';
 import { useTemporalStore } from '@/lib/store';
 
-interface RelatedChild {
-  childEntityCode: string;
-  childEntityName: string;
-  childDomainCode: string;
-  relationshipType: string;
-}
-
-interface RelatedParent {
-  parentEntityCode: string;
-  parentEntityName: string;
-  parentDomainCode: string;
-  relationshipType: string;
-}
-
-interface PositionNode {
-  id: string;
-  entityCode: string;
-  entityName: string;
-  attributes: Record<string, { value?: string } | string>;
-  childRelationships: RelatedChild[];
-  parentRelationships: RelatedParent[];
-}
-
-function relatedName(position: PositionNode, domainCode: string) {
-  const child = position.childRelationships?.find((rel) => rel.childDomainCode === domainCode);
-  if (child) return child.childEntityName;
-  const parent = position.parentRelationships?.find((rel) => rel.parentDomainCode === domainCode);
-  return parent?.parentEntityName || '—';
-}
-
-function attributeText(attributes: PositionNode['attributes'], code: string) {
-  const value = attributes?.[code];
-  if (value && typeof value === 'object' && 'value' in value) return value.value ?? '';
-  return value == null ? '' : String(value);
-}
+const RELATED: RelatedAttributeColumn[] = [
+  {
+    alias: 'fund',
+    label: 'Fund',
+    direction: 'UP',
+    relationshipCode: 'POSITION_FUND',
+    domainCode: 'FUND',
+    field: 'entity_name',
+    header: 'Fund',
+  },
+  {
+    alias: 'security',
+    label: 'Security',
+    direction: 'UP',
+    relationshipCode: 'POSITION_SECURITY',
+    domainCode: 'SECURITY',
+    field: 'entity_name',
+    header: 'Security',
+  },
+];
 
 export default function PositionsPage() {
-  const [positions, setPositions] = useState<PositionNode[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [showCreateModal, setShowCreateModal] = useState(false);
   const asOfDate = useTemporalStore(state => state.asOfDate);
 
-  const fetchPositions = useCallback(async () => {
-    setLoading(true);
-    const { data } = await graphqlQuery<{ positions: { edges: { node: PositionNode }[]; totalCount: number } }, any>(
-      POSITIONS_QUERY,
-      { pagination: { first: 100 }, asOfDate }
+  const handleCreate = async (formData: any) => {
+    const { data } = await graphqlMutation<{ createEntity: { entity: any; errors: any[] } }>(
+      CREATE_ENTITY_MUTATION,
+      {
+        input: {
+          entityCode: formData.code,
+          entityName: formData.name,
+          domainCode: 'POSITION',
+          templateCode: formData.template,
+          description: formData.description || '',
+          clientId: formData.clientId || null,
+          attributes: formData.attributes || {},
+          parentRelationships: toRelationshipInputs(formData.parentRelationships, 'parent'),
+          childRelationships: toRelationshipInputs(formData.childRelationships, 'child'),
+        },
+      }
     );
-    if (data?.positions) {
-      setPositions(data.positions.edges.map(edge => edge.node));
-      setTotalCount(data.positions.totalCount);
+    if (data?.createEntity?.entity) {
+      setShowCreateModal(false);
+      setRefreshKey((k) => k + 1);
     }
-    setLoading(false);
-  }, [asOfDate]);
-
-  useEffect(() => {
-    fetchPositions();
-  }, [fetchPositions]);
+  };
 
   return (
     <div className="view-fade">
@@ -77,52 +70,41 @@ export default function PositionsPage() {
           <div style={{ width: '4px', height: '48px', background: '#0369a1' }}></div>
           <div>
             <div className="page-title">Positions</div>
-            <div className="page-meta">{totalCount} records · Linked to fund and security</div>
+            <div className="page-meta">{totalCount.toLocaleString()} records · Linked to fund and security</div>
           </div>
         </div>
         <div className="page-actions">
-          <Link href="/imports" className="btn btn-primary">Load position file</Link>
+          <Link href="/imports" className="btn">Load position file</Link>
+          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>+ New Record</button>
         </div>
       </div>
 
-      <div className="filter-bar">
-        <div className="filter-label">As of</div>
-        <div className="filter-pill">{asOfDate}</div>
-        <div className="filter-count">
-          Showing <strong>{positions.length}</strong> of {totalCount}
-        </div>
-      </div>
+      <EntityAttributeTable
+        domainCode="POSITION"
+        domainKey="positions"
+        asOfDate={asOfDate}
+        refreshKey={refreshKey}
+        emptyMessage="No positions yet. Load a position file to create issuers, funds, securities, and positions."
+        related={RELATED}
+        onTotalChange={setTotalCount}
+      />
 
-      <div className="data-table">
-        <div className="tbl-head" style={{ gridTemplateColumns: '120px 1fr 1.2fr 1.2fr 140px' }}>
-          <div>Code</div>
-          <div>Type</div>
-          <div>Fund</div>
-          <div>Security</div>
-          <div>Market value</div>
-        </div>
-        {loading ? (
-          <div className="tbl-row" style={{ gridTemplateColumns: '1fr' }}><div>Loading...</div></div>
-        ) : positions.length === 0 ? (
-          <div className="tbl-row" style={{ gridTemplateColumns: '1fr' }}>
-            <div>No positions yet. Load a position file to create issuers, funds, securities, and positions.</div>
+      {showCreateModal && (
+        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px', maxHeight: '90vh', overflow: 'auto' }}>
+            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Create New Position</h2>
+              <button onClick={() => setShowCreateModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer' }}>×</button>
+            </div>
+            <EntityForm
+              domain="positions"
+              mode="create"
+              onSubmit={handleCreate}
+              onCancel={() => setShowCreateModal(false)}
+            />
           </div>
-        ) : (
-          positions.map((position) => {
-            return (
-              <Link key={position.id} href={`/positions/${position.id}`}>
-                <div className="tbl-row" style={{ cursor: 'pointer', gridTemplateColumns: '120px 1fr 1.2fr 1.2fr 140px' }}>
-                  <div className="row-id">{position.entityCode}</div>
-                  <div>{attributeText(position.attributes, 'POSITION_TYPE') || '—'}</div>
-                  <div>{relatedName(position, 'FUND')}</div>
-                  <div>{relatedName(position, 'SECURITY')}</div>
-                  <div>{attributeText(position.attributes, 'TOTAL_FAIR_MARKET_VALUE_AMOUNT') || '—'}</div>
-                </div>
-              </Link>
-            );
-          })
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

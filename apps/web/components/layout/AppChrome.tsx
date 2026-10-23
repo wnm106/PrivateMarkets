@@ -1,6 +1,8 @@
 'use client';
 
+import { useMemo } from 'react';
 import { usePathname } from 'next/navigation';
+import { routeChatContext } from '@/lib/page-context';
 import { TopBar } from './TopBar';
 import { AppSidebar } from './AppSidebar';
 import { SourceLegend } from './SourceLegend';
@@ -12,12 +14,13 @@ const BARE_PATHS = ['/welcome', '/login', '/no-access'];
 
 export function AppChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || '/';
+  const routeContext = useMemo(() => routeChatContext(pathname), [pathname]);
   const bare = BARE_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
   if (bare) return <>{children}</>;
 
   return (
-    <>
+    <div className="app-frame">
       <ImpersonationBanner />
       {/* The assistant is a flex sibling of the page content, so opening it
           compresses the page rather than overlaying it. */}
@@ -28,8 +31,8 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
           {pathname !== '/' && <SourceLegend />}
           <main className="main">{children}</main>
         </div>
-        <ChatPanel />
+        <ChatPanel context={routeContext} />
       </div>
-    </>
+    </div>
   );
 }

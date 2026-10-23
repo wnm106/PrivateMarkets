@@ -112,6 +112,7 @@ export const lineageResolvers = {
               validFrom: v.valid_from,
               validTo: v.valid_to,
               confidenceScore: v.confidence_score,
+              receivedAt: v.last_received_at || v.system_from,
             };
           }),
           resolutionRule: storedRuleLabel(winningRecord?.resolution_rule_applied) || sequenceLabel(sequence),
@@ -119,6 +120,65 @@ export const lineageResolvers = {
           calcDirty: dirty.has(code),
         };
       });
+    },
+
+    entityActivity: async (
+      _: any,
+      args: { entityId: string; knowledgeDate?: string; attributeCode?: string | null; limit?: number },
+      context: Context
+    ) => {
+      const knownAt = knowledgeCutoff(args.knowledgeDate);
+      const limit = Math.min(Math.max(args.limit ?? 40, 1), 100);
+      let query = context.supabase
+        .from('entity_attribute_values')
+        .select('attribute_id, source_id, golden_value, system_from, created_by, valid_from, valid_to')
+        .eq('entity_id', args.entityId);
+      if (args.attributeCode) {
+        const { data: attributes, error: attributeError } = await context.supabase
+          .from('attribute_register')
+          .select('id')
+          .eq('attribute_code', args.attributeCode)
+          .limit(1);
+        if (attributeError) throw attributeError;
+        const attribute = attributes?.[0];
+        if (!attribute) return [];
+        query = query.eq('attribute_id', attribute.id);
+      }
+      query = query.order('system_from', { ascending: false }).limit(limit);
+      if (knownAt) query = query.lte('system_from', knownAt);
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const rows = await attachAttributeSources(context, data || []);
+      const userIds = [...new Set(rows.map((row) => row.created_by).filter(Boolean))];
+      const names = new Map<string, string>();
+      if (userIds.length > 0) {
+        const { data: profiles } = await context.supabase
+          .schema('tenancy')
+          .from('profiles')
+          .select('id, display_name')
+          .in('id', userIds);
+        for (const profile of profiles || []) {
+          if (profile.display_name) names.set(profile.id, profile.display_name);
+        }
+      }
+
+      return rows
+        .map((row) => ({
+          attributeCode: row.attribute_code,
+          attributeName: row.attribute_name || row.attribute_code,
+          value: row.golden_value,
+          updatedAt: row.system_from,
+          updatedBy: (row.created_by && names.get(row.created_by)) || (row.created_by ? 'Unknown user' : 'System'),
+          sourceName: row.source_name || null,
+          validFrom: dateOnly(row.valid_from),
+          validTo: dateOnly(row.valid_to),
+        }))
+        .sort((a, b) => {
+          const byTime = String(b.updatedAt).localeCompare(String(a.updatedAt));
+          if (byTime !== 0) return byTime;
+          return String(b.validFrom).localeCompare(String(a.validFrom));
+        });
     },
     
     temporalHistory: async (
@@ -406,6 +466,7 @@ export const lineageResolvers = {
               is_manual_override: current.is_manual_override,
               override_reason: current.override_reason,
               metadata: current.metadata,
+              last_received_at: current.last_received_at,
               created_by: context.user?.id,
             });
             if (insertError) throw insertError;
@@ -415,6 +476,90 @@ export const lineageResolvers = {
         return { success: true, errors: [] };
       } catch (error: any) {
         return { success: false, errors: [{ field: '', message: error.message, code: 'DELETE_SOURCE_FAILED' }] };
+      }
+    },
+
+    clearManualOverride: async (_: any, args: { input: { entityId: string; attributeCode: string; asOf?: string | null } }, context: Context) => {
+      const { input } = args;
+      const asOf = input.asOf || new Date().toISOString().split('T')[0];
+      const now = new Date().toISOString();
+
+      try {
+        const { data: attrDef, error: attrError } = await context.supabase
+          .from('attribute_register')
+          .select('id')
+          .eq('attribute_code', input.attributeCode)
+          .single();
+        if (attrError || !attrDef) throw attrError || new Error(`Attribute not found: ${input.attributeCode}`);
+
+        const { data: manualSource, error: sourceError } = await context.supabase
+          .schema('entity_instances')
+          .from('source_registry')
+          .select('id')
+          .eq('source_code', 'MANUAL')
+          .maybeSingle();
+        if (sourceError) throw sourceError;
+
+        const { data: currentRows, error: currentError } = await context.supabase
+          .from('entity_attribute_values')
+          .select('*')
+          .eq('entity_id', input.entityId)
+          .eq('attribute_id', attrDef.id)
+          .lte('valid_from', asOf)
+          .gte('valid_to', asOf)
+          .eq('system_to', OPEN_SYSTEM_TO);
+        if (currentError) throw currentError;
+
+        const rows = currentRows || [];
+        const manuals = rows.filter((row) => row.is_manual_override === true || (manualSource?.id && row.source_id === manualSource.id));
+        if (manuals.length === 0) throw new Error('No manual override is current on that date.');
+
+        const systemRows = rows.filter((row) => !manuals.some((manual) => manual.id === row.id) && String(row.golden_value ?? '').trim() !== '');
+        if (systemRows.length === 0) {
+          throw new Error('No system source has a value to take ownership. The override was left in place.');
+        }
+
+        for (const current of manuals) {
+          const { error: closeError } = await context.supabase
+            .from('entity_attribute_values')
+            .update({ system_to: now })
+            .eq('id', current.id);
+          if (closeError) throw closeError;
+
+          const started = dateOnly(current.valid_from);
+          if (started < asOf) {
+            const ended = dayBefore(asOf);
+            if (ended >= started) {
+              const { error: insertError } = await context.supabase.from('entity_attribute_values').insert({
+                entity_id: current.entity_id,
+                attribute_id: current.attribute_id,
+                source_id: current.source_id,
+                golden_value: current.golden_value,
+                golden_value_jsonb: current.golden_value_jsonb,
+                golden_value_numeric: current.golden_value_numeric,
+                golden_value_date: current.golden_value_date,
+                golden_value_timestamp: current.golden_value_timestamp,
+                golden_value_boolean: current.golden_value_boolean,
+                valid_from: started,
+                valid_to: ended,
+                system_from: now,
+                system_to: OPEN_SYSTEM_TO,
+                precedence_rank: current.precedence_rank,
+                confidence_score: current.confidence_score,
+                is_manual_override: current.is_manual_override,
+                override_reason: current.override_reason,
+                metadata: current.metadata,
+                last_received_at: current.last_received_at,
+                created_by: context.user?.id,
+              });
+              if (insertError) throw insertError;
+            }
+          }
+        }
+
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        return { success: false, errors: [{ field: '', message: error.message, code: 'CLEAR_OVERRIDE_FAILED' }] };
       }
     },
   },
