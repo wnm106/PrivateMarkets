@@ -212,9 +212,21 @@ input AssignAttributeInput {
   precedenceRank: Int
   displayOrder: Int
   displayLabel: String
+  defaultPrecedenceChain: [String!]
 }
 
 type AssignAttributeResult {
+  assignment: TemplateAttribute
+  errors: [MutationError!]!
+}
+
+input UpdateTemplateSourcePreferenceInput {
+  templateId: ID!
+  attributeId: ID!
+  defaultPrecedenceChain: [String!]!
+}
+
+type UpdateTemplateSourcePreferenceResult {
   assignment: TemplateAttribute
   errors: [MutationError!]!
 }

@@ -3,6 +3,16 @@ import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePos
 import { dirtyAttributeCodes } from './calculation';
 import { resolveSchemaClientId, withClientNames } from './schema-scope';
 
+function normalizePrecedenceChain(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+}
+
+function normalizeChainVersion(value: unknown): number {
+  const version = Number(value);
+  return Number.isFinite(version) && version > 0 ? Math.trunc(version) : 1;
+}
+
 export const entityResolvers = {
   Query: {
     entities: async (
@@ -905,16 +915,21 @@ export const entityResolvers = {
       const { input } = args;
       
       try {
+        const insertRow: Record<string, unknown> = {
+          template_id: input.templateId,
+          attribute_id: input.attributeId,
+          is_required: input.isRequired ?? false,
+          precedence_rank: input.precedenceRank ?? 100,
+          display_order: input.displayOrder ?? 0,
+          display_label: input.displayLabel,
+        };
+        if (input.defaultPrecedenceChain !== undefined) {
+          insertRow.default_precedence_chain = input.defaultPrecedenceChain ?? [];
+        }
+
         const { data, error } = await context.supabase
           .from('template_attribute_assignments')
-          .insert({
-            template_id: input.templateId,
-            attribute_id: input.attributeId,
-            is_required: input.isRequired ?? false,
-            precedence_rank: input.precedenceRank ?? 100,
-            display_order: input.displayOrder ?? 0,
-            display_label: input.displayLabel,
-          })
+          .insert(insertRow)
           .select()
           .single();
         
@@ -946,6 +961,8 @@ export const entityResolvers = {
             precedenceRank: data.precedence_rank,
             displayOrder: data.display_order,
             displayLabel: data.display_label,
+            defaultPrecedenceChain: normalizePrecedenceChain(data.default_precedence_chain),
+            chainVersion: normalizeChainVersion(data.chain_version),
           },
           errors: [],
         };
@@ -981,7 +998,6 @@ export const entityResolvers = {
 
         if (error) throw error;
 
-        // Fetch attribute details
         const { data: attr } = await context.supabase
           .from('attribute_register')
           .select('*')
@@ -1007,6 +1023,8 @@ export const entityResolvers = {
             precedenceRank: data.precedence_rank,
             displayOrder: data.display_order,
             displayLabel: data.display_label,
+            defaultPrecedenceChain: normalizePrecedenceChain(data.default_precedence_chain),
+            chainVersion: normalizeChainVersion(data.chain_version),
           },
           errors: [],
         };
@@ -1014,6 +1032,75 @@ export const entityResolvers = {
         return {
           assignment: null,
           errors: [{ field: '', message: error.message, code: 'UPDATE_FAILED' }],
+        };
+      }
+    },
+
+    updateTemplateSourcePreference: async (
+      _: any,
+      args: { input: { templateId: string; attributeId: string; defaultPrecedenceChain: string[] } },
+      context: Context
+    ) => {
+      const { input } = args;
+      const chain = normalizePrecedenceChain(input.defaultPrecedenceChain);
+
+      try {
+        const { data, error } = await context.supabase
+          .from('template_attribute_assignments')
+          .update({ default_precedence_chain: chain })
+          .eq('template_id', input.templateId)
+          .eq('attribute_id', input.attributeId)
+          .select()
+          .maybeSingle();
+
+        if (error) throw error;
+        if (!data) {
+          return {
+            assignment: null,
+            errors: [{
+              field: 'attributeId',
+              message: 'That attribute is not assigned to this template',
+              code: 'NOT_FOUND',
+            }],
+          };
+        }
+
+        const { data: attr, error: attrError } = await context.supabase
+          .from('attribute_register')
+          .select('*')
+          .eq('id', input.attributeId)
+          .single();
+
+        if (attrError) throw attrError;
+
+        return {
+          assignment: {
+            attributeId: data.attribute_id,
+            attribute: {
+              id: attr.id,
+              attributeCode: attr.attribute_code,
+              attributeName: attr.attribute_name,
+              dataType: attr.data_type,
+              description: attr.description,
+              unitOfMeasure: attr.unit_of_measure,
+              isRequired: attr.is_required,
+              isMultiValued: attr.is_multi_valued,
+              referenceDomainCode: attr.reference_domain_code,
+              defaultPrecedenceRank: attr.default_precedence_rank,
+            },
+            isRequired: data.is_required,
+            precedenceRank: data.precedence_rank,
+            displayOrder: data.display_order,
+            displayLabel: data.display_label,
+            defaultPrecedenceChain: normalizePrecedenceChain(data.default_precedence_chain),
+            chainVersion: normalizeChainVersion(data.chain_version),
+          },
+          errors: [],
+        };
+      } catch (error: any) {
+        return {
+          assignment: null,
+          errors: [{ field: 'defaultPrecedenceChain', message: error.message, code: 'UPDATE_FAILED' }],
         };
       }
     },
@@ -1026,7 +1113,6 @@ export const entityResolvers = {
       const { input } = args;
 
       try {
-        // Update display_order for each attribute based on its position in the array
         const updates = input.attributeIds.map((attributeId: string, index: number) =>
           context.supabase
             .from('template_attribute_assignments')
@@ -1066,7 +1152,6 @@ export const entityResolvers = {
 
         if (error) throw error;
 
-        // Fetch attribute assignments for the updated template
         const { data: assignments } = await context.supabase
           .from('template_attribute_assignments')
           .select('*, attribute_register!inner(*)')
@@ -1099,6 +1184,8 @@ export const entityResolvers = {
               precedenceRank: a.precedence_rank,
               displayOrder: a.display_order,
               displayLabel: a.display_label,
+              defaultPrecedenceChain: normalizePrecedenceChain(a.default_precedence_chain),
+              chainVersion: normalizeChainVersion(a.chain_version),
             })),
           },
           errors: [],
@@ -1135,6 +1222,7 @@ export const entityResolvers = {
         };
       }
     },
+
 
     // Domain Type mutations
     createDomainType: async (_: any, args: { input: any }, context: Context) => {

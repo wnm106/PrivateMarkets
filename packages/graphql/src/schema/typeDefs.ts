@@ -1241,6 +1241,7 @@ input AssignAttributeInput {
   precedenceRank: Int
   displayOrder: Int
   displayLabel: String
+  defaultPrecedenceChain: [String!]
 }
 
 type AssignAttributeResult {
@@ -1258,6 +1259,17 @@ input UpdateTemplateAttributeInput {
 }
 
 type UpdateTemplateAttributeResult {
+  assignment: TemplateAttribute
+  errors: [MutationError!]!
+}
+
+input UpdateTemplateSourcePreferenceInput {
+  templateId: ID!
+  attributeId: ID!
+  defaultPrecedenceChain: [String!]!
+}
+
+type UpdateTemplateSourcePreferenceResult {
   assignment: TemplateAttribute
   errors: [MutationError!]!
 }
@@ -2306,6 +2318,7 @@ type Mutation {
   upsertDisplayLayout(input: UpsertDisplayLayoutInput!): UpsertDisplayLayoutResult!
   upsertEntityTemplateBinding(input: UpsertEntityTemplateBindingInput!): UpsertEntityTemplateBindingResult!
   saveDisplayValue(input: SaveDisplayValueInput!): SaveDisplayValueResult!
+  updateTemplateSourcePreference(input: UpdateTemplateSourcePreferenceInput!): UpdateTemplateSourcePreferenceResult!
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
@@ -2543,6 +2556,8 @@ type TemplateAttribute {
   displayLabel: String
   sectionCode: String
   sectionName: String
+  defaultPrecedenceChain: [String!]!
+  chainVersion: Int!
 }
 
 type TemplateSection {
@@ -2792,8 +2807,7 @@ input SaveDisplayValueInput {
 type SaveDisplayValueResult {
   success: Boolean!
   id: ID
-  errors: [MutationError!]!
-}
+  errors: [MutationError!]!}
 
 # Entity Identifier Definition Type
 type EntityIdentifierDefinition {

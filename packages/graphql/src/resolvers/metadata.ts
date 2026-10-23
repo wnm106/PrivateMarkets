@@ -219,6 +219,8 @@ export const metadataResolvers = {
           displayLabel: a.display_label,
           sectionCode: sectionById.get(a.section_id)?.section_code || null,
           sectionName: sectionById.get(a.section_id)?.section_name || null,
+          defaultPrecedenceChain: Array.isArray(a.default_precedence_chain) ? a.default_precedence_chain : [],
+          chainVersion: Number.isFinite(Number(a.chain_version)) ? Number(a.chain_version) : 1,
         })),
       })));
     },
