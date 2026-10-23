@@ -17,6 +17,7 @@ interface GoldenRecordHeaderProps {
   listLabel: string;
   accentColor: string;
   onRename?: (name: string) => Promise<void>;
+  mergeHref?: string;
 }
 
 export function GoldenRecordHeader({
@@ -32,6 +33,7 @@ export function GoldenRecordHeader({
   listLabel,
   accentColor,
   onRename,
+  mergeHref,
 }: GoldenRecordHeaderProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
@@ -149,6 +151,11 @@ export function GoldenRecordHeader({
             <Link href={`${entityPath}/lineage`}>
               <button className="btn btn-sm">View Lineage</button>
             </Link>
+            {mergeHref && (
+              <Link href={mergeHref}>
+                <button className="btn btn-sm">Find matches</button>
+              </Link>
+            )}
             {conflicts > 0 && (
               <Link href="/resolve">
                 <button className="btn btn-sm btn-primary">Resolve Conflicts</button>

@@ -2173,6 +2173,165 @@ type LinkAttributeToListResult {
 # File: root.graphql
 # Root Query Type
 
+type MatchRuleClause {
+  id: ID!
+  clauseCode: String!
+  attributeCodes: [String!]!
+  useEntityName: Boolean!
+  algorithm: String!
+  threshold: Float!
+  weight: Float!
+  deterministic: Boolean!
+  isActive: Boolean!
+}
+
+type MatchRule {
+  id: ID!
+  ruleCode: String!
+  ruleName: String!
+  description: String
+  minScore: Float!
+  isActive: Boolean!
+  clauses: [MatchRuleClause!]!
+}
+
+type MergeReason {
+  clauseCode: String!
+  algorithm: String!
+  label: String!
+  leftValue: String!
+  rightValue: String!
+  leftAttribute: String!
+  rightAttribute: String!
+  similarity: Float!
+  deterministic: Boolean!
+}
+
+type MergeEntityRef {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+}
+
+type MergeCandidate {
+  score: Int!
+  crossDomain: Boolean!
+  ruleCode: String!
+  ruleName: String!
+  reasons: [MergeReason!]!
+  left: MergeEntityRef!
+  right: MergeEntityRef!
+}
+
+type MergeCandidateResult {
+  candidates: [MergeCandidate!]!
+  scannedCount: Int!
+  truncated: Boolean!
+}
+
+type MergeFieldComparison {
+  attributeCode: String!
+  survivorValue: String
+  retiredValue: String
+  status: String!
+}
+
+type MergePreview {
+  survivor: MergeEntityRef!
+  retired: MergeEntityRef!
+  crossDomain: Boolean!
+  score: Int!
+  ruleName: String
+  reasons: [MergeReason!]!
+  fields: [MergeFieldComparison!]!
+  relationshipsToMove: Int!
+}
+
+type MergeEntitiesResult {
+  success: Boolean!
+  survivorId: ID
+  retiredId: ID
+  attributesCopied: Int
+  relationshipsMoved: Int
+  intersectionsMoved: Int
+  positionsMoved: Int
+  errors: [MutationError!]!
+}
+
+type EntityGraphNode {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  depth: Int!
+  direction: String!
+}
+
+type EntityGraphEdge {
+  id: ID!
+  parentEntityId: ID!
+  childEntityId: ID!
+  relationshipCode: String!
+  relationshipType: String!
+  isPrimary: Boolean!
+  metadata: JSON
+}
+
+type EntityGraph {
+  rootId: ID!
+  nodes: [EntityGraphNode!]!
+  edges: [EntityGraphEdge!]!
+}
+
+input MergeCandidateFilter {
+  entityId: ID
+  query: String
+  ruleCode: String
+  crossDomainOnly: Boolean
+  sameDomainOnly: Boolean
+  limit: Int
+}
+
+input MergeFieldChoiceInput {
+  attributeCode: String!
+  takeFrom: String!
+}
+
+input MatchClauseInput {
+  id: ID
+  clauseCode: String!
+  attributeCodes: [String!]!
+  useEntityName: Boolean!
+  algorithm: String!
+  threshold: Float!
+  weight: Float!
+  deterministic: Boolean!
+  isActive: Boolean!
+}
+
+input UpdateMatchRuleInput {
+  id: ID!
+  ruleName: String
+  description: String
+  minScore: Float
+  isActive: Boolean
+  clauses: [MatchClauseInput!]
+}
+
+input CreateMatchRuleInput {
+  ruleCode: String!
+  ruleName: String!
+  description: String
+  minScore: Float!
+  clauses: [MatchClauseInput!]!
+}
+
+type UpdateMatchRuleResult {
+  rule: MatchRule
+  errors: [MutationError!]!
+}
+
 type Query {
   # Generic entity queries
   entities(
@@ -2200,6 +2359,10 @@ type Query {
   calcDefinitions: [CalcDefinition!]!
   calculatedAttributeStates(entityId: ID!): [CalculatedAttributeState!]!
   expressionFunctions(category: String): [ExpressionFunction!]!
+  matchRules: [MatchRule!]!
+  mergeCandidates(filter: MergeCandidateFilter): MergeCandidateResult!
+  mergePreview(survivorId: ID!, retiredId: ID!, ruleCode: String): MergePreview!
+  entityGraph(entityId: ID!, depth: Int, relationshipCodes: [String!]): EntityGraph!
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
@@ -2322,6 +2485,9 @@ type Mutation {
   upsertEntityTemplateBinding(input: UpsertEntityTemplateBindingInput!): UpsertEntityTemplateBindingResult!
   saveDisplayValue(input: SaveDisplayValueInput!): SaveDisplayValueResult!
   updateTemplateSourcePreference(input: UpdateTemplateSourcePreferenceInput!): UpdateTemplateSourcePreferenceResult!
+  mergeEntities(survivorId: ID!, retiredId: ID!, fieldChoices: [MergeFieldChoiceInput!], matchScore: Int, matchReasons: JSON): MergeEntitiesResult!
+  updateMatchRule(input: UpdateMatchRuleInput!): UpdateMatchRuleResult!
+  createMatchRule(input: CreateMatchRuleInput!): UpdateMatchRuleResult!
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!

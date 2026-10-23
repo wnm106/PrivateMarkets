@@ -2466,6 +2466,98 @@ export const DECIDE_RECONCILIATION_RUN_MUTATION = `
   }
 `;
 
+
+export const MATCH_RULES_QUERY = `
+  query MatchRules {
+    matchRules {
+      id
+      ruleCode
+      ruleName
+      description
+      minScore
+      isActive
+      clauses {
+        id
+        clauseCode
+        attributeCodes
+        useEntityName
+        algorithm
+        threshold
+        weight
+        deterministic
+        isActive
+      }
+    }
+  }
+`;
+
+export const MERGE_CANDIDATES_QUERY = `
+  query MergeCandidates($filter: MergeCandidateFilter) {
+    mergeCandidates(filter: $filter) {
+      scannedCount
+      truncated
+      candidates {
+        score
+        crossDomain
+        ruleCode
+        ruleName
+        reasons { clauseCode algorithm label leftValue rightValue leftAttribute rightAttribute similarity deterministic }
+        left { id entityCode entityName domainCode }
+        right { id entityCode entityName domainCode }
+      }
+    }
+  }
+`;
+
+export const MERGE_PREVIEW_QUERY = `
+  query MergePreview($survivorId: ID!, $retiredId: ID!, $ruleCode: String) {
+    mergePreview(survivorId: $survivorId, retiredId: $retiredId, ruleCode: $ruleCode) {
+      crossDomain
+      score
+      ruleName
+      relationshipsToMove
+      reasons { label leftValue rightValue similarity deterministic }
+      survivor { id entityCode entityName domainCode }
+      retired { id entityCode entityName domainCode }
+      fields { attributeCode survivorValue retiredValue status }
+    }
+  }
+`;
+
+export const MERGE_ENTITIES_MUTATION = `
+  mutation MergeEntities($survivorId: ID!, $retiredId: ID!, $fieldChoices: [MergeFieldChoiceInput!], $matchScore: Int, $matchReasons: JSON) {
+    mergeEntities(survivorId: $survivorId, retiredId: $retiredId, fieldChoices: $fieldChoices, matchScore: $matchScore, matchReasons: $matchReasons) {
+      success
+      survivorId
+      retiredId
+      attributesCopied
+      relationshipsMoved
+      intersectionsMoved
+      positionsMoved
+      errors { field message code }
+    }
+  }
+`;
+
+export const UPDATE_MATCH_RULE_MUTATION = `
+  mutation UpdateMatchRule($input: UpdateMatchRuleInput!) {
+    updateMatchRule(input: $input) {
+      rule { id ruleCode }
+      errors { field message code }
+    }
+  }
+`;
+
+export const ENTITY_GRAPH_QUERY = `
+  query EntityGraph($entityId: ID!, $depth: Int, $relationshipCodes: [String!]) {
+    entityGraph(entityId: $entityId, depth: $depth, relationshipCodes: $relationshipCodes) {
+      rootId
+      nodes { id entityCode entityName domainCode depth direction }
+      edges { id parentEntityId childEntityId relationshipCode relationshipType isPrimary metadata }
+    }
+  }
+`;
+
 export const LINK_ATTRIBUTE_TO_LIST_MUTATION = `
   mutation LinkAttributeToList($attributeId: ID!, $listCode: String!) {
     linkAttributeToList(attributeId: $attributeId, listCode: $listCode) {

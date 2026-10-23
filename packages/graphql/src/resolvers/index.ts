@@ -16,6 +16,7 @@ import { statementTemplateResolvers } from './statement-template';
 import { displayLayoutResolvers } from './display-layout';
 import { calculationResolvers } from './calculation';
 import { reconciliationResolvers } from './reconciliation';
+import { entityResolutionResolvers } from './entity-resolution';
 
 export const resolvers = {
   Query: {
@@ -43,6 +44,10 @@ export const resolvers = {
     attributeRegister: metadataResolvers.Query.attributeRegister,
     domainTemplates: metadataResolvers.Query.domainTemplates,
     previewStatementTemplate: statementTemplateResolvers.Query.previewStatementTemplate,
+    matchRules: entityResolutionResolvers.Query.matchRules,
+    mergeCandidates: entityResolutionResolvers.Query.mergeCandidates,
+    mergePreview: entityResolutionResolvers.Query.mergePreview,
+    entityGraph: entityResolutionResolvers.Query.entityGraph,
   },
   
   Mutation: {
@@ -65,6 +70,9 @@ export const resolvers = {
     updateAttributeDefinition: metadataResolvers.Mutation.updateAttributeDefinition,
     deleteAttribute: metadataResolvers.Mutation.deleteAttribute,
     applyStatementTemplate: statementTemplateResolvers.Mutation.applyStatementTemplate,
+    mergeEntities: entityResolutionResolvers.Mutation.mergeEntities,
+    updateMatchRule: entityResolutionResolvers.Mutation.updateMatchRule,
+    createMatchRule: entityResolutionResolvers.Mutation.createMatchRule,
   },
   
   Subscription: {},

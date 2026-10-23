@@ -371,7 +371,11 @@ export default function LandingPage() {
       <section>
         <div className="home-section-title">
           <h2>Entity Domains</h2>
-          <Link href="/admin/entities">Manage domains</Link>
+          <span>
+            <Link href="/merge">Resolve entities</Link>
+            {' · '}
+            <Link href="/admin/entities">Manage domains</Link>
+          </span>
         </div>
         <div className="home-domains">
           {!loading && domains.length === 0 && (
@@ -456,7 +460,11 @@ export default function LandingPage() {
         <div className="home-panel">
           <div className="home-section-title">
             <h2>Recent Activity</h2>
-            <Link href="/quality">View all</Link>
+            <span>
+              <Link href="/merge">Resolve entities</Link>
+              {' · '}
+              <Link href="/quality">View all</Link>
+            </span>
           </div>
           {stats.activity.length === 0 ? (
             <div className="home-empty">{loading ? 'Loading activity…' : 'No recent activity.'}</div>
