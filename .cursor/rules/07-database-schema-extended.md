@@ -91,7 +91,7 @@ domain_code TEXT
 attribute_id UUID
 rule_type TEXT NOT NULL
 severity TEXT NOT NULL
-rule_expression TEXT NOT NULL
+rule_expression TEXT NOT NULL  -- true when the record fails
 rule_description TEXT
 threshold_value FLOAT
 is_active BOOLEAN DEFAULT true

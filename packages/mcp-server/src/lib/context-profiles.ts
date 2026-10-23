@@ -44,7 +44,7 @@ export const CONTEXT_PROFILES: Record<ToolContext, ContextProfile> = {
     name: 'data-quality',
     description: 'Managing data quality rules and resolving exceptions',
     allowedCategories: ['domain-read', 'dq'],
-    systemInstruction: `You are helping users manage data quality. You can view DQ exceptions, resolve them, and get DQ summaries. You can also read entity data for context. Focus on helping users understand and resolve data quality issues.`,
+    systemInstruction: `You are helping users manage data quality. You can view DQ exceptions, resolve them, and get DQ summaries. You can also read entity data for context. Focus on helping users understand and resolve data quality issues. DQ rule expressions are SQL predicates that are true for records that fail the rule, not predicates that describe passing records.`,
   },
   'import': {
     name: 'import',

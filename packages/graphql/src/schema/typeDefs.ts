@@ -229,6 +229,7 @@ type DQRule {
   attributeCode: String
   ruleType: DQRuleType!
   severity: DQSeverity!
+  "SQL predicate that is true when a record fails this rule."
   ruleExpression: String!
   ruleDescription: String
   thresholdValue: Float
@@ -317,6 +318,7 @@ input CreateDQRuleInput {
   attributeCode: String
   ruleType: DQRuleType!
   severity: DQSeverity!
+  "SQL predicate that is true when a record fails this rule."
   ruleExpression: String!
   ruleDescription: String
   thresholdValue: Float
@@ -326,6 +328,7 @@ input CreateDQRuleInput {
 input UpdateDQRuleInput {
   id: ID!
   ruleName: String
+  "SQL predicate that is true when a record fails this rule."
   ruleExpression: String
   ruleDescription: String
   thresholdValue: Float
