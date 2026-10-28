@@ -10,6 +10,7 @@ import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
 import { DisplayLayoutView, type ResolvedLayoutView } from './DisplayLayoutView';
 import { EntityReports } from '@/components/reporting/EntityReports';
+import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard';
 import { domainHref } from '@/lib/domain-routes';
 
 export interface TemplateAttribute {
@@ -69,7 +70,7 @@ function formulaLabel(formula: string | null | undefined): string {
 function formatFormula(expr: any): string {
   if (expr == null) return '';
   if (typeof expr === 'string' || typeof expr === 'number') return String(expr);
-  if (typeof expr.ref === 'string') return expr.ref;
+  if (typeof expr.ref === 'string') return expr.ref.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
   if (typeof expr.attributeCode === 'string') return expr.attributeCode;
   if (typeof expr.op === 'string' && Array.isArray(expr.args)) {
     const op = FORMULA_OPS[expr.op] || expr.op;
@@ -133,7 +134,10 @@ export function GoldenRecordSections({
   asOfDate,
   lineageLoaded = false,
 }: GoldenRecordSectionsProps) {
-  const [tab, setTab] = useState<'attributes' | 'dashboards' | 'relationships'>('attributes');
+  const calcRefreshKey = lineageData
+    .map((row) => `${row.attributeCode}:${row.currentValue ?? ''}:${row.lastUpdated ?? ''}`)
+    .join('|');
+  const [tab, setTab] = useState<'attributes' | 'dashboards' | 'quality' | 'relationships'>('attributes');
   const [layouts, setLayouts] = useState<ResolvedLayoutView[]>([]);
   const [controls, setControls] = useState<Record<string, string> | null>(null);
   const [displayVersion, setDisplayVersion] = useState(0);
@@ -229,6 +233,11 @@ export function GoldenRecordSections({
           onClick={() => setTab('dashboards')}
         />
         <SectionTab
+          label="Data quality"
+          active={tab === 'quality'}
+          onClick={() => setTab('quality')}
+        />
+        <SectionTab
           label={`Relationships (${relationshipCount})`}
           active={tab === 'relationships'}
           onClick={() => setTab('relationships')}
@@ -237,6 +246,8 @@ export function GoldenRecordSections({
 
       {tab === 'dashboards' ? (
         <EntityReports domainCode={entity.domainCode} entityId={entity.id} asOfDate={asOfDate} embedded />
+      ) : tab === 'quality' ? (
+        <DataQualityDashboard embedded domainCode={entity.domainCode} entityId={entity.id} />
       ) : tab === 'relationships' ? (
         <div>
           <RelationshipList
@@ -384,6 +395,7 @@ export function GoldenRecordSections({
               onDeleteSourceValue={onDeleteSourceValue}
               asOfDate={asOfDate}
               entityId={entity.id}
+              calcRefreshKey={calcRefreshKey}
             />
           );
         })}
@@ -538,7 +550,7 @@ function RelationshipList({
                       ))}
                     </span>
                     {row.entityId ? (
-                      <Link href={entityPageHref(row.domain, row.entityId)} style={{ fontSize: '11px', color: 'var(--ink-3)', fontWeight: 400 }}>
+                      <Link href={entityPageHref(row.domain, row.entityId)} className="entity-link" style={{ fontSize: '11px', fontWeight: 400 }}>
                         {row.name} ({row.code})
                       </Link>
                     ) : (

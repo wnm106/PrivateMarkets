@@ -3,7 +3,9 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { DomainKey } from '@/lib/mock-data'; // Only keeping DomainKey type
+import type { ColDef } from 'ag-grid-community';
+import { AppGrid } from '@/components/grid/AppGrid';
+import { attributeLineage, type DomainKey } from '@/lib/mock-data';
 import { graphqlQuery, ENTITY_QUERY } from '@/lib/graphql';
 import { sources } from '@/lib/data';
 
@@ -125,87 +127,14 @@ export default function AttributeLineagePage() {
           </span>
         </div>
         <div className="builder-body">
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-              <thead>
-                <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--line)' }}>
-                  <th style={{ padding: '12px', textAlign: 'left', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', fontWeight: 600 }}>
-                    Source
-                  </th>
-                  <th style={{ padding: '12px', textAlign: 'left', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', fontWeight: 600 }}>
-                    Value
-                  </th>
-                  <th style={{ padding: '12px', textAlign: 'left', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', fontWeight: 600 }}>
-                    Valid From
-                  </th>
-                  <th style={{ padding: '12px', textAlign: 'left', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', fontWeight: 600 }}>
-                    System Time
-                  </th>
-                  <th style={{ padding: '12px', textAlign: 'left', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', fontWeight: 600 }}>
-                    Rule Applied
-                  </th>
-                  <th style={{ padding: '12px', textAlign: 'center', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', fontWeight: 600 }}>
-                    Status
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {attributeLineage.map((entry) => {
-                  const src = sources[entry.source];
-                  return (
-                    <tr
-                      key={entry.id}
-                      style={{
-                        borderBottom: '1px solid var(--line)',
-                        background: entry.isGolden ? '#f0f7f2' : 'transparent',
-                      }}
-                    >
-                      <td style={{ padding: '12px' }}>
-                        <span
-                          className="src-badge"
-                          style={{
-                            color: src.hex,
-                            borderColor: `${src.hex}40`,
-                            background: `${src.hex}0a`,
-                          }}
-                        >
-                          <span className="dot" style={{ background: src.hex }}></span>
-                          {src.name}
-                        </span>
-                      </td>
-                      <td style={{ padding: '12px' }}>
-                        <span className="mono" style={{ fontWeight: entry.isGolden ? 600 : 400, color: entry.isGolden ? 'var(--ink)' : 'var(--ink-2)' }}>
-                          {entry.value}
-                        </span>
-                      </td>
-                      <td style={{ padding: '12px', fontSize: '11px', color: 'var(--ink-3)' }} className="mono">
-                        {entry.validFrom}
-                        {entry.validTo && <span> → {entry.validTo}</span>}
-                      </td>
-                      <td style={{ padding: '12px', fontSize: '11px', color: 'var(--ink-3)' }} className="mono">
-                        {entry.systemTime}
-                      </td>
-                      <td style={{ padding: '12px', fontSize: '11px', color: 'var(--ink-3)' }} className="mono">
-                        {entry.ruleApplied}
-                      </td>
-                      <td style={{ padding: '12px', textAlign: 'center' }}>
-                        {entry.isGolden && (
-                          <span style={{ background: 'var(--green)', color: '#fff', padding: '3px 8px', fontSize: '9px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px' }}>
-                            Golden
-                          </span>
-                        )}
-                        {entry.superseded && (
-                          <span style={{ background: 'var(--bg-alt)', color: 'var(--ink-3)', padding: '3px 8px', fontSize: '9px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px' }}>
-                            Superseded
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <AppGrid
+            rows={attributeLineage}
+            columns={LINEAGE_COLUMNS}
+            getRowId={(row) => String(row.id)}
+            autoHeight
+            getRowClass={(params) => (params.data?.isGolden ? 'row-golden' : '')}
+            emptyMessage="No source values."
+          />
         </div>
       </div>
 
@@ -298,3 +227,61 @@ export default function AttributeLineagePage() {
     </div>
   );
 }
+
+
+function lineageSource(code: string | undefined) {
+  if (code && Object.prototype.hasOwnProperty.call(sources, code)) {
+    return sources[code as keyof typeof sources];
+  }
+  return { hex: '#64748b', name: code || 'Source' };
+}
+
+const LINEAGE_COLUMNS: ColDef[] = [
+  {
+    colId: 'source',
+    headerName: 'Source',
+    minWidth: 160,
+    flex: 1,
+    valueGetter: (params) => lineageSource(params.data?.source).name,
+    cellRenderer: (params: any) => {
+      const src = lineageSource(params.data.source);
+      return (
+        <span className="src-badge" style={{ color: src.hex, borderColor: `${src.hex}40`, background: `${src.hex}0a` }}>
+          <span className="dot" style={{ background: src.hex }}></span>
+          {src.name}
+        </span>
+      );
+    },
+  },
+  {
+    field: 'value',
+    headerName: 'Value',
+    flex: 1,
+    minWidth: 120,
+    cellClass: 'mono',
+    cellRenderer: (params: any) => (
+      <span className="mono" style={{ fontWeight: params.data.isGolden ? 600 : 400 }}>{params.value}</span>
+    ),
+  },
+  {
+    colId: 'valid',
+    headerName: 'Valid From',
+    minWidth: 160,
+    cellClass: 'mono',
+    valueGetter: (params) => params.data?.validTo ? `${params.data.validFrom} → ${params.data.validTo}` : params.data?.validFrom,
+  },
+  { field: 'systemTime', headerName: 'System Time', minWidth: 160, cellClass: 'mono' },
+  { field: 'ruleApplied', headerName: 'Rule Applied', flex: 1, minWidth: 140, cellClass: 'mono' },
+  {
+    colId: 'status',
+    headerName: 'Status',
+    width: 140,
+    sortable: false,
+    filter: false,
+    cellRenderer: (params: any) => params.data.isGolden ? (
+      <span style={{ background: 'var(--green)', color: '#fff', padding: '3px 8px', fontSize: '9px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px' }}>Golden</span>
+    ) : params.data.superseded ? (
+      <span style={{ background: 'var(--bg-alt)', color: 'var(--ink-3)', padding: '3px 8px', fontSize: '9px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px' }}>Superseded</span>
+    ) : null,
+  },
+];

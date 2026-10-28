@@ -160,7 +160,7 @@ export default function WelcomePage() {
           </nav>
           <Link
             href="/login"
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-semibold bg-gradient-to-r from-brand-blue to-brand-cyan shadow-lg shadow-brand-cyan/30 hover:brightness-110"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-semibold bg-accent shadow-lg shadow-brand-cyan/30 hover:brightness-110"
             aria-label="Log in"
           >
             <LoginIcon />
@@ -189,7 +189,7 @@ export default function WelcomePage() {
           <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
             <Link
               href="/login"
-              className="px-8 py-4 rounded-xl text-white text-base font-semibold bg-gradient-to-r from-brand-blue to-brand-cyan shadow-xl shadow-brand-cyan/30 hover:brightness-110"
+              className="px-8 py-4 rounded-xl text-white text-base font-semibold bg-accent shadow-xl shadow-brand-cyan/30 hover:brightness-110"
             >
               Log in to tapestr.ai
             </Link>

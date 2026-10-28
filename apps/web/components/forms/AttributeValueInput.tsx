@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import { ATTRIBUTE_REGISTER_QUERY, REFERENCE_LIST_DETAIL_QUERY, graphqlQuery } from '@/lib/graphql';
-import { attributeDisplayKind, inputStepFor, inputTypeFor, inputValueFor, type AttributeDisplay } from '@/lib/attribute-display';
+import { attributeDisplayKind, formatAttributeDisplay, inputStepFor, inputTypeFor, inputValueFor, type AttributeDisplay } from '@/lib/attribute-display';
 
 export interface ListOption {
   value: string;
@@ -82,8 +82,8 @@ async function fetchCatalog(): Promise<Catalog> {
   const lists = await Promise.all([...listCodes].map(async (listCode) => {
     const result = await graphqlQuery<{
       referenceList: { values: Array<{ valueCode: string; valueLabel: string; isActive: boolean; displayOrder: number }> } | null;
-    }>(REFERENCE_LIST_DETAIL_QUERY, { listCode }, 'network-only');
-    const options = (result.data?.referenceList?.values || [])
+    }>(REFERENCE_LIST_DETAIL_QUERY, { listCode }, 'network-only').catch(() => null);
+    const options = (result?.data?.referenceList?.values || [])
       .filter((item) => item.isActive)
       .sort((a, b) => a.displayOrder - b.displayOrder || a.valueLabel.localeCompare(b.valueLabel))
       .map((item) => ({
@@ -201,16 +201,26 @@ export function AttributeValueInput({
 }) {
   const options = useAttributeListOptions(attributeCode);
   const display = useAttributeDisplay(attributeCode);
+  const [focused, setFocused] = useState(false);
+  const waitingForList = Boolean(attributeCode) && options === null;
   const listed = options || [];
   // A typed number is not a list. Only attributes with real choices become a dropdown.
   // Otherwise the first digit becomes the only option and further typing stops.
   const known = listed.some((option) => option.value === value);
   const choices = value && !known ? [{ value, label: value }, ...listed] : listed;
 
+  if (waitingForList) {
+    return (
+      <select className="select" aria-label={ariaLabel} disabled value="">
+        <option value="">Loading choices…</option>
+      </select>
+    );
+  }
+
   if (listed.length > 0) {
     return (
       <select
-        className={className ? `select ${className}` : 'select'}
+        className="select"
         value={value}
         aria-label={ariaLabel}
         autoFocus={autoFocus}
@@ -232,17 +242,23 @@ export function AttributeValueInput({
     );
   }
 
-  const kind = attributeDisplayKind({
+  const meta: AttributeDisplay = {
     dataType: dataType || display?.dataType,
     displayFormat: display?.displayFormat,
-  });
-  const inputType = inputTypeFor(kind);
+    numericPrecision: display?.numericPrecision,
+    unitOfMeasure: display?.unitOfMeasure,
+  };
+  const kind = attributeDisplayKind(meta);
+  const numeric = kind === 'currency' || kind === 'percentage' || kind === 'number' || kind === 'integer';
+  const raw = inputValueFor(kind, value);
+  const shown = !focused && numeric ? (formatAttributeDisplay(raw, meta) || raw) : raw;
+  const inputType = kind === 'date' ? 'date' : focused && numeric ? inputTypeFor(kind) : 'text';
   return (
     <input
-      className={className || 'text-input'}
+      className={className && className !== 'select' ? className : 'text-input'}
       type={inputType}
-      step={inputStepFor(kind)}
-      value={inputValueFor(kind, value)}
+      step={focused ? inputStepFor(kind) : undefined}
+      value={shown}
       placeholder={placeholder}
       aria-label={ariaLabel}
       autoFocus={autoFocus}
@@ -250,7 +266,11 @@ export function AttributeValueInput({
       style={style}
       onClick={onClick}
       onKeyDown={onKeyDown}
-      onBlur={onBlur}
+      onFocus={() => setFocused(true)}
+      onBlur={() => {
+        setFocused(false);
+        onBlur?.();
+      }}
       onChange={(event) => onChange(event.target.value)}
     />
   );

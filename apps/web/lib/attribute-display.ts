@@ -95,9 +95,10 @@ function formatNumericValue(value: string, kind: DisplayKind, meta?: AttributeDi
     const code = (meta?.unitOfMeasure || '').trim().toUpperCase();
     const currency = /^[A-Z]{3}$/.test(code) ? code : 'USD';
     const places = digits ?? 2;
-    return parsed.toLocaleString(undefined, {
+    return parsed.toLocaleString('en-US', {
       style: 'currency',
       currency,
+      useGrouping: true,
       minimumFractionDigits: places,
       maximumFractionDigits: places,
     });
@@ -105,14 +106,15 @@ function formatNumericValue(value: string, kind: DisplayKind, meta?: AttributeDi
 
   if (kind === 'percentage') {
     const places = digits ?? 2;
-    return `${parsed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: places })}%`;
+    return `${parsed.toLocaleString('en-US', { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: places })}%`;
   }
 
   if (kind === 'integer') {
-    return parsed.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    return parsed.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 0 });
   }
 
-  return parsed.toLocaleString(undefined, {
+  return parsed.toLocaleString('en-US', {
+    useGrouping: true,
     minimumFractionDigits: digits ?? 0,
     maximumFractionDigits: digits ?? 6,
   });

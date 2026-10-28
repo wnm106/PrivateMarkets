@@ -9,12 +9,25 @@ import { registerImportMapTools } from '@tapestrai/mcp-server/src/tools/import-m
 import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/position-file-tools';
 import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/compliance-tools';
 import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
+import { QUERY_DATA_GUIDE, registerQueryTools } from '@tapestrai/mcp-server/src/tools/query-data';
 import { getContextProfile } from '@tapestrai/mcp-server/src/lib/context-profiles';
+import {
+  coerceSkillState,
+  completeAssistantTurn,
+  ingestUserTurn,
+  skillAllowsTool,
+  skillById,
+  skillFromUserText,
+  skillSystemAddendum,
+  type SkillDef,
+  type SkillState,
+  type SkillView,
+} from '@tapestrai/mcp-server/src/lib/chat-skills';
 import { DATA_QUERY_SPEC_DOC } from '@tapestrai/graphql/src/lib/data-query-engine';
 import {
   authenticate,
-  CONVERSATION_COLUMNS,
   deriveTitle,
+  selectConversationRows,
   supabaseAnonKey,
   supabaseUrl,
 } from '@/lib/chat-server';
@@ -49,6 +62,7 @@ registerImportMapTools(toolRegistry);
 registerPositionFileTools(toolRegistry);
 registerComplianceTools(toolRegistry);
 registerReportingTools(toolRegistry);
+registerQueryTools(toolRegistry);
 
 async function callGemini(body: Record<string, any>) {
   const response = await fetch(
@@ -181,7 +195,7 @@ function screenContextBlock(context: Record<string, any> | null | undefined): st
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, context, toolContext, conversationId, attachmentIds, designerDraft, voice } = await request.json();
+    const { messages, context, toolContext, conversationId, attachmentIds, designerDraft, voice, skill: requestedSkill, skillState: clientSkillState } = await request.json();
     const requestedAttachmentIds: string[] = Array.isArray(attachmentIds) ? attachmentIds : [];
 
     if (!geminiApiKey) {
@@ -191,22 +205,6 @@ export async function POST(request: NextRequest) {
     // History is a signed-in feature; anonymous callers still get a reply but
     // nothing is persisted for them.
     const auth = await authenticate(request);
-
-    const profile = getContextProfile(toolContext);
-    let systemInstruction = profile.systemInstruction + chatVoiceInstruction(voice) + screenContextBlock(context);
-
-    // Report designer: give the model the current draft and the query format up front.
-    if (profile.name === 'report-designer') {
-      systemInstruction += `\n\n## Data query format\n${DATA_QUERY_SPEC_DOC}`;
-      if (context?.kind) systemInstruction += `\n\nYou are designing a ${String(context.kind).toUpperCase()}.`;
-      // The open draft lives in the page, not the request context, so accept it
-      // from either place.
-      const draft = designerDraft ?? context?.draft;
-      if (draft) {
-        const serialized = JSON.stringify(draft);
-        systemInstruction += `\n\n## Current draft (what the user sees in the designer)\n${serialized.length > 30000 ? serialized.slice(0, 30000) + '…[truncated]' : serialized}`;
-      }
-    }
 
     // Convert messages to Gemini format (accept both `content` and `text`)
     const incoming: Array<{ role: 'user' | 'model'; content?: string; text?: string }> = messages || [];
@@ -223,26 +221,26 @@ export async function POST(request: NextRequest) {
 
     if (auth && lastUser) {
       if (conversationId) {
-        const { data } = await auth.supabase
-          .from('chat_conversations')
-          .select(CONVERSATION_COLUMNS)
-          .eq('id', conversationId)
-          .maybeSingle();
+        const { data } = await selectConversationRows((columns) =>
+          auth.supabase.from('chat_conversations').select(columns).eq('id', conversationId).maybeSingle()
+        );
         conversation = data ?? null;
       }
 
       if (!conversation) {
-        const { data } = await auth.supabase
-          .from('chat_conversations')
-          .insert({
-            created_by: auth.userId,
-            title: deriveTitle(lastUser.content ?? lastUser.text ?? ''),
-            tool_context: toolContext ?? null,
-            page_context: context?.page ?? null,
-            domain_code: context?.domainCode ?? null,
-          })
-          .select(CONVERSATION_COLUMNS)
-          .single();
+        const { data } = await selectConversationRows((columns) =>
+          auth.supabase
+            .from('chat_conversations')
+            .insert({
+              created_by: auth.userId,
+              title: deriveTitle(lastUser.content ?? lastUser.text ?? ''),
+              tool_context: toolContext ?? null,
+              page_context: context?.page ?? null,
+              domain_code: context?.domainCode ?? null,
+            })
+            .select(columns)
+            .single()
+        );
         conversation = data ?? null;
       }
 
@@ -285,6 +283,35 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const userText = lastUser?.content ?? lastUser?.text ?? '';
+    const clientLedger = skillById(clientSkillState?.skillId) ? clientSkillState : null;
+    const storedRaw = clientLedger ?? conversation?.skill_state;
+    const storedSkill = skillById(storedRaw?.skillId);
+    const requested = skillById(requestedSkill);
+    const skill: SkillDef | null = requested ?? storedSkill ?? skillFromUserText(userText);
+    let skillState: SkillState | null = skill
+      ? ingestUserTurn(
+          skill,
+          coerceSkillState(skill, skill?.id === storedSkill?.id ? storedRaw : null),
+          userText
+        )
+      : null;
+
+    const profile = getContextProfile(skill?.toolContext ?? toolContext);
+    let systemInstruction = profile.systemInstruction + chatVoiceInstruction(voice) + screenContextBlock(context);
+
+    // Report designer: give the model the current draft and the query format up front.
+    if (profile.name === 'report-designer') {
+      systemInstruction += `\n\n## Data query format\n${DATA_QUERY_SPEC_DOC}`;
+      if (context?.kind) systemInstruction += `\n\nYou are designing a ${String(context.kind).toUpperCase()}.`;
+      const draft = designerDraft ?? context?.draft;
+      if (draft) {
+        const serialized = JSON.stringify(draft);
+        systemInstruction += `\n\n## Current draft (what the user sees in the designer)\n${serialized.length > 30000 ? serialized.slice(0, 30000) + '…[truncated]' : serialized}`;
+      }
+    }
+    if (skill && skillState) systemInstruction += skillSystemAddendum(skill, skillState);
+
     const contents: any[] = (history.length ? history : incoming).map((msg) => ({
       role: msg.role === 'user' ? 'user' : 'model',
       parts: [{ text: msg.content ?? (msg as any).text ?? '' }],
@@ -314,8 +341,14 @@ export async function POST(request: NextRequest) {
         })
       : undefined;
 
-    const tools = toolRegistry.listToolsForGemini(toolContext);
+    const tools = toolRegistry
+      .listToolsForGemini(skill?.toolContext ?? toolContext)
+      .filter((tool) => skillAllowsTool(skill, skillState, tool.name));
+    if (tools.some((tool) => tool.name === 'query_data')) {
+      systemInstruction += QUERY_DATA_GUIDE;
+    }
     const executedCalls: Array<{ name: string; args: any }> = [];
+    const successfulTools = new Set<string>();
     /** Results already produced this turn, so an identical repeat is not re-run. */
     const callCache = new Map<string, { ok: boolean; value?: any; error?: string }>();
 
@@ -329,13 +362,30 @@ export async function POST(request: NextRequest) {
         tool_calls: executedCalls.length ? executedCalls : null,
         model: geminiModel,
       });
-      const { data } = await auth.supabase
-        .from('chat_conversations')
-        .select(CONVERSATION_COLUMNS)
-        .eq('id', conversation.id)
-        .maybeSingle();
+      const patch: Record<string, unknown> = {};
+      if (skillState) patch.skill_state = skillState;
+      if (skill) patch.tool_context = skill.toolContext;
+      if (Object.keys(patch).length) {
+        await auth.supabase.from('chat_conversations').update(patch).eq('id', conversation.id);
+      }
+      const { data } = await selectConversationRows((columns) =>
+        auth.supabase.from('chat_conversations').select(columns).eq('id', conversation.id).maybeSingle()
+      );
       if (data) conversation = data;
       return conversation.id;
+    };
+
+    const finish = (text: string) => {
+      if (!skill || !skillState) return { text, skill: null as SkillView | null };
+      const done = completeAssistantTurn(
+        skill,
+        skillState,
+        text,
+        executedCalls.filter((call) => successfulTools.has(call.name)).map((call) => call.name),
+        userText
+      );
+      skillState = done.state;
+      return { text: done.text, skill: done.view };
     };
 
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
@@ -358,10 +408,13 @@ export async function POST(request: NextRequest) {
       const functionCalls = parts.filter((p) => p.functionCall);
 
       if (functionCalls.length === 0) {
-        const text = parts.map((p) => p.text || '').join('').trim() || 'No response generated.';
-        const turnConversationId = await persistAssistantTurn(text);
+        const raw = parts.map((p) => p.text || '').join('').trim() || 'No response generated.';
+        const finished = finish(raw);
+        const turnConversationId = await persistAssistantTurn(finished.text);
         return NextResponse.json({
-          text,
+          text: finished.text,
+          skill: finished.skill,
+          skillState,
           toolCalls: executedCalls,
           conversationId: turnConversationId,
           conversation,
@@ -388,8 +441,18 @@ export async function POST(request: NextRequest) {
         }
 
         try {
+          if (skill && !skillAllowsTool(skill, skillState, name)) {
+            const outcome = {
+              ok: false,
+              error: 'This skill is still collecting decisions. Do not call this tool until the user confirms the spec.',
+            };
+            callCache.set(cacheKey, outcome);
+            results.set(call, outcome);
+            continue;
+          }
           const value = await toolRegistry.executeTool(name, args || {}, toolSupabase);
           const outcome = { ok: true, value };
+          successfulTools.add(name);
           callCache.set(cacheKey, outcome);
           results.set(call, outcome);
         } catch (error: any) {
@@ -467,9 +530,12 @@ export async function POST(request: NextRequest) {
     const exhausted =
       finalText ||
       'I gathered data but did not finish within the allotted steps. Please ask a narrower question or try again.';
-    const exhaustedConversationId = await persistAssistantTurn(exhausted);
+    const finished = finish(exhausted);
+    const exhaustedConversationId = await persistAssistantTurn(finished.text);
     return NextResponse.json({
-      text: exhausted,
+      text: finished.text,
+      skill: finished.skill,
+      skillState,
       toolCalls: executedCalls,
       conversationId: exhaustedConversationId,
       conversation,

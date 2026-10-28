@@ -1,7 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ColDef } from 'ag-grid-community';
+import { AppGrid } from '@/components/grid/AppGrid';
 import {
   DECIDE_RECONCILIATION_RUN_MUTATION,
   RECONCILIATION_RUN_QUERY,
@@ -136,12 +138,81 @@ export function ReconciliationReview({ runId }: { runId: string }) {
   const sourceLines = visible.filter((line) => line.breakKind === 'SOURCE');
   const periodLines = visible.filter((line) => line.breakKind === 'PERIOD');
   const sourceKeys = Array.from(new Map(sourceLines.flatMap((line) => line.cells.map((cell) => [cell.key, cell.label] as const))).entries());
+  const locked = run?.status === 'APPROVED';
+  const reviewActions = useRef({ resolveLine, setSources });
+  reviewActions.current = { resolveLine, setSources };
+  const reviewContext = useMemo(() => ({ get: () => reviewActions.current }), []);
+  const sourceKeySignature = sourceKeys.map(([key]) => key).join('|');
+  const sourceColumns = useMemo<ColDef[]>(() => {
+    const columns: ColDef[] = [
+      {
+        colId: 'line',
+        headerName: 'Line',
+        minWidth: 160,
+        flex: 1,
+        valueGetter: (params) => params.data?.lineName || '',
+        cellRenderer: (params: any) => <span>{params.data.lineName}<span className="recon-code">{params.data.lineCode}</span></span>,
+      },
+      { field: 'attributeName', headerName: 'Attribute', minWidth: 140, flex: 1 },
+    ];
+    for (const [key, label] of sourceKeySignature.split('|').filter(Boolean).map((key) => {
+      const match = sourceKeys.find(([item]) => item === key);
+      return [key, match?.[1] || key] as const;
+    })) {
+      columns.push({
+        colId: `src:${key}`,
+        headerName: label,
+        minWidth: 120,
+        valueGetter: (params) => displayValue(params.data?.cells?.find((cell: Cell) => cell.key === key)?.value),
+        cellClass: (params) => {
+          const cell = params.data?.cells?.find((item: Cell) => item.key === key);
+          const chosen = params.data?.resolutionSourceCode === key || (!params.data?.resolutionSourceCode && cell?.value === params.data?.goldenValue);
+          return chosen ? 'recon-golden' : '';
+        },
+      });
+    }
+    columns.push(
+      { field: 'variance', headerName: 'Variance', width: 120, valueFormatter: (params) => displayNumber(params.value) },
+      { field: 'status', headerName: 'Status', width: 130, valueFormatter: (params) => statusLabel(params.value) },
+      { colId: 'resolution', headerName: 'Resolution', minWidth: 280, sortable: false, filter: false, autoHeight: true, cellRenderer: SourceResolutionCell },
+    );
+    return columns;
+    // sourceKeys is rebuilt each render; the signature captures the column set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKeySignature]);
+  const periodColumns = useMemo<ColDef[]>(() => [
+    {
+      colId: 'line',
+      headerName: 'Line',
+      minWidth: 160,
+      flex: 1,
+      valueGetter: (params) => params.data?.lineName || '',
+      cellRenderer: (params: any) => <span>{params.data.lineName}<span className="recon-code">{params.data.lineCode}</span></span>,
+    },
+    { field: 'attributeName', headerName: 'Attribute', minWidth: 140, flex: 1 },
+    {
+      colId: 'prior',
+      headerName: 'Prior',
+      minWidth: 120,
+      valueGetter: (params) => displayValue(params.data?.cells?.find((cell: Cell) => cell.key === 'PRIOR')?.value),
+      cellClass: (params) => (params.data?.resolutionSourceCode === 'PRIOR' ? 'recon-golden' : ''),
+    },
+    {
+      colId: 'current',
+      headerName: 'Current',
+      minWidth: 120,
+      valueGetter: (params) => displayValue(params.data?.cells?.find((cell: Cell) => cell.key === 'CURRENT')?.value),
+      cellClass: (params) => (params.data?.resolutionSourceCode === 'CURRENT' || params.data?.status === 'ACCEPTED' ? 'recon-golden' : ''),
+    },
+    { field: 'variance', headerName: 'Variance', width: 120, valueFormatter: (params) => displayNumber(params.value) },
+    { field: 'status', headerName: 'Status', width: 130, valueFormatter: (params) => statusLabel(params.value) },
+    { colId: 'resolution', headerName: 'Resolution', minWidth: 280, sortable: false, filter: false, autoHeight: true, cellRenderer: PeriodResolutionCell },
+  ], []);
 
   if (!run) {
     return <div className="view-fade"><div className="page-meta">{error || 'Loading review…'}</div></div>;
   }
 
-  const locked = run.status === 'APPROVED';
 
   return (
     <div className="view-fade">
@@ -209,74 +280,32 @@ export function ReconciliationReview({ runId }: { runId: string }) {
       {sourceLines.length > 0 && (
         <section className="recon-grid-wrap">
           <h2>Sources</h2>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Line</th>
-                <th>Attribute</th>
-                {sourceKeys.map(([key, label]) => <th key={key}>{label}</th>)}
-                <th>Variance</th>
-                <th>Status</th>
-                <th>Resolution</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sourceLines.map((line) => (
-                <tr key={line.id} className={line.isBreak ? 'recon-break' : ''}>
-                  <td>{line.lineName}<span className="recon-code">{line.lineCode}</span></td>
-                  <td>{line.attributeName}</td>
-                  {sourceKeys.map(([key]) => {
-                    const cell = line.cells.find((item) => item.key === key);
-                    const chosen = line.resolutionSourceCode === key || (!line.resolutionSourceCode && cell?.value === line.goldenValue);
-                    return <td key={key} className={chosen ? 'recon-golden' : ''}>{displayValue(cell?.value)}</td>;
-                  })}
-                  <td>{displayNumber(line.variance)}</td>
-                  <td>{statusLabel(line.status)}</td>
-                  <td>{line.isBreak && <LineActions line={line} locked={locked} busy={busy === line.id} sourceCode={sources[line.id] || ''} onSource={(value) => setSources((current) => ({ ...current, [line.id]: value }))} onResolve={resolveLine} />}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <AppGrid
+            rows={sourceLines.map((line) => ({ ...line, __sourceCode: sources[line.id] || '', __busy: busy === line.id, __locked: locked }))}
+            columns={sourceColumns}
+            getRowId={(row) => row.id}
+            autoHeight
+            autoRowHeight
+            context={reviewContext}
+            getRowClass={(params) => (params.data?.isBreak ? 'recon-break' : '')}
+            emptyMessage="No source lines."
+          />
         </section>
       )}
 
       {periodLines.length > 0 && (
         <section className="recon-grid-wrap">
           <h2>Prior period</h2>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Line</th>
-                <th>Attribute</th>
-                <th>Prior</th>
-                <th>Current</th>
-                <th>Variance</th>
-                <th>Status</th>
-                <th>Resolution</th>
-              </tr>
-            </thead>
-            <tbody>
-              {periodLines.map((line) => (
-                <tr key={line.id} className={line.isBreak ? 'recon-break' : ''}>
-                  <td>{line.lineName}<span className="recon-code">{line.lineCode}</span></td>
-                  <td>{line.attributeName}</td>
-                  <td className={line.resolutionSourceCode === 'PRIOR' ? 'recon-golden' : ''}>{displayValue(line.cells.find((cell) => cell.key === 'PRIOR')?.value)}</td>
-                  <td className={line.resolutionSourceCode === 'CURRENT' || line.status === 'ACCEPTED' ? 'recon-golden' : ''}>{displayValue(line.cells.find((cell) => cell.key === 'CURRENT')?.value)}</td>
-                  <td>{displayNumber(line.variance)}</td>
-                  <td>{statusLabel(line.status)}</td>
-                  <td>
-                    {line.isBreak && !locked && line.status === 'OPEN' && (
-                      <div className="recon-actions">
-                        <button type="button" className="btn btn-sm" disabled={busy === line.id} onClick={() => resolveLine(line, 'ACCEPTED')}>Keep current</button>
-                        <button type="button" className="btn btn-sm" disabled={busy === line.id} onClick={() => resolveLine(line, 'OVERRIDDEN', 'PRIOR')}>Keep prior</button>
-                        <button type="button" className="btn btn-sm" disabled={busy === line.id} onClick={() => resolveLine(line, 'WAIVED')}>Waive</button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <AppGrid
+            rows={periodLines.map((line) => ({ ...line, __busy: busy === line.id, __locked: locked }))}
+            columns={periodColumns}
+            getRowId={(row) => row.id}
+            autoHeight
+            autoRowHeight
+            context={reviewContext}
+            getRowClass={(params) => (params.data?.isBreak ? 'recon-break' : '')}
+            emptyMessage="No prior-period lines."
+          />
         </section>
       )}
 
@@ -296,6 +325,34 @@ export function ReconciliationReview({ runId }: { runId: string }) {
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+function SourceResolutionCell(props: any) {
+  if (!props.data.isBreak) return null;
+  const actions = props.context.get();
+  return (
+    <LineActions
+      line={props.data}
+      locked={props.data.__locked}
+      busy={props.data.__busy}
+      sourceCode={props.data.__sourceCode}
+      onSource={(value) => actions.setSources((current: Record<string, string>) => ({ ...current, [props.data.id]: value }))}
+      onResolve={actions.resolveLine}
+    />
+  );
+}
+
+function PeriodResolutionCell(props: any) {
+  const line = props.data;
+  if (!line.isBreak || line.__locked || line.status !== 'OPEN') return null;
+  const resolve = props.context.get().resolveLine as (line: Line, status: string, sourceCode?: string) => void;
+  return (
+    <div className="recon-actions">
+      <button type="button" className="btn btn-sm" disabled={line.__busy} onClick={() => resolve(line, 'ACCEPTED')}>Keep current</button>
+      <button type="button" className="btn btn-sm" disabled={line.__busy} onClick={() => resolve(line, 'OVERRIDDEN', 'PRIOR')}>Keep prior</button>
+      <button type="button" className="btn btn-sm" disabled={line.__busy} onClick={() => resolve(line, 'WAIVED')}>Waive</button>
     </div>
   );
 }

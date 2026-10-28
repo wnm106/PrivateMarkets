@@ -62,6 +62,27 @@ function listValues(raw: string | null): string[] {
   return trimmed.split(',').map((v) => v.trim()).filter((v) => v.length > 0);
 }
 
+import { parseComparisonExpression, resolveComparisonExpression } from './expression-library';
+
+function compareOrdered(actual: string, expected: string, operator: 'gt' | 'gte' | 'lt' | 'lte') {
+  const date = /^\d{4}-\d{2}-\d{2}/;
+  if (date.test(actual) && date.test(expected)) {
+    const left = actual.slice(0, 10);
+    const right = expected.slice(0, 10);
+    if (operator === 'gt') return left > right;
+    if (operator === 'gte') return left >= right;
+    if (operator === 'lt') return left < right;
+    return left <= right;
+  }
+  const left = Number(actual);
+  const right = Number(expected);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+  if (operator === 'gt') return left > right;
+  if (operator === 'gte') return left >= right;
+  if (operator === 'lt') return left < right;
+  return left <= right;
+}
+
 export function evaluateOperator(actual: string | null, operator: string, expected: string | null): boolean {
   switch (operator) {
     case 'equals':
@@ -81,13 +102,7 @@ export function evaluateOperator(actual: string | null, operator: string, expect
     case 'lt':
     case 'lte': {
       if (actual == null || expected == null) return false;
-      const left = Number(actual);
-      const right = Number(expected);
-      if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
-      if (operator === 'gt') return left > right;
-      if (operator === 'gte') return left >= right;
-      if (operator === 'lt') return left < right;
-      return left <= right;
+      return compareOrdered(actual, expected, operator);
     }
     default:
       return false;
@@ -108,6 +123,7 @@ export function matchPopulationEntity(
   conditions: PopulationCondition[],
   resolveTargets: (startId: string, path: RelationshipHopRef[]) => string[],
   readValue: (entityId: string, attributeCode: string) => string | null,
+  asOf?: string,
 ): PopulationMatch {
   const active = conditions.filter((c) => c.attributeCode);
   const values: Record<string, string | null> = {};
@@ -126,7 +142,7 @@ export function matchPopulationEntity(
     const ordered = [...groupConds].sort((a, b) => (a.conditionOrder ?? 0) - (b.conditionOrder ?? 0));
     let groupMatch: boolean | null = null;
     for (const cond of ordered) {
-      const result = conditionMatches(entityId, cond, resolveTargets, readValue, values);
+      const result = conditionMatches(entityId, cond, resolveTargets, readValue, values, asOf);
       if (groupMatch == null) groupMatch = result;
       else if ((cond.logicOperator || 'AND').toUpperCase() === 'OR') groupMatch = groupMatch || result;
       else groupMatch = groupMatch && result;
@@ -153,6 +169,7 @@ function conditionMatches(
   resolveTargets: (startId: string, path: RelationshipHopRef[]) => string[],
   readValue: (entityId: string, attributeCode: string) => string | null,
   values: Record<string, string | null>,
+  asOf?: string,
 ): boolean {
   const read = (id: string | null, code: string) => (id ? readValue(id, code) : null);
   const attributeSubjects = subjects(entityId, cond.attributePath, resolveTargets);
@@ -162,6 +179,16 @@ function conditionMatches(
 
   for (const subject of attributeSubjects) {
     const actual = read(subject, cond.attributeCode);
+    const expression = (cond.value || '').trim();
+    const parsed = parseComparisonExpression(expression);
+    if (parsed.kind === 'call') {
+      const expected = resolveComparisonExpression(expression, (code) => read(subject, code), asOf || new Date().toISOString().slice(0, 10));
+      if (evaluateOperator(actual, cond.operator, expected)) {
+        ok = true;
+        if (actual != null) matched.push(actual);
+      }
+      continue;
+    }
     if (!cond.compareAttributeCode) {
       if (evaluateOperator(actual, cond.operator, cond.value ?? null)) {
         ok = true;

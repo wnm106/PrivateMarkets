@@ -29,6 +29,18 @@ function knowledgeCutoff(knowledgeDate?: string | null): string | null {
   return parsed.toISOString();
 }
 
+/** Refresh calculations for the record that just changed. The shared queue can
+ *  hold a job for every position, and draining it in this request times out. */
+async function refreshEntityCalculations(context: Context, entityId: string) {
+  const { error } = await context.supabase.rpc('process_entity_calculated_attributes', {
+    p_entity_id: entityId,
+    p_limit: 20,
+  });
+  if (error) {
+    console.error('Calculated attributes were not refreshed:', error.message);
+  }
+}
+
 async function attachAttributeSources(context: Context, rows: any[]) {
   if (rows.length === 0) return [];
   const attributeIds = [...new Set(rows.map((row) => row.attribute_id).filter(Boolean))];
@@ -403,6 +415,8 @@ export const lineageResolvers = {
 
         if (error) throw error;
 
+        await refreshEntityCalculations(context, input.entityId);
+
         return { success: true, attributeValueId: data.id, errors: [] };
       } catch (error: any) {
         return { success: false, attributeValueId: null, errors: [{ field: '', message: error.message, code: 'ADD_SOURCE_FAILED' }] };
@@ -472,6 +486,8 @@ export const lineageResolvers = {
             if (insertError) throw insertError;
           }
         }
+
+        await refreshEntityCalculations(context, input.entityId);
 
         return { success: true, errors: [] };
       } catch (error: any) {

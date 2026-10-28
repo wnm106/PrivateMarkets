@@ -8,7 +8,8 @@ import {
   type DisplayNode,
   type LayoutParameter,
 } from '@tapestrai/graphql/src/lib/display-layout';
-import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
+import { AttributeValueInput, useAttributeDisplay } from '@/components/forms/AttributeValueInput';
+import { formatAttributeDisplay } from '@/lib/attribute-display';
 
 export interface DisplayParameterOption {
   value: string;
@@ -197,6 +198,12 @@ function LayoutNode({
   );
 }
 
+function FormattedAttributeText({ attributeCode, value }: { attributeCode?: string; value: string }) {
+  const meta = useAttributeDisplay(attributeCode);
+  const text = formatAttributeDisplay(value, meta) || value;
+  return <span>{text || '—'}</span>;
+}
+
 function FieldCell({
   attributeCode,
   value,
@@ -211,7 +218,7 @@ function FieldCell({
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
   useEffect(() => { setDraft(value); }, [value]);
-  if (readOnly) return <span>{value || '—'}</span>;
+  if (readOnly) return <FormattedAttributeText attributeCode={attributeCode} value={value} />;
   const save = (next: string) => {
     if (next === value || !next.trim()) return;
     setSaving(true);

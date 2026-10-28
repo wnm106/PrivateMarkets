@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import type { ColDef } from 'ag-grid-community';
+import { AppGrid } from '@/components/grid/AppGrid';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -67,6 +69,41 @@ export function statusLabel(status: string): string {
   };
   return labels[status] || status;
 }
+
+const RUN_COLUMNS: ColDef<RunSummary>[] = [
+  {
+    colId: 'review',
+    headerName: 'Review',
+    flex: 1.2,
+    minWidth: 160,
+    valueGetter: (params) => params.data?.definition.definitionName || '',
+    cellRenderer: (params: any) => <Link href={`/reconcile/${params.data.id}`}>{params.data.definition.definitionName}</Link>,
+  },
+  {
+    colId: 'entity',
+    headerName: 'Entity',
+    flex: 1.2,
+    minWidth: 160,
+    valueGetter: (params) => params.data?.anchorEntityName || '',
+    cellRenderer: (params: any) => <span>{params.data.anchorEntityName}<span className="recon-code">{params.data.anchorEntityCode}</span></span>,
+  },
+  {
+    colId: 'asof',
+    headerName: 'As of',
+    minWidth: 180,
+    valueGetter: (params) => {
+      const asOf = String(params.data?.asOfDate || '').slice(0, 10);
+      return params.data?.compareAsOfDate ? `${asOf} vs ${String(params.data.compareAsOfDate).slice(0, 10)}` : asOf;
+    },
+  },
+  {
+    field: 'status',
+    headerName: 'Status',
+    width: 160,
+    cellRenderer: (params: any) => <span className={`recon-status status-${String(params.value).toLowerCase()}`}>{statusLabel(params.value)}</span>,
+  },
+  { field: 'openBreakCount', headerName: 'Open breaks', width: 140, filter: 'agNumberColumnFilter' },
+];
 
 export function ReconciliationHome() {
   const router = useRouter();
@@ -214,31 +251,14 @@ export function ReconciliationHome() {
 
       <section className="recon-runs">
         <h2>Recent reviews</h2>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Review</th>
-              <th>Entity</th>
-              <th>As of</th>
-              <th>Status</th>
-              <th>Open breaks</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.map((run) => (
-              <tr key={run.id}>
-                <td><Link href={`/reconcile/${run.id}`}>{run.definition.definitionName}</Link></td>
-                <td>{run.anchorEntityName}<span className="recon-code">{run.anchorEntityCode}</span></td>
-                <td>{String(run.asOfDate).slice(0, 10)}{run.compareAsOfDate ? ` vs ${String(run.compareAsOfDate).slice(0, 10)}` : ''}</td>
-                <td><span className={`recon-status status-${run.status.toLowerCase()}`}>{statusLabel(run.status)}</span></td>
-                <td>{run.openBreakCount}</td>
-              </tr>
-            ))}
-            {runs.length === 0 && !loading && (
-              <tr><td colSpan={5}>No reviews yet.</td></tr>
-            )}
-          </tbody>
-        </table>
+        <AppGrid
+          rows={runs}
+          columns={RUN_COLUMNS}
+          getRowId={(row) => row.id}
+          autoHeight
+          loading={loading && runs.length === 0}
+          emptyMessage="No reviews yet."
+        />
       </section>
     </div>
   );

@@ -80,8 +80,7 @@ export function AttributeExpandPanel({
     (attribute.defaultPrecedenceChain || []).filter((code) => code && code !== 'MANUAL'),
   );
   const [sources, setSources] = useState<string[]>(FALLBACK_SOURCES);
-  const [savingFields, setSavingFields] = useState(false);
-  const [savingChain, setSavingChain] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [calculation, setCalculation] = useState<CalculationSpec | null>(null);
 
@@ -125,11 +124,11 @@ export function AttributeExpandPanel({
     });
   }, []);
 
-  const saveFields = async () => {
-    setSavingFields(true);
+  const save = async () => {
+    setSaving(true);
     setMessage('');
     try {
-      const result = await graphqlClient.mutation(UPDATE_ATTRIBUTE_MUTATION, {
+      const fields = await graphqlClient.mutation(UPDATE_ATTRIBUTE_MUTATION, {
         input: {
           id: attribute.id,
           attributeName: form.attributeName || null,
@@ -148,37 +147,27 @@ export function AttributeExpandPanel({
           referenceListCode: form.referenceListCode || null,
         },
       }).toPromise();
-      if (result.data?.updateAttributeDefinition?.success) {
-        setMessage('Attribute saved.');
-        onSaved();
-      } else {
-        setMessage(result.data?.updateAttributeDefinition?.errors?.[0]?.message || 'Could not save the attribute.');
+      if (fields.error || !fields.data?.updateAttributeDefinition?.success) {
+        setMessage(fields.data?.updateAttributeDefinition?.errors?.[0]?.message || fields.error?.message || 'Could not save the attribute.');
+        return;
       }
-    } catch (error: any) {
-      setMessage(error?.message || 'Could not save the attribute.');
-    } finally {
-      setSavingFields(false);
-    }
-  };
 
-  const saveChain = async () => {
-    setSavingChain(true);
-    setMessage('');
-    try {
-      const result = await graphqlClient.mutation(UPDATE_ATTRIBUTE_PRECEDENCE_MUTATION, {
+      const sequence = await graphqlClient.mutation(UPDATE_ATTRIBUTE_PRECEDENCE_MUTATION, {
         attributeCode: attribute.attributeCode,
         chain,
       }).toPromise();
-      if (result.data?.updateAttributeDefaultPrecedence?.success) {
-        setMessage('Global source sequence saved. Templates keep using it unless they set an override.');
+      if (sequence.error || !sequence.data?.updateAttributeDefaultPrecedence?.success) {
+        setMessage(sequence.data?.updateAttributeDefaultPrecedence?.errors?.[0]?.message || sequence.error?.message || 'The attribute saved. The source sequence did not.');
         onSaved();
-      } else {
-        setMessage(result.data?.updateAttributeDefaultPrecedence?.errors?.[0]?.message || 'Could not save the sequence.');
+        return;
       }
+
+      setMessage('Saved.');
+      onSaved();
     } catch (error: any) {
-      setMessage(error?.message || 'Could not save the sequence.');
+      setMessage(error?.message || 'Could not save the attribute.');
     } finally {
-      setSavingChain(false);
+      setSaving(false);
     }
   };
 
@@ -281,11 +270,6 @@ export function AttributeExpandPanel({
           </select>
         </label>
       )}
-      <div style={{ display: 'flex', gap: '8px' }}>
-        <button className="btn btn-primary" type="button" onClick={saveFields} disabled={savingFields}>{savingFields ? 'Saving…' : 'Save attribute'}</button>
-        <button className="btn" type="button" onClick={onCancel}>Close</button>
-      </div>
-
       <div style={{ borderTop: '1px solid var(--line)', paddingTop: '14px' }}>
         <div style={{ fontWeight: 600, fontSize: '13px' }}>Calculation</div>
         {calculation ? (
@@ -327,11 +311,12 @@ export function AttributeExpandPanel({
             </button>
           ))}
         </div>
-        <button className="btn btn-primary" type="button" style={{ marginTop: '12px' }} onClick={saveChain} disabled={savingChain}>
-          {savingChain ? 'Saving…' : 'Save global sequence'}
-        </button>
       </div>
-      {message && <div style={{ fontSize: '12px', color: 'var(--ink-2)' }}>{message}</div>}
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <button className="btn btn-primary" type="button" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+        <button className="btn" type="button" onClick={onCancel} disabled={saving}>Close</button>
+        {message && <span style={{ fontSize: '12px', color: 'var(--ink-2)' }}>{message}</span>}
+      </div>
     </div>
   );
 }

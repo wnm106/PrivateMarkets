@@ -2,14 +2,49 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { formatAttributeDisplay, type AttributeDisplay } from '@/lib/attribute-display';
+import { peekAttributeDisplay, useAttributeDisplay } from '@/components/forms/AttributeValueInput';
 import { decompileCalcExpression } from '@/lib/calc-expression';
 import { domainHref } from '@/lib/domain-routes';
 import { graphqlQuery } from '@/lib/graphql';
 
-function formatPart(value: string): string {
-  const parsed = Number(value.replace(/,/g, ''));
-  if (!Number.isFinite(parsed)) return value;
-  return parsed.toLocaleString(undefined, { maximumFractionDigits: 6 });
+function formatPart(value: string, meta?: AttributeDisplay | null): string {
+  if (!meta?.dataType) return value;
+  return formatAttributeDisplay(value, meta) || value;
+}
+
+const FORMULA_WORDS: Record<string, string> = { add: '+', sub: '−', mul: '×', div: '÷' };
+
+function operandText(code: string, components: CalcComponent[], kind: 'name' | 'value'): string {
+  const match = components.find((component) => component.attributeCode === code && component.role === 'OPERAND')
+    || components.find((component) => component.attributeCode === code);
+  if (kind === 'name') return match?.attributeName || code.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
+  if (!match || match.value == null || match.value === '') return '—';
+  return formatPart(match.value, peekAttributeDisplay(code));
+}
+
+function describeExpression(expr: unknown, components: CalcComponent[], kind: 'name' | 'value'): string {
+  if (expr == null) return '';
+  if (typeof expr === 'string' || typeof expr === 'number') return String(expr);
+  if (typeof expr !== 'object') return String(expr);
+  const node = expr as Record<string, unknown>;
+  if (typeof node.ref === 'string') return operandText(node.ref, components, kind);
+  if ('const' in node) {
+    if (kind !== 'value') return String(node.const);
+    const literal = String(node.const);
+    const typed = literal.includes('.') ? { dataType: 'FLOAT' } : { dataType: 'INTEGER' };
+    return formatPart(literal, typed);
+  }
+  if (node.op === 'neg' && Array.isArray(node.args)) return `−${describeExpression(node.args[0], components, kind)}`;
+  if (typeof node.op === 'string' && Array.isArray(node.args) && node.args.length === 2) {
+    const symbol = FORMULA_WORDS[node.op] || node.op;
+    return `${describeExpression(node.args[0], components, kind)} ${symbol} ${describeExpression(node.args[1], components, kind)}`;
+  }
+  if (typeof node.fn === 'string' && Array.isArray(node.args)) {
+    const args = node.args.map((arg) => describeExpression(arg, components, kind)).filter(Boolean).join(', ');
+    return `${node.fn}(${args})`;
+  }
+  return '';
 }
 
 export interface CalcComponent {
@@ -79,6 +114,7 @@ export function CalcBreakdownPanel({
   formula,
   displayedValue,
   displayedSourceName,
+  refreshKey = '',
   depth = 0,
 }: {
   entityId: string;
@@ -87,8 +123,10 @@ export function CalcBreakdownPanel({
   formula?: string;
   displayedValue?: string;
   displayedSourceName?: string;
+  refreshKey?: string;
   depth?: number;
 }) {
+  const display = useAttributeDisplay(attributeCode);
   const [breakdown, setBreakdown] = useState<CalcBreakdown | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -109,22 +147,29 @@ export function CalcBreakdownPanel({
       setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [entityId, attributeCode, asOfDate]);
+  }, [entityId, attributeCode, asOfDate, refreshKey]);
 
   if (loading) return <div className="calc-break-note">Loading the values used in this calculation…</div>;
   if (error) return <div className="calc-break-note">{error}</div>;
   if (!breakdown) return <div className="calc-break-note">{formula || 'This value is calculated.'}</div>;
 
   const expression = decompileCalcExpression(breakdown.expression) || formula;
-  const formulaValue = breakdown.value != null && breakdown.value !== '' ? formatPart(breakdown.value) : '';
-  const shownValue = displayedValue && displayedValue !== '—' ? formatPart(displayedValue) : '';
+  const english = describeExpression(breakdown.expression, breakdown.components, 'name') || expression;
+  const substituted = describeExpression(breakdown.expression, breakdown.components, 'value');
+  const formulaValue = breakdown.value != null && breakdown.value !== '' ? formatPart(breakdown.value, display) : '';
+  const shownValue = displayedValue && displayedValue !== '—' ? formatPart(displayedValue, display) : '';
   const missingInputs = breakdown.components.filter((component) => component.value == null || component.value === '');
 
   return (
     <div className="calc-break">
       <div className="calc-break-formula">
-        {expression && <code>{expression}</code>}
-        {formulaValue && <span>= {formulaValue}</span>}
+        {english && <div className="calc-break-english">{english}</div>}
+        {(substituted || formulaValue) && (
+          <div className="calc-break-worked">
+            {substituted && <span>{substituted}</span>}
+            {formulaValue && <span className="calc-break-equals">= {formulaValue}</span>}
+          </div>
+        )}
       </div>
       {!formulaValue && missingInputs.length > 0 && (
         <div className="calc-break-note">
@@ -162,7 +207,7 @@ export function CalcBreakdownPanel({
                 </div>
                 <div className="sa-drill-td">
                   {component.entityId && component.domainCode ? (
-                    <Link href={`${domainHref(component.domainCode)}/${component.entityId}`} onClick={(event) => event.stopPropagation()}>
+                    <Link href={`${domainHref(component.domainCode)}/${component.entityId}`} className="entity-link" onClick={(event) => event.stopPropagation()}>
                       {component.entityName || component.entityCode}
                     </Link>
                   ) : (
@@ -172,7 +217,7 @@ export function CalcBreakdownPanel({
                   {component.detail && <div className="calc-break-meta">{component.detail}</div>}
                 </div>
                 <div className="sa-drill-td sa-drill-value">
-                  {component.value == null || component.value === '' ? 'No value stored' : formatPart(component.value)}
+                  {component.value == null || component.value === '' ? 'No value stored' : formatPart(component.value, peekAttributeDisplay(component.attributeCode))}
                   {component.calculated && component.entityId && depth < 3 && (
                     <button
                       type="button"
@@ -194,6 +239,7 @@ export function CalcBreakdownPanel({
                     entityId={component.entityId}
                     attributeCode={component.attributeCode}
                     asOfDate={asOfDate}
+                    refreshKey={refreshKey}
                     depth={depth + 1}
                   />
                 </div>

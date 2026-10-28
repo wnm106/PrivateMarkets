@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ColDef } from 'ag-grid-community';
+import { AppGrid } from '@/components/grid/AppGrid';
 import { usePublishViewContext } from '@/lib/view-context';
 import { graphqlClient } from '@/lib/graphql';
 import {
@@ -57,8 +59,6 @@ export default function AdminSourcesPage() {
     color: DEFAULT_COLOR, isActive: true,
   });
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortField, setSortField] = useState<'precedenceRank' | 'sourceName'>('precedenceRank');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
   usePublishViewContext(
     showModal
@@ -154,24 +154,49 @@ export default function AdminSourcesPage() {
     } catch (err: any) { setError(err.message); }
   };
 
-  const handleSort = (field: 'precedenceRank' | 'sourceName') => {
-    if (sortField === field) setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-    else { setSortField(field); setSortDirection('asc'); }
-  };
-
   const filteredSources = sources
-    .filter(s => { const q = searchQuery.toLowerCase(); return s.sourceName.toLowerCase().includes(q) || s.sourceCode.toLowerCase().includes(q) || (s.vendorName?.toLowerCase().includes(q) ?? false); })
-    .sort((a, b) => { const m = sortDirection === 'asc' ? 1 : -1; return sortField === 'precedenceRank' ? (a.precedenceRank - b.precedenceRank) * m : a.sourceName.localeCompare(b.sourceName) * m; });
+    .filter(s => { const q = searchQuery.toLowerCase(); return s.sourceName.toLowerCase().includes(q) || s.sourceCode.toLowerCase().includes(q) || (s.vendorName?.toLowerCase().includes(q) ?? false); });
+
+  const sourceActions = useRef({ handleEdit, handleDelete, handleToggleActive });
+  sourceActions.current = { handleEdit, handleDelete, handleToggleActive };
+  const sourceContext = useMemo(() => ({ get: () => sourceActions.current }), []);
+  const sourceColumns = useMemo<ColDef<Source>[]>(() => [
+    {
+      colId: 'source',
+      headerName: 'Source',
+      flex: 1.4,
+      minWidth: 200,
+      valueGetter: (params) => params.data?.sourceName || '',
+      cellRenderer: SourceNameCell,
+    },
+    {
+      field: 'sourceCode',
+      headerName: 'Code',
+      minWidth: 140,
+      cellRenderer: (params: any) => <code className="text-sm bg-gray-100 px-2 py-1 rounded">{params.value}</code>,
+    },
+    { field: 'sourceType', headerName: 'Type', width: 130, cellRenderer: SourceTypeCell },
+    { field: 'vendorName', headerName: 'Vendor', flex: 1, valueFormatter: (params) => params.value || '-' },
+    {
+      colId: 'feed',
+      headerName: 'Feed',
+      flex: 1,
+      valueGetter: (params) => params.data?.feedFormat ? `${params.data.feedFormat} / ${params.data.feedFrequency || 'N/A'}` : '-',
+    },
+    { field: 'precedenceRank', headerName: 'Precedence', width: 140, sort: 'asc', filter: 'agNumberColumnFilter' },
+    { colId: 'status', headerName: 'Status', width: 130, sortable: false, filter: false, cellRenderer: SourceStatusCell },
+    { colId: 'actions', headerName: 'Actions', width: 140, sortable: false, filter: false, cellRenderer: SourceActionsCell },
+  ], []);
 
   const generateSourceCode = (name: string) => name.toUpperCase().replace(/[^A-Z0-9\s]/g, '').replace(/\s+/g, '_').substring(0, 50);
 
 
   if (loading) {
-    return <div className="p-8"><div className="text-center">Loading sources...</div></div>;
+    return <div className="screen"><div className="text-center">Loading sources...</div></div>;
   }
 
   return (
-    <div className="p-8">
+    <div className="screen">
       <div className="mb-6">
         <h1 className="text-3xl font-bold mb-2">Source Registry</h1>
         <p className="text-gray-600">
@@ -199,74 +224,17 @@ export default function AdminSourcesPage() {
         </button>
       </div>
 
-      <div className="bg-white rounded-lg shadow overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Code</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vendor</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Feed</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                onClick={() => handleSort('precedenceRank')}>
-                Precedence {sortField === 'precedenceRank' && (sortDirection === 'asc' ? '↑' : '↓')}
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {filteredSources.map((source) => (
-              <tr key={source.id} className={`hover:bg-gray-50 ${!source.isActive ? 'opacity-50' : ''}`}>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="flex items-center gap-3">
-                    {source.isProtected && <span className="text-gray-400" title="Protected source">🔒</span>}
-                    <div className="w-4 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: source.color || DEFAULT_COLOR }} />
-                    <span className={`font-medium ${!source.isActive ? 'line-through' : ''}`}>{source.sourceName}</span>
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <code className="text-sm bg-gray-100 px-2 py-1 rounded">{source.sourceCode}</code>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <span className={`px-2 py-1 text-xs font-medium rounded ${
-                    source.sourceType === 'VENDOR' ? 'bg-blue-100 text-blue-800'
-                    : source.sourceType === 'INTERNAL' ? 'bg-green-100 text-green-800'
-                    : source.sourceType === 'MANUAL' ? 'bg-yellow-100 text-yellow-800'
-                    : 'bg-gray-100 text-gray-800'
-                  }`}>{source.sourceType}</span>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{source.vendorName || '-'}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {source.feedFormat ? `${source.feedFormat} / ${source.feedFrequency || 'N/A'}` : '-'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{source.precedenceRank}</td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <button onClick={() => handleToggleActive(source)} disabled={source.isProtected && source.isActive}
-                    className={`px-3 py-1 text-xs font-medium rounded ${
-                      source.isActive ? 'bg-green-100 text-green-800 hover:bg-green-200' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    } ${source.isProtected && source.isActive ? 'cursor-not-allowed opacity-50' : ''}`}>
-                    {source.isActive ? 'Active' : 'Inactive'}
-                  </button>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  <div className="flex gap-2">
-                    <button onClick={() => handleEdit(source)} className="text-blue-600 hover:text-blue-800">Edit</button>
-                    {!source.isProtected && (
-                      <button onClick={() => handleDelete(source)} className="text-red-600 hover:text-red-800">Delete</button>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {filteredSources.length === 0 && (
-          <div className="text-center py-12 text-gray-500">
-            {searchQuery ? 'No sources match your search' : 'No sources found'}
-          </div>
-        )}
+      <div className="screen-fill bg-white rounded-lg shadow overflow-x-auto">
+        <AppGrid
+          rows={filteredSources}
+          columns={sourceColumns}
+          getRowId={(row) => row.id}
+          autoHeight={false}
+          height="100%"
+          context={sourceContext}
+          getRowClass={(params) => (params.data?.isActive ? '' : 'is-inactive')}
+          emptyMessage={searchQuery ? 'No sources match your search' : 'No sources found'}
+        />
       </div>
 
       {showModal && (
@@ -382,6 +350,57 @@ export default function AdminSourcesPage() {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+
+function SourceNameCell(props: any) {
+  const source = props.data;
+  return (
+    <div className="flex items-center gap-3">
+      {source.isProtected && <span className="text-gray-400" title="Protected source">🔒</span>}
+      <div className="w-4 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: source.color || DEFAULT_COLOR }} />
+      <span className={`font-medium ${!source.isActive ? 'line-through' : ''}`}>{source.sourceName}</span>
+    </div>
+  );
+}
+
+function SourceTypeCell(props: any) {
+  const sourceType = props.data.sourceType as string;
+  const tone = sourceType === 'VENDOR' ? 'bg-blue-100 text-blue-800'
+    : sourceType === 'INTERNAL' ? 'bg-green-100 text-green-800'
+    : sourceType === 'MANUAL' ? 'bg-yellow-100 text-yellow-800'
+    : 'bg-gray-100 text-gray-800';
+  return <span className={`px-2 py-1 text-xs font-medium rounded ${tone}`}>{sourceType}</span>;
+}
+
+function SourceStatusCell(props: any) {
+  const source = props.data;
+  const actions = props.context.get();
+  return (
+    <button
+      type="button"
+      onClick={() => actions.handleToggleActive(source)}
+      disabled={source.isProtected && source.isActive}
+      className={`px-3 py-1 text-xs font-medium rounded ${
+        source.isActive ? 'bg-green-100 text-green-800 hover:bg-green-200' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+      } ${source.isProtected && source.isActive ? 'cursor-not-allowed opacity-50' : ''}`}
+    >
+      {source.isActive ? 'Active' : 'Inactive'}
+    </button>
+  );
+}
+
+function SourceActionsCell(props: any) {
+  const source = props.data;
+  const actions = props.context.get();
+  return (
+    <div className="flex gap-2">
+      <button type="button" onClick={() => actions.handleEdit(source)} className="text-blue-600 hover:text-blue-800">Edit</button>
+      {!source.isProtected && (
+        <button type="button" onClick={() => actions.handleDelete(source)} className="text-red-600 hover:text-red-800">Delete</button>
       )}
     </div>
   );

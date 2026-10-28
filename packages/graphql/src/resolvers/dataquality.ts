@@ -35,7 +35,7 @@ export const dataQualityResolvers = {
     
     staleAttributes: async (
       _: any,
-      args: { domainCode?: string | null; olderThanDays?: number | null; asOfDate?: string | null },
+      args: { domainCode?: string | null; olderThanDays?: number | null; asOfDate?: string | null; knowledgeDate?: string | null; entityId?: string | null },
       context: Context,
     ) => {
       const olderThanDays = Math.min(Math.max(args.olderThanDays ?? 30, 1), 3650);
@@ -43,6 +43,8 @@ export const dataQualityResolvers = {
         p_domain_code: args.domainCode || null,
         p_older_than_days: olderThanDays,
         p_as_of_date: args.asOfDate || null,
+        p_knowledge_date: args.knowledgeDate || null,
+        p_entity_id: args.entityId || null,
       });
       if (error) throw error;
       const report = (data || {}) as {
@@ -59,11 +61,13 @@ export const dataQualityResolvers = {
       };
     },
 
-    dataQualityDashboard: async (_: any, args: { domainCode?: string | null; fromDate?: string | null; toDate?: string | null }, context: Context) => {
+    dataQualityDashboard: async (_: any, args: { domainCode?: string | null; fromDate?: string | null; toDate?: string | null; knowledgeDate?: string | null; entityId?: string | null }, context: Context) => {
       const { data, error } = await context.supabase.rpc('data_quality_dashboard', {
         p_domain_code: args.domainCode || null,
         p_from_date: args.fromDate || null,
         p_to_date: args.toDate || null,
+        p_knowledge_date: args.knowledgeDate || null,
+        p_entity_id: args.entityId || null,
       });
       if (error) throw error;
       return data;
@@ -252,6 +256,27 @@ export const dataQualityResolvers = {
         return { success: true, errors: [] };
       } catch (error: any) {
         return { success: false, errors: [{ field: '', message: error.message, code: 'RESOLVE_FAILED' }] };
+      }
+    },
+
+    confirmAttributeReceipt: async (
+      _: any,
+      args: { entityId: string; attributeCode: string },
+      context: Context,
+    ) => {
+      try {
+        const { data, error } = await context.supabase.rpc('confirm_attribute_receipt', {
+          p_entity_id: args.entityId,
+          p_attribute_code: args.attributeCode,
+        });
+        if (error) throw error;
+        return { success: true, receivedAt: data, errors: [] };
+      } catch (error: any) {
+        return {
+          success: false,
+          receivedAt: null,
+          errors: [{ field: '', message: error.message, code: 'RECEIPT_FAILED' }],
+        };
       }
     },
   },

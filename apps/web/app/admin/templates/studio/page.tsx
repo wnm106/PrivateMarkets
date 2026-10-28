@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import type { ColDef } from 'ag-grid-community';
+import { AppGrid } from '@/components/grid/AppGrid';
 import Link from 'next/link';
 import { graphqlQuery, graphqlMutation, DOMAIN_TYPES_QUERY, ENTITIES_QUERY } from '@/lib/graphql';
 import { authHeaders } from '@/lib/reporting';
@@ -620,74 +622,15 @@ export default function StatementStudioPage() {
                 <button type="button" className="btn btn-sm" onClick={() => setSections((current) => renumber(move(current, sectionIndex, -1)))} aria-label="Move section up">Up</button>
                 <button type="button" className="btn btn-sm" onClick={() => setSections((current) => renumber(move(current, sectionIndex, 1)))} aria-label="Move section down">Down</button>
               </header>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                  <thead>
-                    <tr style={{ textAlign: 'left', color: 'var(--ink-3)', fontSize: '10px', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-                      <th style={cellStyle}>Line</th>
-                      <th style={cellStyle}>Attribute</th>
-                      <th style={cellStyle}>Type</th>
-                      <th style={cellStyle}>Alias</th>
-                      <th style={cellStyle}>Required</th>
-                      <th style={cellStyle}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {section.lines.map((line, lineIndex) => (
-                      <tr key={`${line.attributeCode}-${lineIndex}`} style={{ borderTop: '1px solid var(--line)' }}>
-                        <td style={cellStyle}>
-                          <input className="text-input" aria-label="Statement label" value={line.displayLabel} onChange={(event) => {
-                            const displayLabel = event.target.value;
-                            const aliases = line.aliases.filter((alias) => alias !== line.displayLabel);
-                            if (displayLabel.trim() && displayLabel.trim().toLowerCase() !== line.attributeName.toLowerCase()) aliases.unshift(displayLabel.trim());
-                            updateLine(sectionIndex, lineIndex, { displayLabel, aliases: [...new Set(aliases)] });
-                          }} />
-                          {line.sampleValue && <div className="mono" style={{ color: 'var(--ink-3)', marginTop: '4px' }}>{line.sampleValue}</div>}
-                        </td>
-                        <td style={cellStyle}>
-                          <select
-                            className="select"
-                            aria-label="Canonical attribute"
-                            value={line.isNew ? '' : line.attributeCode}
-                            onChange={(event) => chooseAttribute(sectionIndex, lineIndex, event.target.value)}
-                          >
-                            <option value="">New · {line.isNew ? line.attributeCode : 'create attribute'}</option>
-                            {catalog.map((attribute) => (
-                              <option key={attribute.attributeCode} value={attribute.attributeCode}>
-                                {attribute.attributeCode} · {attribute.attributeName}
-                              </option>
-                            ))}
-                          </select>
-                          <div style={{ marginTop: '6px' }}><MatchPill line={line} /></div>
-                        </td>
-                        <td style={cellStyle}>
-                          <select className="select" aria-label="Data type" value={line.dataType} onChange={(event) => updateLine(sectionIndex, lineIndex, { dataType: event.target.value })}>
-                            {DATA_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-                          </select>
-                        </td>
-                        <td style={cellStyle}>
-                          {line.aliases.length === 0 && <span style={{ color: 'var(--ink-4)' }}>—</span>}
-                          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                            {line.aliases.map((alias) => (
-                              <span key={alias} className="mono" style={{ fontSize: '10px', padding: '2px 6px', border: '1px solid var(--line)', background: 'var(--bg)' }}>{alias}</span>
-                            ))}
-                          </div>
-                        </td>
-                        <td style={{ ...cellStyle, textAlign: 'center' }}>
-                          <input type="checkbox" checked={line.required} aria-label={`Required ${line.displayLabel}`} onChange={(event) => updateLine(sectionIndex, lineIndex, { required: event.target.checked })} />
-                        </td>
-                        <td style={cellStyle}>
-                          <div style={{ display: 'flex', gap: '4px' }}>
-                            <button type="button" className="btn btn-sm" aria-label="Move line up" onClick={() => updateSection(sectionIndex, { lines: renumber(move(section.lines, lineIndex, -1)) })}>Up</button>
-                            <button type="button" className="btn btn-sm" aria-label="Move line down" onClick={() => updateSection(sectionIndex, { lines: renumber(move(section.lines, lineIndex, 1)) })}>Down</button>
-                            <button type="button" className="btn btn-sm" onClick={() => updateSection(sectionIndex, { lines: renumber(section.lines.filter((_, itemIndex) => itemIndex !== lineIndex)) })}>Remove</button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <StudioLinesGrid
+                sectionIndex={sectionIndex}
+                lines={section.lines}
+                catalog={catalog}
+                onUpdateLine={updateLine}
+                onChooseAttribute={chooseAttribute}
+                onMove={(index, lineIndex, direction) => updateSection(index, { lines: renumber(move(section.lines, lineIndex, direction)) })}
+                onRemove={(index, lineIndex) => updateSection(index, { lines: renumber(section.lines.filter((_, itemIndex) => itemIndex !== lineIndex)) })}
+              />
             </article>
           ))}
           {sections.length > 0 && (
@@ -741,4 +684,137 @@ function bannerStyle(color: string): CSSProperties {
     marginBottom: '14px',
     fontSize: '12px',
   };
+}
+
+
+function StudioLinesGrid({
+  sectionIndex,
+  lines,
+  catalog,
+  onUpdateLine,
+  onChooseAttribute,
+  onMove,
+  onRemove,
+}: {
+  sectionIndex: number;
+  lines: DraftLine[];
+  catalog: CatalogAttribute[];
+  onUpdateLine: (sectionIndex: number, lineIndex: number, patch: Partial<DraftLine>) => void;
+  onChooseAttribute: (sectionIndex: number, lineIndex: number, attributeCode: string) => void;
+  onMove: (sectionIndex: number, lineIndex: number, direction: -1 | 1) => void;
+  onRemove: (sectionIndex: number, lineIndex: number) => void;
+}) {
+  const propsRef = useRef({ sectionIndex, catalog, onUpdateLine, onChooseAttribute, onMove, onRemove });
+  propsRef.current = { sectionIndex, catalog, onUpdateLine, onChooseAttribute, onMove, onRemove };
+  const context = useMemo(() => ({ get: () => propsRef.current }), []);
+  const rows = lines.map((line, lineIndex) => ({ ...line, __lineIndex: lineIndex, __id: `${line.attributeCode}-${lineIndex}` }));
+  return (
+    <AppGrid
+      rows={rows}
+      columns={STUDIO_COLUMNS}
+      getRowId={(row) => row.__id}
+      autoHeight
+      autoRowHeight
+      enableSortFilter={false}
+      context={context}
+      emptyMessage="No lines in this section."
+    />
+  );
+}
+
+const STUDIO_COLUMNS: ColDef[] = [
+  { colId: 'line', headerName: 'Line', flex: 1.2, minWidth: 180, autoHeight: true, sortable: false, filter: false, cellRenderer: StudioLabelCell },
+  { colId: 'attribute', headerName: 'Attribute', flex: 1.4, minWidth: 220, autoHeight: true, sortable: false, filter: false, cellRenderer: StudioAttributeCell },
+  { colId: 'type', headerName: 'Type', width: 150, sortable: false, filter: false, cellRenderer: StudioTypeCell },
+  { colId: 'alias', headerName: 'Alias', flex: 1, minWidth: 160, autoHeight: true, sortable: false, filter: false, cellRenderer: StudioAliasCell },
+  { colId: 'required', headerName: 'Required', width: 110, sortable: false, filter: false, cellRenderer: StudioRequiredCell },
+  { colId: 'actions', headerName: '', width: 210, sortable: false, filter: false, cellRenderer: StudioActionsCell },
+];
+
+function StudioLabelCell(props: any) {
+  const line = props.data;
+  const actions = props.context.get();
+  return (
+    <div>
+      <input className="text-input" aria-label="Statement label" value={line.displayLabel} onChange={(event) => {
+        const displayLabel = event.target.value;
+        const aliases = line.aliases.filter((alias: string) => alias !== line.displayLabel);
+        if (displayLabel.trim() && displayLabel.trim().toLowerCase() !== String(line.attributeName || '').toLowerCase()) aliases.unshift(displayLabel.trim());
+        actions.onUpdateLine(actions.sectionIndex, line.__lineIndex, { displayLabel, aliases: [...new Set(aliases)] });
+      }} />
+      {line.sampleValue && <div className="mono" style={{ color: 'var(--ink-3)', marginTop: '4px' }}>{line.sampleValue}</div>}
+    </div>
+  );
+}
+
+function StudioAttributeCell(props: any) {
+  const line = props.data;
+  const actions = props.context.get();
+  return (
+    <div>
+      <select
+        className="select"
+        aria-label="Canonical attribute"
+        value={line.isNew ? '' : line.attributeCode}
+        onChange={(event) => actions.onChooseAttribute(actions.sectionIndex, line.__lineIndex, event.target.value)}
+      >
+        <option value="">New · {line.isNew ? line.attributeCode : 'create attribute'}</option>
+        {actions.catalog.map((attribute: CatalogAttribute) => (
+          <option key={attribute.attributeCode} value={attribute.attributeCode}>
+            {attribute.attributeCode} · {attribute.attributeName}
+          </option>
+        ))}
+      </select>
+      <div style={{ marginTop: '6px' }}><MatchPill line={line} /></div>
+    </div>
+  );
+}
+
+function StudioTypeCell(props: any) {
+  const line = props.data;
+  const actions = props.context.get();
+  return (
+    <select className="select" aria-label="Data type" value={line.dataType} onChange={(event) => actions.onUpdateLine(actions.sectionIndex, line.__lineIndex, { dataType: event.target.value })}>
+      {DATA_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+    </select>
+  );
+}
+
+function StudioAliasCell(props: any) {
+  const line = props.data;
+  return (
+    <div>
+      {line.aliases.length === 0 && <span style={{ color: 'var(--ink-4)' }}>—</span>}
+      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+        {line.aliases.map((alias: string) => (
+          <span key={alias} className="mono" style={{ fontSize: '10px', padding: '2px 6px', border: '1px solid var(--line)', background: 'var(--bg)' }}>{alias}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StudioRequiredCell(props: any) {
+  const line = props.data;
+  const actions = props.context.get();
+  return (
+    <input
+      type="checkbox"
+      checked={line.required}
+      aria-label={`Required ${line.displayLabel}`}
+      onChange={(event) => actions.onUpdateLine(actions.sectionIndex, line.__lineIndex, { required: event.target.checked })}
+    />
+  );
+}
+
+function StudioActionsCell(props: any) {
+  const line = props.data;
+  const actions = props.context.get();
+  return (
+    <div style={{ display: 'flex', gap: '4px' }}>
+      <button type="button" className="btn btn-sm" aria-label="Move line up" onClick={() => actions.onMove(actions.sectionIndex, line.__lineIndex, -1)}>Up</button>
+      <button type="button" className="btn btn-sm" aria-label="Move line down" onClick={() => actions.onMove(actions.sectionIndex, line.__lineIndex, 1)}>Down</button>
+      <button type="button" className="btn btn-sm" onClick={() => actions.onRemove(actions.sectionIndex, line.__lineIndex)}>Remove</button>
+    </div>
+  );
 }

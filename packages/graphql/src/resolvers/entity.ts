@@ -553,11 +553,17 @@ export const entityResolvers = {
                 ? raw
                 : Number.isFinite(Number(text)) ? Number(text) : null;
 
+              // The edit takes effect on the date the user is viewing, so the
+              // record page shows it without waiting for the next calendar day.
+              const asOf = /^\d{4}-\d{2}-\d{2}$/.test(String(input.asOfDate || ''))
+                ? String(input.asOfDate)
+                : new Date().toISOString().split('T')[0];
+
               // Replace only the manual source. Other sources stay, and the preference trigger stamps the winner.
               const { error: closeError } = await context.supabase
                 .from('entity_attribute_values')
                 .update({
-                  valid_to: new Date().toISOString().split('T')[0],
+                  valid_to: asOf,
                   system_to: new Date().toISOString(),
                 })
                 .eq('entity_id', input.id)
@@ -573,7 +579,7 @@ export const entityResolvers = {
                 source_id: source.id,
                 golden_value: text,
                 golden_value_numeric: numeric,
-                valid_from: new Date().toISOString().split('T')[0],
+                valid_from: asOf,
                 precedence_rank: attr.default_precedence_rank,
                 created_by: userId,
               });

@@ -3,18 +3,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  DQ_DATE_FNS,
   DQ_OPERATORS,
   type DqClause,
   type DqJoin,
   type DqOperator,
-  type DqValueKind,
+  applyRhs,
   clauseIssue,
+  comparisonHint,
   describeRule,
   formatExpression,
   isComparison,
+  literalKindFor,
   newClause,
   operatorNeedsValue,
   parseExpression,
+  rhsText,
   serializeClauses,
 } from '@/lib/dq-expression';
 
@@ -59,7 +63,9 @@ export function DqExpressionEditor({ expression, attributes, domains = [], onCha
   const [rawIssue, setRawIssue] = useState<string | null>(null);
   const [focusId, setFocusId] = useState('');
 
-  const issues = clauses.map(clauseIssue);
+  const issues = clauses.map((clause) => (
+    clauseIssue(clause, attributes.find((attribute) => attribute.attributeCode === clause.attribute)?.dataType)
+  ));
   const issue = issues.find(Boolean) || null;
   const serialized = serializeClauses(clauses);
   const nameFor = (code: string) => attributes.find((attribute) => attribute.attributeCode === code)?.attributeName || code;
@@ -85,7 +91,24 @@ export function DqExpressionEditor({ expression, attributes, domains = [], onCha
 
   const changeOperator = (clause: DqClause, operator: DqOperator) => {
     const patch: Partial<DqClause> = { operator };
-    if (isComparison(operator) && !isComparison(clause.operator)) patch.valueKind = 'number';
+    if (isComparison(operator) && !isComparison(clause.operator)) {
+      const kind = literalKindFor(attributes.find((attribute) => attribute.attributeCode === clause.attribute)?.dataType);
+      patch.valueKind = kind === 'number' ? 'number' : 'text';
+      patch.value = '';
+      patch.dateFn = null;
+    }
+    update(clause.id, patch);
+  };
+
+  const changeAttribute = (clause: DqClause, attribute: string) => {
+    const dataType = attributes.find((item) => item.attributeCode === attribute)?.dataType;
+    const patch: Partial<DqClause> = { attribute };
+    if (isComparison(clause.operator) && !rhsMatches(clause, dataType, attributes)) {
+      const kind = literalKindFor(dataType);
+      patch.valueKind = kind === 'number' ? 'number' : 'text';
+      patch.value = '';
+      patch.dateFn = null;
+    }
     update(clause.id, patch);
   };
 
@@ -175,7 +198,7 @@ export function DqExpressionEditor({ expression, attributes, domains = [], onCha
                     domains={domains}
                     value={clause.attribute}
                     autoOpen={focusId === clause.id}
-                    onChange={(attribute) => update(clause.id, { attribute })}
+                    onChange={(attribute) => changeAttribute(clause, attribute)}
                   />
                   <select
                     className="select dq-op"
@@ -192,7 +215,12 @@ export function DqExpressionEditor({ expression, attributes, domains = [], onCha
                       </optgroup>
                     ))}
                   </select>
-                  <ValueSlot clause={clause} onChange={(patch) => update(clause.id, patch)} />
+                  <ValueSlot
+                    clause={clause}
+                    attributes={attributes}
+                    domains={domains}
+                    onChange={(patch) => update(clause.id, patch)}
+                  />
                   {clauses.length > 1 && (
                     <button type="button" className="dq-remove" onClick={() => removeClause(clause.id)}>
                       Remove
@@ -230,14 +258,37 @@ export function DqExpressionEditor({ expression, attributes, domains = [], onCha
 }
 
 function ClauseHint({ clause }: { clause: DqClause }) {
-  if (clause.valueKind === 'current_date' && isComparison(clause.operator)) {
-    return <p className="dq-hint">Compared with the as-of date of this quality check, not the time you save the rule.</p>;
-  }
-  const hint = GUIDANCE[clause.operator];
+  const hint = comparisonHint(clause) || GUIDANCE[clause.operator];
   return hint ? <p className="dq-hint">{hint}</p> : null;
 }
 
-function ValueSlot({ clause, onChange }: { clause: DqClause; onChange: (patch: Partial<DqClause>) => void }) {
+function rhsMatches(clause: DqClause, dataType: string | null | undefined, attributes: DqAttributeOption[]) {
+  const kind = literalKindFor(dataType);
+  if (clause.valueKind === 'relative' || clause.valueKind === 'current_date') return kind === 'date';
+  if (clause.valueKind === 'attribute') {
+    if (clause.dateFn && kind !== 'date') return false;
+    if (!clause.value.trim()) return true;
+    return literalKindFor(attributes.find((item) => item.attributeCode === clause.value)?.dataType) === kind;
+  }
+  if (kind === 'number') return clause.valueKind === 'number';
+  return clause.valueKind === 'text';
+}
+
+function ValueSlot({
+  clause,
+  attributes,
+  domains,
+  onChange,
+}: {
+  clause: DqClause;
+  attributes: DqAttributeOption[];
+  domains: DqDomainOption[];
+  onChange: (patch: Partial<DqClause>) => void;
+}) {
+  const canonical = rhsText(clause);
+  const [draft, setDraft] = useState(canonical);
+  useEffect(() => { setDraft(canonical); }, [canonical]);
+
   if (!operatorNeedsValue(clause.operator) || clause.operator === 'IN') return null;
   if (clause.operator === '~' || clause.operator === 'LIKE' || clause.operator === 'ILIKE') {
     return (
@@ -246,30 +297,66 @@ function ValueSlot({ clause, onChange }: { clause: DqClause; onChange: (patch: P
         aria-label="Pattern"
         value={clause.value}
         placeholder={clause.operator === '~' ? '^[A-Z]{2}$' : '%USD%'}
-        onChange={(event) => onChange({ value: event.target.value, valueKind: 'text' })}
+        onChange={(event) => onChange({ value: event.target.value, valueKind: 'text', dateFn: null })}
       />
     );
   }
+  if (!clause.attribute) return null;
+
+  const subject = attributes.find((attribute) => attribute.attributeCode === clause.attribute);
+  const kind = literalKindFor(subject?.dataType);
+  const compatible = attributes.filter((attribute) => (
+    attribute.attributeCode !== clause.attribute && literalKindFor(attribute.dataType) === kind
+  ));
+
+  const commit = (next: string) => {
+    setDraft(next);
+    if (!next.trim()) {
+      onChange({ value: '', valueKind: kind === 'number' ? 'number' : 'text', dateFn: null });
+      return;
+    }
+    const patch = applyRhs(clause, next);
+    if (patch) onChange(patch);
+  };
+
+  const insertExpression = (token: string) => {
+    const current = draft.trim();
+    const field = /^[A-Za-z_][A-Za-z0-9_]*$/.test(current) && current.toUpperCase() !== 'CURRENT_DATE' ? current : '';
+    if (token === 'CURRENT_DATE') commit('CURRENT_DATE');
+    else commit(field ? `${token}(${field})` : `${token}(CURRENT_DATE)`);
+  };
+
   return (
     <div className="dq-value-slot">
-      <select
-        className="select"
-        aria-label="Value type"
-        value={clause.valueKind}
-        onChange={(event) => onChange({ valueKind: event.target.value as DqValueKind })}
-      >
-        <option value="number">Number</option>
-        <option value="text">Text</option>
-        <option value="current_date">As-of date</option>
-      </select>
-      {clause.valueKind !== 'current_date' && (
-        <input
-          className="text-input"
-          aria-label="Value"
-          value={clause.value}
-          placeholder={clause.valueKind === 'number' ? '0' : 'Value'}
-          onChange={(event) => onChange({ value: event.target.value })}
-        />
+      <input
+        className="text-input dq-value-entry"
+        aria-label="Value"
+        value={draft}
+        placeholder={kind === 'number' ? "0 or OTHER_FIELD" : kind === 'date' ? "2026-10-31, OTHER_DATE, END_OF_MONTH(CURRENT_DATE)" : kind === 'boolean' ? 'true, false' : "'US' or OTHER_FIELD"}
+        onChange={(event) => commit(event.target.value)}
+      />
+      <AttributeField
+        attributes={compatible}
+        domains={domains}
+        value=""
+        autoOpen={false}
+        emptyLabel="Attribute"
+        onChange={(value) => commit(value)}
+      />
+      {kind === 'date' && (
+        <select
+          className="select"
+          aria-label="Insert expression"
+          value=""
+          onChange={(event) => {
+            if (event.target.value) insertExpression(event.target.value);
+          }}
+        >
+          <option value="">Expression</option>
+          {DQ_DATE_FNS.map((item) => (
+            <option key={item.token} value={item.token}>{item.label}</option>
+          ))}
+        </select>
       )}
     </div>
   );
@@ -280,12 +367,14 @@ function AttributeField({
   domains,
   value,
   autoOpen,
+  emptyLabel = 'Choose an attribute',
   onChange,
 }: {
   attributes: DqAttributeOption[];
   domains: DqDomainOption[];
   value: string;
   autoOpen: boolean;
+  emptyLabel?: string;
   onChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -380,7 +469,7 @@ function AttributeField({
           setOpen((current) => !current);
         }}
       >
-        <span>{selected ? selected.attributeName : 'Choose an attribute'}</span>
+        <span>{selected ? selected.attributeName : emptyLabel}</span>
       </button>
       {open && box && createPortal(
         <div

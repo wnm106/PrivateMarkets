@@ -74,6 +74,10 @@ function applyNumericOp(op: 'add' | 'sub' | 'mul' | 'div', left: number | null, 
   return left / right;
 }
 
+const DATE_FN_TOKENS = new Set([
+  'PREVIOUS_DAY', 'START_OF_MONTH', 'END_OF_MONTH', 'START_OF_QUARTER', 'END_OF_QUARTER', 'START_OF_YEAR', 'END_OF_YEAR',
+]);
+
 function applyFunction(code: string, args: ExprValue[]): ExprValue {
   const fn = code.toUpperCase();
   if (fn === 'ABS' || fn === 'FLOOR' || fn === 'CEIL') {
@@ -146,6 +150,14 @@ function applyFunction(code: string, args: ExprValue[]): ExprValue {
     expectCount(fn, args.length, 2);
     const op = fn === 'ADD' ? 'add' : fn === 'SUB' ? 'sub' : fn === 'MUL' ? 'mul' : 'div';
     return applyNumericOp(op, asNumber(args[0], fn), asNumber(args[1], fn));
+  }
+  if (DATE_FN_TOKENS.has(fn)) {
+    expectCount(fn, args.length, 1);
+    const text = asText(args[0]);
+    if (text === null) return null;
+    const shifted = applyDateFn(fn, text);
+    if (!shifted) throw new Error(`${fn} expects a date`);
+    return shifted;
   }
   throw new Error(`Unknown expression function: ${fn}`);
 }
@@ -397,6 +409,102 @@ export const EXPRESSION_FUNCTIONS: ExpressionFunctionDef[] = [
     sortOrder: 180,
   },
   {
+    id: 'ROW:CURRENT_DATE',
+    code: 'CURRENT_DATE',
+    name: 'As-of date',
+    category: 'ROW',
+    returnType: 'VALUE',
+    description: 'The as-of date of the calculation, not the day the expression is saved.',
+    signature: 'CURRENT_DATE',
+    example: { ref: 'CURRENT_DATE' },
+    callable: true,
+    sortOrder: 182,
+  },
+  {
+    id: 'ROW:PREVIOUS_DAY',
+    code: 'PREVIOUS_DAY',
+    name: 'Yesterday',
+    category: 'ROW',
+    returnType: 'VALUE',
+    description: 'The day before a date. PREVIOUS_DAY(CURRENT_DATE) is the day before the as-of date.',
+    signature: 'PREVIOUS_DAY(date)',
+    example: { fn: 'PREVIOUS_DAY', args: [{ ref: 'CURRENT_DATE' }] },
+    callable: true,
+    sortOrder: 184,
+  },
+  {
+    id: 'ROW:START_OF_MONTH',
+    code: 'START_OF_MONTH',
+    name: 'Start of month',
+    category: 'ROW',
+    returnType: 'VALUE',
+    description: 'The first day of the month containing a date.',
+    signature: 'START_OF_MONTH(date)',
+    example: { fn: 'START_OF_MONTH', args: [{ ref: 'CURRENT_DATE' }] },
+    callable: true,
+    sortOrder: 186,
+  },
+  {
+    id: 'ROW:END_OF_MONTH',
+    code: 'END_OF_MONTH',
+    name: 'End of month',
+    category: 'ROW',
+    returnType: 'VALUE',
+    description: 'The last day of the month containing a date.',
+    signature: 'END_OF_MONTH(date)',
+    example: { fn: 'END_OF_MONTH', args: [{ ref: 'CURRENT_DATE' }] },
+    callable: true,
+    sortOrder: 188,
+  },
+  {
+    id: 'ROW:START_OF_QUARTER',
+    code: 'START_OF_QUARTER',
+    name: 'Start of quarter',
+    category: 'ROW',
+    returnType: 'VALUE',
+    description: 'The first day of the calendar quarter containing a date.',
+    signature: 'START_OF_QUARTER(date)',
+    example: { fn: 'START_OF_QUARTER', args: [{ ref: 'CURRENT_DATE' }] },
+    callable: true,
+    sortOrder: 190,
+  },
+  {
+    id: 'ROW:END_OF_QUARTER',
+    code: 'END_OF_QUARTER',
+    name: 'End of quarter',
+    category: 'ROW',
+    returnType: 'VALUE',
+    description: 'The last day of the calendar quarter containing a date.',
+    signature: 'END_OF_QUARTER(date)',
+    example: { fn: 'END_OF_QUARTER', args: [{ ref: 'CURRENT_DATE' }] },
+    callable: true,
+    sortOrder: 192,
+  },
+  {
+    id: 'ROW:START_OF_YEAR',
+    code: 'START_OF_YEAR',
+    name: 'Start of year',
+    category: 'ROW',
+    returnType: 'VALUE',
+    description: 'The first day of the calendar year containing a date.',
+    signature: 'START_OF_YEAR(date)',
+    example: { fn: 'START_OF_YEAR', args: [{ ref: 'CURRENT_DATE' }] },
+    callable: true,
+    sortOrder: 194,
+  },
+  {
+    id: 'ROW:END_OF_YEAR',
+    code: 'END_OF_YEAR',
+    name: 'End of year',
+    category: 'ROW',
+    returnType: 'VALUE',
+    description: 'The last day of the calendar year containing a date.',
+    signature: 'END_OF_YEAR(date)',
+    example: { fn: 'END_OF_YEAR', args: [{ ref: 'CURRENT_DATE' }] },
+    callable: true,
+    sortOrder: 196,
+  },
+  {
     id: 'GROUP:SUM',
     code: 'SUM',
     name: 'Sum',
@@ -514,4 +622,188 @@ export function listExpressionFunctions(category?: string | null): ExpressionFun
   const filter = category?.trim().toUpperCase();
   if (!filter) return rows;
   return rows.filter((row) => row.category === filter);
+}
+
+export interface DateExpressionFn {
+  value: string;
+  token: string;
+  label: string;
+  wrapLabel: string;
+  hint: string;
+  wrapHint: string;
+  asOfPhrase: string;
+  signature: string;
+  wrapPhrase: (name: string) => string;
+}
+
+export const DQ_DATE_FNS: DateExpressionFn[] = [
+  { value: 'as_of', token: 'CURRENT_DATE', label: 'As-of date', wrapLabel: 'That date', hint: 'The as-of date of this check, not the day you save the rule.', wrapHint: 'Compared with that attribute on the same record.', asOfPhrase: 'the as-of date', signature: 'CURRENT_DATE', wrapPhrase: (name) => name },
+  { value: 'previous_day', token: 'PREVIOUS_DAY', label: 'Yesterday', wrapLabel: 'The day before', hint: 'The day before a date. With no date, that is the day before the as-of date.', wrapHint: 'The day before that attribute’s date.', asOfPhrase: 'the day before the as-of date', signature: 'PREVIOUS_DAY(date)', wrapPhrase: (name) => `the day before ${name}` },
+  { value: 'start_of_month', token: 'START_OF_MONTH', label: 'Start of month', wrapLabel: 'Start of its month', hint: 'The first day of the month containing a date.', wrapHint: 'The first day of the month that contains that attribute.', asOfPhrase: 'the start of the as-of month', signature: 'START_OF_MONTH(date)', wrapPhrase: (name) => `the start of the month of ${name}` },
+  { value: 'end_of_month', token: 'END_OF_MONTH', label: 'End of month', wrapLabel: 'End of its month', hint: 'The last day of the month containing a date.', wrapHint: 'The last day of the month that contains that attribute.', asOfPhrase: 'the end of the as-of month', signature: 'END_OF_MONTH(date)', wrapPhrase: (name) => `the end of the month of ${name}` },
+  { value: 'start_of_quarter', token: 'START_OF_QUARTER', label: 'Start of quarter', wrapLabel: 'Start of its quarter', hint: 'The first day of the calendar quarter containing a date.', wrapHint: 'The first day of the calendar quarter that contains that attribute.', asOfPhrase: 'the start of the as-of quarter', signature: 'START_OF_QUARTER(date)', wrapPhrase: (name) => `the start of the quarter of ${name}` },
+  { value: 'end_of_quarter', token: 'END_OF_QUARTER', label: 'End of quarter', wrapLabel: 'End of its quarter', hint: 'The last day of the calendar quarter containing a date.', wrapHint: 'The last day of the calendar quarter that contains that attribute.', asOfPhrase: 'the end of the as-of quarter', signature: 'END_OF_QUARTER(date)', wrapPhrase: (name) => `the end of the quarter of ${name}` },
+  { value: 'start_of_year', token: 'START_OF_YEAR', label: 'Start of year', wrapLabel: 'Start of its year', hint: 'The first day of the calendar year containing a date.', wrapHint: 'The first day of the calendar year that contains that attribute.', asOfPhrase: 'the start of the as-of year', signature: 'START_OF_YEAR(date)', wrapPhrase: (name) => `the start of the year of ${name}` },
+  { value: 'end_of_year', token: 'END_OF_YEAR', label: 'End of year', wrapLabel: 'End of its year', hint: 'The last day of the calendar year containing a date.', wrapHint: 'The last day of the calendar year that contains that attribute.', asOfPhrase: 'the end of the as-of year', signature: 'END_OF_YEAR(date)', wrapPhrase: (name) => `the end of the year of ${name}` },
+];
+
+export const CALC_DATE_FUNCTIONS = DQ_DATE_FNS.map((fn) => ({
+  code: fn.token,
+  name: fn.label,
+  category: 'ROW',
+  description: fn.hint,
+  signature: fn.signature,
+  callable: true,
+}));
+
+/** A field is read on this date, computed from the expression's as-of date. */
+export const AS_OF_PERIODS = [
+  { code: 'PRIOR_MONTH_END', name: 'Prior month end', description: 'The attribute’s value on the last day of the month before the as-of date. As of 23 Oct 2026, that is 30 Sep 2026.', signature: 'PRIOR_MONTH_END(attribute)' },
+  { code: 'PRIOR_QUARTER_END', name: 'Prior quarter end', description: 'The attribute’s value on the last day of the quarter before the as-of date.', signature: 'PRIOR_QUARTER_END(attribute)' },
+  { code: 'PRIOR_YEAR_END', name: 'Prior year end', description: 'The attribute’s value on 31 December of the year before the as-of date.', signature: 'PRIOR_YEAR_END(attribute)' },
+  { code: 'MONTH_END', name: 'Month end', description: 'The attribute’s value on the last day of the as-of date’s month.', signature: 'MONTH_END(attribute)' },
+  { code: 'QUARTER_END', name: 'Quarter end', description: 'The attribute’s value on the last day of the as-of date’s quarter.', signature: 'QUARTER_END(attribute)' },
+  { code: 'YEAR_END', name: 'Year end', description: 'The attribute’s value on 31 December of the as-of date’s year.', signature: 'YEAR_END(attribute)' },
+] as const;
+
+export const AS_OF_PERIOD_CODES = new Set<string>(AS_OF_PERIODS.map((period) => period.code));
+
+const CALL_TOKENS = DQ_DATE_FNS.filter((fn) => fn.token !== 'CURRENT_DATE').map((fn) => fn.token).join('|');
+
+export function isReservedRef(code: string) {
+  return code.toUpperCase() === 'CURRENT_DATE';
+}
+
+export type ComparisonExpression =
+  | { kind: 'literal'; text: string }
+  | { kind: 'attribute'; name: string }
+  | { kind: 'call'; token: string; argument: string; canonical: string }
+  | { kind: 'asof'; attribute: string; period: string; canonical: string };
+
+export function parseComparisonExpression(text: string): ComparisonExpression {
+  const raw = text.trim();
+  const wrapped = raw.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)$/);
+  if (wrapped && AS_OF_PERIOD_CODES.has(wrapped[1].toUpperCase())) {
+    const period = wrapped[1].toUpperCase();
+    const attribute = wrapped[2];
+    return { kind: 'asof', attribute, period, canonical: `${period}(${attribute})` };
+  }
+  const asOf = raw.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+AS\s+OF\s+([A-Za-z_][A-Za-z0-9_]*)$/i);
+  if (asOf && AS_OF_PERIOD_CODES.has(asOf[2].toUpperCase())) {
+    const attribute = asOf[1];
+    const period = asOf[2].toUpperCase();
+    return { kind: 'asof', attribute, period, canonical: `${attribute} AS OF ${period}` };
+  }
+  if (/^CURRENT_DATE$/i.test(raw)) return { kind: 'call', token: 'CURRENT_DATE', argument: 'CURRENT_DATE', canonical: 'CURRENT_DATE' };
+  if (/^YESTERDAY$/i.test(raw)) return { kind: 'call', token: 'PREVIOUS_DAY', argument: 'CURRENT_DATE', canonical: 'PREVIOUS_DAY(CURRENT_DATE)' };
+  let match = raw.match(new RegExp(`^(${CALL_TOKENS})$`, 'i'));
+  if (match) {
+    const token = match[1].toUpperCase();
+    return { kind: 'call', token, argument: 'CURRENT_DATE', canonical: `${token}(CURRENT_DATE)` };
+  }
+  match = raw.match(new RegExp(`^(${CALL_TOKENS})\\s*\\(\\s*(CURRENT_DATE|[A-Za-z_][A-Za-z0-9_]*)\\s*\\)$`, 'i'));
+  if (match) {
+    const token = match[1].toUpperCase();
+    const argument = /^CURRENT_DATE$/i.test(match[2]) ? 'CURRENT_DATE' : match[2];
+    return { kind: 'call', token, argument, canonical: `${token}(${argument})` };
+  }
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw)) return { kind: 'attribute', name: raw };
+  return { kind: 'literal', text };
+}
+
+export function comparisonFields(text: string): { value: string; compareAttributeCode: string } {
+  const parsed = parseComparisonExpression(text);
+  if (!text.trim()) return { value: '', compareAttributeCode: '' };
+  if (parsed.kind === 'asof') return { value: `AS OF ${parsed.period}`, compareAttributeCode: parsed.attribute };
+  if (parsed.kind === 'attribute') return { value: '', compareAttributeCode: parsed.name };
+  if (parsed.kind === 'call' && parsed.argument !== 'CURRENT_DATE') return { value: parsed.canonical, compareAttributeCode: parsed.argument };
+  if (parsed.kind === 'call') return { value: parsed.canonical, compareAttributeCode: '' };
+  const quoted = text.trim().match(/^'((?:[^']|'')*)'$/);
+  if (quoted) return { value: quoted[1].replace(/''/g, "'"), compareAttributeCode: '' };
+  return { value: text, compareAttributeCode: '' };
+}
+
+export function comparisonText(value: string | null | undefined, compareAttributeCode: string | null | undefined): string {
+  const expression = (value || '').trim();
+  if (/^AS OF /i.test(expression) && compareAttributeCode && compareAttributeCode !== '__PICK__') {
+    const period = expression.replace(/^AS OF\s+/i, '').trim().toUpperCase();
+    if (AS_OF_PERIOD_CODES.has(period)) return `${period}(${compareAttributeCode})`;
+    return `${compareAttributeCode} ${expression}`;
+  }
+  if (parseComparisonExpression(expression).kind === 'call') return expression;
+  if (compareAttributeCode && compareAttributeCode !== '__PICK__') return compareAttributeCode;
+  if (!expression || /^-?\d+(\.\d+)?$/.test(expression) || expression === 'true' || expression === 'false') return expression;
+  if (expression.startsWith("'")) return expression;
+  return `'${expression.replace(/'/g, "''")}'`;
+}
+
+export function describeComparisonExpression(text: string, nameFor: (code: string) => string = (code) => code): string {
+  const parsed = parseComparisonExpression(text);
+  if (!text.trim()) return 'Enter a value, another attribute, or a date function.';
+  if (parsed.kind === 'asof') {
+    const period = AS_OF_PERIODS.find((item) => item.code === parsed.period);
+    return `${period?.name || parsed.period} of ${nameFor(parsed.attribute)}, relative to the as-of date.`;
+  }
+  if (parsed.kind === 'attribute') return `Compared with ${nameFor(parsed.name)} on the same record.`;
+  if (parsed.kind === 'literal') return `Compared with ${text.trim()}.`;
+  const fn = DQ_DATE_FNS.find((item) => item.token === parsed.token);
+  if (!fn) return text;
+  if (parsed.argument === 'CURRENT_DATE') return `${fn.asOfPhrase.charAt(0).toUpperCase()}${fn.asOfPhrase.slice(1)}.`;
+  return `${fn.wrapPhrase(nameFor(parsed.argument)).replace(/^./, (letter) => letter.toUpperCase())}.`;
+}
+
+function utcDate(iso: string): Date | null {
+  const match = iso.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+export function applyDateFn(token: string, iso: string): string | null {
+  const date = utcDate(iso);
+  if (!date) return null;
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  const key = token.toUpperCase();
+  if (key === 'CURRENT_DATE') return isoDate(date);
+  if (key === 'PREVIOUS_DAY' || key === 'YESTERDAY') return isoDate(new Date(date.getTime() - 86400000));
+  if (key === 'START_OF_MONTH') return isoDate(new Date(Date.UTC(year, month, 1)));
+  if (key === 'END_OF_MONTH') return isoDate(new Date(Date.UTC(year, month + 1, 0)));
+  if (key === 'START_OF_QUARTER') return isoDate(new Date(Date.UTC(year, Math.floor(month / 3) * 3, 1)));
+  if (key === 'END_OF_QUARTER') return isoDate(new Date(Date.UTC(year, Math.floor(month / 3) * 3 + 3, 0)));
+  if (key === 'START_OF_YEAR') return isoDate(new Date(Date.UTC(year, 0, 1)));
+  if (key === 'END_OF_YEAR') return isoDate(new Date(Date.UTC(year, 12, 0)));
+  if (key === 'MONTH_END') return applyDateFn('END_OF_MONTH', iso);
+  if (key === 'QUARTER_END') return applyDateFn('END_OF_QUARTER', iso);
+  if (key === 'YEAR_END') return applyDateFn('END_OF_YEAR', iso);
+  if (key === 'PRIOR_MONTH_END') return shiftBack(iso, 'START_OF_MONTH', 'END_OF_MONTH');
+  if (key === 'PRIOR_QUARTER_END') return shiftBack(iso, 'START_OF_QUARTER', 'END_OF_QUARTER');
+  if (key === 'PRIOR_YEAR_END') return shiftBack(iso, 'START_OF_YEAR', 'END_OF_YEAR');
+  return null;
+}
+
+function shiftBack(iso: string, startToken: string, endToken: string): string | null {
+  const start = applyDateFn(startToken, iso);
+  if (!start) return null;
+  const previous = applyDateFn('PREVIOUS_DAY', start);
+  return previous ? applyDateFn(endToken, previous) : null;
+}
+
+export function resolveComparisonExpression(
+  text: string,
+  readAttribute: (code: string) => string | null,
+  asOf: string,
+): string | null {
+  const parsed = parseComparisonExpression(text);
+  if (parsed.kind === 'literal') return text;
+  if (parsed.kind === 'attribute') return readAttribute(parsed.name);
+  if (parsed.kind === 'asof') return null;
+  const source = parsed.argument === 'CURRENT_DATE' ? asOf : readAttribute(parsed.argument);
+  if (!source) return null;
+  if (parsed.token === 'CURRENT_DATE') return source.slice(0, 10);
+  return applyDateFn(parsed.token, source);
 }

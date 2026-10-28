@@ -1,5 +1,7 @@
 'use client';
 
+import { formatAttributeDisplay } from '@/lib/attribute-display';
+import { useAttributeDisplay } from '@/components/forms/AttributeValueInput';
 import type { ActivityData } from './types';
 
 interface ActivityFeedPanelProps {
@@ -38,16 +40,10 @@ function formatEffective(from?: string, to?: string) {
   return `${startLabel} – ${endLabel}`;
 }
 
-function formatActivityValue(value: string | undefined) {
-  if (value == null || value === '') return 'Cleared';
-  const trimmed = value.trim();
-  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
-    const numeric = Number(trimmed);
-    if (Number.isFinite(numeric)) {
-      return numeric.toLocaleString(undefined, { maximumFractionDigits: 6 });
-    }
-  }
-  return value;
+function ShownValue({ attributeCode, value }: { attributeCode?: string; value?: string }) {
+  const meta = useAttributeDisplay(attributeCode);
+  if (value == null || value === '') return <>Cleared</>;
+  return <>{formatAttributeDisplay(value, meta) || value}</>;
 }
 
 export function ActivityFeedPanel({ activities }: ActivityFeedPanelProps) {
@@ -71,7 +67,7 @@ export function ActivityFeedPanel({ activities }: ActivityFeedPanelProps) {
             <div className="act-avatar" title={item.who}>{initials(item.who)}</div>
             <div style={{ minWidth: 0 }}>
               <div className="act-txt">{item.attribute || item.text}</div>
-              {item.attribute && <div className="act-value">{formatActivityValue(item.value)}</div>}
+              {item.attribute && <div className="act-value"><ShownValue attributeCode={item.attributeCode} value={item.value} /></div>}
               <div className="act-time">{[item.who, formatActivityTime(item.time), formatEffective(item.validFrom, item.validTo)].filter(Boolean).join(' · ')}</div>
             </div>
           </div>

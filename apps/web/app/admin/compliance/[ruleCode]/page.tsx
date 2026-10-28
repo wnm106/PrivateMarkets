@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { usePublishViewContext } from '@/lib/view-context';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
@@ -18,6 +18,7 @@ import {
   ENTITIES_QUERY,
 } from '@/lib/graphql';
 import { ComplianceRuleForm, ComplianceRuleFormData, buildComplianceVersionInput, dimensionFromDto, describeDimension, emptyDimension } from '@/components/forms/ComplianceRuleForm';
+import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
 interface RollupHopDto {
   relationshipCode: string;
@@ -590,19 +591,7 @@ export default function ComplianceRuleDetailPage() {
           {runs.length > 0 && (
             <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', padding: '18px 22px' }}>
               <div className="section-kicker">Evaluation History</div>
-              {runs.map((run) => (
-                <div
-                  key={run.id}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--line)', fontSize: '12px', cursor: 'pointer' }}
-                  onClick={() => loadRunResults(run.id)}
-                >
-                  <span className="mono">{run.asOfDate} · {new Date(run.startedAt).toLocaleString()}</span>
-                  <span>{run.sourceScope}</span>
-                  <span>{run.runStatus}</span>
-                  <span className="mono">{run.resultCount ?? 0} results</span>
-                  <span className="mono" style={{ color: (run.breachCount ?? 0) > 0 ? 'var(--red)' : 'var(--green)' }}>{run.breachCount ?? 0} breaches</span>
-                </div>
-              ))}
+              <RunHistory runs={runs} onOpen={loadRunResults} />
             </div>
           )}
         </>
@@ -621,59 +610,70 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
 }
 
 function ResultsTable({ results }: { results: ResultDto[] }) {
+  const columns = useMemo<ColDef<ResultDto>[]>(() => [
+    {
+      colId: 'anchor',
+      headerName: 'Anchor Entity',
+      minWidth: 160,
+      flex: 1.4,
+      cellClass: 'mono',
+      valueGetter: (params) => params.data?.anchorEntityCode || params.data?.anchorEntityId || '',
+    },
+    {
+      field: 'groupByValue',
+      headerName: 'Group',
+      minWidth: 140,
+      flex: 1,
+      valueFormatter: (params) => params.value || '—',
+    },
+    { field: 'numeratorValue', headerName: 'Numerator', minWidth: 120, valueFormatter: (params) => formatNum(params.value) },
+    { field: 'denominatorValue', headerName: 'Denominator', minWidth: 130, valueFormatter: (params) => formatNum(params.value) },
+    { field: 'computedValue', headerName: 'Value', minWidth: 110, valueFormatter: (params) => formatNum(params.value) },
+    {
+      field: 'status',
+      headerName: 'Status',
+      minWidth: 140,
+      cellRenderer: (params) => {
+        if (!params.value) return null;
+        const style = STATUS_STYLE[String(params.value)] || STATUS_STYLE.NO_DATA;
+        return <span style={{ fontSize: 10, padding: '3px 8px', background: style.bg, color: style.fg, fontWeight: 600 }}>{String(params.value).replace('_', ' ')}</span>;
+      },
+    },
+  ], []);
   return (
-    <div className="data-table">
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1.4fr 1fr 90px 90px 90px 110px',
-          gap: '10px',
-          padding: '10px 14px',
-          background: 'var(--bg)',
-          borderBottom: '1px solid var(--line)',
-          fontSize: '10px',
-          fontWeight: 600,
-          textTransform: 'uppercase',
-          letterSpacing: '1px',
-          color: 'var(--ink-3)',
-        }}
-      >
-        <div>Anchor Entity</div>
-        <div>Group</div>
-        <div style={{ textAlign: 'right' }}>Numerator</div>
-        <div style={{ textAlign: 'right' }}>Denominator</div>
-        <div style={{ textAlign: 'right' }}>Value</div>
-        <div style={{ textAlign: 'center' }}>Status</div>
-      </div>
-      {results.map((r) => {
-        const style = STATUS_STYLE[r.status] || STATUS_STYLE.NO_DATA;
-        return (
-          <div
-            key={r.id}
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1.4fr 1fr 90px 90px 90px 110px',
-              gap: '10px',
-              padding: '10px 14px',
-              borderBottom: '1px solid var(--line)',
-              fontSize: '12px',
-              alignItems: 'center',
-            }}
-          >
-            <div className="mono">{r.anchorEntityCode || r.anchorEntityId}</div>
-            <div className="mono" style={{ fontSize: '11px' }}>{r.groupByValue || '—'}</div>
-            <div className="mono" style={{ textAlign: 'right' }}>{formatNum(r.numeratorValue)}</div>
-            <div className="mono" style={{ textAlign: 'right' }}>{formatNum(r.denominatorValue)}</div>
-            <div className="mono" style={{ textAlign: 'right', fontWeight: 600 }}>{formatNum(r.computedValue)}</div>
-            <div style={{ textAlign: 'center' }}>
-              <span style={{ fontSize: '10px', padding: '3px 8px', background: style.bg, color: style.fg, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                {r.status.replace('_', ' ')}
-              </span>
-            </div>
-          </div>
-        );
-      })}
-    </div>
+    <AppGrid
+      rows={results}
+      columns={columns}
+      getRowId={(row) => row.id}
+      autoHeight
+      emptyMessage="No results."
+    />
+  );
+}
+
+function RunHistory({ runs, onOpen }: { runs: RunDto[]; onOpen: (id: string) => void }) {
+  const columns = useMemo<ColDef<RunDto>[]>(() => [
+    {
+      colId: 'when',
+      headerName: 'Run',
+      minWidth: 240,
+      flex: 1.4,
+      valueGetter: (params) => params.data ? `${params.data.asOfDate} · ${new Date(params.data.startedAt).toLocaleString()}` : '',
+    },
+    { field: 'sourceScope', headerName: 'Scope', minWidth: 140 },
+    { field: 'runStatus', headerName: 'Status', minWidth: 130 },
+    { field: 'resultCount', headerName: 'Results', minWidth: 110 },
+    { field: 'breachCount', headerName: 'Breaches', minWidth: 110 },
+  ], []);
+  return (
+    <AppGrid
+      rows={runs}
+      columns={columns}
+      getRowId={(row) => row.id}
+      autoHeight
+      emptyMessage="No evaluations yet."
+      onRowClicked={(row) => onOpen(row.id)}
+    />
   );
 }
 

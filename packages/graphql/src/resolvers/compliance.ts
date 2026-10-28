@@ -620,6 +620,7 @@ async function previewPopulation(context: Context, input: any) {
       conditions,
       (id, path) => targetsAlongPath(id, path, hopMaps),
       (id, code) => textOfAttribute(attributes.get(id), code),
+      asOf,
     );
     if (result.match) {
       matches.push({

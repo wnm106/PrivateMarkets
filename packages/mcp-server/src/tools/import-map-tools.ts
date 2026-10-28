@@ -10,7 +10,7 @@ import { getIdentifierSuggestions } from '../lib/import-map/identifier-validator
 
 const analyzeImportMapTool: ToolDefinition = {
   name: 'analyze_import_map',
-  description: 'Analyze a data file and generate AI-assisted field mapping recommendations for MDM entities. Parses XLSX, CSV, JSON, HTML, or XML data, extracts field names, recommends entity attribute mappings, validates entity identifiers, and determines import sequencing based on entity relationships.',
+  description: 'Read a file and propose mappings onto existing entity types. Parses XLSX, CSV, JSON, HTML, or XML. domainCode values come from list_domain_types. Target attribute codes come from get_template_metadata. Do not invent a target field. Call get_relationship_types before proposing links between records. This does not load the data.',
   category: 'import',
   inputSchema: {
     type: 'object',
@@ -86,7 +86,7 @@ const analyzeImportMapTool: ToolDefinition = {
 
 const executeImportMapTool: ToolDefinition = {
   name: 'execute_import_map',
-  description: 'Execute a data import using field mappings to create or update MDM entities. Imports data in the correct sequence based on entity relationships (parents first). Supports dry-run mode, batch processing, and error handling options.',
+  description: 'Load a file using mappings the user has accepted. Parents load before children. domainCode and attributeCode values must already exist: list_domain_types and get_template_metadata. Prefer a dry run before a real load. Do not invent target fields.',
   category: 'import',
   inputSchema: {
     type: 'object',
@@ -175,7 +175,7 @@ const executeImportMapTool: ToolDefinition = {
 
 const getIdentifierSuggestionsTool: ToolDefinition = {
   name: 'get_identifier_suggestions',
-  description: 'Get identifier suggestions and recommendations for a domain. Shows what attributes form entity identifiers (e.g., ISIN for Security, LEI for Issuer) and provides recommendations for identifier configuration.',
+  description: 'Which fields identify a record of one entity type, such as LEI for an issuer. domainCode comes from list_domain_types. Call this before create_entity_identifier or before mapping an import identifier. The examples in older notes may not match this database. Use the returned codes.',
   category: 'import',
   inputSchema: {
     type: 'object',
@@ -194,7 +194,7 @@ const getIdentifierSuggestionsTool: ToolDefinition = {
 
 const parseDataPreviewTool: ToolDefinition = {
   name: 'parse_data_preview',
-  description: 'Parse a data file and return a preview of extracted fields, sample values, and inferred data types. Useful for understanding the structure of incoming data before creating field mappings.',
+  description: 'Show the columns, sample values, and inferred types in a file. Call this before analyze_import_map. It does not choose target attributes. Those come from get_template_metadata.',
   category: 'import',
   inputSchema: {
     type: 'object',

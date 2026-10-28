@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -13,6 +13,7 @@ import {
   UPDATE_REFERENCE_LIST_VALUE_MUTATION,
   DELETE_REFERENCE_LIST_VALUE_MUTATION,
 } from '@/lib/graphql';
+import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
 interface ReferenceListValue {
   id: string;
@@ -43,6 +44,71 @@ function firstError(result: { data?: any; error?: any }, key: string): string | 
   return null;
 }
 
+function LabelCell(props: any) {
+  const row = props.data;
+  const editing = !!row?.__editing;
+  const draft = props.context?.get?.()?.draft;
+  const [value, setValue] = useState(draft?.current?.label || row?.valueLabel || '');
+  useEffect(() => {
+    if (editing) setValue(draft?.current?.label || '');
+  }, [editing, row?.id]);
+  if (!row || props.node?.group) return props.value || null;
+  if (!editing) return <span style={{ color: row.isActive ? 'var(--ink)' : 'var(--ink-3)' }}>{row.valueLabel}</span>;
+  return (
+    <input
+      className="text-input"
+      value={value}
+      onChange={(event) => {
+        if (draft) draft.current.label = event.target.value;
+        setValue(event.target.value);
+      }}
+    />
+  );
+}
+
+function SynonymCell(props: any) {
+  const row = props.data;
+  const editing = !!row?.__editing;
+  const draft = props.context?.get?.()?.draft;
+  const [value, setValue] = useState(draft?.current?.synonyms || '');
+  useEffect(() => {
+    if (editing) setValue(draft?.current?.synonyms || '');
+  }, [editing, row?.id]);
+  if (!row || props.node?.group) return props.value || null;
+  if (!editing) return <span style={{ color: 'var(--ink-3)' }}>{row.synonymText}</span>;
+  return (
+    <input
+      className="text-input"
+      value={value}
+      onChange={(event) => {
+        if (draft) draft.current.synonyms = event.target.value;
+        setValue(event.target.value);
+      }}
+    />
+  );
+}
+
+function ValueActions(props: any) {
+  const row = props.data;
+  if (!row || props.node?.group) return null;
+  const actions = props.context.get();
+  if (row.__editing) {
+    return (
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button type="button" className="btn btn-sm btn-primary" disabled={actions.saving} onClick={() => actions.saveValue(row)}>Save</button>
+        <button type="button" className="btn btn-sm" disabled={actions.saving} onClick={() => actions.setEditingId(null)}>Cancel</button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+      <button type="button" className="btn btn-sm" disabled={actions.saving} onClick={() => actions.startEdit(row)}>Edit</button>
+      <button type="button" className="btn btn-sm" disabled={actions.saving} onClick={() => actions.toggleValue(row)}>{row.isActive ? 'Hide' : 'Show'}</button>
+      <button type="button" className="btn btn-sm" disabled={actions.saving} onClick={() => actions.deleteValue(row)}>Remove</button>
+    </div>
+  );
+}
+
 function parseSynonyms(raw: string): string[] {
   return raw
     .split(',')
@@ -69,8 +135,7 @@ export default function ReferenceListDetailPage() {
   const [newSynonyms, setNewSynonyms] = useState('');
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editLabel, setEditLabel] = useState('');
-  const [editSynonyms, setEditSynonyms] = useState('');
+  const draft = useRef({ label: '', synonyms: '' });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -182,17 +247,16 @@ export default function ReferenceListDetailPage() {
   });
 
   const startEdit = (row: ReferenceListValue) => {
+    draft.current = { label: row.valueLabel, synonyms: (row.synonyms || []).join(', ') };
     setEditingId(row.id);
-    setEditLabel(row.valueLabel);
-    setEditSynonyms((row.synonyms || []).join(', '));
   };
 
   const saveValue = (row: ReferenceListValue) => runMutation(async () => {
     const result = await graphqlMutation(UPDATE_REFERENCE_LIST_VALUE_MUTATION, {
       input: {
         id: row.id,
-        valueLabel: editLabel.trim() || row.valueLabel,
-        synonyms: parseSynonyms(editSynonyms),
+        valueLabel: draft.current.label.trim() || row.valueLabel,
+        synonyms: parseSynonyms(draft.current.synonyms),
       },
     });
     const message = firstError(result, 'updateReferenceListValue');
@@ -212,6 +276,23 @@ export default function ReferenceListDetailPage() {
     const result = await graphqlMutation(DELETE_REFERENCE_LIST_VALUE_MUTATION, { id: row.id });
     return firstError(result, 'deleteReferenceListValue');
   });
+
+  const gridRows = useMemo(() => values.map((row) => ({
+    ...row,
+    synonymText: (row.synonyms || []).length > 0 ? row.synonyms.join(', ') : '—',
+    statusLabel: row.isActive ? 'Active' : 'Inactive',
+    __editing: row.id === editingId,
+  })), [values, editingId]);
+  const valueActions = useRef({ startEdit, saveValue, toggleValue, deleteValue, setEditingId, draft, saving });
+  valueActions.current = { startEdit, saveValue, toggleValue, deleteValue, setEditingId, draft, saving };
+  const valueContext = useMemo(() => ({ get: () => valueActions.current }), []);
+  const valueColumns = useMemo<ColDef<(typeof gridRows)[number]>[]>(() => [
+    { field: 'valueCode', headerName: 'Code', minWidth: 160, cellClass: 'mono' },
+    { colId: 'label', headerName: 'Label', minWidth: 180, flex: 1, autoHeight: true, valueGetter: (params) => params.data?.valueLabel || '', cellRenderer: LabelCell },
+    { colId: 'synonyms', headerName: 'Synonyms', minWidth: 220, flex: 1.4, autoHeight: true, wrapText: true, valueGetter: (params) => params.data?.synonymText || '', cellRenderer: SynonymCell },
+    { field: 'statusLabel', headerName: 'Status', minWidth: 110 },
+    { colId: 'actions', headerName: '', width: 250, sortable: false, filter: false, cellRenderer: ValueActions },
+  ], []);
 
   return (
     <div className="view-fade">
@@ -305,49 +386,17 @@ export default function ReferenceListDetailPage() {
           </div>
 
           <div className="data-table">
-            <div style={{ display: 'grid', gridTemplateColumns: '160px minmax(120px, 1fr) minmax(160px, 1.4fr) 72px 220px', gap: '12px', padding: '12px 18px', background: 'var(--bg)', borderBottom: '1px solid var(--line)', fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)' }}>
-              <div>Code</div>
-              <div>Label</div>
-              <div>Synonyms</div>
-              <div>Status</div>
-              <div></div>
-            </div>
-            {values.length === 0 ? (
-              <div style={{ padding: '28px 18px', color: 'var(--ink-3)', fontSize: '12px' }}>
-                {search ? 'No values match that search.' : 'No canonical values yet. Add the first one above.'}
-              </div>
-            ) : values.map((row) => (
-              <div key={row.id} style={{ display: 'grid', gridTemplateColumns: '160px minmax(120px, 1fr) minmax(160px, 1.4fr) 72px 220px', gap: '12px', padding: '14px 18px', borderBottom: '1px solid var(--line)', fontSize: '12px', alignItems: 'center' }}>
-                <div className="mono" style={{ color: 'var(--accent)', fontWeight: 500 }}>{row.valueCode}</div>
-                {editingId === row.id ? (
-                  <input className="text-input" value={editLabel} onChange={(e) => setEditLabel(e.target.value)} style={{ padding: '7px 10px' }} />
-                ) : (
-                  <div style={{ color: row.isActive ? 'var(--ink)' : 'var(--ink-3)' }}>{row.valueLabel}</div>
-                )}
-                {editingId === row.id ? (
-                  <input className="text-input" value={editSynonyms} onChange={(e) => setEditSynonyms(e.target.value)} style={{ padding: '7px 10px' }} />
-                ) : (
-                  <div style={{ color: 'var(--ink-3)', lineHeight: 1.5 }}>
-                    {(row.synonyms || []).length > 0 ? row.synonyms.join(', ') : '—'}
-                  </div>
-                )}
-                <div style={{ color: row.isActive ? 'var(--ink)' : 'var(--ink-3)' }}>{row.isActive ? 'Active' : 'Inactive'}</div>
-                <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
-                  {editingId === row.id ? (
-                    <>
-                      <button className="btn btn-sm btn-primary" onClick={() => saveValue(row)} disabled={saving}>Save</button>
-                      <button className="btn btn-sm" onClick={() => setEditingId(null)} disabled={saving}>Cancel</button>
-                    </>
-                  ) : (
-                    <>
-                      <button className="btn btn-sm" onClick={() => startEdit(row)} disabled={saving}>Edit</button>
-                      <button className="btn btn-sm" onClick={() => toggleValue(row)} disabled={saving}>{row.isActive ? 'Hide' : 'Show'}</button>
-                      <button className="btn btn-sm" onClick={() => deleteValue(row)} disabled={saving}>Remove</button>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
+            <AppGrid
+              rows={gridRows}
+              columns={valueColumns}
+              getRowId={(row) => row.id}
+              autoHeight={false}
+              height="100%"
+              autoRowHeight
+              emptyMessage={search ? 'No values match that search.' : 'No canonical values yet. Add the first one above.'}
+              context={valueContext}
+              layoutKey={`${editingId || ''}:${saving}`}
+            />
           </div>
         </>
       ) : null}

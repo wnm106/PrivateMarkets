@@ -406,6 +406,12 @@ type UpdateDQRuleResult {
   errors: [MutationError!]!
 }
 
+type ConfirmAttributeReceiptResult {
+  success: Boolean!
+  receivedAt: DateTime
+  errors: [MutationError!]!
+}
+
 type ResolveDQExceptionResult {
   success: Boolean!
   errors: [MutationError!]!
@@ -485,9 +491,10 @@ type OverrideMatch {
   attributeName: String!
   overrideValue: String!
   overrideReason: String
-  prioritySourceCode: String!
-  prioritySourceName: String!
-  priorityValue: String!
+  prioritySourceCode: String
+  prioritySourceName: String
+  priorityValue: String
+  ready: Boolean!
 }
 
 type QualityEntityRef {
@@ -651,6 +658,7 @@ type EntityQualityResult {
   qualityResolvedCount: Int!
   qualityIntroducedCount: Int!
   overrideMatchCount: Int!
+  overrideCount: Int!
 }
 
 # File: compliance.graphql
@@ -1289,6 +1297,8 @@ input UpdateEntityInput {
   description: String
   isActive: Boolean
   attributes: JSONObject
+  """Date the attribute edit is effective. Use the date on screen so the new value is visible there."""
+  asOfDate: Date
   parentRelationships: [EntityRelationshipInput!]
   childRelationships: [EntityRelationshipInput!]
 }
@@ -2340,6 +2350,165 @@ type LinkAttributeToListResult {
   errors: [MutationError!]!
 }
 
+type MatchRuleClause {
+  id: ID!
+  clauseCode: String!
+  attributeCodes: [String!]!
+  useEntityName: Boolean!
+  algorithm: String!
+  threshold: Float!
+  weight: Float!
+  deterministic: Boolean!
+  isActive: Boolean!
+}
+
+type MatchRule {
+  id: ID!
+  ruleCode: String!
+  ruleName: String!
+  description: String
+  minScore: Float!
+  isActive: Boolean!
+  clauses: [MatchRuleClause!]!
+}
+
+type MergeReason {
+  clauseCode: String!
+  algorithm: String!
+  label: String!
+  leftValue: String!
+  rightValue: String!
+  leftAttribute: String!
+  rightAttribute: String!
+  similarity: Float!
+  deterministic: Boolean!
+}
+
+type MergeEntityRef {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+}
+
+type MergeCandidate {
+  score: Int!
+  crossDomain: Boolean!
+  ruleCode: String!
+  ruleName: String!
+  reasons: [MergeReason!]!
+  left: MergeEntityRef!
+  right: MergeEntityRef!
+}
+
+type MergeCandidateResult {
+  candidates: [MergeCandidate!]!
+  scannedCount: Int!
+  truncated: Boolean!
+}
+
+type MergeFieldComparison {
+  attributeCode: String!
+  survivorValue: String
+  retiredValue: String
+  status: String!
+}
+
+type MergePreview {
+  survivor: MergeEntityRef!
+  retired: MergeEntityRef!
+  crossDomain: Boolean!
+  score: Int!
+  ruleName: String
+  reasons: [MergeReason!]!
+  fields: [MergeFieldComparison!]!
+  relationshipsToMove: Int!
+}
+
+type MergeEntitiesResult {
+  success: Boolean!
+  survivorId: ID
+  retiredId: ID
+  attributesCopied: Int
+  relationshipsMoved: Int
+  intersectionsMoved: Int
+  positionsMoved: Int
+  errors: [MutationError!]!
+}
+
+type EntityGraphNode {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  depth: Int!
+  direction: String!
+}
+
+type EntityGraphEdge {
+  id: ID!
+  parentEntityId: ID!
+  childEntityId: ID!
+  relationshipCode: String!
+  relationshipType: String!
+  isPrimary: Boolean!
+  metadata: JSON
+}
+
+type EntityGraph {
+  rootId: ID!
+  nodes: [EntityGraphNode!]!
+  edges: [EntityGraphEdge!]!
+}
+
+input MergeCandidateFilter {
+  entityId: ID
+  query: String
+  ruleCode: String
+  crossDomainOnly: Boolean
+  sameDomainOnly: Boolean
+  limit: Int
+}
+
+input MergeFieldChoiceInput {
+  attributeCode: String!
+  takeFrom: String!
+}
+
+input MatchClauseInput {
+  id: ID
+  clauseCode: String!
+  attributeCodes: [String!]!
+  useEntityName: Boolean!
+  algorithm: String!
+  threshold: Float!
+  weight: Float!
+  deterministic: Boolean!
+  isActive: Boolean!
+}
+
+input UpdateMatchRuleInput {
+  id: ID!
+  ruleName: String
+  description: String
+  minScore: Float
+  isActive: Boolean
+  clauses: [MatchClauseInput!]
+}
+
+input CreateMatchRuleInput {
+  ruleCode: String!
+  ruleName: String!
+  description: String
+  minScore: Float!
+  clauses: [MatchClauseInput!]!
+}
+
+type UpdateMatchRuleResult {
+  rule: MatchRule
+  errors: [MutationError!]!
+}
+
 # File: root.graphql
 # Root Query Type
 
@@ -2371,6 +2540,10 @@ type Query {
   calcBreakdown(entityId: ID!, attributeCode: String!, asOfDate: Date): CalcBreakdown
   calculatedAttributeStates(entityId: ID!): [CalculatedAttributeState!]!
   expressionFunctions(category: String): [ExpressionFunction!]!
+  matchRules: [MatchRule!]!
+  mergeCandidates(filter: MergeCandidateFilter): MergeCandidateResult!
+  mergePreview(survivorId: ID!, retiredId: ID!, ruleCode: String): MergePreview!
+  entityGraph(entityId: ID!, depth: Int, relationshipCodes: [String!]): EntityGraph!
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
@@ -2386,8 +2559,8 @@ type Query {
   dqRule(id: ID!): DQRule
   dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
   dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
-  dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date): DataQualityDashboard!
-  staleAttributes(domainCode: String, olderThanDays: Int, asOfDate: Date): StaleAttributeReport!
+  dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date, knowledgeDate: DateTime, entityId: ID): DataQualityDashboard!
+  staleAttributes(domainCode: String, olderThanDays: Int, asOfDate: Date, knowledgeDate: DateTime, entityId: ID): StaleAttributeReport!
   
   # Source queries
   dataSources(type: String, isActive: Boolean): [DataSource!]!
@@ -2445,6 +2618,10 @@ type Query {
   referenceList(id: ID, listCode: String): ReferenceListDetail
   normalizeValue(listCode: String!, values: [String!]!): [NormalizationResult!]!
 
+  # Record experiences: editable multi-entity working screens
+  recordExperiences(anchorDomainCode: String, isActive: Boolean): [RecordExperience!]!
+  recordExperience(experienceCode: String!): RecordExperience
+
   # Reporting (dashboards & narratives)
   dashboards(domainCode: String, isActive: Boolean): [Dashboard!]!
   dashboard(id: ID, dashboardCode: String): Dashboard
@@ -2497,12 +2674,16 @@ type Mutation {
   upsertEntityTemplateBinding(input: UpsertEntityTemplateBindingInput!): UpsertEntityTemplateBindingResult!
   saveDisplayValue(input: SaveDisplayValueInput!): SaveDisplayValueResult!
   updateTemplateSourcePreference(input: UpdateTemplateSourcePreferenceInput!): UpdateTemplateSourcePreferenceResult!
+  mergeEntities(survivorId: ID!, retiredId: ID!, fieldChoices: [MergeFieldChoiceInput!], matchScore: Int, matchReasons: JSON): MergeEntitiesResult!
+  updateMatchRule(input: UpdateMatchRuleInput!): UpdateMatchRuleResult!
+  createMatchRule(input: CreateMatchRuleInput!): UpdateMatchRuleResult!
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
   updateDQRule(input: UpdateDQRuleInput!): UpdateDQRuleResult!
   resolveDQException(input: ResolveDQExceptionInput!): ResolveDQExceptionResult!
   recordDQDisposition(input: RecordDQDispositionInput!): RecordDQDispositionResult!
+  confirmAttributeReceipt(entityId: ID!, attributeCode: String!): ConfirmAttributeReceiptResult!
   
   # Intersection mutations
   createIntersectionType(input: CreateIntersectionTypeInput!): CreateIntersectionTypeResult!
@@ -2704,6 +2885,11 @@ type DeleteCompetingSourceResult {
 # Metadata Types
 input UpdateAttributeDefinitionInput {
   id: ID!
+  attributeName: String
+  dataType: String
+  description: String
+  unitOfMeasure: String
+  isMultiValued: Boolean
   displayFormat: String
   listValues: [String!]
   validationRules: JSON
@@ -2715,6 +2901,7 @@ input UpdateAttributeDefinitionInput {
   aggregationType: String
   weightAttributeCode: String
   numericPrecision: Int
+  referenceListCode: String
 }
 
 type UpdateAttributeDefinitionResult {
@@ -3757,6 +3944,44 @@ type UpdateSecurityResult {
   errors: [MutationError!]!
 }
 
+
+# Record experiences compose one anchor entity with related forms, grids, and dashboards.
+
+type ExperienceSection {
+  key: String!
+  title: String!
+  kind: String!
+  placement: String!
+  domainCode: String
+  relationshipCode: String
+  direction: String
+  columns: [String!]!
+  dashboardCode: String
+  templateCode: String
+}
+
+type ExperiencePipelineStage {
+  code: String!
+  label: String!
+}
+
+type ExperiencePipeline {
+  stageAttribute: String!
+  stages: [ExperiencePipelineStage!]!
+  cardAttributes: [String!]!
+}
+
+type RecordExperience {
+  id: ID!
+  experienceCode: String!
+  experienceName: String!
+  description: String
+  anchorDomainCode: String!
+  sections: [ExperienceSection!]!
+  pipeline: ExperiencePipeline
+  isDefault: Boolean!
+  isActive: Boolean!
+}
 
 # Reporting: Custom Dashboards & Narratives
 #

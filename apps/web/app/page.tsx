@@ -2,8 +2,10 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ColDef } from 'ag-grid-community';
 import { graphqlQuery } from '@/lib/graphql';
 import { domainColor, domainHref } from '@/lib/domain-routes';
+import { AppGrid } from '@/components/grid/AppGrid';
 
 interface DomainTypeRecord {
   id: string;
@@ -81,6 +83,27 @@ const STATUS_LABEL: Record<string, string> = {
   WAIVED: 'Waived',
   FALSE_POSITIVE: 'False positive',
 };
+
+function ExceptionStatusCell(props: any) {
+  return (
+    <span className={`home-status status-${String(props.data.status).toLowerCase()}`}>
+      {STATUS_LABEL[props.data.status] || props.data.status}
+    </span>
+  );
+}
+
+function ExceptionViewCell(props: any) {
+  return <Link href={`${domainHref(props.data.domainCode)}/${props.data.entityId}`}>View</Link>;
+}
+
+const EXCEPTION_COLUMNS: ColDef[] = [
+  { field: 'entityName', headerName: 'Entity', flex: 1.2, minWidth: 140 },
+  { field: 'domainLabel', headerName: 'Domain', flex: 1, minWidth: 120 },
+  { field: 'exceptionMessage', headerName: 'Issue', flex: 2, minWidth: 200 },
+  { colId: 'detected', headerName: 'Detected', width: 140, valueGetter: (params) => relativeTime(params.data?.detectedAt || '') },
+  { colId: 'status', headerName: 'Status', width: 140, sortable: false, filter: false, cellRenderer: ExceptionStatusCell },
+  { colId: 'view', headerName: '', width: 90, sortable: false, filter: false, cellRenderer: ExceptionViewCell },
+];
 
 function relativeTime(iso: string) {
   const then = new Date(iso).getTime();
@@ -430,36 +453,13 @@ export default function LandingPage() {
             <div className="home-empty">{loading ? 'Loading exceptions…' : 'No open exceptions.'}</div>
           ) : (
             <div className="home-table-wrap">
-              <table className="home-table">
-                <thead>
-                  <tr>
-                    <th>Entity</th>
-                    <th>Domain</th>
-                    <th>Issue</th>
-                    <th>Detected</th>
-                    <th>Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {exceptions.map((row) => (
-                    <tr key={row.id}>
-                      <td className="home-entity">{row.entityName}</td>
-                      <td>{domainName(row.domainCode)}</td>
-                      <td>{row.exceptionMessage}</td>
-                      <td className="home-muted">{relativeTime(row.detectedAt)}</td>
-                      <td>
-                        <span className={`home-status status-${row.status.toLowerCase()}`}>
-                          {STATUS_LABEL[row.status] || row.status}
-                        </span>
-                      </td>
-                      <td>
-                        <Link href={`${domainHref(row.domainCode)}/${row.entityId}`}>View</Link>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <AppGrid
+                rows={exceptions.map((row) => ({ ...row, domainLabel: domainName(row.domainCode) }))}
+                columns={EXCEPTION_COLUMNS}
+                getRowId={(row) => row.id}
+                autoHeight
+                emptyMessage="No open exceptions."
+              />
             </div>
           )}
         </div>

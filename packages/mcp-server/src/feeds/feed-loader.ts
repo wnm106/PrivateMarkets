@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { EntityMatchIndex, identifierCatalog, type IdentifierCatalog, type MatchEntity } from './entity-match';
 import { chooseRelationship, dependencyLoadOrder, dependencyLoadWaves, relationshipEndpoints, type RelationshipTypeRow } from './load-order';
 import { parseTabularFile } from './parse-table';
 import { POSITION_FILE_MAP } from './position-file-map';
@@ -32,6 +33,18 @@ interface Catalog {
   relationshipTypes: RelationshipTypeRow[];
 }
 
+function allowedDatabaseHosts(): Set<string> {
+  const hosts = new Set<string>(['127.0.0.1', 'localhost']);
+  const configured = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+  try {
+    const host = new URL(configured).hostname;
+    if (host) hosts.add(host);
+  } catch {
+    // An unset or unparseable project URL still allows localhost.
+  }
+  return hosts;
+}
+
 export function assertLocalSupabase(client: SupabaseClient) {
   const url = (client as SupabaseClient & { supabaseUrl?: string }).supabaseUrl || '';
   let host = '';
@@ -40,7 +53,7 @@ export function assertLocalSupabase(client: SupabaseClient) {
   } catch {
     throw new Error('Supabase URL is not valid');
   }
-  if (host !== '127.0.0.1' && host !== 'localhost') {
+  if (!allowedDatabaseHosts().has(host)) {
     throw new Error('Position file loads run only against the local database');
   }
 }
@@ -136,12 +149,14 @@ function collectDrafts(map: FeedMap, rows: Record<string, string>[]): Map<string
   return result;
 }
 
-async function loadCatalog(db: SupabaseClient, map: FeedMap): Promise<Catalog> {
+async function loadCatalog(db: SupabaseClient, map: FeedMap, clientId?: string): Promise<Catalog> {
   const attributeCodes = [...new Set(map.domains.flatMap((domain) => domain.attributes.map((attribute) => attribute.attributeCode)))];
   const templateCodes = [...new Set(map.domains.map((domain) => domain.templateCode))];
 
   const [client, source, templates, attributes, listValues, relationshipTypes] = await Promise.all([
-    db.from('tenant_clients').select('id').eq('client_code', CLIENT_CODE).single(),
+    clientId
+      ? Promise.resolve({ data: { id: clientId }, error: null })
+      : db.from('tenant_clients').select('id').eq('client_code', CLIENT_CODE).single(),
     db.schema('entity_instances').from('source_registry').select('id, precedence_rank').eq('source_code', map.sourceCode).single(),
     db.schema('metadata_register').from('domain_templates').select('id, template_code').in('template_code', templateCodes),
     db.schema('metadata_register').from('attribute_register').select('id, attribute_code, data_type, reference_list_code').in('attribute_code', attributeCodes),
@@ -152,7 +167,7 @@ async function loadCatalog(db: SupabaseClient, map: FeedMap): Promise<Catalog> {
   const failure = client.error || source.error || templates.error || attributes.error || listValues.error || relationshipTypes.error;
   if (failure) throw new Error(failure.message);
   if (!client.data?.id) throw new Error(`Client ${CLIENT_CODE} was not found`);
-  if (!source.data?.id) throw new Error(`Source ${map.sourceCode} was not found. Apply the position file migration.`);
+  if (!source.data?.id) throw new Error(`Source ${map.sourceCode} was not found.`);
 
   const lists: ListValueRow[] = (listValues.data || []).map((row: any) => ({
     list_code: row.list?.list_code,
@@ -280,6 +295,100 @@ export async function previewFeed(map: FeedMap, fileName: string, bytes: Buffer)
   };
 }
 
+async function pageRows(
+  fetchPage: (from: number, to: number) => PromiseLike<{ data: any[] | null; error: { message: string } | null }>,
+): Promise<any[]> {
+  const pageSize = 1000;
+  const rows: any[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const page = await fetchPage(from, from + pageSize - 1);
+    if (page.error) throw new Error(page.error.message);
+    rows.push(...(page.data || []));
+    if ((page.data || []).length < pageSize) break;
+  }
+  return rows;
+}
+
+async function loadIdentifierCatalog(db: SupabaseClient, domainCode: string): Promise<{ catalog: IdentifierCatalog; attributeIds: Map<string, string> }> {
+  const definitions = await db.schema('metadata_register').from('entity_identifier_definitions').select('attribute_codes').eq('domain_code', domainCode).eq('is_active', true);
+  if (definitions.error) throw new Error(definitions.error.message);
+  const catalog = identifierCatalog((definitions.data || []).map((row: { attribute_codes?: string[] }) => row.attribute_codes || []));
+  const codes = [...new Set([...catalog.singles, ...catalog.composites.flat()])];
+  const attributeIds = new Map<string, string>();
+  if (!codes.length) return { catalog, attributeIds };
+  const attributes = await db.schema('metadata_register').from('attribute_register').select('id, attribute_code').in('attribute_code', codes);
+  if (attributes.error) throw new Error(attributes.error.message);
+  for (const row of attributes.data || []) attributeIds.set(String(row.attribute_code).toUpperCase(), row.id);
+  return { catalog, attributeIds };
+}
+
+async function loadEntityMatchIndex(
+  db: SupabaseClient,
+  domainCode: string,
+  clientId: string,
+  codes: string[],
+  catalog: IdentifierCatalog,
+  attributeIds: Map<string, string>,
+): Promise<EntityMatchIndex> {
+  const index = new EntityMatchIndex(catalog, domainCode, clientId);
+  const domainRows = await pageRows((from, to) => db.schema('entity_instances').from('master_entities')
+    .select('id, entity_code, entity_name, domain_code, client_id, is_active, merged_into_id')
+    .eq('domain_code', domainCode)
+    .range(from, to));
+  const codeRows: any[] = [];
+  for (let offset = 0; offset < codes.length; offset += 100) {
+    const chunk = codes.slice(offset, offset + 100);
+    const existing = await db.schema('entity_instances').from('master_entities')
+      .select('id, entity_code, entity_name, domain_code, client_id, is_active, merged_into_id')
+      .in('entity_code', chunk);
+    if (existing.error) throw new Error(existing.error.message);
+    codeRows.push(...(existing.data || []));
+  }
+
+  const byId = new Map<string, any>();
+  for (const row of [...domainRows, ...codeRows]) byId.set(row.id, row);
+  const identifiers = new Map<string, Map<string, string[]>>();
+  const codeByAttributeId = new Map<string, string>();
+  for (const [code, id] of attributeIds) codeByAttributeId.set(id, code);
+  const attributeIdList = [...attributeIds.values()];
+  const entityIds = [...byId.keys()];
+  if (attributeIdList.length && entityIds.length) {
+    for (let offset = 0; offset < entityIds.length; offset += 150) {
+      const chunk = entityIds.slice(offset, offset + 150);
+      const values = await pageRows((from, to) => db.schema('golden_master').from('entity_attribute_values')
+        .select('entity_id, attribute_id, golden_value')
+        .in('entity_id', chunk)
+        .in('attribute_id', attributeIdList)
+        .eq('valid_to', OPEN_TO)
+        .range(from, to));
+      for (const value of values) {
+        const attributeCode = codeByAttributeId.get(value.attribute_id);
+        if (!attributeCode || value.golden_value == null || String(value.golden_value).trim() === '') continue;
+        const perEntity = identifiers.get(value.entity_id) || new Map<string, string[]>();
+        const list = perEntity.get(attributeCode) || [];
+        list.push(String(value.golden_value));
+        perEntity.set(attributeCode, list);
+        identifiers.set(value.entity_id, perEntity);
+      }
+    }
+  }
+
+  for (const row of byId.values()) {
+    const matchEntity: MatchEntity = {
+      id: row.id,
+      code: row.entity_code,
+      name: row.entity_name || '',
+      domainCode: row.domain_code,
+      clientId: row.client_id,
+      active: row.is_active !== false && !row.merged_into_id,
+      provisional: false,
+      identifiers: identifiers.get(row.id) || new Map(),
+    };
+    index.add(matchEntity);
+  }
+  return index;
+}
+
 function sameValue(existing: any, next: { golden_value: string; golden_value_numeric: number | null; golden_value_date: string | null }): boolean {
   if ((existing.golden_value ?? '') !== next.golden_value) return false;
   const existingNumber = existing.golden_value_numeric === null || existing.golden_value_numeric === undefined ? null : Number(existing.golden_value_numeric);
@@ -292,7 +401,7 @@ export async function executeFeed(map: FeedMap, fileName: string, bytes: Buffer,
   return executeParsedFeed(map, fileName, parseTabularFile(fileName, bytes), asOfDate, client);
 }
 
-export async function executeParsedFeed(map: FeedMap, fileName: string, table: ParsedTable, asOfDate: string, client?: SupabaseClient): Promise<FeedLoadResult> {
+export async function executeParsedFeed(map: FeedMap, fileName: string, table: ParsedTable, asOfDate: string, client?: SupabaseClient, clientId?: string): Promise<FeedLoadResult> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
     throw new Error('As-of date must be YYYY-MM-DD');
   }
@@ -302,7 +411,7 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
   const waves = dependencyLoadWaves(map.domains);
   const db = client || localSupabase();
   assertLocalSupabase(db);
-  const catalog = await loadCatalog(db, map);
+  const catalog = await loadCatalog(db, map, clientId);
   await rememberMap(db, map, catalog.sourceId);
 
   const ids = new Map<string, Map<string, string>>();
@@ -332,40 +441,78 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
     if (!templateId) warnings.push(`Template ${domain.templateCode} was not found. Entities will load without it.`);
 
     const codes = entities.map((entity) => entity.code);
-    const existingResult = codes.length
-      ? await db.schema('entity_instances').from('master_entities').select('id, entity_code, domain_code').in('entity_code', codes)
-      : { data: [], error: null };
-    if (existingResult.error) throw new Error(existingResult.error.message);
-    const existingByCode = new Map((existingResult.data || []).map((row: any) => [row.entity_code, row]));
+    const { catalog: matchCatalog, attributeIds } = await loadIdentifierCatalog(db, domainCode);
+    const index = await loadEntityMatchIndex(db, domainCode, catalog.clientId, codes, matchCatalog, attributeIds);
     const idByCode = new Map<string, string>();
+    const linkedTo = new Map<string, string>();
+    const pending = new Map<string, EntityDraft>();
+    let matchedByIdentity = 0;
+
+    const rememberInserted = (fileCode: string, id: string) => {
+      const provisionalId = `pending:${fileCode}`;
+      for (const [code, target] of linkedTo) {
+        if (code === fileCode || target === provisionalId) idByCode.set(code, id);
+      }
+    };
 
     for (const entity of entities) {
-      const existing = existingByCode.get(entity.code);
-      if (existing) {
-        if (existing.domain_code !== domainCode) {
-          stats.failed += 1;
-          const message = `${entity.code} already exists as ${existing.domain_code}, not ${domainCode}`;
-          stats.errors.push(message);
-          errors.push(message);
-          continue;
-        }
-        const update = await db.schema('entity_instances').from('master_entities').update({
-          entity_name: entity.name,
-          ...(templateId ? { template_id: templateId } : {}),
-          updated_at: new Date().toISOString(),
-        }).eq('id', existing.id);
-        if (update.error) {
-          stats.failed += 1;
-          stats.errors.push(update.error.message);
-          errors.push(update.error.message);
-          continue;
-        }
-        stats.matched += 1;
-        idByCode.set(entity.code, existing.id);
+      const incoming = { code: entity.code, name: entity.name, attributes: entity.attributes };
+      const hit = index.resolve(incoming);
+      if (hit.kind === 'rejected') {
+        stats.failed += 1;
+        stats.errors.push(hit.message);
+        errors.push(hit.message);
         continue;
       }
+      if (hit.kind === 'match') {
+        index.absorb(hit.entity.id, incoming);
+        linkedTo.set(entity.code, hit.entity.id);
+        if (!hit.entity.provisional) {
+          const update = await db.schema('entity_instances').from('master_entities').update({
+            entity_name: entity.name,
+            ...(templateId ? { template_id: templateId } : {}),
+            updated_at: new Date().toISOString(),
+          }).eq('id', hit.entity.id);
+          if (update.error) {
+            stats.failed += 1;
+            stats.errors.push(update.error.message);
+            errors.push(update.error.message);
+            linkedTo.delete(entity.code);
+            continue;
+          }
+          idByCode.set(entity.code, hit.entity.id);
+        }
+        if (hit.via !== 'code' && !hit.entity.provisional) matchedByIdentity += 1;
+        stats.matched += 1;
+        continue;
+      }
+      const provisionalId = `pending:${entity.code}`;
+      const identifiers = new Map<string, string[]>();
+      for (const [attributeCode, value] of entity.attributes) {
+        if (!value.trim()) continue;
+        identifiers.set(attributeCode.toUpperCase(), [value]);
+      }
+      index.add({
+        id: provisionalId,
+        code: entity.code,
+        name: entity.name,
+        domainCode,
+        clientId: catalog.clientId,
+        active: true,
+        provisional: true,
+        identifiers,
+      });
+      pending.set(provisionalId, entity);
+      linkedTo.set(entity.code, provisionalId);
+    }
+    if (matchedByIdentity) {
+      warnings.push(`${domainCode}: matched ${matchedByIdentity} existing ${matchedByIdentity === 1 ? 'record' : 'records'} by name or identifier`);
+    }
 
-      const insert = await db.schema('entity_instances').from('master_entities').insert({
+    const toCreate = [...pending.values()];
+    for (let offset = 0; offset < toCreate.length; offset += 200) {
+      const chunk = toCreate.slice(offset, offset + 200);
+      const payload = chunk.map((entity) => ({
         entity_code: entity.code,
         domain_code: domainCode,
         template_id: templateId,
@@ -373,28 +520,40 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
         client_id: catalog.clientId,
         is_active: true,
         metadata: { feed_map: map.mapCode, source_code: map.sourceCode },
-      }).select('id').single();
+      }));
+      const insert = await db.schema('entity_instances').from('master_entities').insert(payload).select('id, entity_code');
       if (insert.error || !insert.data) {
-        stats.failed += 1;
-        const message = insert.error?.message || `Failed to create ${entity.code}`;
-        stats.errors.push(message);
-        errors.push(message);
+        for (const entity of chunk) {
+          const single = await db.schema('entity_instances').from('master_entities').insert(payload.find((row) => row.entity_code === entity.code)!).select('id').single();
+          if (single.error || !single.data) {
+            stats.failed += 1;
+            const message = single.error?.message || `Failed to create ${entity.code}`;
+            stats.errors.push(message);
+            errors.push(message);
+            continue;
+          }
+          stats.created += 1;
+          rememberInserted(entity.code, single.data.id);
+        }
         continue;
       }
-      stats.created += 1;
-      idByCode.set(entity.code, insert.data.id);
+      stats.created += insert.data.length;
+      for (const row of insert.data) rememberInserted(row.entity_code, row.id);
     }
     ids.set(domainCode, idByCode);
 
-    const entityIds = [...idByCode.values()];
+    const entityIds = [...new Set(idByCode.values())];
     const pageAttributeRows = async (column: 'valid_to' | 'valid_from', value: string) => {
       const rows: any[] = [];
       const pageSize = 1000;
-      for (let from = 0; ; from += pageSize) {
-        const page = await db.schema('golden_master').from('entity_attribute_values').select('id, entity_id, attribute_id, valid_from, valid_to, golden_value, golden_value_numeric, golden_value_date').in('entity_id', entityIds).eq('source_id', catalog.sourceId).eq(column, value).range(from, from + pageSize - 1);
-        if (page.error) throw new Error(page.error.message);
-        rows.push(...(page.data || []));
-        if ((page.data || []).length < pageSize) break;
+      for (let idFrom = 0; idFrom < entityIds.length; idFrom += 150) {
+        const idChunk = entityIds.slice(idFrom, idFrom + 150);
+        for (let from = 0; ; from += pageSize) {
+          const page = await db.schema('golden_master').from('entity_attribute_values').select('id, entity_id, attribute_id, valid_from, valid_to, golden_value, golden_value_numeric, golden_value_date').in('entity_id', idChunk).eq('source_id', catalog.sourceId).eq(column, value).range(from, from + pageSize - 1);
+          if (page.error) throw new Error(page.error.message);
+          rows.push(...(page.data || []));
+          if ((page.data || []).length < pageSize) break;
+        }
       }
       return rows;
     };
@@ -411,6 +570,25 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
       list.push(row);
       slicesByKey.set(key, list);
     }
+
+    const pendingAttributes: { label: string; row: Record<string, unknown> }[] = [];
+    const queuedAttributes = new Set<string>();
+    const flushAttributes = async () => {
+      for (let offset = 0; offset < pendingAttributes.length; offset += 200) {
+        const chunk = pendingAttributes.slice(offset, offset + 200);
+        const insert = await db.schema('golden_master').from('entity_attribute_values').insert(chunk.map((item) => item.row));
+        if (!insert.error) {
+          attributeStats.created += chunk.length;
+          continue;
+        }
+        for (const item of chunk) {
+          const single = await db.schema('golden_master').from('entity_attribute_values').insert(item.row);
+          if (single.error) errors.push(`${item.label}: ${single.error.message}`);
+          else attributeStats.created += 1;
+        }
+      }
+      pendingAttributes.length = 0;
+    };
 
     for (const entity of entities) {
       const entityId = idByCode.get(entity.code);
@@ -440,7 +618,9 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
           golden_value_numeric: coerced.golden_value_numeric,
           golden_value_date: coerced.golden_value_date,
         };
-        const slices = slicesByKey.get(`${entityId}|${meta.id}`) || [];
+        const sliceKey = `${entityId}|${meta.id}`;
+        if (queuedAttributes.has(sliceKey)) continue;
+        const slices = slicesByKey.get(sliceKey) || [];
         const openRows = slices.filter((row) => String(row.valid_to).slice(0, 10) === OPEN_TO);
         const sameSlices = slices.filter((row) => String(row.valid_from).slice(0, 10) === asOfDate);
         if (sameSlices.length > 0) {
@@ -465,6 +645,7 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
           }
           if (changed) attributeStats.updated += 1;
           else attributeStats.unchanged += 1;
+          queuedAttributes.add(sliceKey);
           continue;
         }
 
@@ -478,23 +659,27 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
           }).eq('id', earlierOpen.id);
           if (close.error) errors.push(close.error.message);
         }
-        const insert = await db.schema('golden_master').from('entity_attribute_values').insert({
-          entity_id: entityId,
-          attribute_id: meta.id,
-          source_id: catalog.sourceId,
-          golden_source_id: catalog.sourceId,
-          ...value,
-          valid_from: asOfDate,
-          valid_to: validTo,
-          last_received_at: receivedAt,
-          precedence_rank: catalog.precedenceRank,
-          metadata: { raw_value: coerced.raw_value, list_code: hit?.listCode || null, match_type: hit?.matchType || null },
+        queuedAttributes.add(sliceKey);
+        pendingAttributes.push({
+          label: `${entity.code} ${attributeCode}`,
+          row: {
+            entity_id: entityId,
+            attribute_id: meta.id,
+            source_id: catalog.sourceId,
+            golden_source_id: catalog.sourceId,
+            ...value,
+            valid_from: asOfDate,
+            valid_to: validTo,
+            last_received_at: receivedAt,
+            precedence_rank: catalog.precedenceRank,
+            metadata: { raw_value: coerced.raw_value, list_code: hit?.listCode || null, match_type: hit?.matchType || null },
+          },
         });
-        if (insert.error) errors.push(`${entity.code} ${attributeCode}: ${insert.error.message}`);
-        else attributeStats.created += 1;
       }
     }
+    await flushAttributes();
 
+    const relationshipRows: Record<string, unknown>[] = [];
     for (const entity of entities) {
       const entityId = idByCode.get(entity.code);
       if (!entityId) continue;
@@ -518,17 +703,7 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
           continue;
         }
         const endpoints = relationshipEndpoints(relationship, domainCode, entityId, parent.parentDomainCode, parentId);
-        const found = await db.schema('entity_instances').from('entity_relationships').select('id').eq('parent_entity_id', endpoints.parentEntityId).eq('child_entity_id', endpoints.childEntityId).eq('relationship_code', relationship.relationship_code).eq('valid_from', asOfDate).maybeSingle();
-        if (found.error) {
-          relationshipStats.failed += 1;
-          errors.push(found.error.message);
-          continue;
-        }
-        if (found.data) {
-          relationshipStats.matched += 1;
-          continue;
-        }
-        const insert = await db.schema('entity_instances').from('entity_relationships').insert({
+        relationshipRows.push({
           parent_entity_id: endpoints.parentEntityId,
           child_entity_id: endpoints.childEntityId,
           relationship_type: relationship.relationship_code,
@@ -537,9 +712,40 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
           valid_from: asOfDate,
           metadata: { feed_map: map.mapCode },
         });
-        if (insert.error) {
+      }
+    }
+
+    const existingRelationships = new Set<string>();
+    const childIds = [...new Set(relationshipRows.map((row) => String(row.child_entity_id)))];
+    for (let offset = 0; offset < childIds.length; offset += 150) {
+      const chunk = childIds.slice(offset, offset + 150);
+      const found = await db.schema('entity_instances').from('entity_relationships').select('parent_entity_id, child_entity_id, relationship_code').in('child_entity_id', chunk).eq('valid_from', asOfDate);
+      if (found.error) throw new Error(found.error.message);
+      for (const row of found.data || []) {
+        existingRelationships.add(`${row.parent_entity_id}|${row.child_entity_id}|${row.relationship_code}`);
+      }
+    }
+    const relationshipInserts: Record<string, unknown>[] = [];
+    for (const row of relationshipRows) {
+      const key = `${row.parent_entity_id}|${row.child_entity_id}|${row.relationship_code}`;
+      if (existingRelationships.has(key)) relationshipStats.matched += 1;
+      else {
+        existingRelationships.add(key);
+        relationshipInserts.push(row);
+      }
+    }
+    for (let offset = 0; offset < relationshipInserts.length; offset += 200) {
+      const chunk = relationshipInserts.slice(offset, offset + 200);
+      const insert = await db.schema('entity_instances').from('entity_relationships').insert(chunk);
+      if (!insert.error) {
+        relationshipStats.created += chunk.length;
+        continue;
+      }
+      for (const row of chunk) {
+        const single = await db.schema('entity_instances').from('entity_relationships').insert(row);
+        if (single.error) {
           relationshipStats.failed += 1;
-          errors.push(insert.error.message);
+          errors.push(single.error.message);
         } else {
           relationshipStats.created += 1;
         }

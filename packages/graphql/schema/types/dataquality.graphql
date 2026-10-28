@@ -214,9 +214,10 @@ type OverrideMatch {
   attributeName: String!
   overrideValue: String!
   overrideReason: String
-  prioritySourceCode: String!
-  prioritySourceName: String!
-  priorityValue: String!
+  prioritySourceCode: String
+  prioritySourceName: String
+  priorityValue: String
+  ready: Boolean!
 }
 
 type QualityEntityRef {
@@ -380,4 +381,5 @@ type EntityQualityResult {
   qualityResolvedCount: Int!
   qualityIntroducedCount: Int!
   overrideMatchCount: Int!
+  overrideCount: Int!
 }

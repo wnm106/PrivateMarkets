@@ -2,17 +2,10 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { LoadReview } from '@/components/feeds/LoadReview';
 import { usePublishViewContext } from '@/lib/view-context';
-import { dependencyLoadWaves } from '@/lib/feeds/load-order';
-import {
-  TRANSFORM_OPTIONS,
-  applyTarget,
-  feedMapFromAssignments,
-  previewTransform,
-  targetKey,
-  type ColumnAssignment,
-  type MappingTarget,
-} from '@/lib/feeds/suggest';
+import type { ColumnAssignment, MappingTarget } from '@/lib/feeds/suggest';
+import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
 interface InstanceSummary {
   id: string;
@@ -23,6 +16,8 @@ interface InstanceSummary {
   completedAt: string | null;
   asOfDate: string | null;
   errorMessage: string | null;
+  mapName: string | null;
+  mapSaved: boolean;
   runs: { startedAt: string; completedAt: string; asOfDate: string; status: string; created: number; matched: number; failed: number }[];
   resultSummary: {
     created: number;
@@ -32,6 +27,7 @@ interface InstanceSummary {
     attributesUpdated: number;
     attributesUnchanged: number;
     relationshipsMatched: number;
+    relationshipsCreated?: number;
   } | null;
 }
 
@@ -40,11 +36,17 @@ interface InstanceDetail extends InstanceSummary {
   loadWaves: string[][];
 }
 
+interface ReferenceListCatalog {
+  listCode: string;
+  values: { code: string; label: string; synonyms?: string[] | null }[];
+}
+
 interface QueueResponse {
   sourceCode: string;
   name: string;
   description: string;
   targets: MappingTarget[];
+  lists: ReferenceListCatalog[];
   instances: InstanceSummary[];
 }
 
@@ -69,10 +71,9 @@ function resultText(instance: InstanceSummary) {
     : summary.attributesCreated
       ? `attributes created ${summary.attributesCreated}`
       : `attributes unchanged ${summary.attributesUnchanged}`;
-  return `${entities} · ${attributes}`;
+  const links = summary.relationshipsCreated ? ` · ${summary.relationshipsCreated.toLocaleString()} links` : '';
+  return `${entities} · ${attributes}${links}`;
 }
-
-const GRID = '180px 1.1fr 1.4fr 180px 1fr';
 
 export default function PositionFilePage() {
   const [queue, setQueue] = useState<QueueResponse | null>(null);
@@ -104,31 +105,11 @@ export default function PositionFilePage() {
         ? {
             activity: 'viewing',
             kind: 'import',
-            label: queue.name || 'Position file load',
-            summary: `${queue.instances.length} files · ${queue.sourceCode}`,
+            label: queue.name || 'Load data',
+            summary: `${queue.instances.length} files`,
           }
         : null
   );
-
-  const loadWaves = useMemo(() => {
-    if (!detail) return [];
-    try {
-      const map = feedMapFromAssignments(detail.columnMappings);
-      return map.domains.length > 0 ? dependencyLoadWaves(map.domains) : [];
-    } catch {
-      return [];
-    }
-  }, [detail]);
-
-  const targetsByGroup = useMemo(() => {
-    const groups = new Map<string, MappingTarget[]>();
-    for (const target of queue?.targets || []) {
-      const list = groups.get(target.group) || [];
-      list.push(target);
-      groups.set(target.group, list);
-    }
-    return [...groups.entries()];
-  }, [queue]);
 
   async function refreshQueue() {
     const response = await fetch('/api/feeds/position-file');
@@ -165,6 +146,44 @@ export default function PositionFilePage() {
       setBusy(null);
     }
   }
+
+  const fileColumns = useMemo<ColDef<InstanceSummary>[]>(() => [
+    { field: 'receivedAt', headerName: 'Received', minWidth: 180, valueFormatter: (params) => formatWhen(params.value) },
+    { field: 'fileName', headerName: 'File', minWidth: 200, flex: 1.2 },
+    {
+      colId: 'map',
+      headerName: 'Map',
+      minWidth: 160,
+      valueGetter: (params) => params.data ? (params.data.mapSaved ? (params.data.mapName || 'Saved map') : (params.data.mapName || 'New file')) : '',
+    },
+    { field: 'rowCount', headerName: 'Rows', minWidth: 100, filter: 'agNumberColumnFilter' },
+    { field: 'status', headerName: 'Status', minWidth: 120 },
+    {
+      colId: 'result',
+      headerName: 'Result',
+      minWidth: 220,
+      flex: 1.2,
+      autoHeight: true,
+      wrapText: true,
+      valueGetter: (params) => params.data ? resultText(params.data) : '',
+    },
+    {
+      colId: 'review',
+      headerName: '',
+      width: 130,
+      sortable: false,
+      filter: false,
+      cellRenderer: (params) => {
+        if (!params.data) return null;
+        const opening = params.context?.busy != null;
+        return (
+          <button type="button" className="btn" disabled={opening} onClick={() => params.context?.open(params.data.id)}>
+            {params.context?.busy === 'open' ? 'Opening…' : 'Review'}
+          </button>
+        );
+      },
+    },
+  ], []);
 
   function chosenDate() {
     return asOfMode === 'today' ? todayIso() : asOfDate;
@@ -203,19 +222,45 @@ export default function PositionFilePage() {
   }
 
   return (
-    <div className="view-fade">
+    <div className={`view-fade${detail ? ' load-review-page' : ''}`}>
+      {error && <div className="filter-bar" style={{ color: '#b42318', borderColor: '#f0c2bc' }}>{error}</div>}
+      {detail ? (
+        <LoadReview
+          fileId={detail.id}
+          fileName={detail.fileName}
+          rowCount={detail.rowCount}
+          assignments={detail.columnMappings}
+          targets={queue?.targets || []}
+          lists={queue?.lists || []}
+          resultText={detail.resultSummary ? resultText(detail) : null}
+          errorMessage={detail.errorMessage}
+          loading={busy === detail.id}
+          asOfMode={asOfMode}
+          asOfDate={asOfDate}
+          chosenDate={chosenDate()}
+          onAsOfMode={setAsOfMode}
+          onAsOfDate={setAsOfDate}
+          onChange={updateAssignment}
+          onLoad={() => processInstance(detail.id, detail.columnMappings)}
+          mapNote={detail.mapSaved
+            ? `This file matches the saved map${detail.mapName ? ` ${detail.mapName}` : ''}. Columns already on that map are confirmed. Anything new still needs a decision, and loading updates the map.`
+            : 'This file shape is new. Suggestions come from the column names and, where those are not enough, from an AI review. Loading saves the map for the next file with these columns.'}
+          onClose={() => { setDetail(null); setError(null); }}
+        />
+      ) : (
+      <>
       <div className="crumbs">
         <Link href="/" className="crumb-link">Home</Link>
         <span className="sep">›</span>
-        <span className="crumb-current">Position File</span>
+        <span className="crumb-current">Load data</span>
       </div>
 
       <div className="page-header">
         <div className="page-title-block">
           <div style={{ width: '4px', height: '48px', background: '#1b3a4b' }} />
           <div>
-            <div className="page-title">Position file load</div>
-            <div className="page-meta">{queue ? `${queue.name} · source ${queue.sourceCode}` : 'Import source'}</div>
+            <div className="page-title">Load data</div>
+            <div className="page-meta">CSV or Excel · a confirmed map is saved for the next file with the same columns</div>
           </div>
         </div>
         <label className="btn btn-primary">
@@ -249,163 +294,27 @@ export default function PositionFilePage() {
       </div>
 
       <p className="hero-sub" style={{ maxWidth: 820, marginTop: 0 }}>
-        Each upload is an instance on the {queue?.sourceCode || 'POSITION_FILE'} source. The original file is kept, so you can change the column mapping and reprocess without losing the source values.
+        Upload a CSV or Excel file. Tapestr suggests where each column goes, using a saved map when the columns have been seen before and an AI review when they have not. Loading saves that map.
       </p>
-      {error && <div className="filter-bar" style={{ color: '#b42318' }}>{error}</div>}
 
       <div className="section-title">
-        <h2>Instance queue</h2>
-        <span className="hint">Load time, result, and reprocess</span>
+        <h2>Files</h2>
+        <span className="hint">Each file keeps its rows. A confirmed column map is reused for the same columns.</span>
       </div>
-      <div className="data-table" style={{ marginBottom: 22 }}>
-        <div className="tbl-head" style={{ gridTemplateColumns: '190px 1.3fr 70px 110px 1.2fr 120px' }}>
-          <div>Received</div>
-          <div>File</div>
-          <div>Rows</div>
-          <div>Status</div>
-          <div>Result</div>
-          <div></div>
-        </div>
-        {(queue?.instances || []).length === 0 ? (
-          <div className="tbl-row" style={{ gridTemplateColumns: '1fr' }}><div>No files stored yet. Upload a CSV or Excel file to add an instance.</div></div>
-        ) : (
-          queue?.instances.map((instance) => (
-            <div key={instance.id} className="tbl-row" style={{ gridTemplateColumns: '190px 1.3fr 70px 110px 1.2fr 120px' }}>
-              <div>{formatWhen(instance.receivedAt)}</div>
-              <button onClick={() => selectInstance(instance.id)} style={{ textAlign: 'left', background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit' }}>{instance.fileName}</button>
-              <div>{instance.rowCount}</div>
-              <div>{instance.status}</div>
-              <div>{resultText(instance)}</div>
-              <button
-                className="btn"
-                disabled={busy !== null || instance.status === 'PROCESSING'}
-                onClick={() => processInstance(instance.id, detail?.id === instance.id ? detail.columnMappings : undefined)}
-              >
-                {busy === instance.id ? 'Working…' : 'Reprocess'}
-              </button>
-            </div>
-          ))
-        )}
+      <div className="data-table" style={{ marginBottom: 22, minHeight: 280 }}>
+        <AppGrid
+          rows={queue?.instances || []}
+          columns={fileColumns}
+          getRowId={(row) => row.id}
+          autoHeight={false}
+          height="100%"
+          loading={!queue}
+          emptyMessage="No files stored yet. Upload a CSV or Excel file to add an instance."
+          onRowClicked={(row) => selectInstance(row.id)}
+          context={{ busy, open: selectInstance }}
+        />
       </div>
-
-      {detail && (
-        <>
-          <div className="section-title">
-            <h2>{detail.fileName}</h2>
-            <span className="hint">{detail.rowCount} stored rows · {detail.columnMappings.length} source columns</span>
-          </div>
-          <div className="filter-bar" style={{ flexWrap: 'wrap', gap: 12 }}>
-            <label className="filter-pill">
-              <input type="radio" name="asof" checked={asOfMode === 'today'} onChange={() => setAsOfMode('today')} /> Today ({todayIso()})
-            </label>
-            <label className="filter-pill">
-              <input type="radio" name="asof" checked={asOfMode === 'specific'} onChange={() => setAsOfMode('specific')} /> Specific date
-            </label>
-            {asOfMode === 'specific' && (
-              <input type="date" value={asOfDate} onChange={(event) => setAsOfDate(event.target.value)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '6px 8px' }} />
-            )}
-            <button className="btn btn-primary" disabled={busy !== null} onClick={() => processInstance(detail.id, detail.columnMappings)}>
-              {busy === detail.id ? 'Processing…' : `Process as of ${chosenDate()}`}
-            </button>
-            {loadWaves.length > 0 && (
-              <span className="nav-desc">Load order {loadWaves.map((wave) => wave.join(' + ')).join(' → ')}</span>
-            )}
-          </div>
-          {detail.resultSummary && (
-            <div className="page-meta" style={{ margin: '8px 0 14px' }}>
-              Last result {formatWhen(detail.completedAt)}: {resultText(detail)}.
-              {detail.runs.length > 1 && ` ${detail.runs.length} attempts stored.`}
-              {detail.errorMessage ? ` ${detail.errorMessage}` : ''}
-            </div>
-          )}
-
-          <div className="data-table" style={{ overflowX: 'auto' }}>
-            <div className="tbl-head" style={{ gridTemplateColumns: GRID, position: 'sticky', top: 0, zIndex: 1, minWidth: 980 }}>
-              <div>Source column</div>
-              <div>Source values</div>
-              <div>Entity attribute</div>
-              <div>Transform</div>
-              <div>Suggestion</div>
-            </div>
-            {detail.columnMappings.map((assignment, index) => {
-              const sample = assignment.samples[0] || '';
-              const transformed = sample ? previewTransform(sample, assignment.transform) : '';
-              const selectedKey = targetKey(assignment);
-              const selectedKnown = (queue?.targets || []).some((target) => target.key === selectedKey);
-              return (
-                <div key={assignment.sourceColumn} className="tbl-row" style={{ gridTemplateColumns: GRID, alignItems: 'start', cursor: 'default', minWidth: 980 }}>
-                  <div className="row-id">{assignment.sourceColumn}</div>
-                  <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>
-                    {assignment.samples.join(' · ') || '—'}
-                    {sample && transformed !== sample && <div>→ {transformed}</div>}
-                  </div>
-                  <div>
-                    <select
-                      value={selectedKey}
-                      onChange={(event) => {
-                        const target = queue?.targets.find((item) => item.key === event.target.value);
-                        if (target) updateAssignment(index, applyTarget(assignment, target));
-                      }}
-                      style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '6px 8px' }}
-                    >
-                      {!selectedKnown && <option value={selectedKey}>{assignment.domainCode || 'File'} · {assignment.attributeCode || assignment.role}</option>}
-                      {targetsByGroup.map(([group, targets]) => (
-                        <optgroup key={group} label={group}>
-                          {targets.map((target) => (
-                            <option key={target.key} value={target.key}>{target.label}</option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </select>
-                    {assignment.role === 'filter' && (
-                      <input
-                        value={assignment.filterEquals || ''}
-                        placeholder="Keep rows equal to"
-                        onChange={(event) => updateAssignment(index, { ...assignment, filterEquals: event.target.value })}
-                        style={{ width: '100%', marginTop: 4, border: '1px solid var(--line)', padding: '4px 6px' }}
-                      />
-                    )}
-                  </div>
-                  <div>
-                    <select
-                      value={assignment.transform.kind}
-                      onChange={(event) => updateAssignment(index, {
-                        ...assignment,
-                        transform: { ...assignment.transform, kind: event.target.value as ColumnAssignment['transform']['kind'] },
-                      })}
-                      style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '6px 8px' }}
-                    >
-                      {TRANSFORM_OPTIONS.map((option) => (
-                        <option key={option.kind} value={option.kind}>{option.label}</option>
-                      ))}
-                    </select>
-                    {assignment.transform.kind === 'replace' && (
-                      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-                        <input
-                          value={assignment.transform.find || ''}
-                          placeholder="Find"
-                          onChange={(event) => updateAssignment(index, { ...assignment, transform: { ...assignment.transform, find: event.target.value } })}
-                          style={{ width: '50%', border: '1px solid var(--line)', padding: '4px 6px' }}
-                        />
-                        <input
-                          value={assignment.transform.replaceWith || ''}
-                          placeholder="Replace"
-                          onChange={(event) => updateAssignment(index, { ...assignment, transform: { ...assignment.transform, replaceWith: event.target.value } })}
-                          style={{ width: '50%', border: '1px solid var(--line)', padding: '4px 6px' }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>
-                    {assignment.suggestion.method === 'manual' ? 'Manual' : assignment.suggestion.method === 'ai' ? 'AI review' : assignment.suggestion.method === 'source_map' ? 'Source map' : 'Determined'}
-                    {' · '}
-                    {assignment.suggestion.reason}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </>
+      </>
       )}
     </div>
   );

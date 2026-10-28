@@ -68,6 +68,7 @@ export interface ActivityData {
   time: string;
   text: string;
   attribute?: string;
+  attributeCode?: string;
   value?: string;
   validFrom?: string;
   validTo?: string;

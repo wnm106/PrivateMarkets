@@ -1,6 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ColDef } from 'ag-grid-community';
+import { AppGrid } from '@/components/grid/AppGrid';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { graphqlQuery, graphqlMutation, ENTITIES_QUERY, DOMAIN_TYPES_QUERY } from '@/lib/graphql';
@@ -430,6 +432,29 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
   );
 }
 
+function QueryPreview({ columns, rows }: { columns: Array<{ name: string }>; rows: Array<Record<string, unknown>> }) {
+  const columnDefs = useMemo<ColDef[]>(() => columns.map((column) => ({
+    field: column.name,
+    headerName: column.name,
+    flex: 1,
+    minWidth: 110,
+    valueFormatter: (params) => String(params.value ?? ''),
+  })), [columns]);
+  const data = rows.map((row, index) => ({ ...row, __id: String(index) }));
+  return (
+    <div style={{ maxHeight: 180 }}>
+      <AppGrid
+        rows={data}
+        columns={columnDefs}
+        getRowId={(row) => String(row.__id)}
+        autoHeight={false}
+        height={180}
+        emptyMessage="No rows"
+      />
+    </div>
+  );
+}
+
 function TestResults({ result }: { result: any }) {
   if (result.fatal) return <div style={{ color: 'var(--red)', fontSize: '12px', marginTop: '10px' }}>{result.fatal}</div>;
   if (result.validationErrors?.length) {
@@ -452,18 +477,7 @@ function TestResults({ result }: { result: any }) {
             </span>
           </div>
           {!r.error && r.rows.length > 0 && (
-            <div style={{ overflowX: 'auto', maxHeight: '180px' }}>
-              <table style={{ borderCollapse: 'collapse', fontSize: '11px', width: '100%' }}>
-                <thead>
-                  <tr>{r.columns.slice(0, 8).map((c: any) => <th key={c.name} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--line)' }}>{c.name}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {r.rows.slice(0, 5).map((row: any, i: number) => (
-                    <tr key={i}>{r.columns.slice(0, 8).map((c: any) => <td key={c.name} style={{ padding: '4px 8px', borderBottom: '1px solid var(--line)' }}>{String(row[c.name] ?? '')}</td>)}</tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <QueryPreview columns={r.columns.slice(0, 8)} rows={r.rows.slice(0, 5)} />
           )}
         </div>
       ))}

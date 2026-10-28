@@ -12,6 +12,7 @@ import { tenancyResolvers } from './tenancy';
 import { complianceResolvers } from './compliance';
 import { referenceListResolvers } from './referencelist';
 import { reportingResolvers } from './reporting';
+import { experienceResolvers } from './experience';
 import { statementTemplateResolvers } from './statement-template';
 import { displayLayoutResolvers } from './display-layout';
 import { calculationResolvers } from './calculation';
@@ -33,6 +34,7 @@ export const resolvers = {
     ...complianceResolvers.Query,
     ...referenceListResolvers.Query,
     ...reportingResolvers.Query,
+    ...experienceResolvers.Query,
     ...displayLayoutResolvers.Query,
     ...calculationResolvers.Query,
     ...reconciliationResolvers.Query,

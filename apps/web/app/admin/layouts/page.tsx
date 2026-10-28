@@ -120,7 +120,7 @@ export default function DisplayLayoutsPage() {
   };
 
   return (
-    <div className="view-fade" style={{ padding: 24 }}>
+    <div className="view-fade">
       <div className="crumbs">
         <Link href="/" className="crumb-link">Home</Link>
         <span className="sep">›</span>

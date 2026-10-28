@@ -19,12 +19,27 @@ export const graphqlClient = new Client({
 export async function graphqlQuery<TData, TVariables extends Record<string, any>>(
   query: string,
   variables?: TVariables,
-  requestPolicy?: 'cache-first' | 'cache-and-network' | 'network-only' | 'cache-only'
-): Promise<{ data?: TData; error?: any }> {
-  const result = await graphqlClient.query(query, variables, {
-    requestPolicy: requestPolicy || 'cache-first',
-  }).toPromise();
-  return { data: result.data as TData, error: result.error };
+  requestPolicy?: 'cache-first' | 'cache-and-network' | 'network-only' | 'cache-only',
+  signal?: AbortSignal,
+): Promise<{ data?: TData; error?: any; aborted?: boolean }> {
+  try {
+    const result = await graphqlClient.query(query, variables, {
+      requestPolicy: requestPolicy || 'cache-first',
+      fetchOptions: () => {
+        const token = readBrowserAccessToken();
+        return {
+          headers: { authorization: token ? `Bearer ${token}` : '' },
+          ...(signal ? { signal } : {}),
+        };
+      },
+    }).toPromise();
+    if (signal?.aborted) return { aborted: true };
+    return { data: result.data as TData, error: result.error };
+  } catch (error) {
+    if (signal?.aborted) return { aborted: true };
+    const message = error instanceof Error ? error.message : 'The request failed.';
+    return { error: { message } };
+  }
 }
 
 export async function graphqlMutation<TData, TVariables extends Record<string, any>>(
@@ -1485,8 +1500,8 @@ export const TRIGGER_DATA_LOADER_MUTATION = `
 `;
 
 export const STALE_ATTRIBUTES_QUERY = `
-  query StaleAttributes($domainCode: String, $olderThanDays: Int, $asOfDate: Date) {
-    staleAttributes(domainCode: $domainCode, olderThanDays: $olderThanDays, asOfDate: $asOfDate) {
+  query StaleAttributes($domainCode: String, $olderThanDays: Int, $asOfDate: Date, $knowledgeDate: DateTime, $entityId: ID) {
+    staleAttributes(domainCode: $domainCode, olderThanDays: $olderThanDays, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate, entityId: $entityId) {
       olderThanDays
       asOfDate
       count
@@ -1508,8 +1523,8 @@ export const STALE_ATTRIBUTES_QUERY = `
 `;
 
 export const DATA_QUALITY_DASHBOARD_QUERY = `
-  query DataQualityDashboard($domainCode: String, $fromDate: Date, $toDate: Date) {
-    dataQualityDashboard(domainCode: $domainCode, fromDate: $fromDate, toDate: $toDate) {
+  query DataQualityDashboard($domainCode: String, $fromDate: Date, $toDate: Date, $knowledgeDate: DateTime, $entityId: ID) {
+    dataQualityDashboard(domainCode: $domainCode, fromDate: $fromDate, toDate: $toDate, knowledgeDate: $knowledgeDate, entityId: $entityId) {
       fromDate
       toDate
       domains
@@ -1592,6 +1607,7 @@ export const DATA_QUALITY_DASHBOARD_QUERY = `
         prioritySourceCode
         prioritySourceName
         priorityValue
+        ready
       }
       entities {
         id
@@ -1614,6 +1630,7 @@ export const DATA_QUALITY_DASHBOARD_QUERY = `
         qualityResolvedCount
         qualityIntroducedCount
         overrideMatchCount
+        overrideCount
       }
     }
   }
@@ -2574,8 +2591,8 @@ export const MERGE_CANDIDATES_QUERY = `
         ruleCode
         ruleName
         reasons { clauseCode algorithm label leftValue rightValue leftAttribute rightAttribute similarity deterministic }
-        left { id entityCode entityName domainCode }
-        right { id entityCode entityName domainCode }
+        left { id entityCode entityName domainCode createdAt relationshipCount children { id entityCode entityName domainCode createdAt descendantCount } }
+        right { id entityCode entityName domainCode createdAt relationshipCount children { id entityCode entityName domainCode createdAt descendantCount } }
       }
     }
   }

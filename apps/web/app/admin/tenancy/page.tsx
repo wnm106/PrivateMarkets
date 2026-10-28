@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ColDef } from 'ag-grid-community';
+import { AppGrid } from '@/components/grid/AppGrid';
 import { graphqlClient } from '@/lib/graphql';
 import {
   CLIENTS_QUERY,
@@ -72,7 +74,7 @@ export default function TenancyAdminPage() {
   }, []);
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
+    <div className="screen">
       <div className="mb-6">
         <h1 className="text-3xl font-bold mb-2">Clients, Users &amp; Roles</h1>
         <p className="text-gray-600">
@@ -166,28 +168,13 @@ function ClientsTab({ clients, onChanged, onError }: { clients: Client[]; onChan
       )}
 
       <div className="bg-white rounded-lg shadow overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Client</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Code</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {clients.map((c) => (
-              <tr key={c.id}>
-                <td className="px-6 py-4 whitespace-nowrap font-medium">{c.clientName}{c.isInternal && <span className="ml-2 text-xs text-gray-400">(internal)</span>}</td>
-                <td className="px-6 py-4 whitespace-nowrap"><code className="text-sm bg-gray-100 px-2 py-1 rounded">{c.clientCode}</code></td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <span className={`px-2 py-1 text-xs font-medium rounded ${c.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
-                    {c.isActive ? 'Active' : 'Inactive'}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <AppGrid
+          rows={clients}
+          columns={CLIENT_COLUMNS}
+          getRowId={(row) => row.id}
+          autoHeight
+          emptyMessage="No clients yet"
+        />
       </div>
     </div>
   );
@@ -284,6 +271,10 @@ function MembersTab({
     load(selectedClientId);
   };
 
+  const memberActions = useRef({ handleRevoke, handleAssign, handleDeactivate, roles });
+  memberActions.current = { handleRevoke, handleAssign, handleDeactivate, roles };
+  const memberContext = useMemo(() => ({ get: () => memberActions.current }), []);
+
   return (
     <div>
       <div className="mb-4">
@@ -314,51 +305,15 @@ function MembersTab({
           </div>
 
           <div className="bg-white rounded-lg shadow overflow-x-auto mb-6">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Roles</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Add role</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                  <th className="px-6 py-3" />
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {members.map((m) => (
-                  <tr key={m.id}>
-                    <td className="px-6 py-4 whitespace-nowrap">{m.profile?.displayName || m.profile?.email || m.userId}</td>
-                    <td className="px-6 py-4">
-                      <div className="flex flex-wrap gap-1">
-                        {m.roles.map((r) => (
-                          <span key={r.id} className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded">
-                            {r.roleName}
-                            <button onClick={() => handleRevoke(m.userId, r.id)} className="text-blue-500 hover:text-blue-900">×</button>
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <select defaultValue="" onChange={(e) => { handleAssign(m.userId, e.target.value); e.target.value = ''; }} className="px-2 py-1 border rounded text-sm">
-                        <option value="">+ role…</option>
-                        {roles.filter((r) => !m.roles.some((mr) => mr.id === r.id)).map((r) => <option key={r.id} value={r.id}>{r.roleName}</option>)}
-                      </select>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 py-1 text-xs font-medium rounded ${m.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
-                        {m.isActive ? 'Active' : 'Removed'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-sm">
-                      {m.isActive && <button onClick={() => handleDeactivate(m.userId)} className="text-red-600 hover:text-red-800">Remove</button>}
-                    </td>
-                  </tr>
-                ))}
-                {members.length === 0 && (
-                  <tr><td colSpan={5} className="text-center py-8 text-gray-500">No members yet</td></tr>
-                )}
-              </tbody>
-            </table>
+            <AppGrid
+              rows={members.map((member) => ({ ...member, __rolesReady: roles.map((role) => role.id).join(',') }))}
+              columns={MEMBER_COLUMNS}
+              getRowId={(row) => row.id}
+              autoHeight
+              autoRowHeight
+              context={memberContext}
+              emptyMessage="No members yet"
+            />
           </div>
 
           <div className="bg-white rounded-lg shadow p-4">
@@ -442,6 +397,10 @@ function EntityAccessTab({ clients, onError }: { clients: Client[]; onError: (e:
     load();
   };
 
+  const grantActions = useRef({ handleRevoke });
+  grantActions.current = { handleRevoke };
+  const grantContext = useMemo(() => ({ get: () => grantActions.current }), []);
+
   return (
     <div>
       <p className="text-sm text-gray-600 mb-4">
@@ -510,32 +469,137 @@ function EntityAccessTab({ clients, onError }: { clients: Client[]; onError: (e:
       </div>
 
       <div className="bg-white rounded-lg shadow overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Grantee</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Access</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Children</th>
-              <th className="px-6 py-3" />
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {grants.map((g) => (
-              <tr key={g.id}>
-                <td className="px-6 py-4 whitespace-nowrap">{g.granteeLabel ?? g.id}</td>
-                <td className="px-6 py-4 whitespace-nowrap">{g.granteeType}</td>
-                <td className="px-6 py-4 whitespace-nowrap">{g.accessLevel}</td>
-                <td className="px-6 py-4 whitespace-nowrap">{g.includeChildren ? 'Yes' : 'No'}</td>
-                <td className="px-6 py-4 text-sm"><button onClick={() => handleRevoke(g.id)} className="text-red-600 hover:text-red-800">Revoke</button></td>
-              </tr>
-            ))}
-            {grants.length === 0 && (
-              <tr><td colSpan={5} className="text-center py-8 text-gray-500">No restrictions on this entity — visible to all client members with entity.read</td></tr>
-            )}
-          </tbody>
-        </table>
+        <AppGrid
+          rows={grants}
+          columns={GRANT_COLUMNS}
+          getRowId={(row) => row.id}
+          autoHeight
+          context={grantContext}
+          emptyMessage="No restrictions on this entity — visible to all client members with entity.read"
+        />
       </div>
     </div>
   );
 }
+
+const CLIENT_COLUMNS: ColDef[] = [
+  {
+    colId: 'client',
+    headerName: 'Client',
+    flex: 1.4,
+    minWidth: 180,
+    valueGetter: (params) => params.data?.clientName || '',
+    cellRenderer: (params: any) => (
+      <span className="font-medium">
+        {params.data.clientName}
+        {params.data.isInternal && <span className="ml-2 text-xs text-gray-400">(internal)</span>}
+      </span>
+    ),
+  },
+  {
+    field: 'clientCode',
+    headerName: 'Code',
+    minWidth: 160,
+    cellRenderer: (params: any) => <code className="text-sm bg-gray-100 px-2 py-1 rounded">{params.value}</code>,
+  },
+  {
+    colId: 'status',
+    headerName: 'Status',
+    width: 130,
+    valueGetter: (params) => (params.data?.isActive ? 'Active' : 'Inactive'),
+    cellRenderer: (params: any) => (
+      <span className={`px-2 py-1 text-xs font-medium rounded ${params.data.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
+        {params.data.isActive ? 'Active' : 'Inactive'}
+      </span>
+    ),
+  },
+];
+
+const MEMBER_COLUMNS: ColDef[] = [
+  {
+    colId: 'user',
+    headerName: 'User',
+    flex: 1.2,
+    minWidth: 180,
+    valueGetter: (params) => params.data?.profile?.displayName || params.data?.profile?.email || params.data?.userId || '',
+  },
+  {
+    colId: 'roles',
+    headerName: 'Roles',
+    flex: 1.4,
+    minWidth: 200,
+    sortable: false,
+    filter: false,
+    autoHeight: true,
+    cellRenderer: (params: any) => (
+      <div className="flex flex-wrap gap-1">
+        {params.data.roles.map((role: { id: string; roleName: string }) => (
+          <span key={role.id} className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded">
+            {role.roleName}
+            <button type="button" onClick={() => params.context.get().handleRevoke(params.data.userId, role.id)} className="text-blue-500 hover:text-blue-900">×</button>
+          </span>
+        ))}
+      </div>
+    ),
+  },
+  {
+    colId: 'add',
+    headerName: 'Add role',
+    minWidth: 160,
+    sortable: false,
+    filter: false,
+    cellRenderer: (params: any) => (
+      <select
+        defaultValue=""
+        onChange={(event) => {
+          params.context.get().handleAssign(params.data.userId, event.target.value);
+          event.target.value = '';
+        }}
+        className="px-2 py-1 border rounded text-sm"
+      >
+        <option value="">+ role…</option>
+        {params.context.get().roles
+          .filter((role: { id: string }) => !params.data.roles.some((current: { id: string }) => current.id === role.id))
+          .map((role: { id: string; roleName: string }) => <option key={role.id} value={role.id}>{role.roleName}</option>)}
+      </select>
+    ),
+  },
+  {
+    colId: 'status',
+    headerName: 'Status',
+    width: 130,
+    valueGetter: (params) => (params.data?.isActive ? 'Active' : 'Removed'),
+    cellRenderer: (params: any) => (
+      <span className={`px-2 py-1 text-xs font-medium rounded ${params.data.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
+        {params.data.isActive ? 'Active' : 'Removed'}
+      </span>
+    ),
+  },
+  {
+    colId: 'remove',
+    headerName: '',
+    width: 110,
+    sortable: false,
+    filter: false,
+    cellRenderer: (params: any) => params.data.isActive
+      ? <button type="button" onClick={() => params.context.get().handleDeactivate(params.data.userId)} className="text-red-600 hover:text-red-800">Remove</button>
+      : null,
+  },
+];
+
+const GRANT_COLUMNS: ColDef[] = [
+  { colId: 'grantee', headerName: 'Grantee', flex: 1.4, valueGetter: (params) => params.data?.granteeLabel ?? params.data?.id ?? '' },
+  { field: 'granteeType', headerName: 'Type', width: 120 },
+  { field: 'accessLevel', headerName: 'Access', width: 120 },
+  { colId: 'children', headerName: 'Children', width: 120, valueGetter: (params) => (params.data?.includeChildren ? 'Yes' : 'No') },
+  {
+    colId: 'revoke',
+    headerName: '',
+    width: 110,
+    sortable: false,
+    filter: false,
+    cellRenderer: (params: any) => (
+      <button type="button" onClick={() => params.context.get().handleRevoke(params.data.id)} className="text-red-600 hover:text-red-800">Revoke</button>
+    ),
+  },
+];

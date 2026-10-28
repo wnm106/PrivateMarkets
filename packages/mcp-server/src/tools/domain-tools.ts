@@ -3,7 +3,7 @@ import { ToolDefinition } from '../lib/types';
 
 const getAttributeMetadata: ToolDefinition = {
   name: 'get_attribute_metadata',
-  description: 'Get detailed metadata for one or more attributes including descriptions, data types, validation rules, and allowed values. Essential for understanding what data each attribute represents.',
+  description: 'Data type, description, unit, validation, and allowed values for attributes. Omit attributeCodes for the whole register. domainCode returns only attributes that reference that domain, not the fields stored on that entity type. For the fields an entity type uses, call get_template_metadata. Do not invent an attribute code.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -15,7 +15,7 @@ const getAttributeMetadata: ToolDefinition = {
       },
       domainCode: {
         type: 'string',
-        description: 'Filter attributes by domain code (e.g., "SECURITY", "FUND", "ISSUER")',
+        description: 'Only attributes whose reference domain is this code. Not the field list for that entity type.',
       },
     },
   },
@@ -59,7 +59,7 @@ const getAttributeMetadata: ToolDefinition = {
 
 const getTemplateMetadata: ToolDefinition = {
   name: 'get_template_metadata',
-  description: 'Get template definitions including which attributes are required for each template. Helps understand the structure and required fields for different entity types.',
+  description: 'Which attributes belong to an entity type, with names, descriptions, data types, and which are required. Call this before a grain "entity" query or before creating a record. domainCode comes from list_domain_types. Use the returned attribute_code values. Do not invent field codes.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -131,7 +131,7 @@ const getTemplateMetadata: ToolDefinition = {
 
 const getEntity: ToolDefinition = {
   name: 'get_entity',
-  description: 'Get any entity by ID or entity code from the generic entity master view. Returns entity with all attributes and relationships as JSONB.',
+  description: 'One record by id or entity code, including its current attribute values and relationships. Not a system-wide answer. For a count or a filter across records, use query_data.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -155,7 +155,7 @@ const getEntity: ToolDefinition = {
 
 const listEntities: ToolDefinition = {
   name: 'list_entities',
-  description: 'List entities of any domain type with optional filtering and pagination. Uses the generic entity_master view.',
+  description: 'One page of records for an entity type. domainCode comes from list_domain_types. first defaults to 20 and is a page, not the population. For a count, a filter, or a question across records or sources, use query_data.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -190,7 +190,7 @@ const listEntities: ToolDefinition = {
 
 const createEntity: ToolDefinition = {
   name: 'create_entity',
-  description: 'Create a new entity of any domain type with attributes and relationships.',
+  description: 'Create one record. domainCode comes from list_domain_types. templateCode and attribute keys come from get_template_metadata. Do not invent codes. Attribute values are stored as a manual entry.',
   category: 'domain-write',
   inputSchema: {
     type: 'object',
@@ -266,7 +266,7 @@ const createEntity: ToolDefinition = {
 
 const createRelationship: ToolDefinition = {
   name: 'create_relationship',
-  description: 'Create a relationship between two entities (e.g., Security issued by Issuer).',
+  description: 'Link two existing records. relationshipCode comes from get_relationship_types and must match that type\'s parent and child domains. Do not invent a relationship code.',
   category: 'domain-write',
   inputSchema: {
     type: 'object',
@@ -301,7 +301,7 @@ const createRelationship: ToolDefinition = {
 
 const getRelationshipTypes: ToolDefinition = {
   name: 'get_relationship_types',
-  description: 'Get all available relationship types and their allowed domain combinations.',
+  description: 'Every relationship code, with its parent domain, child domain, and cardinality. Call this before query_data path or lookups, and before create_relationship. Use the returned relationship_code. Do not invent one.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -323,7 +323,7 @@ const getRelationshipTypes: ToolDefinition = {
 
 const getIntersectionTypes: ToolDefinition = {
   name: 'get_intersection_types',
-  description: 'Get all available intersection types (composite entity definitions) with their member roles.',
+  description: 'Composite record types, such as a position made of a fund and a security, with each member role. Call this before creating or listing intersections. Use the returned codes. Ordinary entity attributes are queried with query_data.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -346,7 +346,7 @@ const getIntersectionTypes: ToolDefinition = {
 
 const createIntersectionType: ToolDefinition = {
   name: 'create_intersection_type',
-  description: 'Create a new intersection type (composite entity definition). Example: A "Position" intersection that combines Fund + Security.',
+  description: 'Define a new composite record type. Call get_intersection_types first so you do not duplicate one. Member domainCode values come from list_domain_types.',
   category: 'domain-admin',
   inputSchema: {
     type: 'object',
@@ -419,7 +419,7 @@ const createIntersectionType: ToolDefinition = {
 
 const createIntersection: ToolDefinition = {
   name: 'create_intersection',
-  description: 'Create a new intersection instance (composite entity). Example: Create a Position by combining a specific Fund and Security.',
+  description: 'Create one composite record. intersectionTypeCode and member roles come from get_intersection_types. Member entityId values are existing records. Attribute keys come from that type\'s definition.',
   category: 'domain-write',
   inputSchema: {
     type: 'object',
@@ -537,7 +537,7 @@ const createIntersection: ToolDefinition = {
 
 const listIntersections: ToolDefinition = {
   name: 'list_intersections',
-  description: 'List intersection instances (composite entities) with optional filtering.',
+  description: 'One page of composite records. intersectionTypeCode comes from get_intersection_types. first defaults to 20. For a count of ordinary entity fields, use query_data.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -573,7 +573,7 @@ const listIntersections: ToolDefinition = {
 
 const getIntersection: ToolDefinition = {
   name: 'get_intersection',
-  description: 'Get a complete intersection instance with all members and attributes.',
+  description: 'One composite record, with its members and attributes. Provide intersectionId or intersectionCode from list_intersections.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -613,7 +613,7 @@ const getIntersection: ToolDefinition = {
 
 const updateIntersection: ToolDefinition = {
   name: 'update_intersection',
-  description: 'Update an intersection instance (members and/or attributes).',
+  description: 'Replace the members and attributes of one composite record. intersectionId comes from list_intersections or get_intersection. Member roles must match get_intersection_types. Passing members or attributes replaces the existing set.',
   category: 'domain-write',
   inputSchema: {
     type: 'object',
@@ -737,7 +737,7 @@ const updateIntersection: ToolDefinition = {
 
 const createDomainType: ToolDefinition = {
   name: 'create_domain_type',
-  description: 'Create a new domain type (e.g., CASH_FLOW). First step when adding a new entity type.',
+  description: 'Create an entity type only after list_domain_types shows that domain_code does not exist. domainCode is the stable code later tools use.',
   category: 'domain-admin',
   inputSchema: {
     type: 'object',
@@ -760,7 +760,7 @@ const createDomainType: ToolDefinition = {
 
 const createAttribute: ToolDefinition = {
   name: 'create_attribute',
-  description: 'Create a new attribute definition in the attribute register.',
+  description: 'Create a field only after search_attributes finds no match. dataType is STRING, NUMBER, INTEGER, BOOLEAN, DATE, TIMESTAMP, JSON, CURRENCY, or PERCENTAGE. Then assign_attribute_to_template to put it on an entity type.',
   category: 'domain-admin',
   inputSchema: {
     type: 'object',
@@ -792,7 +792,7 @@ const createAttribute: ToolDefinition = {
 
 const createTemplate: ToolDefinition = {
   name: 'create_template',
-  description: 'Create a new entity template defining which attributes an entity type uses.',
+  description: 'Create a template for an entity type that list_domain_types already returned. Then assign_attribute_to_template for each field. Do not invent attribute codes.',
   category: 'domain-admin',
   inputSchema: {
     type: 'object',
@@ -816,7 +816,7 @@ const createTemplate: ToolDefinition = {
 
 const assignAttributeToTemplate: ToolDefinition = {
   name: 'assign_attribute_to_template',
-  description: 'Assign an attribute to a template, making it part of that entity type.',
+  description: 'Attach an existing attribute to an existing template. templateCode comes from get_template_metadata. attributeCode comes from search_attributes. Do not invent either code.',
   category: 'domain-admin',
   inputSchema: {
     type: 'object',
@@ -843,7 +843,7 @@ const assignAttributeToTemplate: ToolDefinition = {
 
 const createEntityIdentifier: ToolDefinition = {
   name: 'create_entity_identifier',
-  description: 'Create a unique identifier definition for a domain. Can be single or composite.',
+  description: 'Define how a record of a domain is identified. domainCode comes from list_domain_types. attributeCodes come from search_attributes or get_template_metadata. Call get_identifier_suggestions first when importing.',
   category: 'domain-admin',
   inputSchema: {
     type: 'object',
@@ -871,9 +871,54 @@ const createEntityIdentifier: ToolDefinition = {
   },
 };
 
+const listDomainTypes: ToolDefinition = {
+  name: 'list_domain_types',
+  description:
+    'Every entity type: domain code, name, and description. Call this before query_data, create_entity, or any argument named domainCode. Use the returned domain_code. Do not invent one.',
+  category: 'domain-read',
+  inputSchema: { type: 'object', properties: {} },
+  execute: async (_args, supabase) => {
+    const { data, error } = await supabase
+      .from('domain_types')
+      .select('domain_code, domain_name, description, is_active')
+      .order('domain_code');
+    if (error) throw error;
+    return { domains: data || [], count: data?.length || 0 };
+  },
+};
+
+const searchAttributes: ToolDefinition = {
+  name: 'search_attributes',
+  description:
+    'Find fields by the words the user used, matching code, name, or description. Call this before a query filter or before create_attribute. If more than one match fits, ask which one. Do not invent an attribute code while a match exists.',
+  category: 'domain-read',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Words the user used for the field, such as "issuer rating"' },
+      limit: { type: 'number', description: 'Max matches (default 15)' },
+    },
+    required: ['query'],
+  },
+  execute: async (args, supabase) => {
+    const phrase = String(args.query || '').replace(/[%_,()*]/g, ' ').trim().slice(0, 80);
+    if (!phrase) throw new Error('query is required');
+    const code = phrase.toUpperCase().replace(/\s+/g, '_');
+    const cap = Math.min(Math.max(Number(args.limit) || 15, 1), 30);
+    const { data, error } = await supabase
+      .from('attribute_register')
+      .select('attribute_code, attribute_name, description, data_type, reference_domain_code')
+      .or(`attribute_code.ilike.%${code}%,attribute_name.ilike.%${phrase}%,description.ilike.%${phrase}%`)
+      .order('attribute_code')
+      .limit(cap);
+    if (error) throw error;
+    return { attributes: data || [], count: data?.length || 0, query: phrase };
+  },
+};
+
 const createRelationshipType: ToolDefinition = {
   name: 'create_relationship_type',
-  description: 'Create a relationship type between parent and child domains.',
+  description: 'Define how two entity types connect. Call get_relationship_types first so you do not duplicate one. parentDomainCode and childDomainCode come from list_domain_types. cardinality is ONE_TO_ONE, ONE_TO_MANY, MANY_TO_ONE, or COMPOSITE.',
   category: 'domain-admin',
   inputSchema: {
     type: 'object',
@@ -904,6 +949,8 @@ const createRelationshipType: ToolDefinition = {
 export function registerDomainTools(registry: ToolRegistry): void {
   // Metadata tools - essential for agents to understand data context
   registry.registerTool(getAttributeMetadata);
+  registry.registerTool(searchAttributes);
+  registry.registerTool(listDomainTypes);
   registry.registerTool(getTemplateMetadata);
   
   // Entity operations

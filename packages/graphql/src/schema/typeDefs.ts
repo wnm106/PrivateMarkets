@@ -408,6 +408,12 @@ type UpdateDQRuleResult {
   errors: [MutationError!]!
 }
 
+type ConfirmAttributeReceiptResult {
+  success: Boolean!
+  receivedAt: DateTime
+  errors: [MutationError!]!
+}
+
 type ResolveDQExceptionResult {
   success: Boolean!
   errors: [MutationError!]!
@@ -487,9 +493,10 @@ type OverrideMatch {
   attributeName: String!
   overrideValue: String!
   overrideReason: String
-  prioritySourceCode: String!
-  prioritySourceName: String!
-  priorityValue: String!
+  prioritySourceCode: String
+  prioritySourceName: String
+  priorityValue: String
+  ready: Boolean!
 }
 
 type QualityEntityRef {
@@ -653,6 +660,7 @@ type EntityQualityResult {
   qualityResolvedCount: Int!
   qualityIntroducedCount: Int!
   overrideMatchCount: Int!
+  overrideCount: Int!
 }
 
 # File: compliance.graphql
@@ -1291,6 +1299,8 @@ input UpdateEntityInput {
   description: String
   isActive: Boolean
   attributes: JSONObject
+  """Date the attribute edit is effective. Use the date on screen so the new value is visible there."""
+  asOfDate: Date
   parentRelationships: [EntityRelationshipInput!]
   childRelationships: [EntityRelationshipInput!]
 }
@@ -2342,9 +2352,6 @@ type LinkAttributeToListResult {
   errors: [MutationError!]!
 }
 
-# File: root.graphql
-# Root Query Type
-
 type MatchRuleClause {
   id: ID!
   clauseCode: String!
@@ -2504,6 +2511,9 @@ type UpdateMatchRuleResult {
   errors: [MutationError!]!
 }
 
+# File: root.graphql
+# Root Query Type
+
 type Query {
   # Generic entity queries
   entities(
@@ -2551,8 +2561,8 @@ type Query {
   dqRule(id: ID!): DQRule
   dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
   dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
-  dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date): DataQualityDashboard!
-  staleAttributes(domainCode: String, olderThanDays: Int, asOfDate: Date): StaleAttributeReport!
+  dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date, knowledgeDate: DateTime, entityId: ID): DataQualityDashboard!
+  staleAttributes(domainCode: String, olderThanDays: Int, asOfDate: Date, knowledgeDate: DateTime, entityId: ID): StaleAttributeReport!
   
   # Source queries
   dataSources(type: String, isActive: Boolean): [DataSource!]!
@@ -2609,6 +2619,10 @@ type Query {
   referenceLists(domainCode: String, isActive: Boolean): [ReferenceListSummary!]!
   referenceList(id: ID, listCode: String): ReferenceListDetail
   normalizeValue(listCode: String!, values: [String!]!): [NormalizationResult!]!
+
+  # Record experiences: editable multi-entity working screens
+  recordExperiences(anchorDomainCode: String, isActive: Boolean): [RecordExperience!]!
+  recordExperience(experienceCode: String!): RecordExperience
 
   # Reporting (dashboards & narratives)
   dashboards(domainCode: String, isActive: Boolean): [Dashboard!]!
@@ -2671,6 +2685,7 @@ type Mutation {
   updateDQRule(input: UpdateDQRuleInput!): UpdateDQRuleResult!
   resolveDQException(input: ResolveDQExceptionInput!): ResolveDQExceptionResult!
   recordDQDisposition(input: RecordDQDispositionInput!): RecordDQDispositionResult!
+  confirmAttributeReceipt(entityId: ID!, attributeCode: String!): ConfirmAttributeReceiptResult!
   
   # Intersection mutations
   createIntersectionType(input: CreateIntersectionTypeInput!): CreateIntersectionTypeResult!
@@ -2872,6 +2887,11 @@ type DeleteCompetingSourceResult {
 # Metadata Types
 input UpdateAttributeDefinitionInput {
   id: ID!
+  attributeName: String
+  dataType: String
+  description: String
+  unitOfMeasure: String
+  isMultiValued: Boolean
   displayFormat: String
   listValues: [String!]
   validationRules: JSON
@@ -2883,6 +2903,7 @@ input UpdateAttributeDefinitionInput {
   aggregationType: String
   weightAttributeCode: String
   numericPrecision: Int
+  referenceListCode: String
 }
 
 type UpdateAttributeDefinitionResult {
@@ -3925,6 +3946,44 @@ type UpdateSecurityResult {
   errors: [MutationError!]!
 }
 
+
+# Record experiences compose one anchor entity with related forms, grids, and dashboards.
+
+type ExperienceSection {
+  key: String!
+  title: String!
+  kind: String!
+  placement: String!
+  domainCode: String
+  relationshipCode: String
+  direction: String
+  columns: [String!]!
+  dashboardCode: String
+  templateCode: String
+}
+
+type ExperiencePipelineStage {
+  code: String!
+  label: String!
+}
+
+type ExperiencePipeline {
+  stageAttribute: String!
+  stages: [ExperiencePipelineStage!]!
+  cardAttributes: [String!]!
+}
+
+type RecordExperience {
+  id: ID!
+  experienceCode: String!
+  experienceName: String!
+  description: String
+  anchorDomainCode: String!
+  sections: [ExperienceSection!]!
+  pipeline: ExperiencePipeline
+  isDefault: Boolean!
+  isActive: Boolean!
+}
 
 # Reporting: Custom Dashboards & Narratives
 #

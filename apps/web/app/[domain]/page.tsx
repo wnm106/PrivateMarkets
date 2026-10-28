@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { graphqlMutation, graphqlQuery, CREATE_ENTITY_MUTATION, DOMAIN_TYPES_QUERY, toRelationshipInputs } from '@/lib/graphql';
 import { EntityForm } from '@/components/forms/EntityForm';
-import { EntityAttributeTable } from '@/components/entities/EntityAttributeTable';
+import { EntityHome } from '@/components/entities/EntityHome';
 import { useTemporalStore } from '@/lib/store';
 import { domainCodeFromRoute } from '@/lib/domain-routes';
 
@@ -98,7 +98,7 @@ export default function DomainListPage() {
         </div>
       </div>
 
-      <EntityAttributeTable
+      <EntityHome
         domainCode={domainCode}
         domainKey={route}
         asOfDate={asOfDate}

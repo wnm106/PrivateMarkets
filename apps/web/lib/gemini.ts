@@ -1,5 +1,6 @@
 import type { ChatConversation } from './chat-history';
 import type { ChatVoice } from './chat-voice';
+import type { SkillState, SkillView } from '@tapestrai/mcp-server/src/lib/chat-skills';
 import { authHeaders } from './reporting';
 
 export interface ChatMessage {
@@ -37,6 +38,10 @@ export interface ChatContext {
   designerDraft?: Record<string, any>;
   /** How this reply should be phrased. */
   voice?: ChatVoice;
+  /** Guided skill to run. A designer sets this; otherwise the server infers it. */
+  skill?: 'design-dashboard' | 'design-narrative' | 'create-entity';
+  /** Ledger from the previous turn, so the interview continues if it is not stored yet. */
+  skillState?: SkillState | null;
 }
 
 export interface ChatResponse {
@@ -48,6 +53,9 @@ export interface ChatResponse {
   /** Thread the turn was recorded in (absent for anonymous callers). */
   conversationId?: string | null;
   conversation?: ChatConversation | null;
+  /** Guided skill ledger after this turn, when a skill is active. */
+  skill?: SkillView | null;
+  skillState?: SkillState | null;
 }
 
 export async function sendGeminiMessage(
@@ -68,6 +76,8 @@ export async function sendGeminiMessage(
       attachmentIds: context?.attachmentIds,
       designerDraft: context?.designerDraft,
       voice: context?.voice,
+      skill: context?.skill,
+      skillState: context?.skillState,
     }),
   });
 
@@ -90,5 +100,7 @@ export async function sendGeminiMessage(
     toolCalls: data.toolCalls,
     conversationId: data.conversationId ?? null,
     conversation: data.conversation ?? null,
+    skill: data.skill ?? null,
+    skillState: data.skillState ?? null,
   };
 }

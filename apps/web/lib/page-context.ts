@@ -11,7 +11,7 @@ const PAGES: Record<string, string> = {
   '/': 'Master data overview',
   '/quality': 'Data quality',
   '/reconcile': 'Reconciliation',
-  '/imports': 'Position file load',
+  '/imports': 'Load data',
   '/lists': 'Value lists',
   '/intersections': 'Composite entities',
   '/resolve': 'Resolve',
@@ -28,6 +28,7 @@ const PAGES: Record<string, string> = {
   '/admin/compliance': 'Compliance rules',
   '/admin/dashboards': 'Dashboards',
   '/admin/narratives': 'Narratives',
+  '/admin/skills': 'Skills',
   '/admin/tenancy': 'Clients, users, and roles',
 };
 
@@ -85,6 +86,9 @@ export function routeChatContext(pathname: string): RouteChatContext {
   }
   if (parts[0] === 'admin' && parts[1] === 'narratives' && parts[2]) {
     return { page: `Narrative ${decodeURIComponent(parts[2])}` };
+  }
+  if (parts[0] === 'admin' && parts[1] === 'skills' && parts[2]) {
+    return { page: `Skill ${decodeURIComponent(parts[2])}` };
   }
   if (parts[0] === 'admin' && parts[1] === 'templates' && parts[2] === 'studio') {
     return { page: 'Template studio' };

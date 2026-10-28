@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { graphqlMutation, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
 import { EntityForm } from '@/components/forms/EntityForm';
-import { EntityAttributeTable } from '@/components/entities/EntityAttributeTable';
+import { EntityHome } from '@/components/entities/EntityHome';
 import { useTemporalStore } from '@/lib/store';
 import { DomainKey } from '@/lib/mock-data';
 
@@ -55,13 +55,14 @@ export default function DealsPage() {
           </div>
         </div>
         <div className="page-actions">
+          <Link href="/pipeline" className="btn btn-primary">Pipeline</Link>
           <button className="btn">Export</button>
           <button className="btn">Bulk Edit</button>
-          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>+ New Record</button>
+          <button className="btn" onClick={() => setShowCreateModal(true)}>+ New Record</button>
         </div>
       </div>
 
-      <EntityAttributeTable
+      <EntityHome
         domainCode="DEAL"
         domainKey={domain}
         asOfDate={asOfDate}

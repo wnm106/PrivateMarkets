@@ -11,6 +11,7 @@ import { AttributePicker } from './AttributePicker';
 import { EntityAttributeTree } from './EntityAttributeTree';
 import { ComplianceAttributeSelect, useRelationshipAttributes } from './ComplianceAttributeSelect';
 import { CompliancePopulationPreview } from './CompliancePopulationPreview';
+import { AS_OF_PERIODS, comparisonFields, comparisonText, describeComparisonExpression, DQ_DATE_FNS } from '@/lib/expression-library';
 
 export interface RollupHop {
   relationshipCode: string;
@@ -145,7 +146,19 @@ interface AttributeOpt {
   dataType: string;
 }
 
-const OPERATORS = ['equals', 'not_equals', 'gt', 'gte', 'lt', 'lte', 'in', 'not_in', 'is_null', 'is_not_null'];
+const OPERATORS = ['equals', 'not_equals', 'gt', 'gte', 'lt', 'lte', 'in', 'not_in', 'is_null', 'is_not_null'] as const;
+const OPERATOR_LABELS: Record<(typeof OPERATORS)[number], string> = {
+  equals: 'equals',
+  not_equals: 'does not equal',
+  gt: 'is greater than',
+  gte: 'is at least',
+  lt: 'is less than',
+  lte: 'is at most',
+  in: 'is one of',
+  not_in: 'is not one of',
+  is_null: 'is blank',
+  is_not_null: 'is present',
+};
 const AGGREGATIONS = ['SUM', 'AVG', 'COUNT', 'MIN', 'MAX', 'VALUE', 'CONSTANT'];
 
 function defaultFormData(): ComplianceRuleFormData {
@@ -982,15 +995,50 @@ function ConditionGroup({
               value={cond.operator}
               onChange={(e) => onUpdate(idx, { operator: e.target.value })}
             >
-              {OPERATORS.map((op) => <option key={op} value={op}>{op}</option>)}
+              {OPERATORS.map((op) => <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>)}
             </select>
-            <input
-              className="text-input"
-              value={cond.value}
-              onChange={(e) => onUpdate(idx, { value: e.target.value })}
-              placeholder={cond.compareAttributeCode ? 'Comparing to attribute (see below)' : "Value (comma-separated for 'in')"}
-              disabled={!!cond.compareAttributeCode || cond.operator === 'is_null' || cond.operator === 'is_not_null'}
-            />
+            {cond.operator === 'is_null' || cond.operator === 'is_not_null' ? <span /> : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 }}>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <input
+                    className="text-input"
+                    aria-label="Comparison expression"
+                    value={cond.operator === 'in' || cond.operator === 'not_in' ? cond.value : comparisonText(cond.value, cond.compareAttributeCode)}
+                    onChange={(e) => onUpdate(idx, cond.operator === 'in' || cond.operator === 'not_in'
+                      ? { value: e.target.value, compareAttributeCode: '' }
+                      : comparisonFields(e.target.value))}
+                    placeholder={cond.operator === 'in' || cond.operator === 'not_in' ? 'US, GB' : "1.5, 'US', OTHER_FIELD, END_OF_MONTH(CURRENT_DATE)"}
+                  />
+                  {cond.operator !== 'in' && cond.operator !== 'not_in' && (
+                    <select
+                      className="select"
+                      aria-label="Insert date function"
+                      value=""
+                      style={{ flex: '0 0 132px' }}
+                      onChange={(e) => {
+                        const token = e.target.value;
+                        if (!token) return;
+                        const current = comparisonText(cond.value, cond.compareAttributeCode).trim();
+                        if (AS_OF_PERIODS.some((period) => period.code === token)) {
+                          const field = current.match(/^([A-Za-z_][A-Za-z0-9_]*)/)?.[1] || '';
+                          if (field && field !== 'AS') onUpdate(idx, comparisonFields(`${token}(${field})`));
+                          return;
+                        }
+                        const argument = /^[A-Za-z_][A-Za-z0-9_]*$/.test(current) ? current : 'CURRENT_DATE';
+                        onUpdate(idx, comparisonFields(token === 'CURRENT_DATE' ? 'CURRENT_DATE' : `${token}(${argument})`));
+                      }}
+                    >
+                      <option value="">Function</option>
+                      {DQ_DATE_FNS.map((fn) => <option key={fn.token} value={fn.token}>{fn.label}</option>)}
+                      {AS_OF_PERIODS.map((period) => <option key={period.code} value={period.code}>{period.name}</option>)}
+                    </select>
+                  )}
+                </div>
+                {cond.operator !== 'in' && cond.operator !== 'not_in' && (
+                  <span className="field-hint">{describeComparisonExpression(comparisonText(cond.value, cond.compareAttributeCode))}</span>
+                )}
+              </div>
+            )}
             <button className="cond-remove" onClick={() => onRemove(idx)} style={{ width: '30px', height: '30px' }}>✕</button>
           </div>
           {rootDomainCode && (
@@ -1016,10 +1064,7 @@ function ConditionGroup({
             </div>
           )}
           <details style={{ margin: '0 0 12px 0', fontSize: '11px', color: 'var(--ink-3)' }}>
-            <summary style={{ cursor: 'pointer' }}>
-              Source / period &amp; attribute comparison
-              {(cond.compareAttributeCode || describeDimension(cond.attributeDimension) !== 'run source � as-of') && ' (configured)'}
-            </summary>
+            <summary style={{ cursor: 'pointer' }}>Where these values are read</summary>
             <div style={{ padding: '10px 0 0 12px' }}>
               <DimensionPicker
                 compact
@@ -1027,40 +1072,13 @@ function ConditionGroup({
                 value={cond.attributeDimension}
                 onChange={(d) => onUpdate(idx, { attributeDimension: d })}
               />
-              <div className="field" style={{ marginTop: '10px', maxWidth: '420px' }}>
-                <label>Compare against</label>
-                <select
-                  className="select"
-                  value={cond.compareAttributeCode ? 'attribute' : 'literal'}
-                  onChange={(e) => onUpdate(idx, {
-                    compareAttributeCode: e.target.value === 'attribute' ? (cond.compareAttributeCode || '__PICK__') : '',
-                    compareAttributePath: e.target.value === 'attribute' ? (cond.compareAttributePath || []) : [],
-                  })}
-                >
-                  <option value="literal">Literal value</option>
-                  <option value="attribute">Another attribute (e.g. other source or prior period)</option>
-                </select>
-              </div>
-              {cond.compareAttributeCode && (
-                <>
-                  <div className="field" style={{ marginTop: '10px', maxWidth: '420px' }}>
-                    <ComplianceAttributeSelect
-                      rootDomainCode={rootDomainCode}
-                      relationshipTypes={relationshipTypes}
-                      domains={domains}
-                      attributeCode={cond.compareAttributeCode === '__PICK__' ? '' : cond.compareAttributeCode}
-                      path={cond.compareAttributePath}
-                      onChange={(compareAttributeCode, compareAttributePath) => onUpdate(idx, { compareAttributeCode, compareAttributePath })}
-                      placeholder="Select attribute to compare..."
-                    />
-                  </div>
-                  <DimensionPicker
-                    compact
-                    label="Compared attribute read from"
-                    value={cond.compareDimension}
-                    onChange={(d) => onUpdate(idx, { compareDimension: d })}
-                  />
-                </>
+              {cond.compareAttributeCode && cond.compareAttributeCode !== '__PICK__' && (
+                <DimensionPicker
+                  compact
+                  label={`${cond.compareAttributeCode} read from`}
+                  value={cond.compareDimension}
+                  onChange={(d) => onUpdate(idx, { compareDimension: d })}
+                />
               )}
             </div>
           </details>

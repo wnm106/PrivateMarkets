@@ -13,6 +13,7 @@ import {
   graphqlQuery,
 } from '@/lib/graphql';
 import { DqExpressionEditor } from '@/components/quality/DqExpressionEditor';
+import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
 interface DQRule {
   id: string;
@@ -242,6 +243,75 @@ export default function DQRulesPage() {
   };
 
   const activeCount = rules.filter((rule) => rule.isActive).length;
+  const columns = useMemo<ColDef<DQRule>[]>(() => [
+    { field: 'ruleCode', headerName: 'Code', minWidth: 180, flex: 1, cellClass: 'mono' },
+    {
+      colId: 'rule',
+      headerName: 'Rule',
+      minWidth: 260,
+      flex: 1.6,
+      autoHeight: true,
+      wrapText: true,
+      valueGetter: (params) => params.data ? `${params.data.ruleName} ${params.data.ruleDescription || params.data.ruleExpression || ''}` : '',
+      cellRenderer: (params) => {
+        const rule = params.data;
+        if (!rule) return params.value || '';
+        return (
+          <div>
+            <div style={{ fontWeight: 500, marginBottom: 2 }}>{rule.ruleName}</div>
+            <div style={{ fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.4 }}>{rule.ruleDescription || rule.ruleExpression}</div>
+          </div>
+        );
+      },
+    },
+    {
+      field: 'ruleType',
+      headerName: 'Type',
+      minWidth: 140,
+      cellRenderer: (params) => params.value ? <span style={typeChip(String(params.value))}>{params.value}</span> : null,
+    },
+    {
+      colId: 'applies',
+      headerName: 'Applies to',
+      minWidth: 180,
+      flex: 1,
+      autoHeight: true,
+      wrapText: true,
+      valueGetter: (params) => params.data ? `${params.data.domainCode || 'All domains'} ${params.data.attributeCode || 'Any attribute'}` : '',
+      cellRenderer: (params) => {
+        const rule = params.data;
+        if (!rule) return params.value || '';
+        return (
+          <div>
+            <div>{rule.domainCode || 'All domains'}</div>
+            <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{rule.attributeCode || 'Any attribute'}</div>
+          </div>
+        );
+      },
+    },
+    {
+      field: 'severity',
+      headerName: 'Severity',
+      minWidth: 130,
+      cellRenderer: (params) => params.value ? (
+        <span>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: severityColor(String(params.value)), marginRight: 6 }} />
+          {params.value}
+        </span>
+      ) : null,
+    },
+    {
+      colId: 'status',
+      headerName: 'Status',
+      minWidth: 120,
+      valueGetter: (params) => params.data ? (params.data.isActive ? 'Active' : 'Inactive') : '',
+      cellRenderer: (params) => {
+        if (!params.value) return null;
+        const active = params.value === 'Active';
+        return <span style={active ? activeChip : inactiveChip}>{params.value}</span>;
+      },
+    },
+  ], []);
 
   return (
     <div className="view-fade">
@@ -298,64 +368,19 @@ export default function DQRulesPage() {
         </div>
       </div>
 
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '40px 0' }}>
-          <div className="loader">Loading DQ rules...</div>
-        </div>
-      ) : (
-        <div className="data-table">
-          <div style={headerStyle}>
-            <div>Code</div>
-            <div>Rule</div>
-            <div>Type</div>
-            <div>Applies to</div>
-            <div style={{ textAlign: 'center' }}>Severity</div>
-            <div style={{ textAlign: 'center' }}>Status</div>
-          </div>
-          {filteredRules.map((rule) => (
-            <div
-              key={rule.id}
-              style={{ ...rowStyle, opacity: rule.isActive ? 1 : 0.6 }}
-              onClick={() => openEdit(rule)}
-              onMouseOver={(event) => { event.currentTarget.style.background = 'var(--bg)'; }}
-              onMouseOut={(event) => { event.currentTarget.style.background = 'transparent'; }}
-            >
-              <div className="mono" style={{ color: 'var(--accent)', fontWeight: 500, fontSize: '11px' }}>{rule.ruleCode}</div>
-              <div>
-                <div style={{ color: 'var(--ink)', fontWeight: 500, marginBottom: 2 }}>{rule.ruleName}</div>
-                <div style={{ fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.4 }}>{rule.ruleDescription || rule.ruleExpression}</div>
-              </div>
-              <div>
-                <span style={typeChip(rule.ruleType)}>{rule.ruleType}</span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
-                <div>{rule.domainCode || 'All domains'}</div>
-                <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{rule.attributeCode || 'Any attribute'}</div>
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <span style={{
-                  display: 'inline-block',
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  background: severityColor(rule.severity),
-                  marginRight: 6,
-                }} />
-                <span style={{ fontSize: 11, fontWeight: 500 }}>{rule.severity}</span>
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <span style={rule.isActive ? activeChip : inactiveChip}>{rule.isActive ? 'Active' : 'Inactive'}</span>
-              </div>
-            </div>
-          ))}
-          {filteredRules.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--ink-3)' }}>
-              <div style={{ fontSize: 16, marginBottom: 8 }}>No data quality rules match this selection.</div>
-              <button className="btn btn-primary" onClick={openCreate}>+ Create Rule</button>
-            </div>
-          )}
-        </div>
-      )}
+      <div className="data-table">
+        <AppGrid
+          rows={filteredRules}
+          columns={columns}
+          getRowId={(rule) => rule.id}
+          autoHeight={false}
+          height="100%"
+          loading={loading}
+          emptyMessage="No data quality rules match this selection."
+          onRowClicked={openEdit}
+          getRowClass={(params) => (params.data && !params.data.isActive ? 'is-inactive' : '')}
+        />
+      </div>
 
       {(creating || editing) && (
         <div style={modalBackdrop}>
@@ -468,32 +493,6 @@ export default function DQRulesPage() {
   );
 }
 
-const headerStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '180px 1.8fr 130px 160px 110px 100px',
-  gap: 14,
-  padding: '12px 18px',
-  background: 'var(--bg)',
-  borderBottom: '1px solid var(--line)',
-  fontSize: 10,
-  fontWeight: 600,
-  textTransform: 'uppercase',
-  letterSpacing: '1.2px',
-  color: 'var(--ink-3)',
-};
-
-const rowStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '180px 1.8fr 130px 160px 110px 100px',
-  gap: 14,
-  padding: '14px 18px',
-  borderBottom: '1px solid var(--line)',
-  fontSize: 12,
-  alignItems: 'center',
-  cursor: 'pointer',
-  transition: 'background 0.1s',
-};
-
 const activeChip: React.CSSProperties = {
   fontSize: 10,
   padding: '3px 8px',
@@ -550,6 +549,7 @@ function typeChip(type: string): React.CSSProperties {
     color: tone.color,
     fontWeight: 600,
     letterSpacing: '0.5px',
+    whiteSpace: 'nowrap',
   };
 }
 

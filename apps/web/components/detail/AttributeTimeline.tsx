@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { formatAttributeDisplay } from '@/lib/attribute-display';
+import { useAttributeDisplay } from '@/components/forms/AttributeValueInput';
 import { ENTITY_ACTIVITY_QUERY, graphqlQuery } from '@/lib/graphql';
 import { useTemporalStore } from '@/lib/store';
 
@@ -22,14 +24,10 @@ interface AttributeTimelineProps {
   embedded?: boolean;
 }
 
-function formatValue(value: string | null) {
-  if (value == null || value === '') return 'Cleared';
-  const trimmed = value.trim();
-  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
-    const numeric = Number(trimmed);
-    if (Number.isFinite(numeric)) return numeric.toLocaleString(undefined, { maximumFractionDigits: 6 });
-  }
-  return value;
+function TimelineValue({ attributeCode, value }: { attributeCode: string; value: string | null }) {
+  const meta = useAttributeDisplay(attributeCode);
+  if (value == null || value === '') return <>Cleared</>;
+  return <>{formatAttributeDisplay(value, meta) || value}</>;
 }
 
 function formatWritten(value: string) {
@@ -120,7 +118,7 @@ export function AttributeTimeline({ entityId, attributes, embedded = false }: At
               <div className="value-timeline-body">
                 <div className="value-timeline-when">{periodLabel(entry.validFrom, entry.validTo)}</div>
                 {!attributeCode && <div className="value-timeline-attr">{entry.attributeName}</div>}
-                <div className="value-timeline-value">{formatValue(entry.value)}</div>
+                <div className="value-timeline-value"><TimelineValue attributeCode={entry.attributeCode} value={entry.value} /></div>
                 <div className="value-timeline-meta">
                   {[entry.updatedBy || 'System', entry.sourceName, `written ${formatWritten(entry.updatedAt)}`].filter(Boolean).join(' · ')}
                 </div>

@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { graphqlQuery, graphqlMutation, INTERSECTION_QUERY, ENTITY_QUERY, FIELD_LINEAGE_QUERY, ENTITY_ACTIVITY_QUERY, ATTRIBUTE_REGISTER_QUERY, UPDATE_ENTITY_MUTATION, ADD_COMPETING_SOURCE_MUTATION, DELETE_COMPETING_SOURCE_MUTATION, DATA_SOURCE_QUERY } from '@/lib/graphql';
 import { GoldenRecordHeader } from '@/components/detail/GoldenRecordHeader';
-import { EntityGraphPanel } from '@/components/detail/EntityGraphPanel';
 import { GoldenRecordSections, type TemplateAttribute, type LineageData } from '@/components/detail/GoldenRecordSections';
 import { SourceContributionPanel } from '@/components/detail/SourceContributionPanel';
 import { ActiveConflictsPanel } from '@/components/detail/ActiveConflictsPanel';
@@ -109,6 +108,7 @@ export default function PositionDetailPage() {
       who: entry.updatedBy || 'System',
       time: entry.updatedAt,
       attribute: entry.attributeName || entry.attributeCode,
+      attributeCode: entry.attributeCode,
       value: entry.value ?? '',
       validFrom: entry.validFrom,
       validTo: entry.validTo,
@@ -226,7 +226,7 @@ export default function PositionDetailPage() {
     if (!entity?.id) throw new Error('Position is still loading');
     const result = await graphqlMutation<{ updateEntity: { errors: Array<{ message: string }> } }, { input: { id: string; attributes: Record<string, string> } }>(
       UPDATE_ENTITY_MUTATION,
-      { input: { id: entity.id, attributes: { [attributeCode]: value } } },
+      { input: { id: entity.id, attributes: { [attributeCode]: value }, asOfDate } },
     );
     const saveError = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
     if (saveError) throw new Error(saveError);
@@ -255,6 +255,14 @@ export default function PositionDetailPage() {
     );
     const saveError = result.error?.message || result.data?.addCompetingSource?.errors?.[0]?.message;
     if (saveError || !result.data?.addCompetingSource?.success) throw new Error(saveError || 'Could not save the value');
+    if (isMasterEntity) {
+      const entityResult = await graphqlQuery<any, { id: string; asOfDate: string }>(
+        ENTITY_QUERY,
+        { id: entity.id, asOfDate },
+        'network-only',
+      );
+      if (entityResult.data?.entity) setEntity(entityResult.data.entity);
+    }
     await refreshLineage(entity.id);
   };
   const handleDeleteSourceValue = async (attributeCode: string, sourceCode: string) => {
@@ -316,7 +324,6 @@ export default function PositionDetailPage() {
         <div><GoldenRecordSections entity={entity} templateAttributes={templateAttributes} lineageData={lineageData} lineageLoaded={lineageLoaded} asOfDate={asOfDate} onAddAttribute={handleAddAttribute} onSourceChange={handleSourceChange} onValueChange={handleValueChange} onAddSourceValue={handleAddSourceValue} onDeleteSourceValue={handleDeleteSourceValue} /></div>
         <div><SourceContributionPanel sources={sourceContributions} /><ActiveConflictsPanel conflicts={conflicts} entityId={id} /><ActivityFeedPanel activities={activities} /></div>
       </div>
-      {isMasterEntity && <EntityGraphPanel entityId={entity.id} />}
     </div>
   );
 }

@@ -1,3 +1,8 @@
+import { attributeDisplayKind } from './attribute-display';
+import { DQ_DATE_FNS } from './expression-library';
+
+export { DQ_DATE_FNS };
+
 export type DqOperator =
   | 'IS NULL'
   | 'IS NOT NULL'
@@ -14,7 +19,17 @@ export type DqOperator =
   | 'ILIKE';
 
 export type DqJoin = 'AND' | 'OR';
-export type DqValueKind = 'number' | 'text' | 'current_date';
+export type DqValueKind = 'number' | 'text' | 'current_date' | 'attribute' | 'relative';
+export type DqLiteralKind = 'number' | 'text' | 'date' | 'boolean';
+export type DqDateFn =
+  | 'as_of'
+  | 'previous_day'
+  | 'start_of_month'
+  | 'end_of_month'
+  | 'start_of_quarter'
+  | 'end_of_quarter'
+  | 'start_of_year'
+  | 'end_of_year';
 
 export interface DqClause {
   id: string;
@@ -24,17 +39,19 @@ export interface DqClause {
   valueKind: DqValueKind;
   value: string;
   values: string[];
+  /** Set when the comparison date is the as-of date, or a function of the as-of date or another attribute. */
+  dateFn: DqDateFn | null;
 }
 
 export const DQ_OPERATORS: Array<{ value: DqOperator; label: string; hint: string }> = [
   { value: 'IS NOT NULL', label: 'is present', hint: 'The attribute has a value.' },
   { value: 'IS NULL', label: 'is blank', hint: 'A blank value passes. Use or when a missing value should not fail the other checks.' },
-  { value: '=', label: 'equals', hint: 'Compare with a number, text, or the as-of date.' },
-  { value: '!=', label: 'does not equal', hint: 'Compare with a number, text, or the as-of date.' },
-  { value: '>', label: 'is greater than', hint: 'Compare with a number, text, or the as-of date.' },
-  { value: '>=', label: 'is at least', hint: 'Compare with a number, text, or the as-of date.' },
-  { value: '<', label: 'is less than', hint: 'Compare with a number, text, or the as-of date.' },
-  { value: '<=', label: 'is at most', hint: 'Compare with a number, text, or the as-of date.' },
+  { value: '=', label: 'equals', hint: 'Compare with a value or another attribute.' },
+  { value: '!=', label: 'does not equal', hint: 'Compare with a value or another attribute.' },
+  { value: '>', label: 'is greater than', hint: 'Compare with a value or another attribute.' },
+  { value: '>=', label: 'is at least', hint: 'Compare with a value or another attribute.' },
+  { value: '<', label: 'is less than', hint: 'Compare with a value or another attribute.' },
+  { value: '<=', label: 'is at most', hint: 'Compare with a value or another attribute.' },
   { value: 'IN', label: 'is one of', hint: 'Matching ignores case. Paste a list to add many values at once.' },
   { value: '~', label: 'matches pattern', hint: 'A regular expression, such as ^[A-Z]{2}$ for two letters.' },
   { value: 'LIKE', label: 'is like', hint: '% matches any text and _ matches one character. Case sensitive.' },
@@ -43,6 +60,11 @@ export const DQ_OPERATORS: Array<{ value: DqOperator; label: string; hint: strin
 
 export const DQ_REFERENCES: Array<{ token: string; detail: string }> = [
   { token: 'CURRENT_DATE', detail: 'The as-of date of the quality check, not the clock at the moment you save the rule.' },
+  { token: 'PREVIOUS_DAY(date)', detail: 'The day before a date. PREVIOUS_DAY(CURRENT_DATE) is yesterday relative to the as-of date. The date can also be another attribute.' },
+  { token: 'START_OF_MONTH(date) / END_OF_MONTH(date)', detail: 'The first or last day of the month containing that date.' },
+  { token: 'START_OF_QUARTER(date) / END_OF_QUARTER(date)', detail: 'The first or last day of the calendar quarter containing that date.' },
+  { token: 'START_OF_YEAR(date) / END_OF_YEAR(date)', detail: 'The first or last day of the calendar year containing that date.' },
+  { token: 'Attribute', detail: 'Another attribute on the same record, for example INTEREST_COVERAGE_RATIO >= MIN_INTEREST_COVERAGE.' },
   { token: 'AND', detail: 'Both conditions must pass. AND is applied before OR.' },
   { token: 'OR', detail: 'Either side can pass. Use this with “is blank” so a missing value does not fail a format check.' },
   { token: 'IS NULL', detail: 'The attribute is blank.' },
@@ -53,6 +75,27 @@ export const DQ_REFERENCES: Array<{ token: string; detail: string }> = [
 ];
 
 const COMPARISON = new Set<DqOperator>(['=', '!=', '<>', '>', '>=', '<', '<=']);
+const DATE_FN_PATTERN = 'PREVIOUS_DAY|START_OF_MONTH|END_OF_MONTH|START_OF_QUARTER|END_OF_QUARTER|START_OF_YEAR|END_OF_YEAR';
+const RESERVED_RHS = new Set([
+  'AND', 'OR', 'IS', 'NULL', 'NOT', 'IN', 'LIKE', 'ILIKE', 'TRUE', 'FALSE', 'CURRENT_DATE', 'YESTERDAY',
+  ...DATE_FN_PATTERN.split('|'),
+]);
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+export function literalKindFor(dataType?: string | null): DqLiteralKind {
+  const kind = attributeDisplayKind({ dataType });
+  if (kind === 'date') return 'date';
+  if (kind === 'boolean') return 'boolean';
+  if (kind === 'text') return 'text';
+  return 'number';
+}
+
+export function dateFnByToken(token: string): DqDateFn | null {
+  const key = token.trim().toUpperCase();
+  if (key === 'YESTERDAY') return 'previous_day';
+  return (DQ_DATE_FNS.find((item) => item.token === key)?.value as DqDateFn | undefined) || null;
+}
 
 export function operatorNeedsValue(operator: DqOperator) {
   return operator !== 'IS NULL' && operator !== 'IS NOT NULL';
@@ -67,6 +110,7 @@ export function newClause(join: DqJoin | null = null): DqClause {
     valueKind: 'text',
     value: '',
     values: [],
+    dateFn: null,
   };
 }
 
@@ -78,6 +122,10 @@ function unquote(value: string) {
   return value.replace(/''/g, "'");
 }
 
+function dateFnMeta(dateFn: DqDateFn | null) {
+  return DQ_DATE_FNS.find((item) => item.value === (dateFn || 'as_of')) || DQ_DATE_FNS[0];
+}
+
 export function serializeClauses(clauses: DqClause[]): string {
   return clauses
     .filter((clause) => clause.attribute.trim())
@@ -87,6 +135,13 @@ export function serializeClauses(clauses: DqClause[]): string {
     })
     .filter(Boolean)
     .join(' ');
+}
+
+function serializeDateCall(dateFn: DqDateFn | null, argument: string): string {
+  const arg = argument.trim() || 'CURRENT_DATE';
+  if (!dateFn || dateFn === 'as_of') return arg === 'CURRENT_DATE' ? 'CURRENT_DATE' : arg;
+  const token = dateFnMeta(dateFn).token;
+  return `${token}(${arg})`;
 }
 
 function serializeClause(clause: DqClause): string {
@@ -103,7 +158,15 @@ function serializeClause(clause: DqClause): string {
     const op = clause.operator === '~' ? '~' : clause.operator;
     return `${attribute} ${op} ${quote(clause.value)}`;
   }
-  if (clause.valueKind === 'current_date') return `${attribute} ${clause.operator} CURRENT_DATE`;
+  if (clause.valueKind === 'current_date' || clause.valueKind === 'relative') {
+    return `${attribute} ${clause.operator} ${serializeDateCall(clause.dateFn, '')}`;
+  }
+  if (clause.valueKind === 'attribute') {
+    const code = clause.value.trim();
+    if (!code) return '';
+    const target = clause.dateFn && clause.dateFn !== 'as_of' ? serializeDateCall(clause.dateFn, code) : code;
+    return `${attribute} ${clause.operator} ${target}`;
+  }
   if (clause.valueKind === 'number') {
     if (!/^-?\d+(\.\d+)?$/.test(clause.value.trim())) return '';
     return `${attribute} ${clause.operator} ${clause.value.trim()}`;
@@ -123,7 +186,63 @@ function previewList(values: string[]): string {
   return `${values.slice(0, 4).join(', ')}, and ${values.length - 4} more`;
 }
 
-export function describeClause(clause: DqClause, name: string): string {
+function formatIsoDate(value: string): string {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return value;
+  const month = MONTHS[Number(match[2]) - 1];
+  if (!month) return value;
+  return `${month} ${Number(match[3])}, ${match[1]}`;
+}
+
+export function rhsText(clause: DqClause): string {
+  if (clause.valueKind === 'current_date' || clause.valueKind === 'relative') return serializeDateCall(clause.dateFn, '');
+  if (clause.valueKind === 'attribute') {
+    const code = clause.value.trim();
+    if (!code) return '';
+    return clause.dateFn && clause.dateFn !== 'as_of' ? serializeDateCall(clause.dateFn, code) : code;
+  }
+  if (!clause.value) return '';
+  if (clause.valueKind === 'number' || clause.value === 'true' || clause.value === 'false') return clause.value;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clause.value.trim())) return clause.value.trim();
+  return `'${clause.value.replace(/'/g, "''")}'`;
+}
+
+export function applyRhs(clause: DqClause, raw: string): Partial<DqClause> | null {
+  const text = raw.trim();
+  if (!text) return { value: '', valueKind: 'text', dateFn: null };
+  const parsed = parseRhs(text, clause, clause.operator);
+  if (!parsed) return null;
+  return { valueKind: parsed.valueKind, value: parsed.value, dateFn: parsed.dateFn };
+}
+
+export function describeComparisonTarget(clause: DqClause, nameFor: (code: string) => string = (code) => code): string {
+  if (clause.valueKind === 'current_date' || clause.valueKind === 'relative') {
+    return dateFnMeta(clause.dateFn).asOfPhrase;
+  }
+  if (clause.valueKind === 'attribute') {
+    const name = clause.value.trim() ? nameFor(clause.value.trim()) : 'another attribute';
+    if (!clause.dateFn || clause.dateFn === 'as_of') return name;
+    return dateFnMeta(clause.dateFn).wrapPhrase(name);
+  }
+  if (!clause.value.trim()) return clause.valueKind === 'number' ? 'a number' : 'a value';
+  if (clause.valueKind === 'number') return clause.value.trim();
+  if (clause.value === 'true') return 'yes';
+  if (clause.value === 'false') return 'no';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clause.value.trim())) return formatIsoDate(clause.value.trim());
+  return `“${clause.value.trim()}”`;
+}
+
+export function comparisonHint(clause: DqClause): string | null {
+  if (!isComparison(clause.operator)) return null;
+  if (clause.valueKind === 'current_date' || clause.valueKind === 'relative') {
+    return dateFnMeta(clause.dateFn).hint;
+  }
+  if (clause.valueKind !== 'attribute') return null;
+  if (!clause.dateFn || clause.dateFn === 'as_of') return 'Compared with that attribute on the same record.';
+  return dateFnMeta(clause.dateFn).wrapHint;
+}
+
+export function describeClause(clause: DqClause, name: string, nameFor: (code: string) => string = (code) => code): string {
   const subject = name.trim() || 'this attribute';
   const op = DQ_OPERATORS.find((item) => item.value === clause.operator)?.label || clause.operator.toLowerCase();
   if (!operatorNeedsValue(clause.operator)) return `${subject} ${op}`;
@@ -134,10 +253,7 @@ export function describeClause(clause: DqClause, name: string): string {
   if (clause.operator === '~' || clause.operator === 'LIKE' || clause.operator === 'ILIKE') {
     return clause.value ? `${subject} ${op} “${clause.value}”` : `${subject} ${op} a pattern`;
   }
-  if (clause.valueKind === 'current_date') return `${subject} ${op} the as-of date`;
-  if (!clause.value.trim()) return `${subject} ${op} a ${clause.valueKind === 'number' ? 'number' : 'value'}`;
-  const shown = clause.valueKind === 'number' ? clause.value.trim() : `“${clause.value.trim()}”`;
-  return `${subject} ${op} ${shown}`;
+  return `${subject} ${op} ${describeComparisonTarget(clause, nameFor)}`;
 }
 
 export function describeRule(clauses: DqClause[], nameFor: (code: string) => string): string {
@@ -145,7 +261,7 @@ export function describeRule(clauses: DqClause[], nameFor: (code: string) => str
   if (!ready.length) return 'Choose an attribute and a check. This sentence updates as you build the rule.';
   const sentence = ready
     .map((clause, index) => {
-      const text = describeClause(clause, nameFor(clause.attribute));
+      const text = describeClause(clause, nameFor(clause.attribute), nameFor);
       if (index === 0) return text;
       const join = clause.join === 'OR' ? 'or' : 'and';
       return `${join} ${text}`;
@@ -169,17 +285,21 @@ export function formatExpression(expression: string): string {
     .join('\n');
 }
 
-export function clauseIssue(clause: DqClause): string | null {
+export function clauseIssue(clause: DqClause, dataType?: string | null): string | null {
   if (!clause.attribute.trim()) return 'Choose an attribute.';
   if (!operatorNeedsValue(clause.operator)) return null;
   if (clause.operator === 'IN') return clause.values.some((item) => item.trim()) ? null : 'Add at least one allowed value.';
   if (clause.operator === '~' || clause.operator === 'LIKE' || clause.operator === 'ILIKE') {
     return clause.value ? null : 'Enter the pattern.';
   }
-  if (clause.valueKind === 'current_date') return null;
+  if (clause.valueKind === 'current_date' || clause.valueKind === 'relative') return null;
+  if (clause.valueKind === 'attribute') return clause.value.trim() ? null : 'Choose an attribute to compare with.';
   if (clause.valueKind === 'number') {
     return /^-?\d+(\.\d+)?$/.test(clause.value.trim()) ? null : 'Enter a number.';
   }
+  const kind = dataType ? literalKindFor(dataType) : 'text';
+  if (kind === 'date') return /^\d{4}-\d{2}-\d{2}$/.test(clause.value.trim()) ? null : 'Choose a date.';
+  if (kind === 'boolean') return clause.value === 'true' || clause.value === 'false' ? null : 'Choose yes or no.';
   return clause.value ? null : 'Enter the text to compare.';
 }
 
@@ -225,6 +345,46 @@ function splitJoins(expression: string): RawPart[] {
   return parts;
 }
 
+function parseRhs(raw: string, clause: DqClause, operator: DqOperator): DqClause | null {
+  if (/^CURRENT_DATE$/i.test(raw)) {
+    return { ...clause, operator, valueKind: 'relative', value: '', dateFn: 'as_of' };
+  }
+  if (/^YESTERDAY$/i.test(raw)) {
+    return { ...clause, operator, valueKind: 'relative', value: '', dateFn: 'previous_day' };
+  }
+  let match = raw.match(new RegExp(`^(${DATE_FN_PATTERN})$`, 'i'));
+  if (match) {
+    const dateFn = dateFnByToken(match[1]);
+    return dateFn ? { ...clause, operator, valueKind: 'relative', value: '', dateFn } : null;
+  }
+  match = raw.match(new RegExp(`^(${DATE_FN_PATTERN})\\s*\\(\\s*(CURRENT_DATE|[A-Za-z_][A-Za-z0-9_]*)\\s*\\)$`, 'i'));
+  if (match) {
+    const dateFn = dateFnByToken(match[1]);
+    if (!dateFn) return null;
+    if (/^CURRENT_DATE$/i.test(match[2])) {
+      return { ...clause, operator, valueKind: 'relative', value: '', dateFn };
+    }
+    return { ...clause, operator, valueKind: 'attribute', value: match[2], dateFn };
+  }
+  if (/^-?\d+(?:\.\d+)?$/.test(raw)) {
+    return { ...clause, operator, valueKind: 'number', value: raw, dateFn: null };
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return { ...clause, operator, valueKind: 'text', value: raw, dateFn: null };
+  }
+  if (/^(true|false)$/i.test(raw)) {
+    return { ...clause, operator, valueKind: 'text', value: raw.toLowerCase(), dateFn: null };
+  }
+  match = raw.match(/^'((?:[^']|'')*)'$/);
+  if (match) {
+    return { ...clause, operator, valueKind: 'text', value: unquote(match[1]), dateFn: null };
+  }
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw) && !RESERVED_RHS.has(raw.toUpperCase())) {
+    return { ...clause, operator, valueKind: 'attribute', value: raw, dateFn: null };
+  }
+  return null;
+}
+
 function parseOne(text: string): DqClause | null {
   const clause = newClause();
   let match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+IS\s+NOT\s+NULL$/i);
@@ -232,7 +392,7 @@ function parseOne(text: string): DqClause | null {
   match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+IS\s+NULL$/i);
   if (match) return { ...clause, attribute: match[1], operator: 'IS NULL' };
   match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'((?:[^']|'')*)'$/i);
-  if (match) return { ...clause, attribute: match[1], operator: '~', valueKind: 'text', value: unquote(match[2]) };
+  if (match) return { ...clause, attribute: match[1], operator: '~', valueKind: 'text', value: unquote(match[2]), dateFn: null };
   match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+(I?LIKE)\s*'((?:[^']|'')*)'$/i);
   if (match) {
     return {
@@ -241,25 +401,22 @@ function parseOne(text: string): DqClause | null {
       operator: match[2].toUpperCase() as DqOperator,
       valueKind: 'text',
       value: unquote(match[3]),
+      dateFn: null,
     };
   }
   match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+IN\s*\((.*)\)\s*$/i);
   if (match) {
     const values = [...match[2].matchAll(/'((?:[^']|'')*)'/g)].map((item) => unquote(item[1]));
     if (!values.length) return null;
-    return { ...clause, attribute: match[1], operator: 'IN', values };
+    return { ...clause, attribute: match[1], operator: 'IN', values, dateFn: null };
   }
-  match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(>=|<=|<>|!=|=|>|<)\s*(CURRENT_DATE|-?\d+(?:\.\d+)?|'[^']*')\s*$/i);
+  match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(>=|<=|<>|!=|=|>|<)\s*(.+)$/i);
   if (match) {
     const operator = (match[2] === '<>' ? '!=' : match[2]) as DqOperator;
-    const raw = match[3];
-    if (/^CURRENT_DATE$/i.test(raw)) {
-      return { ...clause, attribute: match[1], operator, valueKind: 'current_date', value: '' };
-    }
-    if (/^-?\d+(?:\.\d+)?$/.test(raw)) {
-      return { ...clause, attribute: match[1], operator, valueKind: 'number', value: raw };
-    }
-    return { ...clause, attribute: match[1], operator, valueKind: 'text', value: unquote(raw.slice(1, -1)) };
+    const parsed = parseRhs(match[3].trim(), clause, operator);
+    if (!parsed) return null;
+    parsed.attribute = match[1];
+    return parsed;
   }
   return null;
 }

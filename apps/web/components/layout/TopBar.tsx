@@ -19,7 +19,7 @@ const CRUMB_LABELS: Record<string, string> = {
   reconcile: 'Reconcile',
   lists: 'Value Lists',
   intersections: 'Composite Entities',
-  imports: 'Position File Load',
+  imports: 'Load data',
   merge: 'Entity Resolution',
   profile: 'Profile',
   resolve: 'Resolve',

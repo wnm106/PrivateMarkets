@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
 import { domainHref } from '@/lib/domain-routes';
+import { SKILL_NAV } from '@/lib/skill-catalog';
 import { BrandLogo } from './BrandLogo';
 import { UserMenu } from './UserMenu';
 
@@ -16,12 +17,13 @@ interface DomainLink {
 }
 
 const TOOLS = [
+  { href: '/pipeline', label: 'Deal Pipeline', icon: 'layers' },
   { href: '/quality', label: 'Data Quality', icon: 'chart' },
   { href: '/merge', label: 'Entity Resolution', icon: 'nodes' },
   { href: '/reconcile', label: 'Reconcile', icon: 'chart' },
   { href: '/lists', label: 'Value Lists', icon: 'layers' },
   { href: '/intersections', label: 'Composite Entities', icon: 'nodes' },
-  { href: '/imports', label: 'Position File Load', icon: 'download' },
+  { href: '/imports', label: 'Load data', icon: 'download' },
 ] as const;
 
 const ADMIN = [
@@ -35,7 +37,9 @@ const ADMIN = [
   { href: '/admin/dq-rules', label: 'DQ Rules', icon: 'alert' },
   { href: '/admin/compliance', label: 'Compliance Rules', icon: 'list' },
   { href: '/admin/dashboards', label: 'Dashboards', icon: 'chart' },
+  { href: '/admin/experiences', label: 'Record Experiences', icon: 'domains' },
   { href: '/admin/narratives', label: 'Narratives', icon: 'list' },
+  { href: '/admin/skills', label: 'Skills', icon: 'list' },
   { href: '/admin/tenancy', label: 'Clients, Users & Roles', icon: 'users' },
 ] as const;
 
@@ -43,6 +47,31 @@ const COLLAPSED_KEY = 'tapestr-nav-collapsed';
 const TOOLS_KEY = 'tapestr-nav-tools';
 const DOMAINS_KEY = 'tapestr-nav-domains';
 const ADMIN_KEY = 'tapestr-nav-admin';
+
+type NavSection = 'domains' | 'tools' | 'admin';
+
+function writeOpenSection(section: NavSection | null) {
+  try {
+    localStorage.setItem(DOMAINS_KEY, section === 'domains' ? '1' : '0');
+    localStorage.setItem(TOOLS_KEY, section === 'tools' ? '1' : '0');
+    localStorage.setItem(ADMIN_KEY, section === 'admin' ? '1' : '0');
+  } catch {
+    /* Storage can be unavailable in private modes. */
+  }
+}
+
+function readOpenSection(): NavSection | null {
+  const domains = localStorage.getItem(DOMAINS_KEY) !== '0';
+  const tools = localStorage.getItem(TOOLS_KEY) !== '0';
+  const admin = localStorage.getItem(ADMIN_KEY) === '1';
+  const open: NavSection[] = [];
+  if (domains) open.push('domains');
+  if (tools) open.push('tools');
+  if (admin) open.push('admin');
+  const chosen = open[0] ?? null;
+  if (open.length > 1) writeOpenSection(chosen);
+  return chosen;
+}
 
 function navActive(pathname: string, href: string, exact = false) {
   if (exact) return pathname === href;
@@ -53,6 +82,7 @@ function adminLinkActive(pathname: string, href: string) {
   if (href === '/admin/templates' && (pathname === '/admin/templates/studio' || pathname.startsWith('/admin/templates/studio/'))) {
     return false;
   }
+  if (href === '/admin/skills') return pathname === '/admin/skills';
   return navActive(pathname, href);
 }
 
@@ -161,18 +191,14 @@ function NavIcon({ name }: { name: string }) {
 export function AppSidebar() {
   const pathname = usePathname() || '/';
   const [collapsed, setCollapsed] = useState(false);
-  const [toolsOpen, setToolsOpen] = useState(true);
-  const [domainsOpen, setDomainsOpen] = useState(true);
-  const [adminOpen, setAdminOpen] = useState(false);
+  const [openSection, setOpenSection] = useState<NavSection | null>('domains');
   const [domains, setDomains] = useState<DomainLink[]>([]);
   const [openExceptions, setOpenExceptions] = useState(0);
 
   useEffect(() => {
     try {
       setCollapsed(localStorage.getItem(COLLAPSED_KEY) === '1');
-      setToolsOpen(localStorage.getItem(TOOLS_KEY) !== '0');
-      setDomainsOpen(localStorage.getItem(DOMAINS_KEY) !== '0');
-      setAdminOpen(localStorage.getItem(ADMIN_KEY) === '1');
+      setOpenSection(readOpenSection());
     } catch {
       /* Storage can be unavailable in private modes. */
     }
@@ -229,7 +255,10 @@ export function AppSidebar() {
 
   useEffect(() => {
     const sources = pathname === '/admin/sources' || pathname.startsWith('/admin/sources/');
-    if (pathname.startsWith('/admin') && !sources) setAdminOpen(true);
+    if (pathname.startsWith('/admin') && !sources) {
+      setOpenSection('admin');
+      writeOpenSection('admin');
+    }
   }, [pathname]);
 
   const toggleCollapsed = () => {
@@ -244,71 +273,21 @@ export function AppSidebar() {
     });
   };
 
-  const toggleTools = () => {
+  const toggleSection = (section: NavSection) => {
     if (collapsed) {
       setCollapsed(false);
-      setToolsOpen(true);
+      setOpenSection(section);
       try {
         localStorage.setItem(COLLAPSED_KEY, '0');
-        localStorage.setItem(TOOLS_KEY, '1');
       } catch {
         /* ignore */
       }
+      writeOpenSection(section);
       return;
     }
-    setToolsOpen((current) => {
-      const next = !current;
-      try {
-        localStorage.setItem(TOOLS_KEY, next ? '1' : '0');
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  };
-
-  const toggleAdmin = () => {
-    if (collapsed) {
-      setCollapsed(false);
-      setAdminOpen(true);
-      try {
-        localStorage.setItem(COLLAPSED_KEY, '0');
-        localStorage.setItem(ADMIN_KEY, '1');
-      } catch {
-        /* ignore */
-      }
-      return;
-    }
-    setAdminOpen((current) => {
-      const next = !current;
-      try {
-        localStorage.setItem(ADMIN_KEY, next ? '1' : '0');
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  };
-
-  const toggleDomains = () => {
-    if (collapsed) {
-      setCollapsed(false);
-      setDomainsOpen(true);
-      try {
-        localStorage.setItem(COLLAPSED_KEY, '0');
-        localStorage.setItem(DOMAINS_KEY, '1');
-      } catch {
-        /* ignore */
-      }
-      return;
-    }
-    setDomainsOpen((current) => {
-      const next = !current;
-      try {
-        localStorage.setItem(DOMAINS_KEY, next ? '1' : '0');
-      } catch {
-        /* ignore */
-      }
+    setOpenSection((current) => {
+      const next = current === section ? null : section;
+      writeOpenSection(next);
       return next;
     });
   };
@@ -346,9 +325,9 @@ export function AppSidebar() {
 
         <button
           type="button"
-          className={`sidebar-link sidebar-section ${domainsOpen && !collapsed ? 'open' : ''} ${collapsed && domains.some((domain) => navActive(pathname, domain.href)) ? 'active' : ''}`}
-          onClick={toggleDomains}
-          aria-expanded={!collapsed && domainsOpen}
+          className={`sidebar-link sidebar-section ${openSection === 'domains' && !collapsed ? 'open' : ''} ${collapsed && domains.some((domain) => navActive(pathname, domain.href)) ? 'active' : ''}`}
+          onClick={() => toggleSection('domains')}
+          aria-expanded={!collapsed && openSection === 'domains'}
           title="Domains"
         >
           <NavIcon name="domains" />
@@ -359,7 +338,7 @@ export function AppSidebar() {
             </svg>
           )}
         </button>
-        {!collapsed && domainsOpen && (
+        {!collapsed && openSection === 'domains' && (
           <div className="sidebar-sub">
             {domains.length === 0 && <div className="sidebar-empty">No domains yet</div>}
             {domains.map((domain) => (
@@ -403,9 +382,9 @@ export function AppSidebar() {
         <div className="sidebar-tools">
           <button
             type="button"
-            className={`sidebar-link sidebar-section ${toolsOpen && !collapsed ? 'open' : ''} ${collapsed && TOOLS.some((tool) => navActive(pathname, tool.href)) ? 'active' : ''}`}
-            onClick={toggleTools}
-            aria-expanded={!collapsed && toolsOpen}
+            className={`sidebar-link sidebar-section ${openSection === 'tools' && !collapsed ? 'open' : ''} ${collapsed && TOOLS.some((tool) => navActive(pathname, tool.href)) ? 'active' : ''}`}
+            onClick={() => toggleSection('tools')}
+            aria-expanded={!collapsed && openSection === 'tools'}
             title="Tools"
           >
             <NavIcon name="layers" />
@@ -416,7 +395,7 @@ export function AppSidebar() {
               </svg>
             )}
           </button>
-          {!collapsed && toolsOpen && (
+          {!collapsed && openSection === 'tools' && (
             <div className="sidebar-sub">
               {TOOLS.map((tool) => (
                 <Link
@@ -437,9 +416,9 @@ export function AppSidebar() {
         <div className="sidebar-tools">
           <button
             type="button"
-            className={`sidebar-link sidebar-section ${adminOpen && !collapsed ? 'open' : ''} ${collapsed && ADMIN.some((item) => adminLinkActive(pathname, item.href)) ? 'active' : ''}`}
-            onClick={toggleAdmin}
-            aria-expanded={!collapsed && adminOpen}
+            className={`sidebar-link sidebar-section ${openSection === 'admin' && !collapsed ? 'open' : ''} ${collapsed && (ADMIN.some((item) => adminLinkActive(pathname, item.href)) || SKILL_NAV.some((skill) => navActive(pathname, skill.href))) ? 'active' : ''}`}
+            onClick={() => toggleSection('admin')}
+            aria-expanded={!collapsed && openSection === 'admin'}
             title="Admin"
           >
             <NavIcon name="gear" />
@@ -450,19 +429,46 @@ export function AppSidebar() {
               </svg>
             )}
           </button>
-          {!collapsed && adminOpen && (
+          {!collapsed && openSection === 'admin' && (
             <div className="sidebar-sub">
               {ADMIN.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`sidebar-sublink ${adminLinkActive(pathname, item.href) ? 'active' : ''}`}
-                  title={item.label}
-                  aria-current={adminLinkActive(pathname, item.href) ? 'page' : undefined}
-                >
-                  <NavIcon name={item.icon} />
-                  <span className="sidebar-label">{item.label}</span>
-                </Link>
+                item.href === '/admin/skills' ? (
+                  <div key={item.href} className="sidebar-skill-group">
+                    <Link
+                      href={item.href}
+                      className={`sidebar-sublink ${adminLinkActive(pathname, item.href) ? 'active' : ''}`}
+                      title={item.label}
+                      aria-current={pathname === item.href ? 'page' : undefined}
+                    >
+                      <NavIcon name={item.icon} />
+                      <span className="sidebar-label">{item.label}</span>
+                    </Link>
+                    <div className="sidebar-skill-links">
+                      {SKILL_NAV.map((skill) => (
+                        <Link
+                          key={skill.id}
+                          href={skill.href}
+                          className={`sidebar-sublink ${navActive(pathname, skill.href) ? 'active' : ''}`}
+                          title={skill.name}
+                          aria-current={navActive(pathname, skill.href) ? 'page' : undefined}
+                        >
+                          <span className="sidebar-label">{skill.name}</span>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`sidebar-sublink ${adminLinkActive(pathname, item.href) ? 'active' : ''}`}
+                    title={item.label}
+                    aria-current={adminLinkActive(pathname, item.href) ? 'page' : undefined}
+                  >
+                    <NavIcon name={item.icon} />
+                    <span className="sidebar-label">{item.label}</span>
+                  </Link>
+                )
               ))}
             </div>
           )}

@@ -3,7 +3,7 @@ import { ToolDefinition } from '../lib/types';
 
 const submitManualOverride: ToolDefinition = {
   name: 'submit_manual_override',
-  description: 'Store a manual source value for an entity attribute. The saved golden source follows template, then attribute, then data-source precedence.',
+  description: 'Store a Manual Entry value on one record. An open manual value wins over every other source. attributeCode comes from search_attributes or get_template_metadata. Required: entityId, attributeCode, value, validFrom (YYYY-MM-DD), and overrideReason.',
   category: 'override',
   inputSchema: {
     type: 'object',
@@ -69,7 +69,7 @@ const submitManualOverride: ToolDefinition = {
 
 const splitValidTime: ToolDefinition = {
   name: 'split_valid_time',
-  description: 'Split a bi-temporal record at a specific date, creating a new version with a different value.',
+  description: 'Close one stored value at splitDate and open a new value from that date. eavId comes from get_field_lineage or get_temporal_history. This edits one source row. It does not change which source wins. To make Manual Entry the value on the record, use submit_manual_override.',
   category: 'override',
   inputSchema: {
     type: 'object',

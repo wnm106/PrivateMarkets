@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { graphqlMutation, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
 import { EntityForm } from '@/components/forms/EntityForm';
-import { EntityAttributeTable, type RelatedAttributeColumn } from '@/components/entities/EntityAttributeTable';
+import { type RelatedAttributeColumn } from '@/components/entities/EntityAttributeTable';
+import { EntityHome } from '@/components/entities/EntityHome';
 import { useTemporalStore } from '@/lib/store';
 
 const RELATED: RelatedAttributeColumn[] = [
@@ -79,7 +80,7 @@ export default function PositionsPage() {
         </div>
       </div>
 
-      <EntityAttributeTable
+      <EntityHome
         domainCode="POSITION"
         domainKey="positions"
         asOfDate={asOfDate}

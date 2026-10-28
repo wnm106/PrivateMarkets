@@ -40,8 +40,8 @@ type Query {
   dqRule(id: ID!): DQRule
   dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
   dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
-  dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date): DataQualityDashboard!
-  staleAttributes(domainCode: String, olderThanDays: Int, asOfDate: Date): StaleAttributeReport!
+  dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date, knowledgeDate: DateTime, entityId: ID): DataQualityDashboard!
+  staleAttributes(domainCode: String, olderThanDays: Int, asOfDate: Date, knowledgeDate: DateTime, entityId: ID): StaleAttributeReport!
   
   # Source queries
   dataSources(type: String, isActive: Boolean): [DataSource!]!
@@ -286,6 +286,11 @@ type ManualOverrideResult {
 # Metadata Types
 input UpdateAttributeDefinitionInput {
   id: ID!
+  attributeName: String
+  dataType: String
+  description: String
+  unitOfMeasure: String
+  isMultiValued: Boolean
   displayFormat: String
   listValues: [String!]
   validationRules: JSON
@@ -297,6 +302,7 @@ input UpdateAttributeDefinitionInput {
   aggregationType: String
   weightAttributeCode: String
   numericPrecision: Int
+  referenceListCode: String
 }
 
 type UpdateAttributeDefinitionResult {

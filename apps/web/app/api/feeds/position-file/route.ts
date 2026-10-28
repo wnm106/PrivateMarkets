@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createImportInstance, listImportInstances, listMappingCatalog } from '@/lib/feeds/import-instances';
-import { POSITION_FILE_MAP } from '@/lib/feeds/position-file-map';
+import { createImportInstance, listImportInstances, listMappingCatalog, listReferenceLists } from '@/lib/feeds/import-instances';
 import { requireFeedUser } from '@/lib/feeds/require-user';
 import { mappingTargets } from '@/lib/feeds/suggest';
 
@@ -8,14 +7,15 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const user = await requireFeedUser();
-  if (!user) return NextResponse.json({ error: 'Sign in to load a position file' }, { status: 401 });
+  if (!user) return NextResponse.json({ error: 'Sign in to load a file' }, { status: 401 });
   try {
-    const [catalog, instances] = await Promise.all([listMappingCatalog(), listImportInstances()]);
+    const [catalog, instances, lists] = await Promise.all([listMappingCatalog(), listImportInstances(), listReferenceLists()]);
     return NextResponse.json({
-      sourceCode: POSITION_FILE_MAP.sourceCode,
-      name: POSITION_FILE_MAP.name,
-      description: POSITION_FILE_MAP.description,
+      sourceCode: 'IMPORT',
+      name: 'Load data',
+      description: 'Upload a tabular file. Columns are discovered, confirmed, and saved as a map for the next file with the same columns.',
       targets: mappingTargets(catalog.attributes, catalog.domains),
+      lists,
       instances,
     });
   } catch (error: any) {
@@ -25,7 +25,7 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const user = await requireFeedUser();
-  if (!user) return NextResponse.json({ error: 'Sign in to load a position file' }, { status: 401 });
+  if (!user) return NextResponse.json({ error: 'Sign in to load a file' }, { status: 401 });
   const form = await request.formData();
   const file = form.get('file');
   if (!(file instanceof File)) return NextResponse.json({ error: 'Choose a CSV or Excel file' }, { status: 400 });

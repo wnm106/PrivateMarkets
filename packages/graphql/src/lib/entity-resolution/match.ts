@@ -40,6 +40,7 @@ export interface MatchableEntity {
   entityName: string;
   domainCode: string;
   clientId: string;
+  createdAt?: string | null;
   attributes: Record<string, string>;
 }
 

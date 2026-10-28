@@ -31,6 +31,8 @@ export interface ColumnTransform {
   kind: TransformKind;
   find?: string;
   replaceWith?: string;
+  /** Source text replaced before the transform runs. `to` is the value that gets stored. */
+  values?: { from: string; to: string }[];
 }
 
 export interface FeedMap {

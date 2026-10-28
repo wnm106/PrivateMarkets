@@ -93,6 +93,13 @@ describe('similarity', () => {
     expect(similarity('jaro_winkler', 'LP', 'LP')).toBe(0);
     expect(similarity('jaccard', 'Cat', 'Cat')).toBe(0);
   });
+
+  it('does not treat numbered series as the same name', () => {
+    expect(similarity('jaccard', 'Bench Fund 1', 'Bench Fund 3')).toBe(0);
+    expect(similarity('jaro_winkler', 'Bench Fund 1', 'Bench Fund 3')).toBe(0);
+    expect(similarity('levenshtein', 'Bench Fund 10', 'Bench Fund 1')).toBe(0);
+    expect(similarity('jaccard', 'Northwind Capital Partners IV, L.P.', 'Northwind Capital Partners IV')).toBe(1);
+  });
 });
 
 describe('match rules across entity types', () => {
@@ -114,6 +121,12 @@ describe('match rules across entity types', () => {
     expect(scored?.crossDomain).toBe(true);
     expect(scored?.score).toBe(100);
     expect(scored?.reasons.some((reason) => reason.deterministic && reason.algorithm === 'exact')).toBe(true);
+  });
+
+  it('does not match funds that differ only by series number', () => {
+    const third = entity({ id: 'fund-3', entityName: 'Bench Fund 3', domainCode: 'FUND' });
+    const first = entity({ id: 'fund-1', entityName: 'Bench Fund 1', domainCode: 'FUND' });
+    expect(scorePair(third, first, legalRule)).toBeNull();
   });
 
   it('vetoes a pair when both sides have a tax id and the ids differ', () => {

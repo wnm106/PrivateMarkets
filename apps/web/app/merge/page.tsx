@@ -2,15 +2,15 @@
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
-import { EntityGraphPanel, entityHref } from '@/components/detail/EntityGraphPanel';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { entityHref } from '@/components/detail/EntityGraphPanel';
+import { planChildMerge, type ChildPlan, type ChildRecord } from '@tapestrai/graphql/lib/entity-resolution/children';
 import {
   graphqlMutation,
   graphqlQuery,
   MATCH_RULES_QUERY,
   MERGE_CANDIDATES_QUERY,
   MERGE_ENTITIES_MUTATION,
-  MERGE_PREVIEW_QUERY,
   UPDATE_MATCH_RULE_MUTATION,
 } from '@/lib/graphql';
 
@@ -19,6 +19,9 @@ interface EntityRef {
   entityCode: string;
   entityName: string;
   domainCode: string;
+  createdAt?: string | null;
+  relationshipCount: number;
+  children?: ChildRecord[];
 }
 
 interface MergeReason {
@@ -27,6 +30,8 @@ interface MergeReason {
   label: string;
   leftValue: string;
   rightValue: string;
+  leftAttribute: string;
+  rightAttribute: string;
   similarity: number;
   deterministic: boolean;
 }
@@ -63,38 +68,205 @@ interface MatchRule {
   clauses: MatchClause[];
 }
 
-interface PreviewField {
-  attributeCode: string;
-  survivorValue?: string | null;
-  retiredValue?: string | null;
-  status: string;
+type Band = 'very' | 'possible';
+type ChildPolicy = 'exact' | 'review' | 'move';
+
+const DISMISS_KEY = 'tapestrai.merge.dismissed';
+const REVIEW_KEY = 'tapestrai.merge.review';
+const ATTR_LABEL: Record<string, string> = {
+  LEI: 'LEI',
+  TAX_ID: 'tax ID',
+  EIN: 'tax ID',
+  CIK: 'CIK',
+  VAT: 'VAT',
+  VAT_NUMBER: 'VAT',
+  DUNS: 'DUNS',
+  CUSIP: 'CUSIP',
+  ISIN: 'ISIN',
+  SEDOL: 'SEDOL',
+  FIGI: 'FIGI',
+  TICKER: 'ticker',
+  FUND_CODE: 'fund code',
+  INTERNAL_ID: 'internal ID',
+  COMPANY_NUMBER: 'company number',
+  ENTITY_NAME: 'name',
+};
+
+function pairKey(candidate: MergeCandidate) {
+  return candidate.left.id < candidate.right.id
+    ? `${candidate.left.id}:${candidate.right.id}`
+    : `${candidate.right.id}:${candidate.left.id}`;
 }
 
-interface Preview {
-  crossDomain: boolean;
-  score: number;
-  ruleName?: string | null;
-  relationshipsToMove: number;
-  reasons: MergeReason[];
-  survivor: EntityRef;
-  retired: EntityRef;
-  fields: PreviewField[];
+interface ReviewItem {
+  key: string;
+  under: string;
+  keep: ChildRecord;
+  retire: ChildRecord;
+  exact: boolean;
 }
 
-type Scope = 'all' | 'same' | 'across';
+function readReview(): ReviewItem[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(REVIEW_KEY) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
 
-function DomainChip({ code }: { code: string }) {
+function readDismissed(): Set<string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]');
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function typeLabel(code: string) {
+  const names: Record<string, string> = {
+    ISSUER: 'Issuers',
+    SECURITY: 'Securities',
+    FUND: 'Funds',
+    POSITION: 'Positions',
+    DEAL: 'Deals',
+    INVESTOR: 'Investors',
+  };
+  if (names[code]) return names[code];
+  return code.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function addedLabel(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `Added ${date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`;
+}
+
+function timeOf(entity: EntityRef) {
+  const time = entity.createdAt ? new Date(entity.createdAt).getTime() : Number.NaN;
+  return Number.isNaN(time) ? null : time;
+}
+
+function nameChip(similarity: number) {
+  if (similarity >= 0.995) return 'Same name';
+  if (similarity >= 0.9) return 'Near-identical name';
+  return 'Similar name';
+}
+
+function chipsFor(candidate: MergeCandidate) {
+  const chips: string[] = [];
+  let bestName = 0;
+  for (const reason of candidate.reasons) {
+    if (reason.deterministic) {
+      const name = ATTR_LABEL[reason.leftAttribute] || reason.leftAttribute.toLowerCase().replace(/_/g, ' ');
+      chips.push(`Same ${name}`);
+      continue;
+    }
+    bestName = Math.max(bestName, reason.similarity);
+  }
+  if (bestName > 0) chips.push(nameChip(bestName));
+  return [...new Set(chips)];
+}
+
+function bandOf(candidate: MergeCandidate): Band {
+  if (candidate.reasons.some((reason) => reason.deterministic)) return 'very';
+  const bestName = candidate.reasons.reduce((best, reason) => reason.deterministic ? best : Math.max(best, reason.similarity), 0);
+  return bestName >= 0.995 ? 'very' : 'possible';
+}
+
+function arrange(candidate: MergeCandidate, flipped: boolean) {
+  const leftTime = timeOf(candidate.left);
+  const rightTime = timeOf(candidate.right);
+  const leftIsOlder = leftTime == null || rightTime == null ? true : leftTime <= rightTime;
+  const keepIsLeft = flipped ? !leftIsOlder : leftIsOlder;
+  return {
+    keep: keepIsLeft ? candidate.left : candidate.right,
+    retire: keepIsLeft ? candidate.right : candidate.left,
+  };
+}
+
+function MergeDialog({
+  candidates,
+  policy,
+  impactOf,
+  merging,
+  onPolicy,
+  onCancel,
+  onConfirm,
+}: {
+  candidates: MergeCandidate[];
+  policy: ChildPolicy;
+  impactOf: (candidate: MergeCandidate) => { keep: EntityRef; retire: EntityRef; plan: ChildPlan };
+  merging: boolean;
+  onPolicy: (policy: ChildPolicy) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const plans = candidates.map(impactOf);
+  const relationships = plans.reduce((sum, item) => sum + item.retire.relationshipCount, 0);
+  const descendants = plans.reduce((sum, item) => sum + item.plan.descendantMoving, 0);
+  const exact = plans.reduce((sum, item) => sum + item.plan.exactCount, 0);
+  const review = plans.reduce((sum, item) => sum + item.plan.reviewCount, 0);
   return (
-    <span style={{
-      fontSize: 10,
-      fontWeight: 700,
-      letterSpacing: '0.04em',
-      textTransform: 'uppercase',
-      padding: '2px 6px',
-      borderRadius: 999,
-      background: 'var(--bg-alt)',
-      color: 'var(--ink-2)',
-    }}>{code}</span>
+    <div className="dup-modal" role="dialog" aria-modal="true" aria-labelledby="merge-dialog-title">
+      <div className="dup-dialog">
+        <h3 id="merge-dialog-title">Merge {candidates.length} pair{candidates.length === 1 ? '' : 's'}?</h3>
+        <div className="dup-stats">
+          <div><strong>{candidates.length}</strong><span>older record{candidates.length === 1 ? '' : 's'} kept</span></div>
+          <div><strong>{relationships}</strong><span>relationship{relationships === 1 ? '' : 's'} move</span></div>
+          <div><strong>{descendants}</strong><span>children move, grandchildren included</span></div>
+        </div>
+        <h4>Moving children can create new duplicates</h4>
+        <p>Under the kept record, {exact + review} child pair{exact + review === 1 ? '' : 's'} now match: {exact} exact, {review} close.</p>
+        <div className="dup-trees">
+          {candidates.map((candidate) => {
+            const { keep, plan } = impactOf(candidate);
+            return (
+            <div key={pairKey(candidate)} className="dup-tree">
+              <strong>{keep.entityName} <span>(kept)</span></strong>
+              {plan.collisions.length === 0 && plan.moving === 0 && <div className="dup-leaf">No children</div>}
+              {plan.collisions.map((collision) => {
+                const alreadyThere = (keep.children || []).some((child) => child.id === collision.kept.id);
+                const queued = policy === 'review' || (policy === 'exact' && !collision.exact);
+                const held = policy === 'move';
+                return (
+                  <div key={`${collision.kept.id}:${collision.moved.id}`}>
+                    <div className="dup-leaf">↳ {collision.kept.entityName} · {alreadyThere ? 'existing' : 'kept'}</div>
+                    <div className="dup-leaf">
+                      ↳ {collision.moved.entityName} · moved in
+                      {!held && <span className={queued ? 'dup-tag review' : 'dup-tag exact'}>{queued ? 'sent to review' : 'merges with above'}</span>}
+                    </div>
+                  </div>
+                );
+              })}
+              {plan.moving > plan.collisions.length && (
+                <div className="dup-leaf">↳ {plan.moving - plan.collisions.length} other child{plan.moving - plan.collisions.length === 1 ? '' : 'ren'} move with no match</div>
+              )}
+            </div>
+            );
+          })}
+        </div>
+        <h4>What should happen to matching children?</h4>
+        <label className={`dup-choice ${policy === 'exact' ? 'is-on' : ''}`}>
+          <input type="radio" name="child-policy" checked={policy === 'exact'} onChange={() => onPolicy('exact')} />
+          <span><strong>Merge exact matches, review the rest</strong><small>Recommended. Close matches wait in your queue.</small></span>
+        </label>
+        <label className={`dup-choice ${policy === 'review' ? 'is-on' : ''}`}>
+          <input type="radio" name="child-policy" checked={policy === 'review'} onChange={() => onPolicy('review')} />
+          <span><strong>Send all child matches to review</strong><small>Nothing merges below the parent until you confirm it.</small></span>
+        </label>
+        <label className={`dup-choice ${policy === 'move' ? 'is-on' : ''}`}>
+          <input type="radio" name="child-policy" checked={policy === 'move'} onChange={() => onPolicy('move')} />
+          <span><strong>Move children only</strong><small>Leave any new duplicates in place.</small></span>
+        </label>
+        <div className="dup-dialog-actions">
+          <button className="dup-row-btn quiet" onClick={onCancel} disabled={merging}>Cancel</button>
+          <button className="dup-merge" onClick={onConfirm} disabled={merging}>{merging ? 'Merging…' : `Merge ${candidates.length} pair${candidates.length === 1 ? '' : 's'}`}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -102,49 +274,39 @@ export default function MergePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const focusId = searchParams.get('entity');
-  const [scope, setScope] = useState<Scope>('all');
   const [query, setQuery] = useState('');
-  const [appliedQuery, setAppliedQuery] = useState('');
-  const [ruleCode, setRuleCode] = useState('');
+  const [typeCode, setTypeCode] = useState('all');
+  const [band, setBand] = useState<Band>('very');
   const [rules, setRules] = useState<MatchRule[]>([]);
   const [candidates, setCandidates] = useState<MergeCandidate[]>([]);
-  const [scannedCount, setScannedCount] = useState(0);
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<MergeCandidate | null>(null);
-  const [survivorId, setSurvivorId] = useState<string | null>(null);
-  const [preview, setPreview] = useState<Preview | null>(null);
-  const [choices, setChoices] = useState<Record<string, 'survivor' | 'retired'>>({});
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [merging, setMerging] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [flipped, setFlipped] = useState<Record<string, boolean>>({});
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [review, setReview] = useState<ReviewItem[]>([]);
+  const [dialog, setDialog] = useState<{ candidates: MergeCandidate[]; policy: ChildPolicy } | null>(null);
+  const [mergingKey, setMergingKey] = useState<string | null>(null);
+  const [showRules, setShowRules] = useState(false);
   const [ruleDraft, setRuleDraft] = useState<MatchRule | null>(null);
   const [savingRule, setSavingRule] = useState(false);
   const [ruleMessage, setRuleMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    const timer = setTimeout(() => setAppliedQuery(query), 300);
-    return () => clearTimeout(timer);
-  }, [query]);
+    setDismissed(readDismissed());
+    setReview(readReview());
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     const [ruleResult, candidateResult] = await Promise.all([
       graphqlQuery<{ matchRules: MatchRule[] }, Record<string, never>>(MATCH_RULES_QUERY, {}, 'network-only'),
-      graphqlQuery<{ mergeCandidates: { candidates: MergeCandidate[]; scannedCount: number; truncated: boolean } }, { filter: Record<string, unknown> }>(
+      graphqlQuery<{ mergeCandidates: { candidates: MergeCandidate[]; truncated: boolean } }, { filter: Record<string, unknown> }>(
         MERGE_CANDIDATES_QUERY,
-        {
-          filter: {
-            entityId: focusId,
-            query: appliedQuery.trim() || null,
-            ruleCode: ruleCode || null,
-            crossDomainOnly: scope === 'across',
-            sameDomainOnly: scope === 'same',
-            limit: 50,
-          },
-        },
+        { filter: { entityId: focusId, limit: 200 } },
         'network-only',
       ),
     ]);
@@ -153,86 +315,184 @@ export default function MergePage() {
     if (candidateResult.error) setError(candidateResult.error.message || 'Could not score entities');
     else {
       setCandidates(candidateResult.data?.mergeCandidates?.candidates || []);
-      setScannedCount(candidateResult.data?.mergeCandidates?.scannedCount || 0);
       setTruncated(Boolean(candidateResult.data?.mergeCandidates?.truncated));
     }
     setLoading(false);
-  }, [appliedQuery, focusId, ruleCode, scope]);
+  }, [focusId]);
 
   useEffect(() => { load(); }, [load]);
 
-  useEffect(() => {
-    if (!selected || !survivorId) {
-      setPreview(null);
-      return;
-    }
-    const retiredId = selected.left.id === survivorId ? selected.right.id : selected.left.id;
-    let cancelled = false;
-    graphqlQuery<{ mergePreview: Preview }, { survivorId: string; retiredId: string; ruleCode: string }>(
-      MERGE_PREVIEW_QUERY,
-      { survivorId, retiredId, ruleCode: selected.ruleCode },
-      'network-only',
-    ).then(({ data, error: queryError }) => {
-      if (cancelled) return;
-      if (queryError) {
-        setPreviewError(queryError.message || 'Could not preview the merge');
-        setPreview(null);
-        return;
-      }
-      const next = data?.mergePreview || null;
-      setPreview(next);
-      setPreviewError(null);
-      const initial: Record<string, 'survivor' | 'retired'> = {};
-      next?.fields.forEach((field) => {
-        if (field.status === 'conflict') initial[field.attributeCode] = 'survivor';
-      });
-      setChoices(initial);
-    });
-    return () => { cancelled = true; };
-  }, [selected, survivorId]);
+  const active = useMemo(
+    () => candidates.filter((candidate) => !dismissed.has(pairKey(candidate))),
+    [candidates, dismissed],
+  );
 
-  const openCandidate = (candidate: MergeCandidate) => {
-    setSelected(candidate);
-    setNotice(null);
-    const preferred = focusId && (candidate.left.id === focusId || candidate.right.id === focusId)
-      ? focusId
-      : candidate.left.id;
-    setSurvivorId(preferred);
+  const reviewCandidates = useMemo<MergeCandidate[]>(() => review
+    .filter((item) => !dismissed.has(item.key))
+    .map((item) => ({
+      score: item.exact ? 100 : 80,
+      crossDomain: item.keep.domainCode !== item.retire.domainCode,
+      ruleCode: 'CHILD_REVIEW',
+      ruleName: 'Child of a merge',
+      reasons: [{
+        clauseCode: 'NAME',
+        algorithm: item.exact ? 'exact' : 'jaro_winkler',
+        label: item.exact ? 'Same name' : 'Near-identical name',
+        leftValue: item.keep.entityName,
+        rightValue: item.retire.entityName,
+        leftAttribute: 'ENTITY_NAME',
+        rightAttribute: 'ENTITY_NAME',
+        similarity: item.exact ? 1 : 0.92,
+        deterministic: item.exact,
+      }],
+      left: { ...item.keep, relationshipCount: item.keep.descendantCount, children: [] },
+      right: { ...item.retire, relationshipCount: item.retire.descendantCount, children: [] },
+    })), [dismissed, review]);
+
+  const underByKey = useMemo(() => new Map(review.map((item) => [item.key, item.under])), [review]);
+
+  const listed = useMemo(() => {
+    const seen = new Set(reviewCandidates.map(pairKey));
+    return [...reviewCandidates, ...active.filter((candidate) => !seen.has(pairKey(candidate)))];
+  }, [active, reviewCandidates]);
+
+  const types = useMemo(() => {
+    const codes = new Set<string>();
+    for (const candidate of listed) {
+      codes.add(candidate.left.domainCode);
+      codes.add(candidate.right.domainCode);
+    }
+    return [...codes].sort();
+  }, [listed]);
+
+  const searched = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return listed.filter((candidate) => {
+      if (typeCode !== 'all' && candidate.left.domainCode !== typeCode && candidate.right.domainCode !== typeCode) return false;
+      if (!needle) return true;
+      const haystack = `${candidate.left.entityName} ${candidate.left.entityCode} ${candidate.right.entityName} ${candidate.right.entityCode}`.toLowerCase();
+      return haystack.includes(needle);
+    });
+  }, [listed, query, typeCode]);
+
+  const counts = useMemo(() => ({
+    very: searched.filter((candidate) => bandOf(candidate) === 'very').length,
+    possible: searched.filter((candidate) => bandOf(candidate) === 'possible').length,
+  }), [searched]);
+
+  const visible = searched.filter((candidate) => bandOf(candidate) === band);
+  const visibleKeys = visible.map(pairKey);
+  const selectedVisible = visibleKeys.filter((key) => selected.has(key));
+  const veryKeys = searched.filter((candidate) => bandOf(candidate) === 'very').map(pairKey);
+
+  const toggle = (key: string) => {
+    const next = new Set(selected);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setSelected(next);
   };
 
-  const merge = async () => {
-    if (!preview || !survivorId) return;
-    setMerging(true);
-    setNotice(null);
-    const fieldChoices = Object.entries(choices)
-      .filter(([, takeFrom]) => takeFrom === 'retired')
-      .map(([attributeCode, takeFrom]) => ({ attributeCode, takeFrom }));
-    const { data, error: mutationError } = await graphqlMutation<{
-      mergeEntities: { success: boolean; attributesCopied: number; relationshipsMoved: number; errors: Array<{ message: string }> };
-    }, {
-      survivorId: string;
-      retiredId: string;
-      fieldChoices: Array<{ attributeCode: string; takeFrom: string }>;
-      matchScore: number;
-      matchReasons: MergeReason[];
-    }>(MERGE_ENTITIES_MUTATION, {
-      survivorId: preview.survivor.id,
-      retiredId: preview.retired.id,
-      fieldChoices,
-      matchScore: preview.score,
-      matchReasons: selected?.reasons || [],
-    });
-    setMerging(false);
-    const result = data?.mergeEntities;
-    if (mutationError || !result?.success) {
-      setNotice(result?.errors?.[0]?.message || mutationError?.message || 'Merge failed');
-      return;
+  const toggleVisible = () => {
+    const next = new Set(selected);
+    const allOn = visibleKeys.length > 0 && visibleKeys.every((key) => next.has(key));
+    for (const key of visibleKeys) {
+      if (allOn) next.delete(key);
+      else next.add(key);
     }
-    setNotice(`Merged into ${preview.survivor.entityName}. ${result.attributesCopied} attribute${result.attributesCopied === 1 ? '' : 's'} copied and ${result.relationshipsMoved} relationship${result.relationshipsMoved === 1 ? '' : 's'} moved.`);
-    setSelected(null);
-    setPreview(null);
+    setSelected(next);
+  };
+
+  const selectVeryLikely = () => setSelected(new Set(veryKeys));
+
+  const dismiss = (keys: string[]) => {
+    const next = new Set(dismissed);
+    for (const key of keys) next.add(key);
+    setDismissed(next);
+    localStorage.setItem(DISMISS_KEY, JSON.stringify([...next]));
+    setSelected((current) => {
+      const remaining = new Set(current);
+      for (const key of keys) remaining.delete(key);
+      return remaining;
+    });
+  };
+
+  const saveReview = (items: ReviewItem[]) => {
+    setReview(items);
+    localStorage.setItem(REVIEW_KEY, JSON.stringify(items));
+  };
+
+  const mergeIds = async (survivorId: string, retiredId: string, score = 100, reasons: MergeReason[] = []) => {
+    const { data, error: mutationError } = await graphqlMutation<{
+      mergeEntities: { success: boolean; errors: Array<{ message: string }> };
+    }, { survivorId: string; retiredId: string; matchScore: number; matchReasons: MergeReason[] }>(MERGE_ENTITIES_MUTATION, {
+      survivorId,
+      retiredId,
+      matchScore: score,
+      matchReasons: reasons,
+    });
+    const result = data?.mergeEntities;
+    if (mutationError || !result?.success) return result?.errors?.[0]?.message || mutationError?.message || 'Merge failed';
+    return null;
+  };
+
+  const impactOf = (candidate: MergeCandidate) => {
+    const { keep, retire } = arrange(candidate, Boolean(flipped[pairKey(candidate)]));
+    return { keep, retire, plan: planChildMerge(keep.children || [], retire.children || []) };
+  };
+
+  const applyMerges = async (chosen: MergeCandidate[], policy: ChildPolicy) => {
+    setDialog(null);
+    setNotice(null);
+    setError(null);
+    const queued = review.filter((item) => !chosen.some((candidate) => pairKey(candidate) === item.key));
+    let mergedParents = 0;
+    let mergedChildren = 0;
+    for (const candidate of chosen) {
+      const { keep, retire, plan } = impactOf(candidate);
+      setMergingKey(pairKey(candidate));
+      const failure = await mergeIds(keep.id, retire.id, candidate.score, candidate.reasons);
+      if (failure) {
+        setMergingKey(null);
+        setError(failure);
+        await load();
+        return;
+      }
+      mergedParents += 1;
+      const toQueue = policy === 'move' ? [] : policy === 'review' ? plan.collisions : plan.collisions.filter((collision) => !collision.exact);
+      for (const collision of toQueue) {
+        const key = [collision.kept.id, collision.moved.id].sort().join(':');
+        if (queued.some((item) => item.key === key)) continue;
+        queued.push({ key, under: keep.entityName, keep: collision.kept, retire: collision.moved, exact: collision.exact });
+      }
+      if (policy === 'exact') {
+        for (const collision of plan.collisions.filter((collision) => collision.exact)) {
+          const childFailure = await mergeIds(collision.kept.id, collision.moved.id);
+          if (childFailure) {
+            setMergingKey(null);
+            setError(childFailure);
+            saveReview(queued);
+            await load();
+            return;
+          }
+          mergedChildren += 1;
+        }
+      }
+    }
+    setMergingKey(null);
+    saveReview(queued);
+    setSelected(new Set());
+    const childNote = mergedChildren > 0 ? ` ${mergedChildren} exact child match${mergedChildren === 1 ? '' : 'es'} merged.` : '';
+    const reviewNote = queued.length > review.length ? ' Close child matches are in the list for review.' : '';
+    setNotice(`Merged ${mergedParents} pair${mergedParents === 1 ? '' : 's'}.${childNote}${reviewNote}`);
     if (focusId) router.replace('/merge');
-    else load();
+    else await load();
+  };
+
+  const requestMerge = (chosen: MergeCandidate[]) => {
+    if (chosen.length === 0) return;
+    const needsDecision = chosen.length > 1 || chosen.some((candidate) => impactOf(candidate).plan.reviewCount > 0);
+    if (needsDecision) setDialog({ candidates: chosen, policy: 'exact' });
+    else applyMerges(chosen, 'exact');
   };
 
   const saveRule = async () => {
@@ -267,264 +527,196 @@ export default function MergePage() {
     if (!message) load();
   };
 
-  const retiredId = selected && survivorId
-    ? (selected.left.id === survivorId ? selected.right.id : selected.left.id)
-    : null;
-
   return (
-    <div className="view-fade">
+    <div className="view-fade dup-page">
       <div className="crumbs">
         <Link href="/" className="crumb-link">Home</Link>
         <span className="sep">›</span>
         <span className="crumb-current">Entity resolution</span>
       </div>
 
-      <div className="section-title" style={{ marginBottom: 8 }}>
-        <h2>Entity resolution</h2>
-      </div>
-      <p style={{ color: 'var(--ink-2)', maxWidth: 820, marginTop: 0 }}>
-        Exact keys such as tax ID, LEI, CUSIP, and internal identifiers combine with Jaro-Winkler, Levenshtein, and Jaccard name scores.
-        The scan looks across entity types. Confirming a merge moves relationship edges onto the survivor instead of copying them onto its attributes.
-      </p>
-
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end', marginBottom: 16 }}>
-        <label style={{ fontSize: 12, color: 'var(--ink-2)' }}>
-          Search
-          <input className="text-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, code, or type" style={{ display: 'block', marginTop: 4, minWidth: 220 }} />
-        </label>
-        <label style={{ fontSize: 12, color: 'var(--ink-2)' }}>
-          Scope
-          <select className="text-input" value={scope} onChange={(event) => setScope(event.target.value as Scope)} style={{ display: 'block', marginTop: 4 }}>
-            <option value="all">All entities</option>
-            <option value="across">Across types only</option>
-            <option value="same">Same type only</option>
-          </select>
-        </label>
-        <label style={{ fontSize: 12, color: 'var(--ink-2)' }}>
-          Rule
-          <select className="text-input" value={ruleCode} onChange={(event) => setRuleCode(event.target.value)} style={{ display: 'block', marginTop: 4 }}>
-            <option value="">All active rules</option>
-            {rules.filter((rule) => rule.isActive).map((rule) => <option key={rule.id} value={rule.ruleCode}>{rule.ruleName}</option>)}
-          </select>
-        </label>
-        <button className="btn" onClick={load}>Refresh</button>
-      </div>
-
-      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 12 }}>
-        Scored {scannedCount.toLocaleString()} active {focusId ? 'entities against this record' : 'entities'}.
-        {focusId ? ' This record is compared with every other type.' : ' Pairs are blocked on shared keys and name tokens, then scored.'}
-        {truncated ? ' The scan stopped early; narrow the search if a pair is missing.' : ''}
-      </div>
-      {error && <div style={{ color: 'var(--red)', marginBottom: 12 }}>{error}</div>}
-      {notice && <div style={{ color: 'var(--green)', marginBottom: 12 }}>{notice}</div>}
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20, alignItems: 'start' }}>
+      <div className="dup-head">
         <div>
-          {loading && <div style={{ color: 'var(--ink-3)' }}>Scoring candidates…</div>}
-          {!loading && candidates.length === 0 && <div style={{ color: 'var(--ink-3)' }}>No candidate pairs at the current thresholds.</div>}
-          {candidates.map((candidate) => {
-            const active = selected?.left.id === candidate.left.id && selected?.right.id === candidate.right.id;
-            return (
-              <button
-                key={`${candidate.left.id}:${candidate.right.id}`}
-                onClick={() => openCandidate(candidate)}
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'left',
-                  background: active ? 'var(--bg-alt)' : 'var(--surface)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 10,
-                  padding: 12,
-                  marginBottom: 10,
-                  cursor: 'pointer',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                  <strong>{candidate.score}</strong>
-                  <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{candidate.crossDomain ? 'Across types' : 'Same type'} · {candidate.ruleName}</span>
-                </div>
-                <div style={{ marginTop: 6, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <DomainChip code={candidate.left.domainCode} />
-                  <span>{candidate.left.entityName}</span>
-                </div>
-                <div style={{ marginTop: 4, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <DomainChip code={candidate.right.domainCode} />
-                  <span>{candidate.right.entityName}</span>
-                </div>
-                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-3)' }}>
-                  {candidate.reasons.map((reason) => reason.label).join(' · ')}
-                </div>
-              </button>
-            );
-          })}
+          <div className="dup-kicker">Data quality</div>
+          <h2>Possible duplicates</h2>
         </div>
-
-        <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 16, background: 'var(--surface)' }}>
-          {!selected && <div style={{ color: 'var(--ink-3)' }}>Select a pair to choose the survivor, settle conflicting values, and merge.</div>}
-          {selected && (
-            <>
-              <div style={{ fontSize: 13, color: 'var(--ink-2)', marginBottom: 10 }}>Which record should survive?</div>
-              {[selected.left, selected.right].map((entity) => (
-                <label key={entity.id} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                  <input type="radio" name="survivor" checked={survivorId === entity.id} onChange={() => setSurvivorId(entity.id)} />
-                  <DomainChip code={entity.domainCode} />
-                  <span>{entity.entityName}</span>
-                  <Link href={entityHref(entity.domainCode, entity.id)} style={{ fontSize: 12 }}>Open</Link>
-                </label>
-              ))}
-              {previewError && <div style={{ color: 'var(--red)', marginTop: 8 }}>{previewError}</div>}
-              {preview && (
-                <>
-                  <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '12px 0' }}>
-                    {preview.relationshipsToMove} current relationship{preview.relationshipsToMove === 1 ? '' : 's'} on the retired record will move onto the survivor.
-                    {preview.crossDomain ? ' These records are different entity types.' : ''}
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr', gap: 8, fontSize: 11, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    <div>Attribute</div><div>Survivor</div><div>Retired</div>
-                  </div>
-                  {preview.fields.map((field) => (
-                    <div key={field.attributeCode} style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--line)', fontSize: 13 }}>
-                      <div>
-                        <div>{field.attributeCode}</div>
-                        {field.status === 'conflict' && (
-                          <div style={{ marginTop: 4 }}>
-                            <label style={{ fontSize: 11, marginRight: 8 }}>
-                              <input type="radio" checked={choices[field.attributeCode] !== 'retired'} onChange={() => setChoices({ ...choices, [field.attributeCode]: 'survivor' })} /> Keep
-                            </label>
-                            <label style={{ fontSize: 11 }}>
-                              <input type="radio" checked={choices[field.attributeCode] === 'retired'} onChange={() => setChoices({ ...choices, [field.attributeCode]: 'retired' })} /> Take other
-                            </label>
-                          </div>
-                        )}
-                        {field.status === 'only_retired' && <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>Will be copied</div>}
-                      </div>
-                      <div>{field.survivorValue || '—'}</div>
-                      <div>{field.retiredValue || '—'}</div>
-                    </div>
-                  ))}
-                  <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={merging} onClick={merge}>
-                    {merging ? 'Merging…' : 'Merge entities'}
-                  </button>
-                </>
-              )}
-            </>
-          )}
+        <div className="dup-tools">
+          <input className="dup-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by name or code" aria-label="Search by name or code" />
+          <select className="dup-type" value={typeCode} onChange={(event) => setTypeCode(event.target.value)} aria-label="Entity type">
+            <option value="all">All types</option>
+            {types.map((code) => <option key={code} value={code}>{typeLabel(code)}</option>)}
+          </select>
         </div>
       </div>
 
-      {survivorId && (
-        <EntityGraphPanel entityId={survivorId} />
-      )}
-      {retiredId && survivorId && retiredId !== survivorId && (
-        <div style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Graph of the record that will be retired</div>
-          <EntityGraphPanel entityId={retiredId} />
+      <div className="dup-bands">
+        <button className={`dup-band ${band === 'very' ? 'is-on' : ''}`} onClick={() => setBand('very')}>Very likely · {counts.very}</button>
+        <button className={`dup-band ${band === 'possible' ? 'is-on' : ''}`} onClick={() => setBand('possible')}>Possible · {counts.possible}</button>
+      </div>
+
+      {error && <div className="dup-error">{error}</div>}
+      {notice && <div className="dup-notice">{notice}</div>}
+
+      {!loading && visible.length > 0 && (
+        <div className="dup-bar">
+          <label>
+            <input
+              type="checkbox"
+              checked={visibleKeys.length > 0 && selectedVisible.length === visibleKeys.length}
+              ref={(node) => {
+                if (node) node.indeterminate = selectedVisible.length > 0 && selectedVisible.length < visibleKeys.length;
+              }}
+              onChange={toggleVisible}
+            />
+            {selectedVisible.length} of {visible.length} selected
+          </label>
+          {counts.very > 0 && <button className="dup-link" onClick={selectVeryLikely}>Select all {counts.very} very likely</button>}
+          <span className="dup-hint">The older record is kept in every pair.</span>
+          <div className="dup-bar-actions">
+            <button className="dup-ghost" disabled={selectedVisible.length === 0} onClick={() => dismiss(selectedVisible)}>Not the same</button>
+            <button className="dup-merge" disabled={selectedVisible.length === 0 || mergingKey !== null} onClick={() => requestMerge(visible.filter((candidate) => selected.has(pairKey(candidate))))}>
+              {mergingKey ? 'Merging…' : selectedVisible.length === 0 ? 'Merge pairs' : `Merge ${selectedVisible.length} pair${selectedVisible.length === 1 ? '' : 's'}`}
+            </button>
+          </div>
         </div>
       )}
 
-      <details style={{ marginTop: 28 }}>
-        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Match rules</summary>
-        <p style={{ color: 'var(--ink-2)', fontSize: 13, maxWidth: 760 }}>
-          Deterministic clauses are exact keys. If both records have a value and it differs, the pair is rejected.
-          Probabilistic clauses contribute only when the score clears the threshold. A missing key is skipped, not a rejection.
-          Saving a rule requires a tenant admin.
-        </p>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-          {rules.map((rule) => (
-            <button key={rule.id} className="btn btn-sm" onClick={() => { setRuleDraft(JSON.parse(JSON.stringify(rule))); setRuleMessage(null); }}>
-              {rule.ruleName}
-            </button>
-          ))}
-        </div>
-        {ruleDraft && (
-          <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 16 }}>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              <label style={{ fontSize: 12 }}>Name
-                <input className="text-input" value={ruleDraft.ruleName} onChange={(event) => setRuleDraft({ ...ruleDraft, ruleName: event.target.value })} style={{ display: 'block' }} />
-              </label>
-              <label style={{ fontSize: 12 }}>Minimum score
-                <input className="text-input" type="number" min={0} max={100} value={ruleDraft.minScore} onChange={(event) => setRuleDraft({ ...ruleDraft, minScore: Number(event.target.value) })} style={{ display: 'block', width: 100 }} />
-              </label>
-              <label style={{ fontSize: 12, alignSelf: 'end' }}>
-                <input type="checkbox" checked={ruleDraft.isActive} onChange={(event) => setRuleDraft({ ...ruleDraft, isActive: event.target.checked })} /> Active
-              </label>
+      {loading && <div className="dup-empty">Scoring candidates…</div>}
+      {!loading && visible.length === 0 && <div className="dup-empty">No {band === 'very' ? 'very likely' : 'possible'} pairs in this view.</div>}
+
+      {visible.map((candidate) => {
+        const key = pairKey(candidate);
+        const { keep, retire } = arrange(candidate, Boolean(flipped[key]));
+        const keepTime = timeOf(keep);
+        const retireTime = timeOf(retire);
+        const keepIsNewer = keepTime != null && retireTime != null && keepTime > retireTime;
+        const meta = (entity: EntityRef) => [entity.entityCode, addedLabel(entity.createdAt)].filter(Boolean).join(' · ');
+        const plan = planChildMerge(keep.children || [], retire.children || []);
+        const under = underByKey.get(key);
+        const moves = retire.relationshipCount;
+        return (
+          <article key={key} className={`dup-card ${selected.has(key) ? 'is-on' : ''}`}>
+            <input type="checkbox" checked={selected.has(key)} onChange={() => toggle(key)} aria-label={`Select ${keep.entityName}`} />
+            <div className="dup-side">
+              <div className="dup-role">Keep · {keepIsNewer ? 'newer' : 'older'}</div>
+              <strong><Link href={entityHref(keep.domainCode, keep.id)} className="entity-link">{keep.entityName}</Link></strong>
+              <div className="dup-meta">{meta(keep)}</div>
+              {under && <div className="dup-under">under {under}</div>}
             </div>
-            <div style={{ overflowX: 'auto' }}>
-            {ruleDraft.clauses.map((clause, index) => (
-              <div key={clause.clauseCode} style={{ display: 'grid', gridTemplateColumns: '140px 1fr 140px 80px 80px 90px 70px', gap: 8, marginTop: 10, alignItems: 'center' }}>
-                <strong style={{ fontSize: 12 }}>{clause.clauseCode}</strong>
-                <input
-                  className="text-input"
-                  value={clause.attributeCodes.join(', ')}
-                  onChange={(event) => {
+            <button className="dup-swap" aria-label="Swap which record is kept" onClick={() => setFlipped({ ...flipped, [key]: !flipped[key] })}>{flipped[key] ? '→' : '←'}</button>
+            <div className="dup-side">
+              <div className="dup-role">Merge in · {keepIsNewer ? 'older' : 'newer'}</div>
+              <strong><Link href={entityHref(retire.domainCode, retire.id)} className="entity-link">{retire.entityName}</Link></strong>
+              <div className="dup-meta">{meta(retire)}</div>
+              <div className="dup-rels">{moves} relationship{moves === 1 ? '' : 's'} will move</div>
+              <div className="dup-kids">
+                ⤷ {plan.moving === 0 ? 'No children' : plan.moving === 1 ? '1 child moves' : `${plan.moving} children move`}
+                {plan.exactCount > 0 && <span className="dup-also"> · {plan.exactCount} will also merge</span>}
+                {plan.reviewCount > 0 && <span className="is-review"> · needs review</span>}
+              </div>
+            </div>
+            <div className="dup-marks">
+              <span className={`dup-badge ${band}`}>{band === 'very' ? 'Very likely' : 'Possible'}</span>
+              <div className="dup-chips">{chipsFor(candidate).map((chip) => <span key={chip} className="dup-chip">{chip}</span>)}</div>
+            </div>
+            <div className="dup-actions">
+              <button className="dup-row-btn primary" disabled={mergingKey !== null} onClick={() => requestMerge([candidate])}>{mergingKey === key ? 'Merging…' : 'Merge'}</button>
+              <button className="dup-row-btn quiet" onClick={() => dismiss([key])}>Not the same</button>
+            </div>
+          </article>
+        );
+      })}
+
+      {dialog && (
+        <MergeDialog
+          candidates={dialog.candidates}
+          policy={dialog.policy}
+          impactOf={impactOf}
+          merging={mergingKey !== null}
+          onPolicy={(policy) => setDialog({ ...dialog, policy })}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => applyMerges(dialog.candidates, dialog.policy)}
+        />
+      )}
+
+      <div className="dup-foot">
+        A merge retires one record and moves its relationships onto the one you keep.
+        {truncated ? ' The list shows the strongest 200 pairs.' : ''}
+        {' '}
+        <button onClick={() => setShowRules((open) => !open)}>How matches are scored</button>
+      </div>
+
+      {showRules && (
+        <div className="dup-rules">
+          <p style={{ color: 'var(--ink-2)', fontSize: 13, maxWidth: 760 }}>
+            Exact keys such as LEI, tax ID, and CUSIP make a pair very likely. Differing exact keys reject the pair.
+            Name scores use Jaro-Winkler, Levenshtein, and Jaccard. Saving a rule requires a tenant admin.
+          </p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '12px 0' }}>
+            {rules.map((rule) => (
+              <button key={rule.id} className="btn btn-sm" onClick={() => { setRuleDraft(JSON.parse(JSON.stringify(rule))); setRuleMessage(null); }}>
+                {rule.ruleName}
+              </button>
+            ))}
+          </div>
+          {ruleDraft && (
+            <div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <label style={{ fontSize: 12 }}>Name
+                  <input className="text-input" value={ruleDraft.ruleName} onChange={(event) => setRuleDraft({ ...ruleDraft, ruleName: event.target.value })} style={{ display: 'block' }} />
+                </label>
+                <label style={{ fontSize: 12 }}>Minimum score
+                  <input className="text-input" type="number" min={0} max={100} value={ruleDraft.minScore} onChange={(event) => setRuleDraft({ ...ruleDraft, minScore: Number(event.target.value) })} style={{ display: 'block', width: 100 }} />
+                </label>
+                <label style={{ fontSize: 12, alignSelf: 'end' }}>
+                  <input type="checkbox" checked={ruleDraft.isActive} onChange={(event) => setRuleDraft({ ...ruleDraft, isActive: event.target.checked })} /> Active
+                </label>
+              </div>
+              {ruleDraft.clauses.map((clause, index) => (
+                <div key={`${clause.clauseCode}-${index}`} style={{ display: 'grid', gridTemplateColumns: '140px 1fr 140px 80px 80px 70px', gap: 8, marginTop: 10, alignItems: 'center' }}>
+                  <strong style={{ fontSize: 12 }}>{clause.clauseCode}</strong>
+                  <input className="text-input" value={clause.attributeCodes.join(', ')} onChange={(event) => {
                     const clauses = [...ruleDraft.clauses];
                     clauses[index] = { ...clause, attributeCodes: event.target.value.split(',').map((code) => code.trim()).filter(Boolean) };
                     setRuleDraft({ ...ruleDraft, clauses });
-                  }}
-                />
-                <select className="text-input" value={clause.algorithm} onChange={(event) => {
-                  const clauses = [...ruleDraft.clauses];
-                  clauses[index] = { ...clause, algorithm: event.target.value };
-                  setRuleDraft({ ...ruleDraft, clauses });
-                }}>
-                  <option value="exact">Exact</option>
-                  <option value="jaro_winkler">Jaro-Winkler</option>
-                  <option value="levenshtein">Levenshtein</option>
-                  <option value="jaccard">Jaccard</option>
-                </select>
-                <input className="text-input" type="number" step="0.01" min={0} max={1} value={clause.threshold} onChange={(event) => {
-                  const clauses = [...ruleDraft.clauses];
-                  clauses[index] = { ...clause, threshold: Number(event.target.value) };
-                  setRuleDraft({ ...ruleDraft, clauses });
-                }} />
-                <input className="text-input" type="number" min={1} value={clause.weight} onChange={(event) => {
-                  const clauses = [...ruleDraft.clauses];
-                  clauses[index] = { ...clause, weight: Number(event.target.value) };
-                  setRuleDraft({ ...ruleDraft, clauses });
-                }} />
-                <label style={{ fontSize: 12 }}>
-                  <input type="checkbox" checked={clause.deterministic} onChange={(event) => {
+                  }} />
+                  <select className="text-input" value={clause.algorithm} onChange={(event) => {
                     const clauses = [...ruleDraft.clauses];
-                    clauses[index] = { ...clause, deterministic: event.target.checked };
+                    clauses[index] = { ...clause, algorithm: event.target.value };
                     setRuleDraft({ ...ruleDraft, clauses });
-                  }} /> Key
-                </label>
-                <label style={{ fontSize: 12 }}>
-                  <input type="checkbox" checked={clause.isActive} onChange={(event) => {
+                  }}>
+                    <option value="exact">Exact</option>
+                    <option value="jaro_winkler">Jaro-Winkler</option>
+                    <option value="levenshtein">Levenshtein</option>
+                    <option value="jaccard">Jaccard</option>
+                  </select>
+                  <input className="text-input" type="number" step="0.01" min={0} max={1} value={clause.threshold} onChange={(event) => {
                     const clauses = [...ruleDraft.clauses];
-                    clauses[index] = { ...clause, isActive: event.target.checked };
+                    clauses[index] = { ...clause, threshold: Number(event.target.value) };
                     setRuleDraft({ ...ruleDraft, clauses });
-                  }} /> On
-                </label>
+                  }} />
+                  <input className="text-input" type="number" min={1} value={clause.weight} onChange={(event) => {
+                    const clauses = [...ruleDraft.clauses];
+                    clauses[index] = { ...clause, weight: Number(event.target.value) };
+                    setRuleDraft({ ...ruleDraft, clauses });
+                  }} />
+                  <label style={{ fontSize: 12 }}>
+                    <input type="checkbox" checked={clause.isActive} onChange={(event) => {
+                      const clauses = [...ruleDraft.clauses];
+                      clauses[index] = { ...clause, isActive: event.target.checked };
+                      setRuleDraft({ ...ruleDraft, clauses });
+                    }} /> On
+                  </label>
+                </div>
+              ))}
+              <div style={{ marginTop: 12 }}>
+                <button className="btn btn-primary" disabled={savingRule} onClick={saveRule}>{savingRule ? 'Saving…' : 'Save rule'}</button>
+                {ruleMessage && <span style={{ marginLeft: 12, fontSize: 13 }}>{ruleMessage}</span>}
               </div>
-            ))}
             </div>
-            <button
-              className="btn btn-sm"
-              style={{ marginTop: 12 }}
-              onClick={() => setRuleDraft({
-                ...ruleDraft,
-                clauses: [...ruleDraft.clauses, {
-                  id: '',
-                  clauseCode: `CLAUSE_${ruleDraft.clauses.length + 1}`,
-                  attributeCodes: [],
-                  useEntityName: true,
-                  algorithm: 'jaro_winkler',
-                  threshold: 0.88,
-                  weight: 10,
-                  deterministic: false,
-                  isActive: true,
-                }],
-              })}
-            >Add clause</button>
-            <div style={{ marginTop: 12 }}>
-              <button className="btn btn-primary" disabled={savingRule} onClick={saveRule}>{savingRule ? 'Saving…' : 'Save rule'}</button>
-              {ruleMessage && <span style={{ marginLeft: 12, fontSize: 13 }}>{ruleMessage}</span>}
-            </div>
-          </div>
-        )}
-      </details>
+          )}
+        </div>
+      )}
     </div>
   );
 }

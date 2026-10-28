@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { CommittedDateInput } from '@/components/forms/CommittedDateInput';
 import { useTemporalStore } from '@/lib/store';
 
 export function AsOfDatePicker() {
@@ -31,19 +32,21 @@ export function AsOfDatePicker() {
   return (
     <div className={`as-of-date-picker ${isNotToday || !knowledgeIsCurrent ? 'as-of-date-picker--historical' : ''}`}>
       <label htmlFor="as-of-date">As Of:</label>
-      <input
+      <CommittedDateInput
         id="as-of-date"
-        type="date"
         value={asOfDate}
-        onChange={(e) => setAsOfDate(e.target.value)}
+        title="Choosing a day applies it when the calendar closes. Press Enter or click away after stepping the fields."
+        onCommit={(value) => {
+          if (/^\d{4}-\d{2}-\d{2}$/.test(value)) setAsOfDate(value);
+        }}
       />
       <label htmlFor="knowledge-date">Known:</label>
-      <input
+      <CommittedDateInput
         id="knowledge-date"
         type="datetime-local"
         value={knowledgeValue}
-        title="Blank means what we know now. Set a past time to see values that have since been deleted."
-        onChange={(e) => setKnowledgeDate(e.target.value || (today ?? knowledgeDate))}
+        title="Blank means what we know now. Choosing a time applies it when the calendar closes."
+        onCommit={(value) => setKnowledgeDate(value || (today ?? knowledgeDate))}
       />
       {(isNotToday || !knowledgeIsCurrent) && today && (
         <button

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -11,6 +11,7 @@ import {
   CREATE_COMPLIANCE_RULE_VERSION_MUTATION,
 } from '@/lib/graphql';
 import { ComplianceRuleForm, ComplianceRuleFormData, buildComplianceVersionInput } from '@/components/forms/ComplianceRuleForm';
+import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
 interface ComplianceRuleRow {
   id: string;
@@ -121,6 +122,97 @@ export default function ComplianceRulesPage() {
     }
   };
 
+  const columns = useMemo<ColDef<ComplianceRuleRow>[]>(() => [
+    {
+      colId: 'rule',
+      headerName: 'Rule',
+      minWidth: 240,
+      flex: 1.6,
+      autoHeight: true,
+      wrapText: true,
+      valueGetter: (params) => params.data ? `${params.data.ruleName} ${params.data.ruleCode}` : '',
+      cellRenderer: (params) => {
+        const rule = params.data;
+        if (!rule) return params.value || '';
+        return (
+          <div>
+            <div style={{ fontWeight: 500 }}>{rule.ruleName}</div>
+            <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{rule.ruleCode}</div>
+          </div>
+        );
+      },
+    },
+    {
+      field: 'ruleCategory',
+      headerName: 'Category',
+      minWidth: 150,
+      cellRenderer: (params) => {
+        if (!params.value) return null;
+        const cat = CATEGORY_COLORS[String(params.value)] || CATEGORY_COLORS.OTHER;
+        return <span style={{ fontSize: 10, padding: '3px 8px', background: cat.bg, color: cat.fg, fontWeight: 600 }}>{params.value}</span>;
+      },
+    },
+    {
+      colId: 'anchor',
+      headerName: 'Anchor Domain',
+      minWidth: 160,
+      valueGetter: (params) => params.data ? `${params.data.anchorDomainCode} ${params.data.appliesToAll ? 'All entities' : 'Specific entities'}` : '',
+      cellRenderer: (params) => {
+        const rule = params.data;
+        if (!rule) return params.value || '';
+        return (
+          <div>
+            <div>{rule.anchorDomainCode}</div>
+            <div style={{ fontSize: 10, color: 'var(--ink-3)' }}>{rule.appliesToAll ? 'All entities' : 'Specific entities'}</div>
+          </div>
+        );
+      },
+    },
+    {
+      colId: 'direction',
+      headerName: 'Direction',
+      minWidth: 120,
+      valueGetter: (params) => params.data?.currentVersion?.limitDirection || '',
+    },
+    {
+      colId: 'limits',
+      headerName: 'Limits',
+      minWidth: 130,
+      autoHeight: true,
+      valueGetter: (params) => {
+        const version = params.data?.currentVersion;
+        if (!version) return '';
+        return [version.softLimitValue != null ? `Soft ${version.softLimitValue}` : '', version.hardLimitValue != null ? `Hard ${version.hardLimitValue}` : ''].filter(Boolean).join(' ');
+      },
+      cellRenderer: (params) => {
+        const version = params.data?.currentVersion;
+        if (!params.data) return params.value || '';
+        if (!version) return <span style={{ color: 'var(--ink-3)' }}>No version</span>;
+        return (
+          <div className="mono">
+            {version.softLimitValue != null && <div style={{ color: 'var(--amber)' }}>Soft: {version.softLimitValue}</div>}
+            {version.hardLimitValue != null && <div style={{ color: 'var(--red)' }}>Hard: {version.hardLimitValue}</div>}
+          </div>
+        );
+      },
+    },
+    {
+      colId: 'status',
+      headerName: 'Status',
+      minWidth: 120,
+      valueGetter: (params) => params.data ? (params.data.isActive ? 'Active' : 'Disabled') : '',
+      cellRenderer: (params) => {
+        if (!params.value) return null;
+        const active = params.value === 'Active';
+        return (
+          <span style={{ fontSize: 10, padding: '3px 8px', background: active ? '#e1f1e7' : 'var(--bg-alt)', color: active ? 'var(--green)' : 'var(--ink-3)', fontWeight: 600 }}>
+            {params.value}
+          </span>
+        );
+      },
+    },
+  ], []);
+
   return (
     <div className="view-fade">
       <div className="crumbs">
@@ -181,123 +273,20 @@ export default function ComplianceRulesPage() {
             </div>
           </div>
 
-          {loading && (
-            <div style={{ textAlign: 'center', padding: '40px 0' }}>
-              <div className="loader">Loading compliance rules...</div>
-            </div>
-          )}
-
-          {!loading && (
-            <div className="data-table">
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1.6fr 130px 140px 110px 120px 90px',
-                  gap: '14px',
-                  padding: '12px 18px',
-                  background: 'var(--bg)',
-                  borderBottom: '1px solid var(--line)',
-                  fontSize: '10px',
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  letterSpacing: '1.2px',
-                  color: 'var(--ink-3)',
-                }}
-              >
-                <div>Rule</div>
-                <div>Category</div>
-                <div>Anchor Domain</div>
-                <div style={{ textAlign: 'center' }}>Direction</div>
-                <div style={{ textAlign: 'center' }}>Limits</div>
-                <div style={{ textAlign: 'center' }}>Status</div>
-              </div>
-              {filteredRules.map((rule) => {
-                const cat = CATEGORY_COLORS[rule.ruleCategory] || CATEGORY_COLORS.OTHER;
-                const v = rule.currentVersion;
-                return (
-                  <div
-                    key={rule.id}
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1.6fr 130px 140px 110px 120px 90px',
-                      gap: '14px',
-                      padding: '14px 18px',
-                      borderBottom: '1px solid var(--line)',
-                      fontSize: '12px',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                      opacity: rule.isActive ? 1 : 0.6,
-                    }}
-                    onClick={() => router.push(`/admin/compliance/${rule.ruleCode}`)}
-                    onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg)')}
-                    onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
-                  >
-                    <div>
-                      <div style={{ color: 'var(--ink)', fontWeight: 500, marginBottom: '2px' }}>{rule.ruleName}</div>
-                      <div className="mono" style={{ fontSize: '10px', color: 'var(--ink-3)' }}>{rule.ruleCode}</div>
-                    </div>
-                    <div>
-                      <span
-                        style={{
-                          fontSize: '10px',
-                          padding: '3px 8px',
-                          background: cat.bg,
-                          color: cat.fg,
-                          fontWeight: 600,
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.5px',
-                        }}
-                      >
-                        {rule.ruleCategory}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
-                      {rule.anchorDomainCode}
-                      {rule.appliesToAll ? (
-                        <div style={{ fontSize: '10px', color: 'var(--ink-3)' }}>All entities</div>
-                      ) : (
-                        <div style={{ fontSize: '10px', color: 'var(--ink-3)' }}>Specific entities</div>
-                      )}
-                    </div>
-                    <div style={{ textAlign: 'center', fontSize: '11px' }}>{v?.limitDirection || '—'}</div>
-                    <div className="mono" style={{ textAlign: 'center', fontSize: '11px' }}>
-                      {v ? (
-                        <>
-                          {v.softLimitValue != null && <div style={{ color: 'var(--amber)' }}>Soft: {v.softLimitValue}</div>}
-                          {v.hardLimitValue != null && <div style={{ color: 'var(--red)' }}>Hard: {v.hardLimitValue}</div>}
-                        </>
-                      ) : (
-                        <span style={{ color: 'var(--ink-3)' }}>No version</span>
-                      )}
-                    </div>
-                    <div style={{ textAlign: 'center' }}>
-                      {rule.isActive ? (
-                        <span style={{ fontSize: '10px', padding: '3px 8px', background: '#e1f1e7', color: 'var(--green)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                          Active
-                        </span>
-                      ) : (
-                        <span style={{ fontSize: '10px', padding: '3px 8px', background: 'var(--bg-alt)', color: 'var(--ink-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                          Disabled
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-
-              {filteredRules.length === 0 && !loading && (
-                <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--ink-3)' }}>
-                  <div style={{ fontSize: '24px', marginBottom: '8px' }}>No compliance rules found</div>
-                  <div style={{ fontSize: '14px', maxWidth: '420px', margin: '0 auto' }}>
-                    Create a rule to evaluate concentration, exposure, leverage, or eligibility limits across any entity level.
-                  </div>
-                  <div style={{ marginTop: '16px' }}>
-                    <button className="btn btn-primary" onClick={() => setShowCreateForm(true)}>+ Create Rule</button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          <div className="data-table">
+            <AppGrid
+              rows={filteredRules}
+              columns={columns}
+              getRowId={(rule) => rule.id}
+              autoHeight={false}
+              height="100%"
+              autoRowHeight
+              loading={loading}
+              emptyMessage="No compliance rules found."
+              onRowClicked={(rule) => router.push(`/admin/compliance/${rule.ruleCode}`)}
+              getRowClass={(params) => (params.data && !params.data.isActive ? 'is-inactive' : '')}
+            />
+          </div>
         </>
       )}
     </div>

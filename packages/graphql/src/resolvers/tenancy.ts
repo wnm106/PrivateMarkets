@@ -20,7 +20,14 @@ export const tenancyResolvers = {
       const [{ data: profile }, { data: clientUsers }, { data: impersonation }] = await Promise.all([
         tn(context).from('profiles').select('*').eq('id', context.user.id).maybeSingle(),
         tn(context).from('client_users').select('client:clients(*)').eq('user_id', context.user.id).eq('is_active', true),
-        tn(context).from('impersonation_sessions').select('*, client:clients(client_name)').is('ended_at', null).maybeSingle(),
+        tn(context)
+          .from('impersonation_sessions')
+          .select('*, client:clients(client_name)')
+          .eq('admin_user_id', context.user.id)
+          .is('ended_at', null)
+          .order('started_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
       ]);
 
       return {
@@ -288,7 +295,10 @@ export const tenancyResolvers = {
 
     startImpersonation: async (_: any, args: { clientId: string; reason?: string }, context: Context) => {
       try {
-        const { error } = await tn(context).rpc('start_impersonation', { p_client_id: args.clientId, p_reason: args.reason ?? null });
+        // Public wrapper, called with the caller's JWT. The service-role client
+        // and a tenancy-schema switch both clear auth.uid(), so the session
+        // never starts and entity lists stay unscoped.
+        const { error } = await context.supabase.rpc('start_impersonation', { p_client_id: args.clientId, p_reason: args.reason ?? null });
         if (error) throw error;
         return { success: true, errors: [] };
       } catch (error: any) {
@@ -298,7 +308,7 @@ export const tenancyResolvers = {
 
     stopImpersonation: async (_: any, __: any, context: Context) => {
       try {
-        const { error } = await tn(context).rpc('stop_impersonation', {});
+        const { error } = await context.supabase.rpc('stop_impersonation', {});
         if (error) throw error;
         return { success: true, errors: [] };
       } catch (error: any) {

@@ -120,8 +120,22 @@ export function exactSimilarity(left: string, right: string): number {
   return a === b ? 1 : 0;
 }
 
+/** Digits that distinguish a series, such as Fund 1 and Fund 3. */
+export function seriesNumbers(value: string): string[] {
+  return normalizeName(value).match(/\d+/g) || [];
+}
+
+export function conflictingSeriesNumbers(left: string, right: string): boolean {
+  const a = seriesNumbers(left);
+  const b = seriesNumbers(right);
+  if (a.length === 0 && b.length === 0) return false;
+  if (a.length !== b.length) return true;
+  return a.some((number, index) => number !== b[index]);
+}
+
 export function similarity(algorithm: MatchAlgorithm, left: string, right: string): number {
   if (algorithm === 'exact') return exactSimilarity(left, right);
+  if (conflictingSeriesNumbers(left, right)) return 0;
   const a = normalizeName(left);
   const b = normalizeName(right);
   if (a.length < 4 || b.length < 4) return 0;

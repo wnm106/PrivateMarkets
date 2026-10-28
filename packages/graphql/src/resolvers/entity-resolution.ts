@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Context } from '../context';
+import { type ChildRecord } from '../lib/entity-resolution/children';
 import { walkEntityGraph, type GraphEdge } from '../lib/entity-resolution/graph';
 import {
   compareAttributes,
@@ -84,21 +85,30 @@ async function loadPopulation(supabase: SupabaseClient): Promise<{ entities: Mat
       entityName: row.entity_name,
       domainCode: row.domain_code,
       clientId: row.client_id,
+      createdAt: row.created_at || null,
       attributes: asAttributes(row.attributes),
     })),
   };
 }
 
-function entityRef(entity: MatchableEntity | undefined, id: string) {
+function entityRef(entity: MatchableEntity | undefined, id: string, relationshipCount = 0, children: ChildRecord[] = []) {
   return {
     id,
     entityCode: entity?.entityCode || id,
     entityName: entity?.entityName || 'Unknown entity',
     domainCode: entity?.domainCode || '',
+    createdAt: entity?.createdAt || null,
+    relationshipCount,
+    children,
   };
 }
 
-function presentPair(pair: ReturnType<typeof scorePair>, byId: Map<string, MatchableEntity>) {
+function presentPair(
+  pair: ReturnType<typeof scorePair>,
+  byId: Map<string, MatchableEntity>,
+  counts: Map<string, number>,
+  childrenOf: Map<string, ChildRecord[]>,
+) {
   if (!pair) return null;
   return {
     score: pair.score,
@@ -106,8 +116,8 @@ function presentPair(pair: ReturnType<typeof scorePair>, byId: Map<string, Match
     ruleCode: pair.ruleCode,
     ruleName: pair.ruleName,
     reasons: pair.reasons,
-    left: entityRef(byId.get(pair.leftId), pair.leftId),
-    right: entityRef(byId.get(pair.rightId), pair.rightId),
+    left: entityRef(byId.get(pair.leftId), pair.leftId, counts.get(pair.leftId) || 0, childrenOf.get(pair.leftId) || []),
+    right: entityRef(byId.get(pair.rightId), pair.rightId, counts.get(pair.rightId) || 0, childrenOf.get(pair.rightId) || []),
   };
 }
 
@@ -187,19 +197,121 @@ async function loadEdges(supabase: SupabaseClient): Promise<GraphEdge[]> {
   return edges;
 }
 
-async function countEdges(supabase: SupabaseClient, entityId: string): Promise<number> {
+async function relationshipCounts(supabase: SupabaseClient, ids: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (!ids.length) return counts;
   const now = new Date().toISOString();
   const asOf = now.slice(0, 10);
-  const { count, error } = await supabase
-    .from('entity_relationships')
-    .select('id', { count: 'exact', head: true })
-    .or(`parent_entity_id.eq.${entityId},child_entity_id.eq.${entityId}`)
-    .lte('valid_from', asOf)
-    .gte('valid_to', asOf)
-    .lte('system_from', now)
-    .gte('system_to', now);
-  if (error) return 0;
-  return count || 0;
+  const bump = (id: string | null) => {
+    if (!id) return;
+    counts.set(id, (counts.get(id) || 0) + 1);
+  };
+  const page = async (column: 'parent_entity_id' | 'child_entity_id', chunk: string[]) => {
+    const rows: Array<Record<string, string>> = [];
+    const pageSize = 1000;
+    for (let from = 0; from < 5000; from += pageSize) {
+      const { data, error } = await supabase
+        .from('entity_relationships')
+        .select(column)
+        .in(column, chunk)
+        .lte('valid_from', asOf)
+        .gte('valid_to', asOf)
+        .lte('system_from', now)
+        .gte('system_to', now)
+        .range(from, from + pageSize - 1);
+      if (error) return rows;
+      rows.push(...((data || []) as Array<Record<string, string>>));
+      if (!data || data.length < pageSize) break;
+    }
+    return rows;
+  };
+  for (let offset = 0; offset < ids.length; offset += 80) {
+    const chunk = ids.slice(offset, offset + 80);
+    const [parents, children] = await Promise.all([
+      page('parent_entity_id', chunk),
+      page('child_entity_id', chunk),
+    ]);
+    for (const row of parents) bump(row.parent_entity_id);
+    for (const row of children) bump(row.child_entity_id);
+  }
+  return counts;
+}
+
+async function childIdsByParent(supabase: SupabaseClient, parentIds: string[]): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  if (!parentIds.length) return map;
+  const now = new Date().toISOString();
+  const asOf = now.slice(0, 10);
+  const add = (parentId: string, childId: string) => {
+    const list = map.get(parentId) || [];
+    if (!list.includes(childId)) list.push(childId);
+    map.set(parentId, list);
+  };
+  const pageSize = 1000;
+  for (let offset = 0; offset < parentIds.length; offset += 80) {
+    const chunk = parentIds.slice(offset, offset + 80);
+    for (let from = 0; from < 8000; from += pageSize) {
+      const { data, error } = await supabase
+        .from('entity_relationships')
+        .select('parent_entity_id, child_entity_id')
+        .in('parent_entity_id', chunk)
+        .lte('valid_from', asOf)
+        .gte('valid_to', asOf)
+        .lte('system_from', now)
+        .gte('system_to', now)
+        .range(from, from + pageSize - 1);
+      if (error) throw new Error(error.message);
+      for (const row of data || []) add(row.parent_entity_id, row.child_entity_id);
+      if (!data || data.length < pageSize) break;
+    }
+  }
+  return map;
+}
+
+async function rememberEntities(supabase: SupabaseClient, ids: string[], byId: Map<string, MatchableEntity>) {
+  const missing = ids.filter((id) => id && !byId.has(id));
+  for (let offset = 0; offset < missing.length; offset += 80) {
+    const chunk = missing.slice(offset, offset + 80);
+    const { data, error } = await supabase
+      .from('entity_master')
+      .select('entity_id, entity_code, entity_name, domain_code, created_at')
+      .in('entity_id', chunk);
+    if (error) throw new Error(error.message);
+    for (const row of data || []) {
+      byId.set(row.entity_id, {
+        id: row.entity_id,
+        entityCode: row.entity_code,
+        entityName: row.entity_name,
+        domainCode: row.domain_code,
+        clientId: '',
+        createdAt: row.created_at || null,
+        attributes: {},
+      });
+    }
+  }
+}
+
+function childRecords(ids: string[], byId: Map<string, MatchableEntity>, descendantCounts: Map<string, number>): ChildRecord[] {
+  const records: ChildRecord[] = [];
+  for (const id of ids) {
+    const entity = byId.get(id);
+    if (!entity) continue;
+    records.push({
+      id: entity.id,
+      entityCode: entity.entityCode,
+      entityName: entity.entityName,
+      domainCode: entity.domainCode,
+      createdAt: entity.createdAt || null,
+      descendantCount: descendantCounts.get(id) || 0,
+    });
+    if (records.length >= 80) break;
+  }
+  return records;
+}
+
+async function countEdges(supabase: SupabaseClient, entityId: string): Promise<number> {
+  const counts = await relationshipCounts(supabase, [entityId]);
+  return counts.get(entityId) || 0;
 }
 
 export const entityResolutionResolvers = {
@@ -224,8 +336,27 @@ export const entityResolutionResolvers = {
         throw new Error('That entity is not an active record you can match.');
       }
       const byId = new Map(entities.map((entity) => [entity.id, entity]));
+      const ids = [...new Set(result.candidates.flatMap((pair) => [pair.leftId, pair.rightId]))];
+      const [counts, directChildren] = await Promise.all([
+        relationshipCounts(context.supabase, ids),
+        childIdsByParent(context.supabase, ids),
+      ]);
+      const childIds = [...new Set([...directChildren.values()].flat())];
+      await rememberEntities(context.supabase, childIds, byId);
+      const grandchildren = await childIdsByParent(context.supabase, childIds);
+      const descendantCounts = new Map<string, number>();
+      for (const [id, kids] of grandchildren) descendantCounts.set(id, kids.length);
+      const childrenOf = new Map<string, ChildRecord[]>();
+      for (const [parentId, kids] of directChildren) {
+        childrenOf.set(parentId, childRecords(kids, byId, descendantCounts));
+      }
+      const candidates = [];
+      for (const pair of result.candidates) {
+        const presented = presentPair(pair, byId, counts, childrenOf);
+        if (presented) candidates.push(presented);
+      }
       return {
-        candidates: result.candidates.map((pair) => presentPair(pair, byId)),
+        candidates,
         scannedCount: result.scannedCount,
         truncated: result.truncated || populationTruncated,
       };

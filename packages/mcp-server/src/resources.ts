@@ -35,9 +35,9 @@ export async function listResources(supabase: SupabaseClient | null): Promise<Re
   const resources: ResourceDefinition[] = [...STATIC_RESOURCES];
 
   resources.push(
-    { uri: 'tapestrai://model/domains', name: 'Domain Types', mimeType: 'application/json', description: 'All domain types (FUND, ISSUER, SECURITY, POSITION, etc.) with descriptions.' },
-    { uri: 'tapestrai://model/relationships', name: 'Relationship Types', mimeType: 'application/json', description: 'All relationship types with parent/child domain codes. Use to understand how entities connect.' },
-    { uri: 'tapestrai://model/attributes', name: 'Attribute Register', mimeType: 'application/json', description: 'All available attributes with data types, descriptions, and units.' },
+    { uri: 'tapestrai://model/domains', name: 'Domain Types', mimeType: 'application/json', description: 'Live entity types with names and descriptions. Read this, or call list_domain_types, before using a domain code. Do not invent one.' },
+    { uri: 'tapestrai://model/relationships', name: 'Relationship Types', mimeType: 'application/json', description: 'Live relationship codes with parent and child entity types. Read this, or call get_relationship_types, before a path, lookup, or create_relationship.' },
+    { uri: 'tapestrai://model/attributes', name: 'Attribute Register', mimeType: 'application/json', description: 'Live fields: code, name, data type, description, unit, and allowed values. This is not which fields sit on an entity type. Read a template resource, or call get_template_metadata, for that.' },
   );
 
   if (supabase) {
@@ -147,16 +147,18 @@ Use \`tapestrai://template/{CODE}\` resources to see template details.
 
 ## Golden Master & Source Data
 
-The system maintains a **golden master** (best-known values) from multiple **sources**
-(e.g. GOLDEN, BLOOMBERG, MANUAL) using precedence rules. Values are bi-temporal.
+The value on a record is chosen from its sources. An open Manual Entry wins when one is present. Otherwise the template sequence, the attribute sequence, or the data-source sequence applies. Values are bi-temporal.
+
+The domain table above is a sketch. Read \`tapestrai://model/domains\` or call \`list_domain_types\` for the live list. Do not invent a domain, attribute, template, or relationship code.
 
 ## Key Tools for Exploration
 
-1. \`get_attribute_metadata\` — all attributes and their types
-2. \`get_template_metadata\` — which attributes belong to each template
-3. \`get_relationship_types\` — how domains connect
-4. \`list_entities\` — browse entities of any domain
-5. \`get_entity\` — all data for a specific entity
+1. \`list_domain_types\` — live entity types, names, and descriptions
+2. \`get_template_metadata\` — which attributes belong to an entity type
+3. \`search_attributes\` — find a field from the words a person used
+4. \`get_relationship_types\` — how entity types connect
+5. \`query_data\` — counts, filters, and groupings. grain "value" is one row per field and its source. grain "entity" is one row per record
+6. \`get_entity\` — one record. \`list_entities\` is one page, not a total
 `;
 const COMPLIANCE_GUIDE = `# Compliance Rules Engine — Complete Guide
 

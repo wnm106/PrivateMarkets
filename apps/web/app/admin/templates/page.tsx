@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import type { ColDef } from 'ag-grid-community';
+import { AppGrid } from '@/components/grid/AppGrid';
 import { usePublishViewContext } from '@/lib/view-context';
 import Link from 'next/link';
 import { graphqlQuery, DOMAIN_TEMPLATES_QUERY, DOMAIN_TYPES_QUERY } from '@/lib/graphql';
@@ -320,56 +322,7 @@ export default function TemplatesPage() {
         <h2>Template-Attribute Matrix</h2>
         <span className="hint">Which attributes belong to which templates</span>
       </div>
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-          <thead>
-            <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--line)' }}>
-              <th style={{ padding: '12px 18px', textAlign: 'left', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', fontWeight: 600, position: 'sticky', left: 0, background: 'var(--bg)', zIndex: 1 }}>
-                Attribute
-              </th>
-              {filteredTemplates.map(tpl => (
-                <th key={tpl.id} style={{ padding: '12px 18px', textAlign: 'center', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', fontWeight: 600, minWidth: '100px' }}>
-                  {tpl.code}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {Array.from(new Set(filteredTemplates.flatMap(t => t.attributes.map(a => a.attributeCode)))).map(attrCode => (
-              <tr key={attrCode} style={{ borderBottom: '1px solid var(--line)' }}>
-                <td style={{ padding: '10px 18px', fontFamily: 'var(--font-ibm-plex-mono), monospace', color: 'var(--accent)', fontWeight: 500, fontSize: '11px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
-                  {attrCode}
-                </td>
-                {filteredTemplates.map(tpl => {
-                  const hasAttr = tpl.attributes.some(a => a.attributeCode === attrCode);
-                  const tplAttr = tpl.attributes.find(a => a.attributeCode === attrCode);
-                  return (
-                    <td key={tpl.id} style={{ padding: '10px 18px', textAlign: 'center' }}>
-                      {hasAttr ? (
-                        <span style={{
-                          display: 'inline-block',
-                          width: '24px',
-                          height: '24px',
-                          background: tplAttr?.required ? 'var(--green)' : 'var(--accent-2)',
-                          color: '#fff',
-                          borderRadius: '50%',
-                          lineHeight: '24px',
-                          fontSize: '10px',
-                          fontWeight: 600,
-                        }}>
-                          {tplAttr?.required ? 'R' : '✓'}
-                        </span>
-                      ) : (
-                        <span style={{ color: 'var(--ink-4)' }}>—</span>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <TemplateMatrix templates={filteredTemplates} />
 
       {/* Create/Edit Modal */}
       {(showCreateForm || editingTemplate) && (
@@ -509,5 +462,60 @@ export default function TemplatesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+
+function TemplateMatrix({ templates }: { templates: Template[] }) {
+  const attrCodes = useMemo(
+    () => Array.from(new Set(templates.flatMap((template) => template.attributes.map((attribute) => attribute.attributeCode)))),
+    [templates],
+  );
+  const rows = useMemo(() => attrCodes.map((attributeCode) => ({ attributeCode })), [attrCodes]);
+  const columns = useMemo<ColDef[]>(() => [
+    {
+      field: 'attributeCode',
+      headerName: 'Attribute',
+      pinned: 'left',
+      minWidth: 200,
+      cellClass: 'mono',
+    },
+    ...templates.map((template) => ({
+      colId: template.id,
+      headerName: template.code,
+      width: 120,
+      sortable: false,
+      filter: false,
+      cellStyle: { textAlign: 'center' as const },
+      cellRenderer: (params: any) => {
+        const match = template.attributes.find((attribute) => attribute.attributeCode === params.data.attributeCode);
+        if (!match) return <span style={{ color: 'var(--ink-4)' }}>—</span>;
+        return (
+          <span style={{
+            display: 'inline-block',
+            width: '24px',
+            height: '24px',
+            background: match.required ? 'var(--green)' : 'var(--accent-2)',
+            color: '#fff',
+            borderRadius: '50%',
+            lineHeight: '24px',
+            fontSize: '10px',
+            fontWeight: 600,
+          }}>
+            {match.required ? 'R' : '✓'}
+          </span>
+        );
+      },
+    })),
+  ], [templates]);
+  return (
+    <AppGrid
+      rows={rows}
+      columns={columns}
+      getRowId={(row) => row.attributeCode}
+      autoHeight={rows.length < 40}
+      height={rows.length < 40 ? undefined : '70vh'}
+      emptyMessage="No attributes on these templates."
+    />
   );
 }

@@ -34,6 +34,12 @@ import {
   subscribeViewContext,
   type ViewFocus,
 } from '@/lib/view-context';
+import {
+  skillById,
+  viewFromStored,
+  type SkillState,
+  type SkillView,
+} from '@tapestrai/mcp-server/src/lib/chat-skills';
 
 /** A file the user has staged but not yet sent. */
 interface StagedAttachment {
@@ -104,6 +110,8 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const [designer, setDesigner] = useState<DesignerBridgeState>(() => getDesignerState());
   const [viewFocus, setViewFocus] = useState<ViewFocus | null>(() => getViewContext().focus);
   const [appliedProposals, setAppliedProposals] = useState<Record<string, boolean>>({});
+  const [skillView, setSkillView] = useState<SkillView | null>(null);
+  const skillStateRef = useRef<SkillState | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -136,6 +144,13 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   // An explicit profile wins; otherwise a designer on the page promotes the
   // default chat into report-designer mode.
   const effectiveToolContext = toolContext ?? (activeDesigner ? 'report-designer' : context?.toolContext);
+  const designerSkill =
+    activeDesigner?.kind === 'narrative'
+      ? 'design-narrative'
+      : activeDesigner?.kind === 'dashboard'
+        ? 'design-dashboard'
+        : undefined;
+  const guidedSkill = skillById(designerSkill) ?? (skillView ? skillById(skillView.id) : null);
 
   const screenLabel = activeDesigner
     ? `Designing a ${activeDesigner.kind}`
@@ -148,6 +163,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
       ...context,
       asOfDate,
       toolContext: effectiveToolContext,
+      skill: designerSkill,
       ...(viewFocus
         ? {
             domainCode: viewFocus.domainCode || context?.domainCode,
@@ -173,7 +189,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
           ? { page: `${context.page} · ${viewFocus.label}` }
           : {}),
     }),
-    [context, effectiveToolContext, activeDesigner, viewFocus, asOfDate]
+    [context, effectiveToolContext, activeDesigner, viewFocus, asOfDate, designerSkill]
   );
 
   /** Draft the assistant should iterate on, when a designer is open. */
@@ -324,7 +340,12 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
         attachmentIds: sentAttachmentIds,
         designerDraft,
         voice: chatVoice,
+        skill: designerSkill,
+        skillState: skillStateRef.current,
       });
+
+      skillStateRef.current = response.skillState ?? null;
+      setSkillView(response.skill ?? null);
 
       setMessages((prev) => [
         ...prev,
@@ -375,6 +396,8 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
       );
       setShowHistory(false);
       setHistoryError(null);
+      setSkillView(viewFromStored(conversation.skill_state));
+      skillStateRef.current = conversation.skill_state ?? null;
     } catch (error) {
       setHistoryError(error instanceof Error ? error.message : 'Could not open conversation');
     } finally {
@@ -392,6 +415,8 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
     setConfirmingDeleteId(null);
     setStaged([]);
     setInput('');
+    setSkillView(null);
+    skillStateRef.current = null;
   };
 
   const beginRename = (conversation: ChatConversation) => {
@@ -534,6 +559,26 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
         <p className="chat-voice-hint">{CHAT_VOICES.find((voice) => voice.id === chatVoice)?.hint}</p>
       </div>
 
+      {skillView && (
+        <div className="chat-skill" aria-live="polite">
+          <div className="chat-skill-kicker">
+            {skillView.name} · {skillView.phaseLabel} · {skillView.decidedCount}/{skillView.requiredCount}
+          </div>
+          {skillView.open && (
+            <div className="chat-skill-open">
+              {skillView.open.status === 'ambiguous' ? 'Needs a choice' : 'Still open'}: {skillView.open.label}
+            </div>
+          )}
+          {skillView.decided.length > 0 && (
+            <div className="chat-skill-decided">
+              {skillView.decided.map((item) => (
+                <span key={item.label} title={item.value}>{item.label}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {showHistory && (
         <div className="chat-history">
           <div className="chat-history-head">
@@ -627,9 +672,10 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
             <p>
               {activeDesigner ? (
                 <>
-                  Describe the {activeDesigner.kind} you want, or drop in a screenshot or sample HTML to
-                  design against. I inspect the real data model and propose changes you can apply.
+                  {guidedSkill?.intro} I will check the real data model before proposing anything you can apply.
                 </>
+              ) : skillView && guidedSkill ? (
+                <>{guidedSkill.intro}</>
               ) : viewFocus ? (
                 <>
                   You&apos;re {viewFocus.activity === 'editing' ? 'editing' : viewFocus.activity === 'creating' ? 'creating' : 'viewing'}{' '}
@@ -806,7 +852,10 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyPress}
           onPaste={handlePaste}
-          placeholder={activeDesigner ? 'Describe the design, or attach a reference…' : 'Ask me anything...'}
+          placeholder={
+            guidedSkill?.placeholder ??
+            (activeDesigner ? 'Describe the design, or attach a reference…' : 'Ask me anything...')
+          }
           rows={2}
           disabled={isLoading}
         />

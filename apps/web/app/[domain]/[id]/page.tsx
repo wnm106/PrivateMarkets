@@ -9,12 +9,11 @@ import { GoldenRecordSections, type TemplateAttribute, type LineageData } from '
 import { SourceContributionPanel } from '@/components/detail/SourceContributionPanel';
 import { ActiveConflictsPanel } from '@/components/detail/ActiveConflictsPanel';
 import { ActivityFeedPanel } from '@/components/detail/ActivityFeedPanel';
-import { EntityReports } from '@/components/reporting/EntityReports';
-import { EntityGraphPanel } from '@/components/detail/EntityGraphPanel';
 import { sources, type SourceKey } from '@/lib/data';
 import { getDomainConfig, type DomainKey } from '@/lib/mock-data';
 import { useTemporalStore } from '@/lib/store';
 import { entityViewFocus, usePublishViewContext } from '@/lib/view-context';
+import { RECORD_EXPERIENCES_QUERY, type RecordExperience } from '@/lib/experience';
 import type { EntityData, ConflictData, SourceContributionData, ActivityData } from '@/components/detail/types';
 
 export default function DynamicEntityDetailPage() {
@@ -34,6 +33,7 @@ export default function DynamicEntityDetailPage() {
 
   // Compute derived data
   const [activities, setActivities] = useState<ActivityData[]>([]);
+  const [workingView, setWorkingView] = useState<{ href: string; name: string } | null>(null);
   const conflicts: ConflictData[] = [];
   const sourceContributions: SourceContributionData[] = [];
 
@@ -114,6 +114,7 @@ export default function DynamicEntityDetailPage() {
       who: entry.updatedBy || 'System',
       time: entry.updatedAt,
       attribute: entry.attributeName || entry.attributeCode,
+      attributeCode: entry.attributeCode,
       value: entry.value ?? '',
       validFrom: entry.validFrom,
       validTo: entry.validTo,
@@ -225,7 +226,7 @@ export default function DynamicEntityDetailPage() {
     if (!entity) throw new Error('Record is still loading');
     const result = await graphqlMutation<{ updateEntity: { errors: Array<{ message: string }> } }, { input: { id: string; attributes: Record<string, string> } }>(
       UPDATE_ENTITY_MUTATION,
-      { input: { id: entity.id, attributes: { [attributeCode]: value } } },
+      { input: { id: entity.id, attributes: { [attributeCode]: value }, asOfDate } },
     );
     const saveError = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
     if (saveError) throw new Error(saveError);
@@ -247,7 +248,7 @@ export default function DynamicEntityDetailPage() {
       [attributeCode]: { ...(typeof existingAttr === 'object' ? existingAttr : { value: existingAttr }), source: sources[newSource]?.name || newSource, source_code: newSource.toUpperCase() },
     };
     try {
-      await graphqlMutation(UPDATE_ENTITY_MUTATION, { input: { id: entity.id, attributes: updatedAttributes } });
+      await graphqlMutation(UPDATE_ENTITY_MUTATION, { input: { id: entity.id, attributes: updatedAttributes, asOfDate } });
       setEntity({ ...entity, attributes: updatedAttributes });
     } catch (err) { console.error('Failed to update source:', err); }
   };
@@ -260,7 +261,7 @@ export default function DynamicEntityDetailPage() {
       [attributeCode]: { ...(typeof existingAttr === 'object' ? existingAttr : { value: existingAttr }), value: newValue },
     };
     try {
-      await graphqlMutation(UPDATE_ENTITY_MUTATION, { input: { id: entity.id, attributes: updatedAttributes } });
+      await graphqlMutation(UPDATE_ENTITY_MUTATION, { input: { id: entity.id, attributes: updatedAttributes, asOfDate } });
       setEntity({ ...entity, attributes: updatedAttributes });
       await loadActivity(entity.id);
     } catch (err) { console.error('Failed to update value:', err); }
@@ -310,13 +311,23 @@ export default function DynamicEntityDetailPage() {
       }
 
       if (entity.id) {
-        const lineageResult = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
-          FIELD_LINEAGE_QUERY,
-          { entityId: entity.id, asOfDate, knowledgeDate },
-          'network-only'
-        );
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+        const [entityResult, lineageResult] = await Promise.all([
+          graphqlQuery<{ entity: EntityData }, { id?: string; entityCode?: string; asOfDate: string }>(
+            ENTITY_QUERY,
+            isUUID ? { id, asOfDate } : { entityCode: id, asOfDate },
+            'network-only'
+          ),
+          graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
+            FIELD_LINEAGE_QUERY,
+            { entityId: entity.id, asOfDate, knowledgeDate },
+            'network-only'
+          ),
+        ]);
+        if (entityResult.data?.entity) setEntity(entityResult.data.entity);
         if (lineageResult.data?.fieldLineage) {
           setLineageData(lineageResult.data.fieldLineage);
+          setLineageLoaded(true);
         }
         await loadActivity(entity.id);
       }
@@ -373,6 +384,22 @@ export default function DynamicEntityDetailPage() {
 
   usePublishViewContext(entity ? entityViewFocus(entity) : null);
 
+  useEffect(() => {
+    if (!entity?.id || !entity.domainCode) return;
+    let cancelled = false;
+    graphqlQuery<{ recordExperiences: RecordExperience[] }, { anchorDomainCode: string; isActive: boolean }>(
+      RECORD_EXPERIENCES_QUERY,
+      { anchorDomainCode: entity.domainCode, isActive: true },
+      'network-only',
+    ).then((result) => {
+      if (cancelled) return;
+      const match = (result.data?.recordExperiences || []).find((item) => item.isDefault)
+        || result.data?.recordExperiences?.[0];
+      setWorkingView(match ? { href: `/experiences/${match.experienceCode}/${entity.id}`, name: match.experienceName } : null);
+    });
+    return () => { cancelled = true; };
+  }, [entity?.id, entity?.domainCode]);
+
   if (loading) {
     return (
       <div className="view-fade">
@@ -421,6 +448,12 @@ export default function DynamicEntityDetailPage() {
         mergeHref={`/merge?entity=${entity.id}`}
       />
 
+      {workingView && (
+        <div className="xp-jump">
+          <Link href={workingView.href} className="btn btn-primary">Open {workingView.name}</Link>
+        </div>
+      )}
+
       <div className="detail-layout">
         <div>
           <GoldenRecordSections
@@ -443,9 +476,6 @@ export default function DynamicEntityDetailPage() {
           <ActivityFeedPanel activities={activities} />
         </div>
       </div>
-
-      <EntityReports domainCode={entity.domainCode} entityId={entity.id} asOfDate={asOfDate} />
-      <EntityGraphPanel entityId={entity.id} />
     </div>
   );
 }
