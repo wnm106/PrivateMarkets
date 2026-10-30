@@ -7,6 +7,7 @@ import { registerOverrideTools } from '@tapestrai/mcp-server/src/tools/override-
 import { registerDQTools } from '@tapestrai/mcp-server/src/tools/dq-tools';
 import { registerImportMapTools } from '@tapestrai/mcp-server/src/tools/import-map-tools';
 import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/position-file-tools';
+import { registerSpecialistTools } from '@tapestrai/mcp-server/src/tools/specialist-tools';
 import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/compliance-tools';
 import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
 import { getContextProfile } from '@tapestrai/mcp-server/src/lib/context-profiles';
@@ -42,6 +43,7 @@ registerOverrideTools(toolRegistry);
 registerDQTools(toolRegistry);
 registerImportMapTools(toolRegistry);
 registerPositionFileTools(toolRegistry);
+registerSpecialistTools(toolRegistry);
 registerComplianceTools(toolRegistry);
 registerReportingTools(toolRegistry);
 

@@ -82,6 +82,7 @@ export default function PositionsPage() {
         </div>
         <div className="page-actions">
           <Link href="/imports" className="btn btn-primary">Load position file</Link>
+          <Link href="/load" className="btn">Any file</Link>
         </div>
       </div>
 

@@ -9,6 +9,11 @@ export interface FeedParentColumn {
   /** Column on this row whose value is the parent domain's identity code. */
   column: string;
   parentDomainCode: string;
+  /**
+   * The parent is already in the system. Load order does not wait for it,
+   * and the loader resolves the code from stored entities.
+   */
+  existing?: boolean;
 }
 
 export interface FeedDomainSpec {

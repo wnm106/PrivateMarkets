@@ -330,6 +330,21 @@ export default function LandingPage() {
             </div>
           </div>
         </Link>
+        <Link href="/load">
+          <div className="nav-card">
+            <div className="nav-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <rect x="3" y="4" width="18" height="16" />
+                <path d="M3 9h18" />
+                <path d="M9 9v11" />
+              </svg>
+            </div>
+            <div>
+              <div className="nav-title">Data specialist</div>
+              <div className="nav-desc">Bring any file. It maps what it can, asks what it cannot tell, and loads parents first.</div>
+            </div>
+          </div>
+        </Link>
         <Link href="/imports">
           <div className="nav-card">
             <div className="nav-icon">

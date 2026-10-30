@@ -221,6 +221,7 @@ export default function PositionFilePage() {
 
       <p className="hero-sub" style={{ maxWidth: 820, marginTop: 0 }}>
         Each upload is an instance on the {queue?.sourceCode || 'POSITION_FILE'} source. The original file is kept, so you can change the column mapping and reprocess without losing the source values.
+        {' '}For any other file, use the <Link href="/load">data specialist</Link>.
       </p>
       {error && <div className="filter-bar" style={{ color: '#b42318' }}>{error}</div>}
 
