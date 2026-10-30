@@ -284,7 +284,7 @@ export default function DQRulesPage() {
         return (
           <div>
             <div>{rule.domainCode || 'All domains'}</div>
-            <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{rule.attributeCode || 'Any attribute'}</div>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>{rule.attributeCode || 'Any attribute'}</div>
           </div>
         );
       },
@@ -387,7 +387,7 @@ export default function DQRulesPage() {
           <div style={modalCard}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <div>
-                <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--accent)', fontWeight: 600, marginBottom: 4 }}>
+                <div style={{ fontSize: 11, textTransform: 'none', letterSpacing: 0, color: 'var(--accent)', fontWeight: 600, marginBottom: 4 }}>
                   {creating ? 'Create' : 'Edit'}
                 </div>
                 <div style={{ fontFamily: 'var(--font-ibm-plex-serif), serif', fontSize: 18, fontWeight: 600 }}>
@@ -494,23 +494,23 @@ export default function DQRulesPage() {
 }
 
 const activeChip: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: 11,
   padding: '3px 8px',
   background: '#e1f1e7',
   color: 'var(--green)',
   fontWeight: 600,
-  textTransform: 'uppercase',
-  letterSpacing: '0.5px',
+  textTransform: 'none',
+  letterSpacing: 0,
 };
 
 const inactiveChip: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: 11,
   padding: '3px 8px',
   background: 'var(--bg-alt)',
   color: 'var(--ink-3)',
   fontWeight: 600,
-  textTransform: 'uppercase',
-  letterSpacing: '0.5px',
+  textTransform: 'none',
+  letterSpacing: 0,
 };
 
 const modalBackdrop: React.CSSProperties = {
@@ -543,12 +543,12 @@ function typeChip(type: string): React.CSSProperties {
   };
   const tone = palette[type] || { background: 'var(--bg-alt)', color: 'var(--ink-2)' };
   return {
-    fontSize: 10,
+    fontSize: 11,
     padding: '3px 8px',
     background: tone.background,
     color: tone.color,
     fontWeight: 600,
-    letterSpacing: '0.5px',
+    letterSpacing: 0,
     whiteSpace: 'nowrap',
   };
 }

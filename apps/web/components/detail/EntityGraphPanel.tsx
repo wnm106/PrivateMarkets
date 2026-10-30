@@ -144,7 +144,7 @@ export function EntityGraphPanel({ entityId }: { entityId: string }) {
               if (members.length === 0) return null;
               return (
                 <div key={group.key} style={{ marginBottom: 14 }}>
-                  <div style={{ fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>{group.title}</div>
+                  <div style={{ fontSize: 11, letterSpacing: '0.04em', textTransform: 'none', color: 'var(--ink-3)', marginBottom: 6 }}>{group.title}</div>
                   {members.map((node) => (
                     <div key={node.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
                       <button
@@ -162,7 +162,7 @@ export function EntityGraphPanel({ entityId }: { entityId: string }) {
             })}
           </div>
           <div>
-            <div style={{ fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Edges</div>
+            <div style={{ fontSize: 11, letterSpacing: '0.04em', textTransform: 'none', color: 'var(--ink-3)', marginBottom: 6 }}>Edges</div>
             {edges.map((edge) => {
               const parent = byId.get(edge.parentEntityId);
               const child = byId.get(edge.childEntityId);

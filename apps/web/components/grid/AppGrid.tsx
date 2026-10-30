@@ -46,19 +46,19 @@ ModuleRegistry.registerModules([AllEnterpriseModule]);
 /** Quartz theme tuned to the tapestr.ai palette. Enterprise runs as a trial until a license key is set. */
 export const appGridTheme = themeQuartz.withParams({
   fontFamily: 'inherit',
-  fontSize: 13,
-  headerFontSize: 12,
+  fontSize: 12.5,
+  headerFontSize: 11,
   headerFontWeight: 600,
   backgroundColor: '#ffffff',
-  foregroundColor: '#0a1628',
-  headerBackgroundColor: '#f7f9fc',
-  headerTextColor: '#566a88',
-  borderColor: '#dde6f1',
-  rowHoverColor: '#eef5fc',
-  accentColor: '#1a8cff',
-  selectedRowBackgroundColor: '#e8f3ff',
-  spacing: 6,
-  wrapperBorderRadius: 6,
+  foregroundColor: '#0f172a',
+  headerBackgroundColor: '#f8fafc',
+  headerTextColor: '#6b7280',
+  borderColor: '#e2e8f0',
+  rowHoverColor: '#f1f5f9',
+  accentColor: '#0e7490',
+  selectedRowBackgroundColor: '#e0f2f7',
+  spacing: 5,
+  wrapperBorderRadius: 4,
 });
 
 export interface GridStore<T> {
@@ -137,6 +137,8 @@ export interface AppGridProps<T> {
   pinnedTopRowData?: T[];
   isFullWidthRow?: IsFullWidthRow<T>;
   fullWidthCellRenderer?: any;
+  /** Keep full-width rows at the grid width so they do not stretch with the columns. */
+  embedFullWidthRows?: boolean;
   getRowHeight?: (params: RowHeightParams<T>) => number | undefined | null;
   /** Changing this asks the grid to remeasure row heights. */
   layoutKey?: string | number;
@@ -170,6 +172,7 @@ export function AppGrid<T>({
   pinnedTopRowData,
   isFullWidthRow,
   fullWidthCellRenderer,
+  embedFullWidthRows,
   getRowHeight,
   layoutKey,
 }: AppGridProps<T>) {
@@ -247,6 +250,7 @@ export function AppGrid<T>({
         pinnedTopRowData={pinnedTopRowData}
         isFullWidthRow={isFullWidthRow}
         fullWidthCellRenderer={fullWidthCellRenderer}
+        embedFullWidthRows={embedFullWidthRows}
         getRowHeight={getRowHeight}
         popupParent={popupParent}
         enableCellTextSelection

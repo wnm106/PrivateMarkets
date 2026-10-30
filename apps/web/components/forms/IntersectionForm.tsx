@@ -155,12 +155,12 @@ export function IntersectionForm({ intersectionTypeCode, onSubmit, onCancel }: I
   return (
     <div>
       <div style={{ marginBottom: '20px', padding: '12px 16px', background: 'var(--bg-2, #f5f5f5)', borderRadius: '6px' }}>
-        <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '4px' }}>Creating</div>
+        <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '4px' }}>Creating</div>
         <div style={{ fontSize: '14px', fontWeight: 600 }}>{intersectionType.intersectionName}</div>
         {intersectionType.description && <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginTop: '4px' }}>{intersectionType.description}</div>}
       </div>
 
-      <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
+      <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
         Select Constituent Entities
       </div>
 
@@ -177,7 +177,7 @@ export function IntersectionForm({ intersectionTypeCode, onSubmit, onCancel }: I
                 <div>
                   <span style={{ fontSize: '13px', fontWeight: 600 }}>{member.memberRole}</span>
                   <span style={{ fontSize: '11px', color: 'var(--ink-3)', marginLeft: '8px' }}>({member.domainCode})</span>
-                  {member.isRequired && <span style={{ fontSize: '10px', color: 'var(--red)', marginLeft: '8px', fontWeight: 600 }}>REQUIRED</span>}
+                  {member.isRequired && <span style={{ fontSize: '11px', color: 'var(--red)', marginLeft: '8px', fontWeight: 600 }}>REQUIRED</span>}
                 </div>
                 {selected && <button type="button" onClick={() => handleRemoveMember(member.memberRole)} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: '12px' }}>Remove</button>}
               </div>
@@ -211,7 +211,7 @@ export function IntersectionForm({ intersectionTypeCode, onSubmit, onCancel }: I
 
       {Object.keys(selectedMembers).length > 0 && (
         <div style={{ marginTop: '16px', padding: '12px', background: 'var(--bg-2, #f5f5f5)', borderRadius: '6px' }}>
-          <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '6px' }}>Generated Intersection Code</div>
+          <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '6px' }}>Generated Intersection Code</div>
           <div style={{ fontSize: '14px', fontFamily: 'monospace', fontWeight: 600 }}>{generateIntersectionCode()}</div>
         </div>
       )}

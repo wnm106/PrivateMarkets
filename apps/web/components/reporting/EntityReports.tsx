@@ -81,7 +81,7 @@ export function EntityReports({ domainCode, entityId, asOfDate, embedded = false
   return (
     <div style={{ marginTop: embedded ? 0 : '28px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', marginRight: '8px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', marginRight: '8px' }}>
           Dashboards &amp; Narratives
         </div>
         {dashboards.map((d) => (

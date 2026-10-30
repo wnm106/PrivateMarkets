@@ -117,7 +117,7 @@ function AggregationCell(props: any) {
           )}
         </span>
         {row.aggregationType === 'WEIGHTED_AVG' && row.weightAttributeCode && (
-          <span style={{ fontSize: '10px', color: '#6b7280' }}>
+          <span style={{ fontSize: '11px', color: '#6b7280' }}>
             weight: <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: '2px' }}>{row.weightAttributeCode}</code>
           </span>
         )}
@@ -249,17 +249,17 @@ function ListValuesCell(props: any) {
                   padding: '1px 6px',
                   background: '#f3f4f6',
                   border: '1px solid #e5e7eb',
-                  fontSize: '10px',
+                  fontSize: '11px',
                   borderRadius: '2px',
                   color: '#374151',
                 }}>{value}</span>
               ))}
               {row.listValues.length > 3 && (
-                <span style={{ fontSize: '10px', color: '#9ca3af' }}>+{row.listValues.length - 3} more</span>
+                <span style={{ fontSize: '11px', color: '#9ca3af' }}>+{row.listValues.length - 3} more</span>
               )}
             </div>
             {row.isMultiValued && (
-              <span style={{ fontSize: '9px', color: '#6366f1', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              <span style={{ fontSize: '11px', color: '#6366f1', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>
                 Multi-select
               </span>
             )}
@@ -283,7 +283,7 @@ function ListValuesCell(props: any) {
             padding: '3px 6px 3px 8px',
             background: '#eff6ff',
             border: '1px solid #bfdbfe',
-            color: '#1e40af',
+            color: '#00334e',
             fontSize: '11px',
             borderRadius: '3px',
             fontWeight: 500,

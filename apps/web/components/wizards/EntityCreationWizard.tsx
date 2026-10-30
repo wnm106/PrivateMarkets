@@ -336,7 +336,7 @@ export function EntityCreationWizard({ domain }: EntityCreationWizardProps) {
                         />
                       )}
                       {attr?.unitOfMeasure && (
-                        <span style={{ fontSize: '10px', color: 'var(--ink-3)', marginTop: '2px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '2px' }}>
                           Unit: {attr.unitOfMeasure}
                         </span>
                       )}
@@ -460,7 +460,7 @@ export function EntityCreationWizard({ domain }: EntityCreationWizardProps) {
           </div>
           <div className="builder-body">
             <div style={{ background: 'var(--bg)', border: '1px solid var(--line)', padding: '18px', marginBottom: '18px' }}>
-              <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '12px' }}>
+              <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '12px' }}>
                 Basic Information
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '8px', fontSize: '12px' }}>
@@ -477,7 +477,7 @@ export function EntityCreationWizard({ domain }: EntityCreationWizardProps) {
 
             {Object.keys(formData.attributes).length > 0 && (
               <div style={{ background: 'var(--bg)', border: '1px solid var(--line)', padding: '18px', marginBottom: '18px' }}>
-                <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '12px' }}>
+                <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '12px' }}>
                   Template Attributes
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '8px', fontSize: '12px' }}>
@@ -493,7 +493,7 @@ export function EntityCreationWizard({ domain }: EntityCreationWizardProps) {
 
             {formData.sources.length > 0 && (
               <div style={{ background: 'var(--bg)', border: '1px solid var(--line)', padding: '18px' }}>
-                <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '12px' }}>
+                <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '12px' }}>
                   Assigned Sources ({formData.sources.length})
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>

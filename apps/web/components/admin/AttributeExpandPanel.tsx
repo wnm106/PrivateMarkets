@@ -9,6 +9,7 @@ import {
   UPDATE_ATTRIBUTE_PRECEDENCE_MUTATION,
 } from '@/lib/graphql';
 import { CalculationWorkspace, type CalculationSpec } from '@/components/admin/CalcExpressionEditor';
+import { ATTRIBUTE_GRID_COLUMNS, ATTRIBUTE_GRID_MAX_ROWS, clampAttributeSpan } from '@/lib/attribute-layout';
 
 const NUMERIC_DATA_TYPES = ['NUMBER', 'INTEGER', 'DECIMAL', 'FLOAT', 'CURRENCY', 'PERCENTAGE', 'PERCENT'];
 const VALID_DATA_TYPES = [
@@ -32,6 +33,9 @@ export interface ExpandableAttribute {
   defaultValue?: string;
   displaySection?: string;
   displayGroup?: number;
+  displaySpanColumns?: number | null;
+  displaySpanRows?: number | null;
+  isDerived?: boolean;
   isEditable?: boolean;
   isVisible?: boolean;
   aggregationType?: string;
@@ -51,15 +55,18 @@ export function AttributeExpandPanel({
   attribute,
   weightAttributes,
   referenceLists,
+  sectionNames = [],
   onSaved,
   onCancel,
 }: {
   attribute: ExpandableAttribute;
   weightAttributes: ExpandableAttribute[];
   referenceLists: ReferenceListOpt[];
+  sectionNames?: string[];
   onSaved: () => void;
   onCancel: () => void;
 }) {
+  const initialSpan = clampAttributeSpan(attribute.displaySpanColumns, attribute.displaySpanRows);
   const [form, setForm] = useState({
     attributeName: attribute.attributeName || '',
     dataType: attribute.dataType || 'STRING',
@@ -69,6 +76,8 @@ export function AttributeExpandPanel({
     isMultiValued: attribute.isMultiValued || false,
     defaultValue: attribute.defaultValue || '',
     displaySection: attribute.displaySection || 'General',
+    displaySpanColumns: initialSpan.columns,
+    displaySpanRows: initialSpan.rows,
     isEditable: attribute.isEditable ?? true,
     isVisible: attribute.isVisible ?? true,
     aggregationType: attribute.aggregationType || 'NONE',
@@ -139,6 +148,8 @@ export function AttributeExpandPanel({
           isMultiValued: form.isMultiValued,
           defaultValue: form.defaultValue || null,
           displaySection: form.displaySection || 'General',
+          displaySpanColumns: form.displaySpanColumns,
+          displaySpanRows: form.displaySpanRows,
           isEditable: form.isEditable,
           isVisible: form.isVisible,
           aggregationType: form.aggregationType || 'NONE',
@@ -180,89 +191,105 @@ export function AttributeExpandPanel({
     });
   };
 
-  const fieldStyle = { width: '100%', padding: '8px', border: '1px solid var(--ink-4)', borderRadius: '4px', fontSize: '14px', background: 'white' };
+  const sectionOptions = sectionNames.some((name) => name.toLowerCase() === form.displaySection.toLowerCase())
+    ? sectionNames
+    : [form.displaySection, ...sectionNames];
 
   return (
-    <div style={{ padding: '4px 4px 8px', display: 'grid', gap: '14px' }} onClick={(event) => event.stopPropagation()}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-        <label style={{ fontSize: '13px', fontWeight: 500 }}>
-          Attribute name
-          <input style={{ ...fieldStyle, marginTop: '4px' }} value={form.attributeName} onChange={(e) => setForm({ ...form, attributeName: e.target.value })} />
-        </label>
-        <label style={{ fontSize: '13px', fontWeight: 500 }}>
-          Data type
-          <select style={{ ...fieldStyle, marginTop: '4px' }} value={form.dataType} onChange={(e) => setForm({ ...form, dataType: e.target.value })}>
-            {VALID_DATA_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-          </select>
-        </label>
-      </div>
-      <label style={{ fontSize: '13px', fontWeight: 500 }}>
-        Description
-        <textarea style={{ ...fieldStyle, marginTop: '4px', minHeight: '56px' }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+    <div className="attribute-editor-body" onClick={(event) => event.stopPropagation()}>
+      <label className="span-2">
+        Attribute name
+        <input className="text-input" value={form.attributeName} onChange={(e) => setForm({ ...form, attributeName: e.target.value })} />
       </label>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-        <label style={{ fontSize: '13px', fontWeight: 500 }}>
-          Unit of measure
-          <input style={{ ...fieldStyle, marginTop: '4px' }} value={form.unitOfMeasure} onChange={(e) => setForm({ ...form, unitOfMeasure: e.target.value })} placeholder="USD, %, bps" />
-        </label>
-        <label style={{ fontSize: '13px', fontWeight: 500 }}>
-          Display format
-          <input style={{ ...fieldStyle, marginTop: '4px' }} value={form.displayFormat} onChange={(e) => setForm({ ...form, displayFormat: e.target.value })} placeholder="currency, date" />
-        </label>
-        <label style={{ fontSize: '13px', fontWeight: 500 }}>
-          Default value
-          <input style={{ ...fieldStyle, marginTop: '4px' }} value={form.defaultValue} onChange={(e) => setForm({ ...form, defaultValue: e.target.value })} />
-        </label>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-        <label style={{ fontSize: '13px', fontWeight: 500 }}>
-          Display section
-          <input style={{ ...fieldStyle, marginTop: '4px' }} value={form.displaySection} onChange={(e) => setForm({ ...form, displaySection: e.target.value })} placeholder="General, Pricing, Details" />
-        </label>
-        <label style={{ fontSize: '13px', fontWeight: 500 }}>
-          Numeric precision
-          <input
-            style={{ ...fieldStyle, marginTop: '4px' }}
-            type="number"
-            value={form.numericPrecision ?? ''}
-            onChange={(e) => setForm({ ...form, numericPrecision: e.target.value ? parseInt(e.target.value, 10) : undefined })}
-            placeholder="2"
-          />
-        </label>
-      </div>
-      <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', fontSize: '13px' }}>
+      <label>
+        Data type
+        <select className="text-input" value={form.dataType} onChange={(e) => setForm({ ...form, dataType: e.target.value })}>
+          {VALID_DATA_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+        </select>
+      </label>
+      <label>
+        Display section
+        {sectionNames.length > 0 ? (
+          <select className="text-input" value={form.displaySection} onChange={(e) => setForm({ ...form, displaySection: e.target.value })}>
+            {sectionOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        ) : (
+          <input className="text-input" value={form.displaySection} onChange={(e) => setForm({ ...form, displaySection: e.target.value })} placeholder="General" />
+        )}
+      </label>
+      <label className="span-4">
+        Description
+        <input className="text-input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+      </label>
+      <label>
+        Unit of measure
+        <input className="text-input" value={form.unitOfMeasure} onChange={(e) => setForm({ ...form, unitOfMeasure: e.target.value })} placeholder="USD, %, bps" />
+      </label>
+      <label>
+        Display format
+        <input className="text-input" value={form.displayFormat} onChange={(e) => setForm({ ...form, displayFormat: e.target.value })} placeholder="currency, date" />
+      </label>
+      <label>
+        Default value
+        <input className="text-input" value={form.defaultValue} onChange={(e) => setForm({ ...form, defaultValue: e.target.value })} />
+      </label>
+      <label>
+        Numeric precision
+        <input
+          className="text-input"
+          type="number"
+          value={form.numericPrecision ?? ''}
+          onChange={(e) => setForm({ ...form, numericPrecision: e.target.value ? parseInt(e.target.value, 10) : undefined })}
+          placeholder="2"
+        />
+      </label>
+      <label>
+        Width
+        <select className="text-input" value={form.displaySpanColumns} onChange={(e) => setForm({ ...form, displaySpanColumns: Number(e.target.value) })}>
+          {Array.from({ length: ATTRIBUTE_GRID_COLUMNS }, (_, index) => index + 1).map((size) => (
+            <option key={size} value={size}>{size} {size === 1 ? 'column' : 'columns'}</option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Height
+        <select className="text-input" value={form.displaySpanRows} onChange={(e) => setForm({ ...form, displaySpanRows: Number(e.target.value) })}>
+          {Array.from({ length: ATTRIBUTE_GRID_MAX_ROWS }, (_, index) => index + 1).map((size) => (
+            <option key={size} value={size}>{size} {size === 1 ? 'row' : 'rows'}</option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Reference list
+        <select
+          className="text-input"
+          value={form.referenceListCode}
+          onChange={(e) => setForm({ ...form, referenceListCode: e.target.value, dataType: e.target.value ? 'REFERENCE_LIST' : form.dataType })}
+        >
+          <option value="">None</option>
+          {referenceLists.map((list) => <option key={list.listCode} value={list.listCode}>{list.listName}</option>)}
+        </select>
+      </label>
+      <label>
+        Aggregation
+        <select className="text-input" value={form.aggregationType} onChange={(e) => setForm({ ...form, aggregationType: e.target.value })}>
+          <option value="NONE">None</option>
+          <option value="MIN">Min</option>
+          <option value="MAX">Max</option>
+          <option value="SUM">Sum</option>
+          <option value="AVG">Average</option>
+          <option value="WEIGHTED_AVG">Weighted average</option>
+        </select>
+      </label>
+      <div className="span-4 attribute-editor-flags">
         <label><input type="checkbox" checked={form.isMultiValued} onChange={(e) => setForm({ ...form, isMultiValued: e.target.checked })} /> Multi-valued</label>
         <label><input type="checkbox" checked={form.isEditable} onChange={(e) => setForm({ ...form, isEditable: e.target.checked })} /> Editable</label>
         <label><input type="checkbox" checked={form.isVisible} onChange={(e) => setForm({ ...form, isVisible: e.target.checked })} /> Visible</label>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-        <label style={{ fontSize: '13px', fontWeight: 500 }}>
-          Reference list
-          <select
-            style={{ ...fieldStyle, marginTop: '4px' }}
-            value={form.referenceListCode}
-            onChange={(e) => setForm({ ...form, referenceListCode: e.target.value, dataType: e.target.value ? 'REFERENCE_LIST' : form.dataType })}
-          >
-            <option value="">None</option>
-            {referenceLists.map((list) => <option key={list.listCode} value={list.listCode}>{list.listName}</option>)}
-          </select>
-        </label>
-        <label style={{ fontSize: '13px', fontWeight: 500 }}>
-          Aggregation
-          <select style={{ ...fieldStyle, marginTop: '4px' }} value={form.aggregationType} onChange={(e) => setForm({ ...form, aggregationType: e.target.value })}>
-            <option value="NONE">None</option>
-            <option value="MIN">Min</option>
-            <option value="MAX">Max</option>
-            <option value="SUM">Sum</option>
-            <option value="AVG">Average</option>
-            <option value="WEIGHTED_AVG">Weighted average</option>
-          </select>
-        </label>
-      </div>
       {form.aggregationType === 'WEIGHTED_AVG' && (
-        <label style={{ fontSize: '13px', fontWeight: 500 }}>
+        <label className="span-2">
           Weight attribute
-          <select style={{ ...fieldStyle, marginTop: '4px' }} value={form.weightAttributeCode} onChange={(e) => setForm({ ...form, weightAttributeCode: e.target.value })}>
+          <select className="text-input" value={form.weightAttributeCode} onChange={(e) => setForm({ ...form, weightAttributeCode: e.target.value })}>
             <option value="">Select a numeric attribute</option>
             {weightAttributes.filter((item) => NUMERIC_DATA_TYPES.includes(item.dataType)).map((item) => (
               <option key={item.id} value={item.attributeCode}>{item.attributeName}</option>
@@ -270,7 +297,7 @@ export function AttributeExpandPanel({
           </select>
         </label>
       )}
-      <div style={{ borderTop: '1px solid var(--line)', paddingTop: '14px' }}>
+      <div className="span-4 attribute-editor-block">
         <div style={{ fontWeight: 600, fontSize: '13px' }}>Calculation</div>
         {calculation ? (
           <CalculationWorkspace spec={calculation} onSaved={setCalculation} />
@@ -281,7 +308,7 @@ export function AttributeExpandPanel({
         )}
       </div>
 
-      <div style={{ borderTop: '1px solid var(--line)', paddingTop: '14px' }}>
+      <div className="span-4 attribute-editor-block">
         <div style={{ fontWeight: 600, fontSize: '13px' }}>Global source sequence</div>
         <div style={{ fontSize: '12px', color: 'var(--ink-3)', margin: '4px 0 10px' }}>
           This order is the default for every template. A template uses it until that template sets its own override. Manual override always stays first.
@@ -312,7 +339,7 @@ export function AttributeExpandPanel({
           ))}
         </div>
       </div>
-      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+      <div className="span-4" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
         <button className="btn btn-primary" type="button" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
         <button className="btn" type="button" onClick={onCancel} disabled={saving}>Close</button>
         {message && <span style={{ fontSize: '12px', color: 'var(--ink-2)' }}>{message}</span>}
@@ -349,13 +376,13 @@ function SequenceChip({
     }}>
       {!pinned && (
         <span style={{ display: 'flex', gap: '2px' }}>
-          {onUp && <button type="button" className="btn" style={{ fontSize: '10px', padding: '0 4px' }} onClick={onUp}>↑</button>}
-          {onDown && <button type="button" className="btn" style={{ fontSize: '10px', padding: '0 4px' }} onClick={onDown}>↓</button>}
-          {onRemove && <button type="button" className="btn" style={{ fontSize: '10px', padding: '0 4px', color: 'var(--red)' }} onClick={onRemove}>×</button>}
+          {onUp && <button type="button" className="btn" style={{ fontSize: '11px', padding: '0 4px' }} onClick={onUp}>↑</button>}
+          {onDown && <button type="button" className="btn" style={{ fontSize: '11px', padding: '0 4px' }} onClick={onDown}>↓</button>}
+          {onRemove && <button type="button" className="btn" style={{ fontSize: '11px', padding: '0 4px', color: 'var(--red)' }} onClick={onRemove}>×</button>}
         </span>
       )}
       <span style={{ fontSize: '12px', fontWeight: 600 }}>{label}</span>
-      <span style={{ fontSize: '9px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>{hint}</span>
+      <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none' }}>{hint}</span>
     </div>
   );
 }

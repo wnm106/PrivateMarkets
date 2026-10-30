@@ -134,7 +134,7 @@ export default function ListsPage() {
                   </div>
                 </div>
                 {list.domainCode ? (
-                  <span className="src-tag" style={{ fontSize: '10px' }}>
+                  <span className="src-tag" style={{ fontSize: '11px' }}>
                     {list.domainCode}
                   </span>
                 ) : (
@@ -161,9 +161,9 @@ export default function ListsPage() {
                   <div
                     style={{
                       color: 'var(--ink-3)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.7px',
-                      fontSize: '9px',
+                      textTransform: 'none',
+                      letterSpacing: 0,
+                      fontSize: '11px',
                       marginBottom: '3px',
                     }}
                   >
@@ -177,9 +177,9 @@ export default function ListsPage() {
                   <div
                     style={{
                       color: 'var(--ink-3)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.7px',
-                      fontSize: '9px',
+                      textTransform: 'none',
+                      letterSpacing: 0,
+                      fontSize: '11px',
                       marginBottom: '3px',
                     }}
                   >

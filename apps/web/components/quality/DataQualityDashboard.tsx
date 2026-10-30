@@ -219,6 +219,11 @@ function formatDay(iso: string) {
   return parseIso(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function domainLabel(code?: string | null) {
+  if (!code) return '—';
+  return code.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function formatPercent(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) return '—';
   if (value > 0 && value < 100 && value >= 99.95) return '99.9%';
@@ -539,32 +544,43 @@ export function DataQualityDashboard({
     : knownDomains;
 
   return (
-    <div className="view-fade">
+    <div className="view-fade da">
       {!embedded && (
-        <div className="crumbs">
-          <Link href="/" className="crumb-link">Home</Link>
-          <span className="sep">›</span>
-          <span className="crumb-current">Data Quality</span>
+        <div className="da-crumbs">
+          <Link href="/">Home</Link>
+          <span>/</span>
+          <strong>Data quality</strong>
         </div>
       )}
 
-      <div className="page-header">
-        <div>
-          <div className="page-title">Data Quality</div>
-          <div className="page-meta">
+      <header className="da-ribbon">
+        <div className="da-title">
+          <span className="da-chip">{entityId ? 'Record' : 'Book'}</span>
+          <h1>Data quality</h1>
+          <p>
             {entityId
-              ? 'Availability, rule results, and how those measures moved for this record. Overrides that now match a priority source can be cleared.'
-              : 'Availability, rule results, and how those measures moved since the prior date. Overrides that now match a priority source can be cleared.'}
-          </div>
+              ? 'Availability, rule results, and how those measures moved for this record.'
+              : 'Availability, rule results, and how those measures moved since the prior date.'}
+          </p>
         </div>
+        <div className="da-facts">
+          <div className="da-fact big"><span>Availability</span><strong>{loading && !summary ? '—' : formatPercent(summary?.availabilityPercent)}</strong></div>
+          <div className="da-fact"><span>Quality</span><strong>{loading && !summary ? '—' : formatPercent(summary?.qualityPercent)}</strong></div>
+          <div className="da-fact"><span>Failing checks</span><strong>{summary ? summary.failingChecks.toLocaleString() : '—'}</strong></div>
+        </div>
+        <div className="da-holdbox">
+          <div className="da-holdtop"><span>Required values populated</span><b>{loading && !summary ? '—' : formatPercent(summary?.availabilityPercent)}</b></div>
+          <div className="da-bar"><i style={{ width: `${Math.min(100, summary?.availabilityPercent ?? 0)}%` }} /></div>
+          <p>{summary ? `${summary.populatedSlots.toLocaleString()} of ${summary.requiredSlots.toLocaleString()} required values.` : 'Loading required values.'}</p>
+        </div>
+      </header>
+      <div className="da-sechead">
+        <p>{comparing ? `Comparing ${formatDay(fromDate)} to ${formatDay(toDate)}` : `As of ${formatDay(toDate)}`}</p>
         <div className="page-actions">
           {(loading || comparing) && (
             <div className="dq-refreshing" role="status" aria-live="polite">
               <RefreshMark />
-              <span>
-                {comparing ? `Comparing ${formatDay(fromDate)} to ${formatDay(toDate)}` : `Refreshing as of ${formatDay(toDate)}`}
-                {knownAt ? `, known ${new Date(knownAt).toLocaleString()}` : ''}
-              </span>
+              <span>{comparing ? 'Comparing' : 'Refreshing'}</span>
             </div>
           )}
           <Link href="/admin/dq-rules" className="btn">Rules</Link>
@@ -578,7 +594,7 @@ export function DataQualityDashboard({
             <select id="dq-domain" className="select" value={domainCode} disabled={Boolean(fixedDomain)} onChange={(event) => setDomainCode(event.target.value)}>
               {!fixedDomain && <option value="">All domains</option>}
               {domainOptions.map((domain) => (
-                <option key={domain} value={domain}>{domain}</option>
+                <option key={domain} value={domain}>{domainLabel(domain)}</option>
               ))}
             </select>
           </div>
@@ -760,9 +776,9 @@ export function DataQualityDashboard({
                   <span>{open ? '▾' : '▸'}</span>
                   <span className="dq-name">
                     {row.attributeName}
-                    <span className="dq-sub">{row.attributeCode}{comparing ? ' · comparing' : ''}</span>
+                    {comparing && <span className="dq-sub">Comparing the prior date</span>}
                   </span>
-                  <span>{row.domainCode || '—'}</span>
+                  <span>{domainLabel(row.domainCode)}</span>
                   <span className="dq-num">{row.requiredCount.toLocaleString()}</span>
                   <span className="dq-num" style={{ color: row.missingCount ? 'var(--red)' : 'var(--green)' }}>{row.missingCount.toLocaleString()}</span>
                   <DirectionMark up={row.resolvedCount} down={row.introducedCount} pending={comparing} upLabel="filled in" downLabel="now missing" />
@@ -841,10 +857,10 @@ export function DataQualityDashboard({
                   <span>{open ? '▾' : '▸'}</span>
                   <span className="dq-name">
                     {rule.ruleName}
-                    <span className="dq-sub">{rule.ruleCode} · {rule.ruleType}{comparing ? ' · comparing' : ''}</span>
+                    {comparing && <span className="dq-sub">Comparing the prior date</span>}
                   </span>
                   <span><span className={`sev-dot ${severityClass(rule.severity)}`} />{rule.severity}</span>
-                  <span>{rule.domainCode || 'All'}</span>
+                  <span>{rule.domainCode ? domainLabel(rule.domainCode) : 'All'}</span>
                   <span className="dq-num">{rule.entityCount.toLocaleString()}</span>
                   <span className="dq-num" style={{ color: rule.failingCount ? 'var(--red)' : 'var(--green)' }}>
                     {rule.evaluated ? rule.failingCount.toLocaleString() : '—'}
@@ -871,7 +887,6 @@ export function DataQualityDashboard({
                             entityId={entity.id}
                             ruleId={rule.ruleId}
                             ruleName={entity.entityName}
-                            ruleCode={`${entity.entityCode} · ${entity.domainCode}`}
                             severity={rule.severity}
                             attributeCode={entity.attributeCode || rule.attributeCode}
                             actualValue={entity.actualValue}
@@ -884,7 +899,7 @@ export function DataQualityDashboard({
                           <div className="ex-grid ex-row" key={entity.id}>
                             <div>
                               <Link href={entityHref(entity.domainCode, entity.id)} className="ex-rule">{entity.entityName}</Link>
-                              <div className="dq-sub">{entity.entityCode} · {entity.status === 'FALSE_POSITIVE' ? 'Not an issue' : 'Waived'}</div>
+                              <div className="dq-sub">{entity.status === 'FALSE_POSITIVE' ? 'Not an issue' : 'Waived'}</div>
                             </div>
                             <div className="dq-sub">{entity.notes || '—'}</div>
                             <div>
@@ -943,9 +958,8 @@ export function DataQualityDashboard({
                   <span>{open ? '▾' : '▸'}</span>
                   <span className="dq-name">
                     {row.attributeName}
-                    <span className="dq-sub">{row.attributeCode}</span>
                   </span>
-                  <span>{row.domainCode || '—'}</span>
+                  <span>{domainLabel(row.domainCode)}</span>
                   <span className="dq-num">{row.changeCount.toLocaleString()}</span>
                   <ValueDirection changes={row.changes} />
                 </button>
@@ -1007,7 +1021,6 @@ export function DataQualityDashboard({
                   <span>{open ? '▾' : '▸'}</span>
                   <span className="dq-name">
                     {group.attributeName}
-                    <span className="dq-sub">{group.attributeCode}</span>
                   </span>
                   <span className="dq-num">
                     {group.matches.length.toLocaleString()}
@@ -1096,7 +1109,6 @@ export function DataQualityDashboard({
                   <span>{open ? '▾' : '▸'}</span>
                   <span className="dq-name">
                     {group.attributeName}
-                    <span className="dq-sub">{group.attributeCode}</span>
                   </span>
                   <span className="dq-num">{group.rows.length.toLocaleString()}</span>
                   <span className="dq-num">{oldestAge(group.rows)}d</span>
@@ -1169,7 +1181,6 @@ export function DataQualityDashboard({
                   <span>{open ? '▾' : '▸'}</span>
                   <span className="dq-name">
                     {entity.entityName}
-                    <span className="dq-sub">{entity.entityCode} · {entity.domainCode}</span>
                   </span>
                   <span className="dq-num">{entity.rows.length.toLocaleString()}</span>
                   <span className="dq-num">{oldestAge(entity.rows)}d</span>
@@ -1256,9 +1267,8 @@ export function DataQualityDashboard({
                   <span>{open ? '▾' : '▸'}</span>
                   <span className="dq-name">
                     {entity.entityName}
-                    <span className="dq-sub">{entity.entityCode}</span>
                   </span>
-                  <span>{entity.domainCode}</span>
+                  <span>{domainLabel(entity.domainCode)}</span>
                   {section === 'handoff' && (
                     <span className="dq-num">
                       {(handoffScope === 'all' ? entity.overrideCount : entity.overrideMatchCount).toLocaleString()}
@@ -1278,11 +1288,10 @@ export function DataQualityDashboard({
                         <div>
                           <strong>{match.attributeName}</strong>
                           <span className="dq-sub">
-                            {match.attributeCode}
-                            {handoffScope === 'all' ? ` · ${handoffStatusLabel(match)}` : ''}
-                            {match.prioritySourceCode
-                              ? ` · ${match.prioritySourceName} (${match.prioritySourceCode}) has ${displayValue(match.priorityValue)}`
-                              : ' · no other source'}
+                            {handoffScope === 'all' ? `${handoffStatusLabel(match)} · ` : ''}
+                            {match.prioritySourceName
+                              ? `${match.prioritySourceName} has ${displayValue(match.priorityValue)}`
+                              : 'No other source'}
                             {handoffScope === 'all' ? ` · override ${displayValue(match.overrideValue)}` : ''}
                           </span>
                         </div>
@@ -1312,7 +1321,6 @@ export function DataQualityDashboard({
                       <div className="dq-check" key={attribute.attributeCode}>
                         <div>
                           <div className="dq-check-name">{attribute.attributeName}</div>
-                          <div className="dq-sub">{attribute.attributeCode}</div>
                         </div>
                         <ResolveForm
                           entityId={entity.id}
@@ -1424,7 +1432,6 @@ function StaleTable({
         cellRenderer: (params: any) => (
           <div>
             <Link href={entityHref(params.data.domainCode, params.data.entityId)}>{params.data.entityName}</Link>
-            <div className="dq-sub">{params.data.entityCode} · {params.data.domainCode}</div>
           </div>
         ),
       });
@@ -1436,7 +1443,7 @@ function StaleTable({
         flex: 1.2,
         minWidth: 160,
         valueGetter: (params) => params.data?.attributeName || '',
-        cellRenderer: (params: any) => <div>{params.data.attributeName}<div className="dq-sub">{params.data.attributeCode}</div></div>,
+        cellRenderer: (params: any) => <div>{params.data.attributeName}</div>,
       });
     }
     defs.push(
@@ -1610,7 +1617,6 @@ function ShiftTables({
             cellRenderer: (params: any) => (
               <div>
                 <Link href={entityHref(params.data.domainCode, params.data.id)}>{params.data.entityName}</Link>
-                <div className="dq-sub">{params.data.entityCode}</div>
               </div>
             ),
           },
@@ -1692,15 +1698,13 @@ function HandoffMatch({
         {showStatus && <span className={handoffStatusClass(match)}>{handoffStatusLabel(match)}</span>}
         <span className="dq-name">
           <Link href={entityHref(match.domainCode, match.id)} onClick={(event) => event.stopPropagation()}>{match.entityName}</Link>
-          <span className="dq-sub">{match.entityCode} · {match.domainCode}</span>
         </span>
         <span className="dq-name">
           {match.attributeName}
-          <span className="dq-sub">{match.attributeCode}{match.overrideReason ? ` · ${match.overrideReason}` : ''}</span>
+          {match.overrideReason && <span className="dq-sub">{match.overrideReason}</span>}
         </span>
         <span>
           {match.prioritySourceName || 'No other source'}
-          {match.prioritySourceCode && <span className="dq-sub">{match.prioritySourceCode}</span>}
         </span>
         <span className="dq-num" title={displayValue(showStatus ? match.overrideValue : match.priorityValue)}>{displayValue(showStatus ? match.overrideValue : match.priorityValue)}</span>
         {showStatus && <span className="dq-num" title={displayValue(match.priorityValue)}>{displayValue(match.priorityValue)}</span>}
@@ -1895,7 +1899,6 @@ function ExceptionBoard({ entity, asOf, onDone }: { entity: QualityEntity; asOf:
       <div className="ex-head">
         <div>
           <div className="ex-title">{entity.entityName}</div>
-          <div className="dq-sub">{entity.entityCode} · {entity.domainCode}</div>
         </div>
         <div className="ex-pills">
           <span className="ex-pill critical">{critical} critical</span>
@@ -1925,7 +1928,6 @@ function ExceptionBoard({ entity, asOf, onDone }: { entity: QualityEntity; asOf:
           entityId={entity.id}
           ruleId={rule.ruleId}
           ruleName={rule.ruleName}
-          ruleCode={rule.ruleCode}
           severity={rule.severity}
           attributeCode={rule.attributeCode}
           actualValue={rule.actualValue}
@@ -1938,7 +1940,6 @@ function ExceptionBoard({ entity, asOf, onDone }: { entity: QualityEntity; asOf:
           <div>
             <span className={`sev-dot ${isCritical(rule.severity) ? 'sev-high' : 'sev-med'}`} />
             <span className="ex-rule">{rule.ruleName}</span>
-            <div className="dq-sub">{rule.ruleCode}</div>
           </div>
           <div>
             <div className="dq-sub">{rule.status === 'FALSE_POSITIVE' ? 'Not an issue' : 'Waived'}</div>
@@ -1964,11 +1965,10 @@ async function reopenRule(entityId: string, ruleId: string, asOf: string, onDone
   onDone();
 }
 
-function ExceptionRow({ entityId, ruleId, ruleName, ruleCode, severity, attributeCode, actualValue, asOf, href, onDone }: {
+function ExceptionRow({ entityId, ruleId, ruleName, severity, attributeCode, actualValue, asOf, href, onDone }: {
   entityId: string;
   ruleId: string;
   ruleName: string;
-  ruleCode: string;
   severity: string;
   attributeCode: string | null;
   actualValue: string | null;
@@ -2040,7 +2040,6 @@ function ExceptionRow({ entityId, ruleId, ruleName, ruleCode, severity, attribut
       <div>
         <span className={`sev-dot ${isCritical(severity) ? 'sev-high' : 'sev-med'}`} />
         {href ? <Link href={href} className="ex-rule">{ruleName}</Link> : <span className="ex-rule">{ruleName}</span>}
-        <div className="dq-sub">{ruleCode}</div>
       </div>
       <div className="ex-actual">{displayValue(actualValue)}</div>
       <div className="ex-edit">
@@ -2109,11 +2108,10 @@ function AvailabilityTable({ rows, total, missingCount, attributeCode, attribute
             cellRenderer: (params: any) => (
               <div>
                 <Link href={entityHref(params.data.domainCode, params.data.id)}>{params.data.entityName}</Link>
-                <div className="dq-sub">{params.data.entityCode}</div>
               </div>
             ),
           },
-          { field: 'domainCode', headerName: 'Domain', minWidth: 120 },
+          { field: 'domainCode', headerName: 'Domain', minWidth: 120, valueFormatter: (params) => domainLabel(params.value) },
           {
             colId: 'value',
             headerName: 'Value',
@@ -2163,7 +2161,7 @@ function EntityTable({ rows, total, attributeCode, attributeName, asOf, onDone, 
         <div className="dq-case" key={entity.id}>
           <div>
             <Link href={entityHref(entity.domainCode, entity.id)}>{entity.entityName}</Link>
-            <div className="dq-sub">{entity.entityCode} · {entity.domainCode} · {attributeName} is required and blank</div>
+            <div className="dq-sub">{attributeName} is required and blank</div>
           </div>
           <ResolveForm
             entityId={entity.id}
@@ -2297,11 +2295,10 @@ function trajectoryChangeColumns(fromDate: string, toDate: string): ColDef[] {
       cellRenderer: (params: any) => (
         <div>
           <Link href={entityHref(params.data.domainCode, params.data.id)}>{params.data.entityName}</Link>
-          <div className="dq-sub">{params.data.entityCode}</div>
         </div>
       ),
     },
-    { field: 'domainCode', headerName: 'Domain', minWidth: 120 },
+    { field: 'domainCode', headerName: 'Domain', minWidth: 120, valueFormatter: (params) => domainLabel(params.value) },
     { colId: 'from', headerName: formatDay(fromDate), minWidth: 130, cellClass: 'dq-num', valueGetter: (params) => displayValue(params.data?.previousValue) },
     { colId: 'to', headerName: formatDay(toDate), minWidth: 130, cellClass: 'dq-num', valueGetter: (params) => displayValue(params.data?.currentValue) },
     { colId: 'direction', headerName: '', width: 90, sortable: false, filter: false, cellRenderer: (params: any) => <ValueDirection changes={[params.data]} /> },

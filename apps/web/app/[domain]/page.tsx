@@ -85,7 +85,7 @@ export default function DomainListPage() {
 
       <div className="page-header">
         <div className="page-title-block">
-          <div style={{ width: '4px', height: '48px', background: ACCENTS[domainCode] || '#1e40af' }}></div>
+          <div style={{ width: '4px', height: '48px', background: ACCENTS[domainCode] || '#00334e' }}></div>
           <div>
             <div className="page-title">{domainName}</div>
             <div className="page-meta">{totalCount} records · Generic Entity Model</div>

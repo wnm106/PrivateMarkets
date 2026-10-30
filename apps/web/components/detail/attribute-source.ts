@@ -76,7 +76,6 @@ export function fieldFromLineage(
     dataType?: string;
     calculated?: boolean;
     formula?: string;
-    fallbackValue?: string;
   },
 ): FieldData {
   const values: CompetingValue[] = (lineage?.competingValues || []).map((cv) => ({
@@ -93,7 +92,7 @@ export function fieldFromLineage(
   const winner = (current != null && current !== ''
     ? values.find((cv) => cv.value === String(current))
     : undefined) || values.find((cv) => cv.value && cv.value !== '—') || values[0];
-  const resolved = current != null && current !== '' ? String(current) : (meta.fallbackValue || '—');
+  const resolved = current != null && current !== '' ? String(current) : '—';
   return {
     label: meta.label,
     attributeCode: meta.attributeCode,
@@ -105,7 +104,7 @@ export function fieldFromLineage(
     storedSourceName: winner?.sourceName,
     precedenceRank: winner?.precedenceRank,
     receivedAt: winner?.receivedAt,
-    competingValues: values.length ? values : undefined,
+    competingValues: values,
     resolutionRule: meta.formula || lineage?.resolutionRule || undefined,
   };
 }

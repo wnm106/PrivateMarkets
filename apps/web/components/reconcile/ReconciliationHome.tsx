@@ -175,18 +175,26 @@ export function ReconciliationHome() {
   };
 
   return (
-    <div className="view-fade">
-      <div className="crumbs">
-        <Link href="/" className="crumb-link">Home</Link>
-        <span className="sep">›</span>
-        <span className="crumb-current">Reconcile</span>
+    <div className="view-fade da">
+      <div className="da-crumbs">
+        <Link href="/">Home</Link>
+        <span>/</span>
+        <strong>Reconcile</strong>
       </div>
-      <div className="page-header">
-        <div>
-          <div className="page-title">Reconcile</div>
-          <div className="page-meta">Review one entity against its sources and, when a prior date is set, against that earlier golden record.</div>
+      <header className="da-ribbon">
+        <div className="da-title">
+          <span className="da-chip">Review</span>
+          <h1>Reconcile</h1>
+          <p>Review one record against its sources and, when a prior date is set, against that earlier golden record.</p>
         </div>
-      </div>
+        <div className="da-facts">
+          <div className="da-fact big"><span>Reviews</span><strong>{loading ? '—' : definitions.length}</strong></div>
+        </div>
+        <div className="da-holdbox">
+          <div className="da-holdtop"><span>Selected review</span><b>{selected ? 1 : 0}</b></div>
+          <p>{selected ? selected.definitionName : 'Choose a review, then a record.'}</p>
+        </div>
+      </header>
 
       {error && <div className="recon-error">{error}</div>}
       {loading && <div className="page-meta">Loading reviews…</div>}
@@ -226,7 +234,6 @@ export function ReconciliationHome() {
                 onClick={() => setEntityId(entity.id)}
               >
                 <strong>{entity.entityName}</strong>
-                <span>{entity.entityCode}</span>
               </button>
             ))}
             {entities.length === 0 && <span className="page-meta">No matching entities.</span>}

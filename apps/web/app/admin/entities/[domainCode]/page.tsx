@@ -42,9 +42,10 @@ import { RelationshipTypeForm } from '@/components/forms/RelationshipTypeForm';
 import { SchemaScopeBadge, SchemaScopeField } from '@/components/admin/SchemaScopeField';
 import { EntityIdentifierDefinitionForm } from '@/components/forms/EntityIdentifierDefinitionForm';
 import { TemplateAttributePicker, type PickerAttribute } from '@/components/forms/TemplateAttributePicker';
-import { AttributeExpandPanel } from '@/components/admin/AttributeExpandPanel';
+import { EntityAttributeGrid } from '@/components/admin/EntityAttributeGrid';
+import { AttributeSectionsPanel } from '@/components/admin/AttributeSectionsPanel';
 
-type TabType = 'attributes' | 'templates' | 'relationships' | 'identifiers' | 'intersections';
+type TabType = 'attributes' | 'sections' | 'templates' | 'relationships' | 'identifiers' | 'intersections';
 
 interface DomainType {
   id: string;
@@ -72,6 +73,8 @@ interface Attribute {
   defaultValue?: string;
   displaySection?: string;
   displayGroup?: number;
+  displaySpanColumns?: number | null;
+  displaySpanRows?: number | null;
   isEditable?: boolean;
   isVisible?: boolean;
   aggregationType?: string;
@@ -204,6 +207,7 @@ export default function EntityTypeDetailPage() {
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('attributes');
+  const [sectionCount, setSectionCount] = useState(0);
 
   const viewFocus = useMemo(() => {
     if (editingTemplate) {
@@ -817,13 +821,13 @@ export default function EntityTypeDetailPage() {
               <SchemaScopeBadge clientId={domain.clientId} clientName={domain.clientName} />
               {!domain.isActive && (
                 <span style={{
-                  fontSize: '10px',
+                  fontSize: '11px',
                   padding: '2px 8px',
                   background: 'var(--bg-alt)',
                   color: 'var(--ink-3)',
                   fontWeight: 600,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px',
+                  textTransform: 'none',
+                  letterSpacing: 0,
                 }}>
                   Inactive
                 </span>
@@ -868,6 +872,11 @@ export default function EntityTypeDetailPage() {
           onClick={() => setActiveTab('attributes')}
         />
         <TabButton
+          label={`Sections (${sectionCount})`}
+          isActive={activeTab === 'sections'}
+          onClick={() => setActiveTab('sections')}
+        />
+        <TabButton
           label={`Templates (${templates.length})`}
           isActive={activeTab === 'templates'}
           onClick={() => setActiveTab('templates')}
@@ -893,107 +902,35 @@ export default function EntityTypeDetailPage() {
       {activeTab === 'attributes' && (
         <Section
           title={`Attributes (${domainAttributes.length})`}
-          subtitle="Click an attribute to edit its values. The source sequence at the bottom is the global default; templates only override it."
+          subtitle="Fields are columns. Expand a row to edit that attribute in place."
           action={<button className="btn" onClick={() => setShowCreateAttributeModal(true)}>+ Attribute</button>}
         >
-          {domainAttributes.length > 0 ? (
-            <div style={{ display: 'grid', gap: '8px' }}>
-              {domainAttributes.map(attr => {
-                const expanded = expandedAttributeId === attr.id;
-                const sequence = (attr.defaultPrecedenceChain || []).filter((code) => code && code !== 'MANUAL');
-                return (
-                <div
-                  key={attr.id}
-                  style={{
-                    ...rowStyle,
-                    flexDirection: 'column',
-                    alignItems: 'stretch',
-                    gap: 0,
-                    padding: 0,
-                    overflow: 'hidden',
-                    borderColor: expanded ? 'var(--accent)' : 'var(--line)',
-                    background: expanded ? 'var(--surface)' : rowStyle.background,
-                    boxShadow: expanded ? 'var(--shadow-sm)' : undefined,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      gap: '12px',
-                      padding: '12px 16px',
-                      cursor: 'pointer',
-                      background: expanded ? 'var(--bg-alt)' : 'transparent',
-                      borderBottom: expanded ? '1px solid var(--line-strong)' : 'none',
-                      borderLeft: expanded ? '3px solid var(--accent)' : '3px solid transparent',
-                    }}
-                    onClick={() => setExpandedAttributeId(expanded ? null : attr.id)}
-                  >
-                    <div>
-                      {expanded && (
-                        <div style={{
-                          fontSize: '10px',
-                          fontWeight: 600,
-                          letterSpacing: '0.08em',
-                          textTransform: 'uppercase',
-                          color: 'var(--accent-2)',
-                          marginBottom: '2px',
-                        }}>
-                          Editing attribute
-                        </div>
-                      )}
-                      <div style={{ fontSize: expanded ? '16px' : '14px', fontWeight: expanded ? 600 : 500, color: 'var(--ink)' }}>
-                        {expanded ? '▾' : '▸'} {attr.attributeName}
-                        {attr.isRequired && <span style={{ color: 'var(--red)', marginLeft: '4px' }}>*</span>}
-                      </div>
-                      <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: 'var(--ink-3)', marginTop: '2px', flexWrap: 'wrap' }}>
-                        <span className="mono">{attr.attributeCode}</span>
-                        <SchemaScopeBadge clientId={attr.clientId} clientName={attr.clientName} />
-                        <span>Type: {attr.dataType}</span>
-                        {attr.isMultiValued && <span>Multi-valued</span>}
-                        {attr.referenceListCode && (
-                          <span style={{ color: 'var(--accent-2)' }}>
-                            📋 {attr.referenceListCode}
-                          </span>
-                        )}
-                        {attr.isDerived && (
-                          <span style={{ color: 'var(--accent-2)' }}>Calculated</span>
-                        )}
-                        {sequence.length > 0 && (
-                          <span>Sequence: Manual → {sequence.join(' → ')}</span>
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      className="btn"
-                      style={{ color: 'var(--red)', fontSize: '12px', padding: '4px 10px' }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleDeleteAttribute(attr);
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                  {expanded && (
-                    <div style={{ padding: '16px', background: 'var(--bg)' }}>
-                      <AttributeExpandPanel
-                        attribute={attr}
-                        weightAttributes={attributes}
-                        referenceLists={referenceLists}
-                        onSaved={() => { void refreshAttributes(); }}
-                        onCancel={() => setExpandedAttributeId(null)}
-                      />
-                    </div>
-                  )}
-                </div>
-                );
-              })}
-            </div>
-          ) : (
-            <EmptyNote text="No attributes defined for this entity type yet." />
-          )}
+          <EntityAttributeGrid
+            domainCode={domain.domainCode}
+            attributes={domainAttributes}
+            referenceLists={referenceLists}
+            expandedId={expandedAttributeId}
+            onExpandedId={setExpandedAttributeId}
+            onDelete={handleDeleteAttribute}
+            onRefresh={() => { void refreshAttributes(); }}
+            onPatch={(id, patch) => {
+              setAttributes((current) => current.map((attribute) => attribute.id === id ? { ...attribute, ...patch } : attribute));
+            }}
+          />
+        </Section>
+      )}
+
+      {activeTab === 'sections' && (
+        <Section
+          title={`Sections (${sectionCount})`}
+          subtitle="Drag to reorder. Set how many columns each section uses, then click a section to preview it."
+        >
+          <AttributeSectionsPanel
+            domainCode={domain.domainCode}
+            attributes={domainAttributes}
+            onAttributesChanged={() => { void refreshAttributes(); }}
+            onCountChange={setSectionCount}
+          />
         </Section>
       )}
 
@@ -1012,7 +949,7 @@ export default function EntityTypeDetailPage() {
                       <span style={{ fontSize: '14px', fontWeight: 500 }}>{template.templateName}</span>
                       <SchemaScopeBadge clientId={template.clientId} clientName={template.clientName} />
                       {!template.isActive && (
-                        <span style={{ fontSize: '10px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>Inactive</span>
+                        <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none' }}>Inactive</span>
                       )}
                     </div>
                     {template.description && (
@@ -1070,13 +1007,13 @@ export default function EntityTypeDetailPage() {
                       {rel.parentDomainCode || '—'} → {rel.childDomainCode || '—'}
                     </span>
                     {rel.isRequired && (
-                      <span style={{ fontSize: '10px', color: 'var(--red)', textTransform: 'uppercase', fontWeight: 600 }}>Required</span>
+                      <span style={{ fontSize: '11px', color: 'var(--red)', textTransform: 'none', fontWeight: 600 }}>Required</span>
                     )}
                     {!rel.isRequired && rel.parentDomainCode && (
-                      <span style={{ fontSize: '10px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>Optional</span>
+                      <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none' }}>Optional</span>
                     )}
                     {!rel.isActive && (
-                      <span style={{ fontSize: '10px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>Inactive</span>
+                      <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none' }}>Inactive</span>
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: '8px' }}>
@@ -1123,12 +1060,12 @@ export default function EntityTypeDetailPage() {
                     </span>
                     {identifier.isPrimary && (
                       <span style={{
-                        fontSize: '10px',
+                        fontSize: '11px',
                         padding: '2px 8px',
                         background: 'var(--accent)',
                         color: 'white',
                         fontWeight: 600,
-                        textTransform: 'uppercase',
+                        textTransform: 'none',
                         borderRadius: '4px',
                       }}>
                         Primary
@@ -2758,7 +2695,7 @@ function TemplateEditorOverlay({
                   color: activeSection === section ? 'var(--ink)' : 'var(--ink-3)',
                   background: 'none', border: 'none',
                   borderBottom: activeSection === section ? '2px solid var(--accent)' : '2px solid transparent',
-                  cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.5px',
+                  cursor: 'pointer', textTransform: 'none', letterSpacing: 0,
                 }}
               >
                 {section === 'details' ? 'Details' : section === 'rules' ? 'Applicability Rules' : section === 'attributes' ? 'Attributes' : 'Source Preferences'}
@@ -3187,7 +3124,7 @@ function SourceChainEditor({
         }}>
           <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#b45309' }} />
           <span style={{ fontSize: '12px', fontWeight: 600, color: '#b45309' }}>Manual Override</span>
-          <span style={{ fontSize: '9px', color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>always #1</span>
+          <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none', letterSpacing: 0 }}>always #1</span>
         </div>
         <span style={{ color: 'var(--ink-3)' }}>→</span>
         {(() => {
@@ -3216,7 +3153,7 @@ function SourceChainEditor({
                         style={{
                           width: '16px', height: '16px', borderRadius: '50%',
                           background: 'white', border: '1px solid #e5e7eb',
-                          fontSize: '10px', cursor: 'pointer',
+                          fontSize: '11px', cursor: 'pointer',
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                         }}
                       >
@@ -3229,7 +3166,7 @@ function SourceChainEditor({
                         style={{
                           width: '16px', height: '16px', borderRadius: '50%',
                           background: 'white', border: '1px solid #e5e7eb',
-                          fontSize: '10px', cursor: 'pointer',
+                          fontSize: '11px', cursor: 'pointer',
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                         }}
                       >
@@ -3241,7 +3178,7 @@ function SourceChainEditor({
                       style={{
                         width: '16px', height: '16px', borderRadius: '50%',
                         background: 'white', border: '1px solid #fecaca',
-                        fontSize: '10px', color: '#ef4444', cursor: 'pointer',
+                        fontSize: '11px', color: '#ef4444', cursor: 'pointer',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                       }}
                     >
@@ -3251,7 +3188,7 @@ function SourceChainEditor({
                 )}
                 <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: color }} />
                 <span style={{ fontSize: '12px', fontWeight: 500, color }}>{srcCode}</span>
-                <span style={{ fontSize: '9px', color: 'var(--ink-3)' }}>#{idx + 2}</span>
+                <span style={{ fontSize: '11px', color: 'var(--ink-3)' }}>#{idx + 2}</span>
               </div>
               {idx < shownChain.length - 1 && <span style={{ color: 'var(--ink-3)' }}>→</span>}
             </div>

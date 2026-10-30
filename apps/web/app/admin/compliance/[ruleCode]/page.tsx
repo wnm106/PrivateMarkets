@@ -46,11 +46,14 @@ interface VersionDto {
   denominatorAttributeCode?: string;
   denominatorAggregation?: string;
   denominatorScope: string;
+  denominatorSource?: string;
   denominatorConstantValue?: number;
   resultUnit: string;
   limitDirection: string;
   softLimitValue?: number;
   hardLimitValue?: number;
+  hardLimitAttributeCode?: string;
+  softLimitFactor?: number;
   defaultSourceScope: string;
   conditions: Array<{
     appliesTo: string;
@@ -464,33 +467,40 @@ export default function ComplianceRuleDetailPage() {
                   <DetailRow label="Effective" value={`${v.validFrom} → ${v.validTo === '9999-12-31' ? 'present' : v.validTo}`} />
                 </div>
                 <div>
-                  <DetailRow label="Numerator" value={`${v.numeratorAggregation}(${v.numeratorAttributeCode})`} />`n                  <DetailRow label="Numerator reads" value={describeDimension(v.numeratorDimension)} />
+                  <DetailRow label="Numerator" value={`${v.numeratorAggregation}(${v.numeratorAttributeCode})`} />
+                  <DetailRow label="Numerator reads" value={describeDimension(v.numeratorDimension)} />
                   <DetailRow
                     label="Denominator"
                     value={
                       v.denominatorScope === 'CONSTANT'
                         ? `Constant: ${v.denominatorConstantValue}`
+                        : v.denominatorSource === 'ANCHOR' && v.denominatorAttributeCode
+                        ? `${v.denominatorAttributeCode} on the fund`
                         : v.denominatorAttributeCode
                         ? `${v.denominatorAggregation}(${v.denominatorAttributeCode}) — ${v.denominatorScope}`
                         : '—'
                     }
                   />
-                  <DetailRow label="Denominator reads" value={v.denominatorAttributeCode ? describeDimension(v.denominatorDimension) : "—"} />`n                  <DetailRow label="Result calculation" value={v.resultTransform || "NONE"} />`n                  <DetailRow label="Result unit" value={v.resultUnit} />
+                  <DetailRow label="Denominator reads" value={v.denominatorAttributeCode ? describeDimension(v.denominatorDimension) : '—'} />
+                  <DetailRow label="Denominator source" value={v.denominatorSource === 'ANCHOR' ? 'On the fund' : 'From the positions'} />
+                  <DetailRow label="Result calculation" value={v.resultTransform || 'NONE'} />
+                  <DetailRow label="Result unit" value={v.resultUnit} />
                   <DetailRow label="Limit direction" value={v.limitDirection} />
                   <DetailRow
                     label="Limits"
                     value={
                       <>
                         {v.softLimitValue != null && <span style={{ color: 'var(--amber)', marginRight: '12px' }}>Soft: {v.softLimitValue}</span>}
-                        {v.hardLimitValue != null && <span style={{ color: 'var(--red)' }}>Hard: {v.hardLimitValue}</span>}
-                        {v.softLimitValue == null && v.hardLimitValue == null && '—'}
+                        {v.hardLimitValue != null && <span style={{ color: 'var(--red)', marginRight: '12px' }}>Hard: {v.hardLimitValue}</span>}
+                        {v.hardLimitAttributeCode && <span>From {v.hardLimitAttributeCode}{v.softLimitFactor != null ? ` × ${v.softLimitFactor}` : ''}</span>}
+                        {v.softLimitValue == null && v.hardLimitValue == null && !v.hardLimitAttributeCode && '—'}
                       </>
                     }
                   />
                 </div>
                 {v.conditions.length > 0 && (
                   <div style={{ gridColumn: '1 / -1', borderTop: '1px solid var(--line)', paddingTop: '12px' }}>
-                    <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '8px' }}>
+                    <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '8px' }}>
                       Conditions
                     </div>
                     {['BASE', 'ANCHOR'].map((scope) => {
@@ -536,12 +546,12 @@ export default function ComplianceRuleDetailPage() {
                 rule.scopeAssignments.map((sa) => (
                   <div key={sa.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--line)', fontSize: '12px' }}>
                     <div>
-                      <span style={{ fontSize: '10px', padding: '2px 7px', background: sa.scopeType === 'INCLUDE' ? '#e1f1e7' : '#fdecec', color: sa.scopeType === 'INCLUDE' ? 'var(--green)' : 'var(--red)', fontWeight: 600, marginRight: '8px' }}>
+                      <span style={{ fontSize: '11px', padding: '2px 7px', background: sa.scopeType === 'INCLUDE' ? '#e1f1e7' : '#fdecec', color: sa.scopeType === 'INCLUDE' ? 'var(--green)' : 'var(--red)', fontWeight: 600, marginRight: '8px' }}>
                         {sa.scopeType}
                       </span>
                       <span className="mono">{sa.entityCode || sa.entityId}</span>
                       {sa.entityName && <span style={{ color: 'var(--ink-3)', marginLeft: '8px' }}>{sa.entityName}</span>}
-                      {sa.includeChildren && <span style={{ color: 'var(--ink-3)', marginLeft: '8px', fontSize: '10px' }}>(+ children)</span>}
+                      {sa.includeChildren && <span style={{ color: 'var(--ink-3)', marginLeft: '8px', fontSize: '11px' }}>(+ children)</span>}
                     </div>
                     <button className="btn btn-sm" onClick={() => handleRemoveScope(sa.id)}>Remove</button>
                   </div>
@@ -581,7 +591,7 @@ export default function ComplianceRuleDetailPage() {
                 </div>
                 {activeRun.errorMessage && <div style={{ color: 'var(--red)', fontSize: '12px', marginBottom: '10px' }}>{activeRun.errorMessage}</div>}
                 {results.length > 0 && (
-                  <ResultsTable results={results} />
+                  <ResultsTable results={results} resultUnit={v?.resultUnit} />
                 )}
               </div>
             )}
@@ -609,7 +619,7 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
   );
 }
 
-function ResultsTable({ results }: { results: ResultDto[] }) {
+function ResultsTable({ results, resultUnit }: { results: ResultDto[]; resultUnit?: string }) {
   const columns = useMemo<ColDef<ResultDto>[]>(() => [
     {
       colId: 'anchor',
@@ -628,7 +638,7 @@ function ResultsTable({ results }: { results: ResultDto[] }) {
     },
     { field: 'numeratorValue', headerName: 'Numerator', minWidth: 120, valueFormatter: (params) => formatNum(params.value) },
     { field: 'denominatorValue', headerName: 'Denominator', minWidth: 130, valueFormatter: (params) => formatNum(params.value) },
-    { field: 'computedValue', headerName: 'Value', minWidth: 110, valueFormatter: (params) => formatNum(params.value) },
+    { field: 'computedValue', headerName: 'Value', minWidth: 130, valueFormatter: (params) => formatNum(params.value, resultUnit) },
     {
       field: 'status',
       headerName: 'Status',
@@ -636,10 +646,10 @@ function ResultsTable({ results }: { results: ResultDto[] }) {
       cellRenderer: (params) => {
         if (!params.value) return null;
         const style = STATUS_STYLE[String(params.value)] || STATUS_STYLE.NO_DATA;
-        return <span style={{ fontSize: 10, padding: '3px 8px', background: style.bg, color: style.fg, fontWeight: 600 }}>{String(params.value).replace('_', ' ')}</span>;
+        return <span style={{ fontSize: 11, padding: '3px 8px', background: style.bg, color: style.fg, fontWeight: 600 }}>{String(params.value).replace('_', ' ')}</span>;
       },
     },
-  ], []);
+  ], [resultUnit]);
   return (
     <AppGrid
       rows={results}
@@ -677,8 +687,11 @@ function RunHistory({ runs, onOpen }: { runs: RunDto[]; onOpen: (id: string) => 
   );
 }
 
-function formatNum(n?: number | null) {
+function formatNum(n?: number | null, unit?: string) {
   if (n == null) return '—';
+  if (unit === 'PERCENTAGE') return `${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+  if (unit === 'CURRENCY') return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+  if (unit === 'COUNT') return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
@@ -727,12 +740,16 @@ function versionToFormData(rule: RuleDto, v: VersionDto): Partial<ComplianceRule
     resultTransform: v.resultTransform || 'NONE',
     denominatorAttributeCode: v.denominatorAttributeCode || '',
     denominatorAggregation: v.denominatorAggregation || 'SUM',
-    denominatorScope: v.denominatorScope,
+    denominatorScope: v.denominatorSource === 'ANCHOR'
+      ? 'ANCHOR'
+      : (!v.denominatorAttributeCode && v.denominatorScope !== 'CONSTANT' ? 'NONE' : v.denominatorScope),
     denominatorConstantValue: v.denominatorConstantValue != null ? String(v.denominatorConstantValue) : '',
     resultUnit: v.resultUnit,
     limitDirection: v.limitDirection,
     softLimitValue: v.softLimitValue != null ? String(v.softLimitValue) : '',
     hardLimitValue: v.hardLimitValue != null ? String(v.hardLimitValue) : '',
+    hardLimitAttributeCode: v.hardLimitAttributeCode || '',
+    softLimitFactor: v.softLimitFactor != null ? String(v.softLimitFactor) : '',
     defaultSourceScope: v.defaultSourceScope,
     conditions: v.conditions.map((c) => ({
       appliesTo: c.appliesTo as 'BASE' | 'ANCHOR',

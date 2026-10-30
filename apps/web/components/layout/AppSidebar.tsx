@@ -18,6 +18,7 @@ interface DomainLink {
 
 const TOOLS = [
   { href: '/pipeline', label: 'Deal Pipeline', icon: 'layers' },
+  { href: '/fund-surface', label: 'Fund surface', icon: 'chart' },
   { href: '/quality', label: 'Data Quality', icon: 'chart' },
   { href: '/merge', label: 'Entity Resolution', icon: 'nodes' },
   { href: '/reconcile', label: 'Reconcile', icon: 'chart' },
@@ -36,6 +37,7 @@ const ADMIN = [
   { href: '/admin/layouts', label: 'Display Layouts', icon: 'domains' },
   { href: '/admin/dq-rules', label: 'DQ Rules', icon: 'alert' },
   { href: '/admin/compliance', label: 'Compliance Rules', icon: 'list' },
+  { href: '/admin/compliance/funds', label: 'Fund Thresholds', icon: 'chart' },
   { href: '/admin/dashboards', label: 'Dashboards', icon: 'chart' },
   { href: '/admin/experiences', label: 'Record Experiences', icon: 'domains' },
   { href: '/admin/narratives', label: 'Narratives', icon: 'list' },
@@ -78,11 +80,19 @@ function navActive(pathname: string, href: string, exact = false) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+function toolActive(pathname: string, href: string) {
+  if (href === '/fund-surface' && /^\/funds\/[^/]+\/overview\/?$/.test(pathname)) return true;
+  return navActive(pathname, href);
+}
+
 function adminLinkActive(pathname: string, href: string) {
   if (href === '/admin/templates' && (pathname === '/admin/templates/studio' || pathname.startsWith('/admin/templates/studio/'))) {
     return false;
   }
   if (href === '/admin/skills') return pathname === '/admin/skills';
+  if (href === '/admin/compliance') {
+    return pathname === '/admin/compliance' || (/^\/admin\/compliance\/[^/]+$/.test(pathname) && pathname !== '/admin/compliance/funds');
+  }
   return navActive(pathname, href);
 }
 
@@ -382,7 +392,7 @@ export function AppSidebar() {
         <div className="sidebar-tools">
           <button
             type="button"
-            className={`sidebar-link sidebar-section ${openSection === 'tools' && !collapsed ? 'open' : ''} ${collapsed && TOOLS.some((tool) => navActive(pathname, tool.href)) ? 'active' : ''}`}
+            className={`sidebar-link sidebar-section ${openSection === 'tools' && !collapsed ? 'open' : ''} ${collapsed && TOOLS.some((tool) => toolActive(pathname, tool.href)) ? 'active' : ''}`}
             onClick={() => toggleSection('tools')}
             aria-expanded={!collapsed && openSection === 'tools'}
             title="Tools"
@@ -401,9 +411,9 @@ export function AppSidebar() {
                 <Link
                   key={tool.href}
                   href={tool.href}
-                  className={`sidebar-sublink ${navActive(pathname, tool.href) ? 'active' : ''}`}
+                  className={`sidebar-sublink ${toolActive(pathname, tool.href) ? 'active' : ''}`}
                   title={tool.label}
-                  aria-current={navActive(pathname, tool.href) ? 'page' : undefined}
+                  aria-current={toolActive(pathname, tool.href) ? 'page' : undefined}
                 >
                   <NavIcon name={tool.icon} />
                   <span className="sidebar-label">{tool.label}</span>

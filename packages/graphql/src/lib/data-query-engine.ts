@@ -15,6 +15,8 @@
  * No SQL or code is ever stored or executed from a spec. No runtime dependencies.
  */
 
+import { overlayTemporalAttributes } from './temporal-attributes';
+
 export type DataQueryAggregation =
   | 'SUM' | 'AVG' | 'MIN' | 'MAX' | 'COUNT' | 'COUNT_DISTINCT' | 'WEIGHTED_AVG';
 
@@ -299,13 +301,15 @@ export async function runDataQueries(
     anchorRow = await fetchAnchor(supabase, ctx.entityId, ctx.entityCode);
     if (!anchorRow) warnings.push('The context entity could not be found or is not accessible.');
   }
+  const asOfDate = normalizeDate(ctx.asOfDate ?? params.asOfDate);
+  const knowledgeDate = ctx.knowledgeDate || params.knowledgeDate || null;
   if (anchorRow) {
     params.entityId = params.entityId ?? anchorRow.entity_id;
     params.entityCode = params.entityCode ?? anchorRow.entity_code;
+    const timed = { id: anchorRow.entity_id as string, attributes: (anchorRow.attributes || {}) as Record<string, unknown> };
+    await overlayTemporalAttributes(supabase, [timed], asOfDate, knowledgeDate, anchorRow.domain_code);
+    anchorRow.attributes = timed.attributes;
   }
-
-  const asOfDate = normalizeDate(ctx.asOfDate ?? params.asOfDate);
-  const knowledgeDate = ctx.knowledgeDate || params.knowledgeDate || null;
   if (asOfDate) params.asOfDate = asOfDate;
 
   const catalogCache = new Map<string, any[]>();

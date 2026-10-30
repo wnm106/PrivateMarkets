@@ -133,7 +133,7 @@ export function ReportList({ kind }: { kind: 'dashboard' | 'narrative' }) {
         return (
           <div>
             <div style={{ fontWeight: 500 }}>{row.name}</div>
-            <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{row.code}</div>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>{row.code}</div>
             {row.description && <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>{row.description}</div>}
           </div>
         );
@@ -155,7 +155,7 @@ export function ReportList({ kind }: { kind: 'dashboard' | 'narrative' }) {
     },
   ], []);
   const input = { width: '100%', padding: '8px 10px', fontSize: '13px', border: '1px solid var(--line)', background: 'white' } as const;
-  const lbl = { fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--ink-3)', margin: '12px 0 4px' } as const;
+  const lbl = { fontSize: '11px', fontWeight: 600, textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', margin: '12px 0 4px' } as const;
 
   return (
     <div className="view-fade">

@@ -6,12 +6,12 @@ import type { EntityData } from './types';
 import { SourceAttributedFieldRow, type FieldData } from './SourceAttributedFieldRow';
 import { sources, type SourceKey } from '@/lib/data';
 import { useTemporalStore } from '@/lib/store';
-import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
-import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
+import { ATTRIBUTE_SECTIONS_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { DisplayLayoutView, type ResolvedLayoutView } from './DisplayLayoutView';
 import { EntityReports } from '@/components/reporting/EntityReports';
 import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard';
 import { domainHref } from '@/lib/domain-routes';
+import { groupForDisplay, type AttributeSectionOrder } from '@/lib/attribute-layout';
 
 export interface TemplateAttribute {
   attributeCode: string;
@@ -19,6 +19,8 @@ export interface TemplateAttribute {
   required: boolean;
   displaySection: string;
   sortOrder: number;
+  spanColumns?: number | null;
+  spanRows?: number | null;
   dataType?: string;
   isDerived?: boolean;
   derivationFormula?: string | null;
@@ -142,6 +144,7 @@ export function GoldenRecordSections({
   const [controls, setControls] = useState<Record<string, string> | null>(null);
   const [displayVersion, setDisplayVersion] = useState(0);
   const [derivedFormulas, setDerivedFormulas] = useState<Record<string, string>>({});
+  const [sections, setSections] = useState<AttributeSectionOrder[]>([]);
   const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
 
   useEffect(() => {
@@ -159,6 +162,20 @@ export function GoldenRecordSections({
         formulas[attribute.attributeCode] = formulaLabel(attribute.derivationFormula);
       }
       setDerivedFormulas(formulas);
+    });
+    return () => { cancelled = true; };
+  }, [entity.domainCode]);
+
+  useEffect(() => {
+    const domainCode = entity.domainCode;
+    if (!domainCode) return;
+    let cancelled = false;
+    graphqlQuery<{ attributeSections: AttributeSectionOrder[] }, { domainCode: string }>(
+      ATTRIBUTE_SECTIONS_QUERY,
+      { domainCode },
+      'network-only',
+    ).then((result) => {
+      if (!cancelled) setSections(result.data?.attributeSections || []);
     });
     return () => { cancelled = true; };
   }, [entity.domainCode]);
@@ -197,13 +214,26 @@ export function GoldenRecordSections({
     .filter((lineage) => !layoutCodes.has(lineage.attributeCode))
     .map((lineage) => [lineage.attributeCode, { value: lineage.currentValue }] as [string, { value: string }]);
   const displayEntries = lineageLoaded ? temporalEntries : populatedEntries;
-  const populatedCodes = new Set(displayEntries.map(([key]) => key));
-  const availableAttributes = templateAttributes
-    .filter((attribute) => !populatedCodes.has(attribute.attributeCode))
-    .sort((a, b) => a.sortOrder - b.sortOrder || a.attributeName.localeCompare(b.attributeName));
-
   const lineageMap = new Map<string, LineageData>();
   lineageData.forEach((ld) => lineageMap.set(ld.attributeCode, ld));
+
+  const listedAttributes: TemplateAttribute[] = [];
+  const listedCodes = new Set<string>();
+  for (const attribute of templateAttributes) {
+    if (layoutCodes.has(attribute.attributeCode)) continue;
+    listedCodes.add(attribute.attributeCode);
+    listedAttributes.push(attribute);
+  }
+  for (const [key] of attributeEntries) {
+    if (listedCodes.has(key)) continue;
+    listedAttributes.push({
+      attributeCode: key,
+      attributeName: lineageMap.get(key)?.attributeName || key,
+      required: false,
+      displaySection: 'General',
+      sortOrder: 10000,
+    });
+  }
 
   const handleSourceChange = (labelOrCode: string, newSrc: SourceKey) => {
     // The SourceAttributedFieldRow passes attributeCode if available, otherwise label
@@ -308,44 +338,44 @@ export function GoldenRecordSections({
             }}
           />
         ))}
-      <div className="field-section">
-        <div className="field-section-head">
-          <div className="field-section-name">Entity Attributes</div>
-          <div className="field-section-count">{displayEntries.length} populated</div>
-        </div>
-
-        {displayEntries.length === 0 && (
+      {listedAttributes.length === 0 && (
+        <div className="field-section">
           <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>
             No attribute values yet.
           </div>
-        )}
+        </div>
+      )}
 
-        {displayEntries.map(([key, attr]) => {
+      {groupForDisplay([
+        ...listedAttributes.map((templateAttr) => {
+          const key = templateAttr.attributeCode;
           const lineage = lineageMap.get(key);
-          // Support both nested { value, source/source_code } and flat string/number values
-          const attrValue = attr && typeof attr === 'object' && 'value' in attr ? attr.value : attr;
-          const attrSource = attr && typeof attr === 'object'
-            ? ((attr as any).source_code || (attr as any).source)
-            : 'manual';
+          const stored = attributes[key];
+          const attrValue = stored && typeof stored === 'object' && 'value' in stored ? stored.value : stored;
+          const attrSource = stored && typeof stored === 'object'
+            ? ((stored as any).source_code || (stored as any).source || '')
+            : '';
 
-          // Prefer lineage.currentValue (resolved by fieldLineage resolver) over entity.attributes
-          // because the resolver correctly skips null/empty values when picking the golden source
-          const resolvedValue = lineage?.currentValue ?? attrValue;
-          const resolvedSource = lineage?.currentValue !== undefined && lineage?.currentValue !== null
-            ? (lineage.competingValues?.find(cv => cv.value === lineage.currentValue)?.source ?? attrSource)
-            : attrSource;
+          // Lineage is what was true at this as-of and knowledge time. A missing row is a
+          // blank. Do not fill it from the value that is open on the record today.
+          const resolvedValue = lineageLoaded ? lineage?.currentValue : (lineage?.currentValue ?? attrValue);
+          const hasValue = resolvedValue !== null && resolvedValue !== undefined && resolvedValue !== '' && resolvedValue !== '—';
+          const resolvedSource = hasValue
+            ? (lineage?.competingValues?.find(cv => cv.value === lineage.currentValue)?.source ?? attrSource)
+            : '';
 
           // Resolve display label from template attributes, fall back to attribute code
-          const templateAttr = templateAttributes.find(ta => ta.attributeCode === key);
-          const displayLabel = templateAttr?.attributeName || key;
+          const displayLabel = templateAttr.attributeName || key;
           const formula = derivedFormulas[key] || (templateAttr?.isDerived ? formulaLabel(templateAttr.derivationFormula) : undefined);
           const calculated = Boolean(formula);
 
           // The formula mark stays on the row. The pill names the source that
           // actually supplied the number, including a feed stored on a calculated attribute.
-          const normalizedSource = typeof resolvedSource === 'string' && resolvedSource
-            ? resolvedSource.toLowerCase()
-            : (calculated ? 'calculated' : 'manual');
+          const normalizedSource = !hasValue
+            ? ''
+            : (typeof resolvedSource === 'string' && resolvedSource
+              ? resolvedSource.toLowerCase()
+              : (calculated ? 'calculated' : ''));
           const storedSourceName = (
             lineage?.competingValues?.find((cv) => cv.value === lineage.currentValue)
             || lineage?.competingValues?.find((cv) => String(cv.source).toLowerCase() === String(resolvedSource).toLowerCase())
@@ -368,54 +398,55 @@ export function GoldenRecordSections({
               const normCv = typeof cv.source === 'string' ? cv.source.toLowerCase() : 'manual';
               return normCv === normalizedSource;
             })?.receivedAt,
-            competingValues: lineage?.competingValues?.map(cv => {
-              const normalizedCvSource = (typeof cv.source === 'string' ? cv.source.toLowerCase() : 'manual');
-              return {
-                source: normalizedCvSource,
-                sourceName: cv.sourceName,
-                value: cv.value,
-                precedenceRank: cv.precedenceRank,
-                validFrom: cv.validFrom,
-                validTo: cv.validTo,
-                confidenceScore: cv.confidenceScore,
-                receivedAt: cv.receivedAt,
-              };
-            }),
+            competingValues: lineage
+              ? (lineage.competingValues || []).map(cv => {
+                const normalizedCvSource = (typeof cv.source === 'string' ? cv.source.toLowerCase() : 'manual');
+                return {
+                  source: normalizedCvSource,
+                  sourceName: cv.sourceName,
+                  value: cv.value,
+                  precedenceRank: cv.precedenceRank,
+                  validFrom: cv.validFrom,
+                  validTo: cv.validTo,
+                  confidenceScore: cv.confidenceScore,
+                  receivedAt: cv.receivedAt,
+                };
+              })
+              : (lineageLoaded ? [] : undefined),
             resolutionRule: formula || lineage?.resolutionRule,
           };
 
-          return (
-            <SourceAttributedFieldRow
-              key={key}
-              field={fieldData}
-              onDrilldown={handleDrilldown}
-              onSourceChange={handleSourceChange}
-              onValueChange={onValueChange}
-              onAddSourceValue={onAddSourceValue}
-              onDeleteSourceValue={onDeleteSourceValue}
-              asOfDate={asOfDate}
-              entityId={entity.id}
-              calcRefreshKey={calcRefreshKey}
-            />
-          );
-        })}
-
-        {availableAttributes.length > 0 && (
-          <>
-            <div className="field-section-head" style={{ borderTop: '1px solid var(--line)' }}>
-              <div className="field-section-name">Available attributes</div>
-              <div className="field-section-count">{availableAttributes.length} to enter</div>
-            </div>
-            {availableAttributes.map((attribute) => (
-              <AvailableAttributeRow
-                key={attribute.attributeCode}
-                attribute={attribute}
-                onSave={(value) => onAddAttribute?.(attribute.attributeCode, value, 'manual')}
+          return {
+            key,
+            section: templateAttr.displaySection || 'General',
+            sortOrder: templateAttr.sortOrder ?? 0,
+            name: displayLabel,
+            node: (
+              <SourceAttributedFieldRow
+                field={fieldData}
+                onDrilldown={handleDrilldown}
+                onSourceChange={handleSourceChange}
+                onValueChange={onValueChange}
+                onAddSourceValue={onAddSourceValue}
+                onDeleteSourceValue={onDeleteSourceValue}
+                asOfDate={asOfDate}
+                entityId={entity.id}
+                calcRefreshKey={calcRefreshKey}
               />
-            ))}
-          </>
-        )}
-      </div>
+            ),
+          };
+        }),
+      ], sections).map((group) => (
+        <div className="field-section" key={group.section}>
+          <div className="field-section-head">
+            <div className="field-section-name">{group.section}</div>
+            <div className="field-section-count">{group.items.length}</div>
+          </div>
+          {group.items.map((item) => (
+            <div key={item.key}>{item.node}</div>
+          ))}
+        </div>
+      ))}
       </div>
       )}
     </div>
@@ -425,57 +456,6 @@ export function GoldenRecordSections({
 function hasStoredValue(attr: unknown): boolean {
   const value = attr && typeof attr === 'object' && 'value' in attr ? (attr as { value: unknown }).value : attr;
   return value !== null && value !== undefined && value !== '' && value !== '—';
-}
-
-function AvailableAttributeRow({
-  attribute,
-  onSave,
-}: {
-  attribute: TemplateAttribute;
-  onSave: (value: string) => Promise<void> | void;
-}) {
-  const [value, setValue] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  const save = async () => {
-    const trimmed = value.trim();
-    if (!trimmed || saving) return;
-    setSaving(true);
-    setError('');
-    try {
-      await onSave(trimmed);
-    } catch (err: any) {
-      setError(err?.message || 'Could not save the value');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="sa-field-row" style={{ cursor: 'default' }}>
-      <div className="sa-field-label">
-        {attribute.attributeName}
-        {attribute.required && <span style={{ color: 'var(--red)' }}>*</span>}
-      </div>
-      <AttributeValueInput
-        attributeCode={attribute.attributeCode}
-        dataType={attribute.dataType}
-        className="text-input"
-        value={value}
-        placeholder="Enter a value"
-        onChange={setValue}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') save();
-        }}
-        style={{ fontSize: '13px', padding: '6px 8px' }}
-      />
-      <button className="btn btn-sm" type="button" onClick={save} disabled={!value.trim() || saving} style={{ justifySelf: 'end' }}>
-        {saving ? 'Saving…' : 'Save'}
-      </button>
-      {error && <div style={{ gridColumn: '1 / -1', color: 'var(--red)', fontSize: '12px' }}>{error}</div>}
-    </div>
-  );
 }
 
 function SectionTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
@@ -536,33 +516,25 @@ function RelationshipList({
           </div>
           {rows.map((row) => (
             <div key={row.key} style={{ ...relationshipGridStyle, borderTop: '1px solid var(--line)' }}>
-              <span style={{ fontSize: '13px', minWidth: 0 }}>
-                {row.members.length > 0 ? (
-                  <span style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    <span>
-                      {row.members.map((member, index) => (
-                        <span key={member.entityId}>
-                          {index > 0 && <span style={{ color: 'var(--ink-3)' }}> · </span>}
-                          <Link href={entityPageHref(member.domainCode, member.entityId)} className="relationship-entity-link">
-                            {member.entityName}
-                          </Link>
-                        </span>
-                      ))}
-                    </span>
-                    {row.entityId ? (
-                      <Link href={entityPageHref(row.domain, row.entityId)} className="entity-link" style={{ fontSize: '11px', fontWeight: 400 }}>
-                        {row.name} ({row.code})
-                      </Link>
-                    ) : (
-                      <span style={{ fontSize: '11px', color: 'var(--ink-3)' }}>{row.name} ({row.code})</span>
-                    )}
-                  </span>
-                ) : row.entityId ? (
+              <span style={{ fontSize: '13px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                {row.entityId ? (
                   <Link href={entityPageHref(row.domain, row.entityId)} className="relationship-entity-link">
                     {row.name} <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}>({row.code})</span>
                   </Link>
                 ) : (
-                  <>{row.name} <span style={{ color: 'var(--ink-3)' }}>({row.code})</span></>
+                  <span>{row.name} <span style={{ color: 'var(--ink-3)' }}>({row.code})</span></span>
+                )}
+                {row.members.length > 0 && (
+                  <span style={{ fontSize: '12px', color: 'var(--ink-3)' }}>
+                    {row.members.map((member, index) => (
+                      <span key={member.entityId}>
+                        {index > 0 && ' · '}
+                        <Link href={entityPageHref(member.domainCode, member.entityId)} className="entity-link" style={{ fontSize: '12px', fontWeight: 400 }}>
+                          {member.entityName}
+                        </Link>
+                      </span>
+                    ))}
+                  </span>
                 )}
               </span>
               <span style={{ fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.type}</span>
@@ -588,9 +560,9 @@ const relationshipGridStyle: CSSProperties = {
 };
 
 const relationshipHeadStyle: CSSProperties = {
-  fontSize: '10px',
+  fontSize: '11px',
   fontWeight: 600,
   letterSpacing: '0.06em',
-  textTransform: 'uppercase',
+  textTransform: 'none',
   color: 'var(--ink-3)',
 };

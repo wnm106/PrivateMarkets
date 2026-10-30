@@ -19,10 +19,10 @@ export function SchemaScopeBadge({
   return (
     <span
       style={{
-        fontSize: '10px',
+        fontSize: '11px',
         fontWeight: 600,
         letterSpacing: '0.04em',
-        textTransform: 'uppercase',
+        textTransform: 'none',
         padding: '2px 6px',
         border: '1px solid var(--line)',
         color: clientId ? 'var(--accent-2)' : 'var(--ink-3)',

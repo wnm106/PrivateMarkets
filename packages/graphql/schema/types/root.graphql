@@ -6,9 +6,10 @@ type Query {
     filter: EntityFilter
     pagination: PaginationInput
     asOfDate: Date
+    knowledgeDate: DateTime
   ): EntityConnection!
   
-  entity(id: ID, entityCode: String, asOfDate: Date): Entity
+  entity(id: ID, entityCode: String, asOfDate: Date, knowledgeDate: DateTime): Entity
   
   # Domain-specific queries (for convenience, but use generic entity under the hood)
   funds(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
@@ -22,6 +23,7 @@ type Query {
   domainTypes: [DomainTypeRecord!]!
   domainRecordCounts: [DomainRecordCount!]!
   attributeRegister(domainCode: String): [AttributeDefinition!]!
+  attributeSections(domainCode: String!): [AttributeSection!]!
   domainTemplates(domainCode: String): [Template!]!
   calcDefinitions: [CalcDefinition!]!
   calcBreakdown(entityId: ID!, attributeCode: String!, asOfDate: Date): CalcBreakdown
@@ -76,6 +78,7 @@ type Query {
   complianceEvaluationRun(id: ID!): ComplianceEvaluationRun
   complianceResults(filter: ComplianceResultFilter, pagination: PaginationInput): ComplianceEvaluationResultConnection!
   compliancePopulationPreview(input: CompliancePopulationPreviewInput!): CompliancePopulationPreview!
+  complianceFundBoard: ComplianceFundBoard!
 
   # Reference List (Controlled Vocabulary) queries
   referenceLists(domainCode: String, isActive: Boolean): [ReferenceList!]!
@@ -118,6 +121,12 @@ type Mutation {
   deleteDomainType(id: ID!): DeleteDomainTypeResult!
   createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
   updateAttributeDefinition(input: UpdateAttributeDefinitionInput!): UpdateAttributeDefinitionResult!
+  createAttributeSection(domainCode: String!, sectionName: String!): AttributeSectionResult!
+  renameAttributeSection(id: ID!, sectionName: String!): AttributeSectionResult!
+  reorderAttributeSections(domainCode: String!, orderedIds: [ID!]!): AttributeSectionResult!
+  updateAttributeSection(id: ID!, columnCount: Int!): AttributeSectionResult!
+  deleteAttributeSection(id: ID!): AttributeSectionResult!
+  reorderSectionAttributes(domainCode: String!, sectionName: String!, attributeIds: [ID!]!): AttributeSectionResult!
   processCalculatedAttributes(limit: Int): ProcessCalculatedAttributesResult!
   updateCalcExpression(id: ID!, expression: JSON!, operands: [CalcOperandInput!]): UpdateCalcExpressionResult!
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
@@ -190,6 +199,9 @@ type Mutation {
   createComplianceScopeAssignment(input: CreateComplianceScopeAssignmentInput!): CreateComplianceScopeAssignmentResult!
   deleteComplianceScopeAssignment(id: ID!): DeleteComplianceScopeAssignmentResult!
   evaluateComplianceRule(input: EvaluateComplianceRuleInput!): EvaluateComplianceRuleResult!
+  scoreDealCompliance(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealComplianceScore!
+  upsertComplianceThreshold(input: UpsertComplianceThresholdInput!): UpsertComplianceThresholdResult!
+  deleteComplianceThreshold(id: ID!): DeleteComplianceThresholdResult!
 
   # Reference List (Controlled Vocabulary) mutations
   createReferenceList(input: CreateReferenceListInput!): CreateReferenceListResult!
@@ -297,6 +309,8 @@ input UpdateAttributeDefinitionInput {
   defaultValue: String
   displaySection: String
   displayGroup: Int
+  displaySpanColumns: Int
+  displaySpanRows: Int
   isEditable: Boolean
   isVisible: Boolean
   aggregationType: String
@@ -308,6 +322,21 @@ input UpdateAttributeDefinitionInput {
 type UpdateAttributeDefinitionResult {
   success: Boolean!
   attribute: AttributeDefinition
+  errors: [MutationError!]!
+}
+
+type AttributeSection {
+  id: ID!
+  domainCode: String!
+  sectionName: String!
+  displayOrder: Int!
+  columnCount: Int!
+}
+
+type AttributeSectionResult {
+  success: Boolean!
+  section: AttributeSection
+  sections: [AttributeSection!]
   errors: [MutationError!]!
 }
 

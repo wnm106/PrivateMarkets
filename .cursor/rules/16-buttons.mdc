@@ -1,0 +1,32 @@
+---
+description: Button and in-place field pattern for the web app
+globs: apps/web/**/*.{tsx,css}
+alwaysApply: false
+---
+
+# Buttons and editable fields
+
+Use the shared classes in `apps/web/styles/globals.css`. Do not invent a text-only control for an action.
+
+## Actions
+
+A control that adds, removes, opens, saves, or commits is a button.
+
+- `btn` is the default: bordered, surface background, `var(--ink-2)` text, weight 600.
+- `btn btn-sm` sits in a table, a list row, or beside body copy.
+- `btn btn-primary` is the single action that completes the screen. One per view.
+- A state control (`Pending`, `Open`, `Draft`) is `btn btn-sm` plus a state class. The state class changes color only. The border and background stay.
+
+```tsx
+<button type="button" className="btn btn-sm">Add a point</button>
+<button type="button" className="btn btn-primary">Commit allocation</button>
+<button type="button" className="btn btn-sm icm-state pending">Pending</button>
+```
+
+Never style an action as unbordered colored text. That reads as a link. Links are `<a>` elements that navigate.
+
+## In-place values
+
+A fact the user can edit in place is a field, not a button and not a link. Use `field-edit`: a border, the surface background, inherited type, and a text cursor. Hover darkens the border. Click replaces it with an input of the same width. Enter or blur saves. Escape cancels.
+
+Section navigation is a nav list. It is not `btn` and not `field-edit`.

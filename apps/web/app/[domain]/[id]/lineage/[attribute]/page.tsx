@@ -71,7 +71,7 @@ export default function AttributeLineagePage() {
           <div style={{ background: 'var(--bg)', border: '1px solid var(--line)', padding: '20px' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '20px', marginBottom: '20px' }}>
               <div>
-                <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '8px' }}>
+                <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '8px' }}>
                   Valid Time Axis
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
@@ -79,20 +79,20 @@ export default function AttributeLineagePage() {
                 </div>
               </div>
               <div style={{ height: '60px', background: 'var(--surface)', border: '1px solid var(--line-strong)', position: 'relative' }}>
-                <div style={{ position: 'absolute', left: '10%', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--ink-3)' }}>
+                <div style={{ position: 'absolute', left: '10%', top: '50%', transform: 'translateY(-50%)', fontSize: '11px', color: 'var(--ink-3)' }}>
                   2025-09
                 </div>
-                <div style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--ink-3)' }}>
+                <div style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translateY(-50%)', fontSize: '11px', color: 'var(--ink-3)' }}>
                   2026-01
                 </div>
-                <div style={{ position: 'absolute', right: '10%', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--ink-3)' }}>
+                <div style={{ position: 'absolute', right: '10%', top: '50%', transform: 'translateY(-50%)', fontSize: '11px', color: 'var(--ink-3)' }}>
                   2026-05
                 </div>
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '20px' }}>
               <div>
-                <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '8px' }}>
+                <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '8px' }}>
                   System Time Axis
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
@@ -100,13 +100,13 @@ export default function AttributeLineagePage() {
                 </div>
               </div>
               <div style={{ height: '60px', background: 'var(--surface)', border: '1px solid var(--line-strong)', position: 'relative' }}>
-                <div style={{ position: 'absolute', left: '15%', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--ink-3)' }}>
+                <div style={{ position: 'absolute', left: '15%', top: '50%', transform: 'translateY(-50%)', fontSize: '11px', color: 'var(--ink-3)' }}>
                   2025-09-01
                 </div>
-                <div style={{ position: 'absolute', left: '55%', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--ink-3)' }}>
+                <div style={{ position: 'absolute', left: '55%', top: '50%', transform: 'translateY(-50%)', fontSize: '11px', color: 'var(--ink-3)' }}>
                   2026-01-15
                 </div>
-                <div style={{ position: 'absolute', right: '15%', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--ink-3)' }}>
+                <div style={{ position: 'absolute', right: '15%', top: '50%', transform: 'translateY(-50%)', fontSize: '11px', color: 'var(--ink-3)' }}>
                   2026-05-15
                 </div>
               </div>
@@ -189,7 +189,7 @@ export default function AttributeLineagePage() {
             maxWidth: '500px',
             width: '90%',
           }}>
-            <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--accent)', fontWeight: 600, marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--accent)', fontWeight: 600, marginBottom: '8px' }}>
               Manual Override
             </div>
             <div style={{ fontFamily: 'var(--font-ibm-plex-serif), serif', fontSize: '18px', fontWeight: 600, marginBottom: '16px' }}>
@@ -279,9 +279,9 @@ const LINEAGE_COLUMNS: ColDef[] = [
     sortable: false,
     filter: false,
     cellRenderer: (params: any) => params.data.isGolden ? (
-      <span style={{ background: 'var(--green)', color: '#fff', padding: '3px 8px', fontSize: '9px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px' }}>Golden</span>
+      <span style={{ background: 'var(--green)', color: '#fff', padding: '3px 8px', fontSize: '11px', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>Golden</span>
     ) : params.data.superseded ? (
-      <span style={{ background: 'var(--bg-alt)', color: 'var(--ink-3)', padding: '3px 8px', fontSize: '9px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px' }}>Superseded</span>
+      <span style={{ background: 'var(--bg-alt)', color: 'var(--ink-3)', padding: '3px 8px', fontSize: '11px', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>Superseded</span>
     ) : null,
   },
 ];

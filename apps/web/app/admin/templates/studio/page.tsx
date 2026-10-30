@@ -577,7 +577,7 @@ export default function StatementStudioPage() {
                   {source.previewUrl && <img src={source.previewUrl} alt="" style={{ width: '42px', height: '42px', objectFit: 'cover', border: '1px solid var(--line)' }} />}
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 600 }}>{source.sourceName}</div>
-                    <div className="mono" style={{ fontSize: '10px', color: 'var(--ink-3)' }}>{source.sourceKind}{source.text ? ' · read' : ''}</div>
+                    <div className="mono" style={{ fontSize: '11px', color: 'var(--ink-3)' }}>{source.sourceKind}{source.text ? ' · read' : ''}</div>
                   </div>
                   <button type="button" className="btn btn-sm" onClick={() => removeSource(source.id)}>Remove</button>
                 </li>
@@ -658,7 +658,7 @@ function MatchPill({ line }: { line: DraftLine }) {
         ? `Alias of ${line.attributeCode}`
         : `Alias of ${line.attributeCode}`;
   return (
-    <span style={{ ...tone, fontSize: '10px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '2px 6px' }}>
+    <span style={{ ...tone, fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'none', padding: '2px 6px' }}>
       {label}{line.matchKind === 'alias' ? ` · ${Math.round(line.confidence * 100)}%` : ''}
     </span>
   );
@@ -787,7 +787,7 @@ function StudioAliasCell(props: any) {
       {line.aliases.length === 0 && <span style={{ color: 'var(--ink-4)' }}>—</span>}
       <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
         {line.aliases.map((alias: string) => (
-          <span key={alias} className="mono" style={{ fontSize: '10px', padding: '2px 6px', border: '1px solid var(--line)', background: 'var(--bg)' }}>{alias}</span>
+          <span key={alias} className="mono" style={{ fontSize: '11px', padding: '2px 6px', border: '1px solid var(--line)', background: 'var(--bg)' }}>{alias}</span>
         ))}
       </div>
     </div>

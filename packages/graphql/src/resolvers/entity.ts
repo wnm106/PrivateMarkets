@@ -1,5 +1,6 @@
 import { Context } from '../context';
 import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePosition, storedRuleLabel } from '../lib/attribute-sequence';
+import { needsTemporalRead, overlayTemporalAttributes } from '../lib/temporal-attributes';
 import { dirtyAttributeCodes } from './calculation';
 import { resolveSchemaClientId, withClientNames } from './schema-scope';
 
@@ -17,10 +18,10 @@ export const entityResolvers = {
   Query: {
     entities: async (
       _: any,
-      args: { filter?: any; pagination?: any; asOfDate?: string },
+      args: { filter?: any; pagination?: any; asOfDate?: string; knowledgeDate?: string },
       context: Context
     ) => {
-      const { filter, pagination, asOfDate } = args;
+      const { filter, pagination, asOfDate, knowledgeDate } = args;
       
       try {
         // Query from generic entity_master view
@@ -79,6 +80,16 @@ export const entityResolvers = {
           node: mapEntityRow(row),
           cursor: btoa(String(offset + index)),
         }));
+
+        if (needsTemporalRead(asOfDate, knowledgeDate)) {
+          await overlayTemporalAttributes(
+            context.supabase,
+            edges.map((edge) => edge.node),
+            asOfDate,
+            knowledgeDate,
+            filter?.domainCode,
+          );
+        }
         
         return {
           edges,
@@ -98,7 +109,7 @@ export const entityResolvers = {
     
     entity: async (
       _: any,
-      args: { id?: string; entityCode?: string; asOfDate?: string },
+      args: { id?: string; entityCode?: string; asOfDate?: string; knowledgeDate?: string },
       context: Context
     ) => {
       let query = context.supabase.from('entity_master').select('*');
@@ -118,7 +129,18 @@ export const entityResolvers = {
         throw error;
       }
       
-      return attachCompositeMembers(mapEntityRow(data), context);
+      const entity = await attachCompositeMembers(mapEntityRow(data), context);
+      // The master projection keeps every still-open value. Replace it with the
+      // values in force at this as-of and knowledge time, so a later value cannot
+      // fill an attribute that was blank then. The entity itself stays.
+      await overlayTemporalAttributes(
+        context.supabase,
+        [entity],
+        args.asOfDate,
+        args.knowledgeDate,
+        entity.domainCode,
+      );
+      return entity;
     },
     
     // Queries for entity management
@@ -580,7 +602,10 @@ export const entityResolvers = {
                 golden_value: text,
                 golden_value_numeric: numeric,
                 valid_from: asOf,
-                precedence_rank: attr.default_precedence_rank,
+                valid_to: '9999-12-31',
+                system_to: '9999-12-31 23:59:59',
+                precedence_rank: 1,
+                is_manual_override: true,
                 created_by: userId,
               });
               if (insertError) throw insertError;
@@ -1645,8 +1670,8 @@ function mapChildRelationship(rel: any): any {
   };
 }
 
-// A position's own name does not say which fund and security it joins.
-// For related entities whose domain is an intersection type, attach those constituents.
+// A tranche or position is an intersection. Attach only the declared constituents
+// (a tranche's security, a position's fund and security), not every record that points at it.
 async function attachCompositeMembers(entity: any, context: Context): Promise<any> {
   const relationships = [...(entity.parentRelationships || []), ...(entity.childRelationships || [])];
   for (const relationship of relationships) relationship.members = relationship.members || [];
@@ -1681,22 +1706,28 @@ async function attachCompositeMembers(entity: any, context: Context): Promise<an
   for (let index = 0; index < compositeIds.length; index += 100) {
     const { data: rows, error } = await context.supabase
       .from('entity_master')
-      .select('entity_id, domain_code, parent_relationships')
+      .select('entity_id, domain_code, parent_relationships, child_relationships')
       .in('entity_id', compositeIds.slice(index, index + 100));
     if (error) throw error;
     for (const row of rows || []) {
       const order = orderByDomain.get(row.domain_code) || new Map<string, number>();
-      const members = (row.parent_relationships || [])
-        .map((parent: any) => ({
-          entityId: parent.parent_entity_id,
-          entityCode: parent.parent_entity_code,
-          entityName: parent.parent_entity_name,
-          domainCode: parent.parent_domain_code,
-        }))
-        .filter((member: { entityId: string; entityName: string }) => member.entityId && member.entityName)
-        .sort((a: { domainCode: string }, b: { domainCode: string }) =>
-          (order.get(a.domainCode) ?? 999) - (order.get(b.domainCode) ?? 999)
-        );
+      const seen = new Set<string>();
+      const members: Array<{ entityId: string; entityCode: string; entityName: string; domainCode: string }> = [];
+      const consider = (related: any, side: 'parent' | 'child') => {
+        const member = {
+          entityId: related[`${side}_entity_id`] as string,
+          entityCode: related[`${side}_entity_code`] as string,
+          entityName: related[`${side}_entity_name`] as string,
+          domainCode: related[`${side}_domain_code`] as string,
+        };
+        if (!member.entityId || !member.entityName || member.entityId === entity.id) return;
+        if (!order.has(member.domainCode) || seen.has(member.entityId)) return;
+        seen.add(member.entityId);
+        members.push(member);
+      };
+      for (const parent of row.parent_relationships || []) consider(parent, 'parent');
+      for (const child of row.child_relationships || []) consider(child, 'child');
+      members.sort((a, b) => (order.get(a.domainCode) ?? 999) - (order.get(b.domainCode) ?? 999));
       membersById.set(row.entity_id, members);
     }
   }

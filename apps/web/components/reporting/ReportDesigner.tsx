@@ -247,7 +247,7 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
   });
 
   const fieldLabel = (text: string) => (
-    <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--ink-3)', margin: '12px 0 4px' }}>{text}</div>
+    <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', margin: '12px 0 4px' }}>{text}</div>
   );
   const inputStyle = { width: '100%', padding: '8px 10px', fontSize: '13px', border: '1px solid var(--line)', background: 'white', fontFamily: 'inherit' } as const;
 

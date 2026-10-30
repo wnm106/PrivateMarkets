@@ -128,10 +128,10 @@ export default function DynamicEntityDetailPage() {
       setError(null);
 
       const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
-      const variables = isUUID ? { id, asOfDate } : { entityCode: id, asOfDate };
+      const variables = isUUID ? { id, asOfDate, knowledgeDate } : { entityCode: id, asOfDate, knowledgeDate };
 
       try {
-        const { data, error: queryError } = await graphqlQuery<{ entity: EntityData }, { id?: string; entityCode?: string; asOfDate: string }>(
+        const { data, error: queryError } = await graphqlQuery<{ entity: EntityData }, { id?: string; entityCode?: string; asOfDate: string; knowledgeDate: string }>(
           ENTITY_QUERY,
           variables
         );
@@ -158,7 +158,7 @@ export default function DynamicEntityDetailPage() {
 
           const entityDomainCode = data.entity.domainCode;
           const attrResult = await graphqlQuery<
-            { attributeRegister: Array<{ attributeCode: string; attributeName: string; dataType: string; isRequired: boolean; displaySection: string; displayGroup: number; isVisible: boolean; isDerived?: boolean; derivationFormula?: string | null }> },
+            { attributeRegister: Array<{ attributeCode: string; attributeName: string; dataType: string; isRequired: boolean; displaySection: string; displayGroup: number; displaySpanColumns?: number | null; displaySpanRows?: number | null; isVisible: boolean; isDerived?: boolean; derivationFormula?: string | null }> },
             { domainCode: string }
           >(
             ATTRIBUTE_REGISTER_QUERY,
@@ -167,13 +167,15 @@ export default function DynamicEntityDetailPage() {
           if (attrResult.data?.attributeRegister) {
             const mappedAttributes: TemplateAttribute[] = attrResult.data.attributeRegister
               .filter((a) => a.isVisible !== false)
-              .              map((a) => ({
+              .map((a) => ({
                 attributeCode: a.attributeCode,
                 attributeName: a.attributeName,
                 dataType: a.dataType,
                 required: a.isRequired || false,
                 displaySection: a.displaySection || 'General',
                 sortOrder: a.displayGroup || 0,
+                spanColumns: a.displaySpanColumns,
+                spanRows: a.displaySpanRows,
                 isDerived: a.isDerived === true,
                 derivationFormula: a.derivationFormula,
               }));
@@ -313,9 +315,9 @@ export default function DynamicEntityDetailPage() {
       if (entity.id) {
         const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
         const [entityResult, lineageResult] = await Promise.all([
-          graphqlQuery<{ entity: EntityData }, { id?: string; entityCode?: string; asOfDate: string }>(
+          graphqlQuery<{ entity: EntityData }, { id?: string; entityCode?: string; asOfDate: string; knowledgeDate: string }>(
             ENTITY_QUERY,
-            isUUID ? { id, asOfDate } : { entityCode: id, asOfDate },
+            isUUID ? { id, asOfDate, knowledgeDate } : { entityCode: id, asOfDate, knowledgeDate },
             'network-only'
           ),
           graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
@@ -357,9 +359,9 @@ export default function DynamicEntityDetailPage() {
 
       const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
       const [entityResult, lineageResult] = await Promise.all([
-        graphqlQuery<{ entity: EntityData }, { id?: string; entityCode?: string; asOfDate: string }>(
+        graphqlQuery<{ entity: EntityData }, { id?: string; entityCode?: string; asOfDate: string; knowledgeDate: string }>(
           ENTITY_QUERY,
-          isUUID ? { id, asOfDate } : { entityCode: id, asOfDate },
+          isUUID ? { id, asOfDate, knowledgeDate } : { entityCode: id, asOfDate, knowledgeDate },
           'network-only'
         ),
         graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
@@ -448,9 +450,14 @@ export default function DynamicEntityDetailPage() {
         mergeHref={`/merge?entity=${entity.id}`}
       />
 
-      {workingView && (
+      {(domain === 'funds' || workingView) && (
         <div className="xp-jump">
-          <Link href={workingView.href} className="btn btn-primary">Open {workingView.name}</Link>
+          {domain === 'funds' && (
+            <Link href={`/funds/${id}/overview`} className="btn btn-primary">Fund surface</Link>
+          )}
+          {workingView && (
+            <Link href={workingView.href} className="btn">Open {workingView.name}</Link>
+          )}
         </div>
       )}
 

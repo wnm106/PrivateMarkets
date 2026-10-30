@@ -124,6 +124,8 @@ export interface ComplianceRuleFormData {
   limitDirection: string;
   softLimitValue: string;
   hardLimitValue: string;
+  hardLimitAttributeCode: string;
+  softLimitFactor: string;
   defaultSourceScope: string;
   conditions: ComplianceCondition[];
 }
@@ -188,6 +190,8 @@ function defaultFormData(): ComplianceRuleFormData {
     limitDirection: 'MAX',
     softLimitValue: '',
     hardLimitValue: '',
+    hardLimitAttributeCode: '',
+    softLimitFactor: '',
     defaultSourceScope: 'GOLDEN',
     conditions: [],
   };
@@ -361,14 +365,14 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
     if (s === 1) {
       if (!formData.baseDomainCode) e.baseDomainCode = 'Choose where values are read from';
       if (!formData.numeratorAttributeCode) e.numeratorAttributeCode = 'Choose the value to measure';
-      if (formData.denominatorScope !== 'CONSTANT' && !formData.denominatorAttributeCode) {
+      if (formData.denominatorScope !== 'CONSTANT' && formData.denominatorScope !== 'NONE' && !formData.denominatorAttributeCode) {
         e.denominatorAttributeCode = 'Choose the value to compare against';
       }
       if (formData.denominatorScope === 'CONSTANT' && !formData.denominatorConstantValue) {
         e.denominatorConstantValue = 'Enter a number';
       }
-      if (!formData.softLimitValue && !formData.hardLimitValue) {
-        e.hardLimitValue = 'Set at least one limit';
+      if (!formData.softLimitValue && !formData.hardLimitValue && !formData.hardLimitAttributeCode) {
+        e.hardLimitValue = 'Set a limit, or read it from the fund';
       }
     }
     setErrors(e);
@@ -402,11 +406,18 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
     let rel = '';
     if (formData.denominatorScope === 'CONSTANT') {
       rel = formData.denominatorConstantValue ? ` ÷ ${formData.denominatorConstantValue}` : '';
+    } else if (formData.denominatorScope === 'NONE') {
+      rel = '';
     } else if (formData.denominatorAttributeCode) {
-      const den = attrName(baseAttributes, formData.denominatorAttributeCode);
-      rel = ` as a share of ${formData.denominatorScope === 'SAME_GROUP' ? 'group' : 'total'} ${den}`;
+      const denList = formData.denominatorScope === 'ANCHOR' ? anchorAttributes : baseAttributes;
+      const den = attrName(denList, formData.denominatorAttributeCode);
+      rel = formData.denominatorScope === 'ANCHOR'
+        ? ` as a percent of the fund's ${den}`
+        : ` as a share of ${formData.denominatorScope === 'SAME_GROUP' ? 'group' : 'total'} ${den}`;
     }
-    const limit = formData.hardLimitValue || formData.softLimitValue;
+    const limit = formData.hardLimitAttributeCode
+      ? `the fund's ${formData.hardLimitAttributeCode}`
+      : (formData.hardLimitValue || formData.softLimitValue);
     const dir = formData.limitDirection === 'MAX' ? 'above' : 'below';
     return `For each ${domainName(formData.anchorDomainCode)}: ${num}${rel}. Breach when ${dir} ${limit || '…'}.`;
   })();
@@ -567,12 +578,14 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
                   value={formData.denominatorScope}
                   onChange={(e) => handleChange('denominatorScope', e.target.value)}
                 >
-                  <option value="ANCHOR_TOTAL">Total for the entity (e.g. % of fund NAV)</option>
+                  <option value="NONE">The measure itself (count or total exposure)</option>
+                  <option value="ANCHOR">A value on the fund (for example NAV)</option>
+                  <option value="ANCHOR_TOTAL">Total of the positions in the fund</option>
                   <option value="SAME_GROUP">Total within the same group</option>
                   <option value="CONSTANT">A fixed number</option>
                 </select>
               </div>
-              {formData.denominatorScope === 'CONSTANT' ? (
+              {formData.denominatorScope === 'NONE' ? null : formData.denominatorScope === 'CONSTANT' ? (
                 <div className="field">
                   <label>Number *</label>
                   <input
@@ -585,11 +598,11 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
                 </div>
               ) : (
                 <AttributePicker
-                  label="Total of *"
-                  rootDomainCode={formData.baseDomainCode}
+                  label={formData.denominatorScope === 'ANCHOR' ? 'Fund value *' : 'Total of *'}
+                  rootDomainCode={formData.denominatorScope === 'ANCHOR' ? formData.anchorDomainCode : formData.baseDomainCode}
                   value={formData.denominatorAttributeCode}
                   onChange={(code) => handleChange('denominatorAttributeCode', code)}
-                  attributes={baseAttributes}
+                  attributes={formData.denominatorScope === 'ANCHOR' ? anchorAttributes : baseAttributes}
                   placeholder="Select value..."
                   error={!!errors.denominatorAttributeCode}
                 />
@@ -624,6 +637,27 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
                   value={formData.softLimitValue}
                   onChange={(e) => handleChange('softLimitValue', e.target.value)}
                   placeholder="Optional"
+                />
+              </div>
+              <AttributePicker
+                label="Or read the hard limit from the fund"
+                rootDomainCode={formData.anchorDomainCode}
+                value={formData.hardLimitAttributeCode}
+                onChange={(code) => handleChange('hardLimitAttributeCode', code)}
+                attributes={anchorAttributes}
+                placeholder="Optional"
+              />
+              <div className="field">
+                <label>Warning as a fraction of that limit</label>
+                <input
+                  className="text-input mono"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={formData.softLimitFactor}
+                  onChange={(e) => handleChange('softLimitFactor', e.target.value)}
+                  placeholder="0.80 = warn at 80%"
                 />
               </div>
             </div>
@@ -795,7 +829,7 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
                   value={formData.numeratorDimension}
                   onChange={(d) => handleChange('numeratorDimension', d)}
                 />
-                {formData.denominatorScope !== 'CONSTANT' && (
+                {formData.denominatorScope !== 'CONSTANT' && formData.denominatorScope !== 'NONE' && (
                   <DimensionPicker
                     label="Compare against: source / period"
                     value={formData.denominatorDimension}
@@ -971,7 +1005,7 @@ function ConditionGroup({
           <div style={{ marginBottom: '8px', border: '1px solid var(--line)', borderRadius: '6px', padding: '10px', background: 'var(--surface)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 130px 1fr 30px', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
             {idx === allConditions.findIndex((c) => c.appliesTo === cond.appliesTo) ? (
-              <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--accent)' }}>IF</span>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent)' }}>IF</span>
             ) : (
               <select
                 className="select"
@@ -1049,7 +1083,7 @@ function ConditionGroup({
                   const el = document.getElementById(`tree-${idx}`);
                   if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
                 }}
-                style={{ fontSize: '10px', padding: '2px 8px', background: 'var(--accent-light)', border: '1px solid var(--accent)', borderRadius: '3px', cursor: 'pointer', color: 'var(--accent)' }}
+                style={{ fontSize: '11px', padding: '2px 8px', background: 'var(--accent-light)', border: '1px solid var(--accent)', borderRadius: '3px', cursor: 'pointer', color: 'var(--accent)' }}
               >
                 🌳 Browse entity tree
               </button>
@@ -1184,6 +1218,8 @@ export function buildComplianceVersionInput(ruleId: string, data: ComplianceRule
       .filter((h) => h.relationshipCode)
       .map((h) => ({ relationshipCode: h.relationshipCode, direction: h.direction, recursive: h.recursive }));
   const isConst = data.denominatorScope === 'CONSTANT';
+  const noRatio = data.denominatorScope === 'NONE';
+  const anchorDen = data.denominatorScope === 'ANCHOR';
   return {
     ruleId,
     validFrom: data.validFrom,
@@ -1197,16 +1233,19 @@ export function buildComplianceVersionInput(ruleId: string, data: ComplianceRule
     numeratorAttributeCode: data.numeratorAttributeCode,
     numeratorAggregation: data.numeratorAggregation,
     numeratorDimension: dimensionToInput(data.numeratorDimension),
-    denominatorDimension: isConst ? undefined : dimensionToInput(data.denominatorDimension),
+    denominatorDimension: isConst || noRatio ? undefined : dimensionToInput(data.denominatorDimension),
     resultTransform: data.resultTransform,
-    denominatorAttributeCode: isConst ? undefined : data.denominatorAttributeCode || undefined,
-    denominatorAggregation: isConst ? undefined : data.denominatorAggregation,
-    denominatorScope: data.denominatorScope,
+    denominatorAttributeCode: isConst || noRatio ? undefined : data.denominatorAttributeCode || undefined,
+    denominatorAggregation: isConst || noRatio ? undefined : data.denominatorAggregation,
+    denominatorScope: anchorDen || noRatio ? 'SAME_GROUP' : data.denominatorScope,
+    denominatorSource: anchorDen ? 'ANCHOR' : 'BASE',
     denominatorConstantValue: data.denominatorConstantValue ? parseFloat(data.denominatorConstantValue) : undefined,
     resultUnit: data.resultUnit,
     limitDirection: data.limitDirection,
     softLimitValue: data.softLimitValue ? parseFloat(data.softLimitValue) : undefined,
     hardLimitValue: data.hardLimitValue ? parseFloat(data.hardLimitValue) : undefined,
+    hardLimitAttributeCode: data.hardLimitAttributeCode || undefined,
+    softLimitFactor: data.softLimitFactor ? parseFloat(data.softLimitFactor) : undefined,
     defaultSourceScope: data.defaultSourceScope,
     conditions: data.conditions
       .filter((c) => c.attributeCode)

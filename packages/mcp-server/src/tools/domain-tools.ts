@@ -59,7 +59,7 @@ const getAttributeMetadata: ToolDefinition = {
 
 const getTemplateMetadata: ToolDefinition = {
   name: 'get_template_metadata',
-  description: 'Which attributes belong to an entity type, with names, descriptions, data types, and which are required. Call this before a grain "entity" query or before creating a record. domainCode comes from list_domain_types. Use the returned attribute_code values. Do not invent field codes.',
+  description: 'Which attributes belong to an entity type, with names, descriptions, data types, reference targets, aggregation, and which are required. Call this before creating a record. For a question that filters, groups, or reads across relationships, call get_model_map instead. domainCode comes from list_domain_types. Use the returned attribute_code values. Do not invent field codes.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -94,7 +94,10 @@ const getTemplateMetadata: ToolDefinition = {
             attribute_name,
             description,
             data_type,
-            list_values
+            list_values,
+            reference_domain_code,
+            aggregation_type,
+            weight_attribute_code
           )
         )
       `)
@@ -119,6 +122,9 @@ const getTemplateMetadata: ToolDefinition = {
         ...assignment,
         attribute_code: assignment.attribute_register?.attribute_code ?? null,
         attribute_name: assignment.attribute_register?.attribute_name ?? null,
+        reference_domain_code: assignment.attribute_register?.reference_domain_code ?? null,
+        aggregation_type: assignment.attribute_register?.aggregation_type ?? null,
+        weight_attribute_code: assignment.attribute_register?.weight_attribute_code ?? null,
       })),
     }));
 
@@ -301,7 +307,7 @@ const createRelationship: ToolDefinition = {
 
 const getRelationshipTypes: ToolDefinition = {
   name: 'get_relationship_types',
-  description: 'Every relationship code, with its parent domain, child domain, and cardinality. Call this before query_data path or lookups, and before create_relationship. Use the returned relationship_code. Do not invent one.',
+  description: 'Every relationship code, with its parent domain, child domain, and cardinality. Call get_model_map before query_data when a question crosses entity types; that map includes the lookup direction of the stored links. Call this before create_relationship. Use the returned relationship_code. Do not invent one.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',

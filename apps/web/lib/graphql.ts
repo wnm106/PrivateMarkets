@@ -117,8 +117,8 @@ export const ENTITIES_QUERY = `
 `;
 
 export const ENTITY_QUERY = `
-  query Entity($id: ID, $entityCode: String, $asOfDate: Date) {
-    entity(id: $id, entityCode: $entityCode, asOfDate: $asOfDate) {
+  query Entity($id: ID, $entityCode: String, $asOfDate: Date, $knowledgeDate: DateTime) {
+    entity(id: $id, entityCode: $entityCode, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate) {
       id
       entityCode
       entityName
@@ -264,6 +264,8 @@ export const ATTRIBUTE_REGISTER_QUERY = `
       defaultValue
       displaySection
       displayGroup
+      displaySpanColumns
+      displaySpanRows
       isEditable
       isVisible
       isDerived
@@ -277,6 +279,76 @@ export const ATTRIBUTE_REGISTER_QUERY = `
       defaultPrecedenceChain
       clientId
       clientName
+    }
+  }
+`;
+
+export const ATTRIBUTE_SECTIONS_QUERY = `
+  query AttributeSections($domainCode: String!) {
+    attributeSections(domainCode: $domainCode) {
+      id
+      domainCode
+      sectionName
+      displayOrder
+      columnCount
+    }
+  }
+`;
+
+export const CREATE_ATTRIBUTE_SECTION_MUTATION = `
+  mutation CreateAttributeSection($domainCode: String!, $sectionName: String!) {
+    createAttributeSection(domainCode: $domainCode, sectionName: $sectionName) {
+      success
+      section { id domainCode sectionName displayOrder columnCount }
+      errors { field message code }
+    }
+  }
+`;
+
+export const RENAME_ATTRIBUTE_SECTION_MUTATION = `
+  mutation RenameAttributeSection($id: ID!, $sectionName: String!) {
+    renameAttributeSection(id: $id, sectionName: $sectionName) {
+      success
+      section { id domainCode sectionName displayOrder columnCount }
+      errors { field message code }
+    }
+  }
+`;
+
+export const REORDER_ATTRIBUTE_SECTIONS_MUTATION = `
+  mutation ReorderAttributeSections($domainCode: String!, $orderedIds: [ID!]!) {
+    reorderAttributeSections(domainCode: $domainCode, orderedIds: $orderedIds) {
+      success
+      sections { id domainCode sectionName displayOrder columnCount }
+      errors { field message code }
+    }
+  }
+`;
+
+export const UPDATE_ATTRIBUTE_SECTION_MUTATION = `
+  mutation UpdateAttributeSection($id: ID!, $columnCount: Int!) {
+    updateAttributeSection(id: $id, columnCount: $columnCount) {
+      success
+      section { id domainCode sectionName displayOrder columnCount }
+      errors { field message code }
+    }
+  }
+`;
+
+export const DELETE_ATTRIBUTE_SECTION_MUTATION = `
+  mutation DeleteAttributeSection($id: ID!) {
+    deleteAttributeSection(id: $id) {
+      success
+      errors { field message code }
+    }
+  }
+`;
+
+export const REORDER_SECTION_ATTRIBUTES_MUTATION = `
+  mutation ReorderSectionAttributes($domainCode: String!, $sectionName: String!, $attributeIds: [ID!]!) {
+    reorderSectionAttributes(domainCode: $domainCode, sectionName: $sectionName, attributeIds: $attributeIds) {
+      success
+      errors { field message code }
     }
   }
 `;
@@ -1907,11 +1979,14 @@ const COMPLIANCE_VERSION_FIELDS = `
   denominatorAttributeCode
   denominatorAggregation
   denominatorScope
+  denominatorSource
   denominatorConstantValue
   resultUnit
   limitDirection
   softLimitValue
   hardLimitValue
+  hardLimitAttributeCode
+  softLimitFactor
   defaultSourceScope
   isActive
   conditions { ${COMPLIANCE_CONDITION_FIELDS} }
@@ -2050,6 +2125,35 @@ export const CREATE_COMPLIANCE_SCOPE_ASSIGNMENT_MUTATION = `
 export const DELETE_COMPLIANCE_SCOPE_ASSIGNMENT_MUTATION = `
   mutation DeleteComplianceScopeAssignment($id: ID!) {
     deleteComplianceScopeAssignment(id: $id) {
+      success
+      errors { field message code }
+    }
+  }
+`;
+
+export const COMPLIANCE_FUND_BOARD_QUERY = `
+  query ComplianceFundBoard {
+    complianceFundBoard {
+      funds { entityId entityCode entityName parentEntityId }
+      rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode consolidateDescendants isActive }
+      thresholds { id ruleId ruleCode ruleName entityId groupValue rankFrom rankTo softLimitValue hardLimitValue applies notes }
+      results { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
+    }
+  }
+`;
+
+export const UPSERT_COMPLIANCE_THRESHOLD_MUTATION = `
+  mutation UpsertComplianceThreshold($input: UpsertComplianceThresholdInput!) {
+    upsertComplianceThreshold(input: $input) {
+      threshold { id }
+      errors { field message code }
+    }
+  }
+`;
+
+export const DELETE_COMPLIANCE_THRESHOLD_MUTATION = `
+  mutation DeleteComplianceThreshold($id: ID!) {
+    deleteComplianceThreshold(id: $id) {
       success
       errors { field message code }
     }

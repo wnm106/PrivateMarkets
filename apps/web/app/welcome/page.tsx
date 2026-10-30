@@ -104,7 +104,7 @@ function ProductPreview() {
           <div className="md:col-span-2 p-6 text-left">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <div className="text-xs uppercase tracking-widest text-ink-3">Golden record</div>
+                <div className="text-xs tracking-widest text-ink-3">Golden record</div>
                 <div className="text-xl font-semibold">Northwind Capital Partners IV</div>
               </div>
               <span className="text-xs font-semibold text-green bg-green/10 px-2.5 py-1 rounded-full">Verified</span>
@@ -123,12 +123,12 @@ function ProductPreview() {
             </div>
           </div>
           <div className="p-6 bg-bg border-l border-line text-left">
-            <div className="text-xs uppercase tracking-widest text-ink-3 mb-3">Data quality</div>
+            <div className="text-xs tracking-widest text-ink-3 mb-3">Data quality</div>
             <div className="text-4xl font-display font-semibold text-brand-blue">98.4%</div>
             <div className="mt-2 h-2 rounded-full bg-line overflow-hidden">
               <div className="h-full w-[98%] bg-gradient-to-r from-brand-blue to-brand-cyan" />
             </div>
-            <div className="mt-6 text-xs uppercase tracking-widest text-ink-3 mb-2">Source conflicts</div>
+            <div className="mt-6 text-xs tracking-widest text-ink-3 mb-2">Source conflicts</div>
             <div className="text-sm rounded-lg bg-white border border-line p-3">
               <div className="font-medium">Committed capital</div>
               <div className="text-ink-3 mt-1">Allvue and manual entry differ. Precedence rule applied.</div>
@@ -172,7 +172,7 @@ export default function WelcomePage() {
       {/* Hero */}
       <section className="relative overflow-hidden bg-[radial-gradient(ellipse_at_top,rgba(0,163,255,0.22),transparent_55%),radial-gradient(circle_at_100%_60%,rgba(30,64,175,0.14),transparent_45%),radial-gradient(circle_at_0%_80%,rgba(0,163,255,0.10),transparent_40%)]">
         <div className="max-w-7xl mx-auto px-6 pt-20 pb-24 text-center">
-          <div className="inline-block text-xs font-semibold tracking-widest uppercase text-brand-blue bg-brand-blue/10 rounded-full px-4 py-1.5">
+          <div className="inline-block text-xs font-semibold tracking-widest text-brand-blue bg-brand-blue/10 rounded-full px-4 py-1.5">
             Master Data Management for Private Markets
           </div>
           <h1 className="mt-6 font-display text-5xl md:text-7xl font-semibold tracking-tight leading-[1.05]">
@@ -207,7 +207,7 @@ export default function WelcomePage() {
       {/* Source strip */}
       <section className="border-y border-line bg-white">
         <div className="max-w-7xl mx-auto px-6 py-8 text-center">
-          <div className="text-xs font-semibold uppercase tracking-widest text-ink-3 mb-4">
+          <div className="text-xs font-semibold tracking-widest text-ink-3 mb-4">
             Unifies the systems your team already uses
           </div>
           <div className="flex flex-wrap items-center justify-center gap-x-12 gap-y-3 text-lg font-semibold text-ink-4">
@@ -221,7 +221,7 @@ export default function WelcomePage() {
       {/* Features */}
       <section id="platform" className="max-w-7xl mx-auto px-6 py-24 scroll-mt-20">
         <div className="text-center mb-14">
-          <div className="text-xs font-semibold tracking-widest uppercase text-brand-sky mb-3">The platform</div>
+          <div className="text-xs font-semibold tracking-widest text-brand-sky mb-3">The platform</div>
           <h2 className="font-display text-4xl font-semibold">Built for data you can defend</h2>
           <p className="text-lg text-ink-3 mt-3">Everything you need to unify, govern and deliver investment data.</p>
         </div>

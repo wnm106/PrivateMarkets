@@ -179,7 +179,7 @@ The entity the rule is **"about"** — what gets scored/assigned a result.
 ### Base Entities & Rollup Path
 Entities whose attributes get **aggregated**. \`base_rollup_path\` walks from anchor to base:
 - **Empty** = single-record rule (anchor IS the base)
-- **One hop** = e.g. FUND → POSITION (via POSITION_FUND, direction DOWN)
+- **One hop** = e.g. FUND → POSITION (via POSITION_FUND, direction UP, because the position is the parent)
 - **Recursive** = e.g. FUND → child FUNDs (via FUND_PARENT, direction DOWN, recursive)
 
 ### Group-By Path & Attribute
@@ -191,20 +191,26 @@ Example: "per-fund industry concentration" → base=POSITION, group-by hop to SE
 |---|---|
 | numeratorAttributeCode | MARKET_VALUE |
 | numeratorAggregation | SUM, COUNT, AVG, MAX, MIN |
-| denominatorAttributeCode | MARKET_VALUE (total NAV) |
-| denominatorAggregation | SUM |
-| denominatorScope | ROLLUP (same set), ANCHOR, UNIVERSE |
-| denominatorConstantValue | Fixed value (no computation) |
+| denominatorAttributeCode | MARKET_VALUE, or NAV when the denominator is read on the fund |
+| denominatorAggregation | SUM, COUNT, AVG, MAX, MIN, VALUE |
+| denominatorScope | ANCHOR_TOTAL (all positions in the fund), SAME_GROUP, CONSTANT |
+| denominatorSource | BASE (aggregate positions) or ANCHOR (read the attribute on the fund, for example NAV) |
+| denominatorConstantValue | Fixed value (no computation). Omit the denominator entirely for a count or a total exposure. |
+
+Relationship direction follows the registry. POSITION is the parent of FUND and of SECURITY, and SECURITY is the parent of ISSUER. From a fund, positions are direction UP. From a position, the security and then the issuer are direction DOWN.
 
 ### Limits
-- limitDirection: LEQ (upper limit) or GEQ (lower limit)
-- softLimitValue: warning threshold
-- hardLimitValue: breach threshold
+- limitDirection: MAX (breach above) or MIN (breach below)
+- softLimitValue: warning threshold, in the result unit
+- hardLimitValue: breach threshold, in the result unit
+- hardLimitAttributeCode: optional attribute on the fund that supplies the hard limit
+- softLimitFactor: when the hard limit comes from the fund, the warning is the hard limit times this factor (0 to 1)
+- resultUnit: PERCENTAGE, RATIO, CURRENCY, or COUNT
 
 ### Conditions (Eligibility Filters)
 - appliesTo: ANCHOR or BASE
 - conditionGroup: same group=ANDed, different groups=ORed
-- operator: EQ, NEQ, GT, GTE, LT, LTE, IN, NOT_IN, IS_NULL, IS_NOT_NULL, LIKE, BETWEEN
+- operator: equals, not_equals, gt, gte, lt, lte, in, not_in, is_null, is_not_null
 
 ## Natural Language → Technical Examples
 
@@ -214,12 +220,12 @@ ruleCode: "FUND_ISSUER_CONC_5PCT"
 ruleCategory: "CONCENTRATION"
 anchorDomainCode: "FUND"
 baseDomainCode: "POSITION"
-baseRollupPath: [{ relationshipCode: "POSITION_FUND", direction: "DOWN" }]
-groupByPath: [{ relationshipCode: "POSITION_SECURITY", direction: "UP" }]
-groupByAttributeCode: "ISSUER"
+baseRollupPath: [{ relationshipCode: "POSITION_FUND", direction: "UP" }]
+groupByPath: [{ relationshipCode: "POSITION_SECURITY", direction: "DOWN" }, { relationshipCode: "SECURITY_ISSUER", direction: "DOWN" }]
+groupByAttributeCode: "ISSUER_LEGAL_NAME"
 numeratorAttributeCode: "MARKET_VALUE", numeratorAggregation: "SUM"
-denominatorAttributeCode: "MARKET_VALUE", denominatorAggregation: "SUM", denominatorScope: "ROLLUP"
-limitDirection: "LEQ", hardLimitValue: 5, resultUnit: "PERCENT"
+denominatorAttributeCode: "NAV", denominatorAggregation: "VALUE", denominatorScope: "SAME_GROUP", denominatorSource: "ANCHOR"
+limitDirection: "MAX", hardLimitValue: 5, resultUnit: "PERCENTAGE"
 \`\`\`
 
 ### Example 2: "Each issuer market cap >= $100M"
@@ -229,8 +235,8 @@ ruleCategory: "ELIGIBILITY"
 anchorDomainCode: "ISSUER"
 baseDomainCode: "ISSUER"
 baseRollupPath: []   (single-record)
-numeratorAttributeCode: "MARKET_CAP", numeratorAggregation: "SUM"
-limitDirection: "GEQ", hardLimitValue: 100000000, resultUnit: "CURRENCY"
+numeratorAttributeCode: "MARKET_CAP", numeratorAggregation: "VALUE"
+limitDirection: "MIN", hardLimitValue: 100000000, resultUnit: "CURRENCY"
 \`\`\`
 
 ### Example 3: "Fund-of-funds NAV <= $500M"
@@ -241,7 +247,7 @@ anchorDomainCode: "FUND"
 baseDomainCode: "FUND"
 baseRollupPath: [{ relationshipCode: "FUND_PARENT", direction: "DOWN", recursive: true }]
 numeratorAttributeCode: "NAV", numeratorAggregation: "SUM"
-limitDirection: "LEQ", hardLimitValue: 500000000, resultUnit: "CURRENCY"
+limitDirection: "MAX", hardLimitValue: 500000000, resultUnit: "CURRENCY"
 \`\`\`
 
 ## Workflow: Building a Rule
@@ -252,7 +258,7 @@ limitDirection: "LEQ", hardLimitValue: 500000000, resultUnit: "CURRENCY"
 4. **Determine grouping**: Sub-grouped? By what attribute?
 5. **Identify numerator**: What attribute, what aggregation?
 6. **Identify denominator**: Same? Different? Constant? What scope?
-7. **Set limits**: Upper (LEQ) or lower (GEQ)? Soft/hard thresholds?
+7. **Set limits**: Upper (MAX) or lower (MIN)? Soft/hard thresholds? Percent, count, or currency?
 8. **Consider conditions**: Any eligibility filters?
 9. **Create rule** → create_compliance_rule
 10. **Create version** → create_compliance_rule_version

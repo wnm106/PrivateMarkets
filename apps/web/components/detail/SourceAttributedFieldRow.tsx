@@ -20,9 +20,11 @@ interface SourceAttributedFieldRowProps {
   asOfDate?: string;
   entityId?: string;
   calcRefreshKey?: string;
+  presentation?: 'row' | 'card';
+  spanRows?: number;
 }
 
-export function SourceAttributedFieldRow({ field, onDrilldown, onAddSourceValue, onDeleteSourceValue, asOfDate, entityId, calcRefreshKey }: SourceAttributedFieldRowProps) {
+export function SourceAttributedFieldRow({ field, onDrilldown, onAddSourceValue, onDeleteSourceValue, asOfDate, entityId, calcRefreshKey, presentation = 'row', spanRows = 1 }: SourceAttributedFieldRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [availableSources, setAvailableSources] = useState<SourceOption[]>([]);
 
@@ -68,15 +70,17 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onAddSourceValue,
     ? { name: dbSource.name, color: dbSource.hex, hex: dbSource.hex }
     : (sources[normalizedFieldSource] ?? { name: field.source, color: '#475569', hex: '#475569' });
 
-  const borderColor = src.hex;
+  const hasValue = field.value !== '' && field.value !== '—' && field.value != null;
+  const hasSource = hasValue && Boolean(field.source);
+  const borderColor = hasSource ? src.hex : 'var(--ink-4)';
   const receiptAge = receiptAgeDays(field.receivedAt);
   const receiptStale = isStaleReceipt(field.receivedAt, field.source);
 
   return (
     <>
       <div
-        className="sa-field-row"
-        style={{ '--field-color': borderColor } as React.CSSProperties}
+        className={presentation === 'card' ? 'sa-field-card' : 'sa-field-row'}
+        style={{ '--field-color': borderColor, '--span-rows': spanRows } as React.CSSProperties}
         onClick={() => setExpanded((open) => !open)}
       >
         <div className="sa-field-label">
@@ -96,26 +100,30 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onAddSourceValue,
           )}
         </div>
         <div className="sa-field-source-cell">
-          <span
-            className="src-pill"
-            style={{ color: '#fff', background: src.hex }}
-            title="Golden source, derived from the source values"
-          >
-            {src.name}
-            {field.precedenceRank !== undefined && (
-              <span style={{ marginLeft: '4px', fontSize: '9px', opacity: 0.8 }}>
-                (P{field.precedenceRank})
-              </span>
-            )}
-          </span>
-          <span
-            className={`receipt-age${receiptStale ? ' stale' : ''}`}
-            title={field.receivedAt ? `Last received ${formatReceipt(field.receivedAt)}. A restatement of the same value still updates this time.` : undefined}
-          >
-            {field.receivedAt && receiptAge != null
-              ? (receiptStale ? `Stale ${receiptAge}d` : receiptAge === 0 ? 'Received today' : `Received ${receiptAge}d ago`)
-              : ''}
-          </span>
+          {hasSource && (
+            <span
+              className="src-pill"
+              style={{ color: `color-mix(in srgb, ${src.hex} 70%, #000)`, background: `color-mix(in srgb, ${src.hex} 14%, #fff)` }}
+              title="Golden source, derived from the source values"
+            >
+              {src.name}
+              {field.precedenceRank !== undefined && (
+                <span style={{ marginLeft: '4px', fontSize: '11px', opacity: 0.8 }}>
+                  (P{field.precedenceRank})
+                </span>
+              )}
+            </span>
+          )}
+          {hasSource && (
+            <span
+              className={`receipt-age${receiptStale ? ' stale' : ''}`}
+              title={field.receivedAt ? `Last received ${formatReceipt(field.receivedAt)}. A restatement of the same value still updates this time.` : undefined}
+            >
+              {field.receivedAt && receiptAge != null
+                ? (receiptStale ? `Stale ${receiptAge}d` : receiptAge === 0 ? 'Received today' : `Received ${receiptAge}d ago`)
+                : ''}
+            </span>
+          )}
           <button
             className="sa-edit-btn"
             onClick={(e) => {

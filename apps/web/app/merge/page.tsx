@@ -528,20 +528,31 @@ export default function MergePage() {
   };
 
   return (
-    <div className="view-fade dup-page">
-      <div className="crumbs">
-        <Link href="/" className="crumb-link">Home</Link>
-        <span className="sep">›</span>
-        <span className="crumb-current">Entity resolution</span>
+    <div className="view-fade da dup-page">
+      <div className="da-crumbs">
+        <Link href="/">Home</Link>
+        <span>/</span>
+        <strong>Entity resolution</strong>
       </div>
 
-      <div className="dup-head">
-        <div>
-          <div className="dup-kicker">Data quality</div>
-          <h2>Possible duplicates</h2>
+      <header className="da-ribbon">
+        <div className="da-title">
+          <span className="da-chip">Resolution</span>
+          <h1>Possible duplicates</h1>
+          <p>Records that look like the same entity. The older record is kept.</p>
         </div>
+        <div className="da-facts">
+          <div className="da-fact big"><span>Very likely</span><strong>{counts.very}</strong></div>
+          <div className="da-fact"><span>Possible</span><strong>{counts.possible}</strong></div>
+        </div>
+        <div className="da-holdbox">
+          <div className="da-holdtop"><span>In this view</span><b>{visible.length}</b></div>
+          <p>Search by name, then choose which pairs are the same record.</p>
+        </div>
+      </header>
+      <div className="dup-head">
         <div className="dup-tools">
-          <input className="dup-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by name or code" aria-label="Search by name or code" />
+          <input className="dup-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by name" aria-label="Search by name" />
           <select className="dup-type" value={typeCode} onChange={(event) => setTypeCode(event.target.value)} aria-label="Entity type">
             <option value="all">All types</option>
             {types.map((code) => <option key={code} value={code}>{typeLabel(code)}</option>)}
@@ -590,7 +601,7 @@ export default function MergePage() {
         const keepTime = timeOf(keep);
         const retireTime = timeOf(retire);
         const keepIsNewer = keepTime != null && retireTime != null && keepTime > retireTime;
-        const meta = (entity: EntityRef) => [entity.entityCode, addedLabel(entity.createdAt)].filter(Boolean).join(' · ');
+        const meta = (entity: EntityRef) => addedLabel(entity.createdAt);
         const plan = planChildMerge(keep.children || [], retire.children || []);
         const under = underByKey.get(key);
         const moves = retire.relationshipCount;

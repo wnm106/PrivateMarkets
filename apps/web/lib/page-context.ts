@@ -26,6 +26,7 @@ const PAGES: Record<string, string> = {
   '/admin/layouts': 'Display layouts',
   '/admin/dq-rules': 'Data quality rules',
   '/admin/compliance': 'Compliance rules',
+  '/admin/compliance/funds': 'Fund thresholds',
   '/admin/dashboards': 'Dashboards',
   '/admin/narratives': 'Narratives',
   '/admin/skills': 'Skills',
@@ -77,6 +78,9 @@ export function routeChatContext(pathname: string): RouteChatContext {
   if (parts[0] === 'admin' && parts[1] === 'entities' && parts[2]) {
     const code = decodeURIComponent(parts[2]).toUpperCase();
     return { page: `${domainLabel(code)} entity type`, domainCode: code };
+  }
+  if (parts[0] === 'admin' && parts[1] === 'compliance' && parts[2] === 'funds') {
+    return { page: 'Fund thresholds' };
   }
   if (parts[0] === 'admin' && parts[1] === 'compliance' && parts[2]) {
     return { page: `Compliance rule ${decodeURIComponent(parts[2])}` };

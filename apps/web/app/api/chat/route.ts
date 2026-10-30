@@ -10,6 +10,8 @@ import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/posit
 import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/compliance-tools';
 import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
 import { QUERY_DATA_GUIDE, registerQueryTools } from '@tapestrai/mcp-server/src/tools/query-data';
+import { formatLessons, lessonFromRow, matchLessons } from '@tapestrai/mcp-server/src/lib/chat-lessons';
+import { presentAnswer } from '@tapestrai/mcp-server/src/lib/chat-answer';
 import { getContextProfile } from '@tapestrai/mcp-server/src/lib/context-profiles';
 import {
   coerceSkillState,
@@ -346,6 +348,15 @@ export async function POST(request: NextRequest) {
       .filter((tool) => skillAllowsTool(skill, skillState, tool.name));
     if (tools.some((tool) => tool.name === 'query_data')) {
       systemInstruction += QUERY_DATA_GUIDE;
+      if (auth) {
+        const { data, error } = await auth.supabase
+          .from('chat_lessons')
+          .select('id, phrases, reading, query_shape, answer_shape')
+          .eq('is_active', true);
+        if (!error && data?.length) {
+          systemInstruction += formatLessons(matchLessons(userText, data.map(lessonFromRow)));
+        }
+      }
     }
     const executedCalls: Array<{ name: string; args: any }> = [];
     const successfulTools = new Set<string>();
@@ -410,9 +421,10 @@ export async function POST(request: NextRequest) {
       if (functionCalls.length === 0) {
         const raw = parts.map((p) => p.text || '').join('').trim() || 'No response generated.';
         const finished = finish(raw);
-        const turnConversationId = await persistAssistantTurn(finished.text);
+        const text = presentAnswer(finished.text);
+        const turnConversationId = await persistAssistantTurn(text);
         return NextResponse.json({
-          text: finished.text,
+          text,
           skill: finished.skill,
           skillState,
           toolCalls: executedCalls,
@@ -531,9 +543,10 @@ export async function POST(request: NextRequest) {
       finalText ||
       'I gathered data but did not finish within the allotted steps. Please ask a narrower question or try again.';
     const finished = finish(exhausted);
-    const exhaustedConversationId = await persistAssistantTurn(finished.text);
+    const text = presentAnswer(finished.text);
+    const exhaustedConversationId = await persistAssistantTurn(text);
     return NextResponse.json({
-      text: finished.text,
+      text,
       skill: finished.skill,
       skillState,
       toolCalls: executedCalls,

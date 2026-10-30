@@ -207,7 +207,7 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
         {/* Template Attributes */}
         {templateAttributes.length > 0 && (
           <div style={{ marginTop: '24px' }}>
-            <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
+            <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
               Template Attributes
             </div>
             <div className="form-grid">
@@ -232,7 +232,7 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
         
         {/* Parent Relationships Section */}
         <div style={{ marginTop: '24px' }}>
-          <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
             Parent Relationships
           </div>
           <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginBottom: '10px' }}>
@@ -247,7 +247,7 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
         
         {/* Child Relationships Section */}
         <div style={{ marginTop: '18px' }}>
-          <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
             Child Relationships
           </div>
           <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginBottom: '10px' }}>
@@ -355,7 +355,7 @@ function RelationshipEditor({
                 <strong>{entry.entityName}</strong>
                 <span style={{ color: 'var(--ink-3)', marginLeft: '6px' }}>({entry.domainCode} · {entry.entityCode})</span>
                 {entry.isPrimary && (
-                  <span style={{ marginLeft: '8px', fontSize: '10px', color: 'var(--accent)', fontWeight: 600, textTransform: 'uppercase' }}>Primary</span>
+                  <span style={{ marginLeft: '8px', fontSize: '11px', color: 'var(--accent)', fontWeight: 600, textTransform: 'none' }}>Primary</span>
                 )}
               </div>
               <button

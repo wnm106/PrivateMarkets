@@ -359,7 +359,7 @@ export default function AdminAttributesPage() {
                       padding: '3px 6px 3px 8px',
                       background: '#eff6ff',
                       border: '1px solid #bfdbfe',
-                      color: '#1e40af',
+                      color: '#00334e',
                       fontSize: '11px',
                       borderRadius: '3px',
                       fontWeight: 500,

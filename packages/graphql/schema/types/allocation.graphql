@@ -1,0 +1,174 @@
+# Deal allocation preview and commit.
+
+input AllocationAdjustmentInput {
+  fundId: ID!
+  trancheId: String!
+  type: String!
+  amount: Float
+  reasonCode: String
+  note: String
+}
+
+input AllocationHoldInput {
+  trancheId: ID!
+  holdPct: Float!
+}
+
+type AllocationCell {
+  trancheId: ID!
+  eligible: Boolean!
+  amount: Float!
+  systemAmount: Float!
+  capReason: String
+  exclusionKind: String
+  exclusionCode: String
+  exclusionText: String
+  overridden: Boolean!
+  reasonCode: String
+}
+
+type AllocationRow {
+  fundId: ID!
+  fundName: String!
+  parentFundId: ID
+  level: String!
+  availableCapital: Float!
+  nav: Float!
+  total: Float!
+  cash: Float
+  undrawn: Float
+  line: Float
+  reserve: Float
+  issuerLimit: Float
+  sponsorLimit: Float
+  unfundedLimit: Float
+  cells: [AllocationCell!]!
+}
+
+type AllocationTrancheResult {
+  id: ID!
+  name: String!
+  size: Float!
+  holdPct: Float!
+  unfunded: Boolean!
+  instrumentType: String!
+  targetAmount: Float!
+  allocated: Float!
+  rank: Int
+  label: String
+  pricing: String
+  callProtection: String
+  equityLinked: Boolean
+  coverage: String
+  tickingFee: String
+  status: String
+  securityId: ID
+}
+
+type AllocationAdjustmentView {
+  fundId: ID!
+  trancheId: String!
+  type: String!
+  amount: Float
+  reason: String
+  note: String
+}
+
+type AllocationPreview {
+  dealId: ID!
+  dealCode: String!
+  dealName: String!
+  description: String
+  stage: String
+  strategy: String
+  borrower: String
+  borrowerId: ID
+  sponsor: String
+  sponsorId: ID
+  pricing: String
+  oid: String
+  leverage: String
+  maturity: String
+  closeDate: String
+  facilitySize: Float!
+  targetHold: Float!
+  allocated: Float!
+  unallocated: Float!
+  tranches: [AllocationTrancheResult!]!
+  rows: [AllocationRow!]!
+  adjustments: [AllocationAdjustmentView!]!
+  errors: [MutationError!]!
+}
+
+type IcMemoPoint {
+  id: ID!
+  kind: String!
+  title: String
+  body: String
+  sortOrder: Int!
+}
+
+type IcCapitalItem {
+  id: ID!
+  side: String!
+  label: String!
+  amount: Float!
+  sortOrder: Int!
+}
+
+type IcFinancialPeriod {
+  id: ID!
+  label: String!
+  basis: String
+  sortOrder: Int!
+  revenue: Float
+  ebitda: Float
+  ebitdaMargin: Float
+  freeCashFlow: Float
+  fundedDebtToEbitda: Float
+  ebitdaToCashInterest: Float
+}
+
+type IcApproval {
+  id: ID!
+  member: String!
+  role: String!
+  decision: String!
+  decidedOn: String
+  sortOrder: Int!
+}
+
+type IcOpenItem {
+  id: ID!
+  title: String!
+  status: String!
+  sortOrder: Int!
+}
+
+type IcTrancheYield {
+  trancheId: ID!
+  grossYield: Float
+  seniority: String
+}
+
+type IcMemo {
+  dealId: ID!
+  clientId: ID
+  issuerId: ID
+  memoStatus: String
+  team: String
+  icDate: String
+  sector: String
+  baseRate: Float
+  holdYears: Float
+  expectedMoic: Float
+  blendedIrr: Float
+  recommendation: String
+  points: [IcMemoPoint!]!
+  capitalItems: [IcCapitalItem!]!
+  periods: [IcFinancialPeriod!]!
+  approvals: [IcApproval!]!
+  openItems: [IcOpenItem!]!
+  trancheYields: [IcTrancheYield!]!
+  errors: [MutationError!]!
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { queryGrain, valueRequest } from './query-data';
+import { QUERY_DATA_GUIDE, queryGrain, valueRequest } from './query-data';
 
 describe('query_data', () => {
   it('treats a source question as one row per field', () => {
@@ -25,5 +25,12 @@ describe('query_data', () => {
     expect(() => valueRequest({
       metrics: [{ alias: 'n', agg: 'SUM', field: 'value' }],
     })).toThrow(/numeric_value/);
+  });
+
+  it('tells the agent to navigate relationships and read composite identifiers', () => {
+    expect(QUERY_DATA_GUIDE).toContain('get_model_map');
+    expect(QUERY_DATA_GUIDE).toContain('WEIGHTED_AVG');
+    expect(QUERY_DATA_GUIDE).toContain('fund.entity_name');
+    expect(QUERY_DATA_GUIDE).toContain('iss.INDUSTRY');
   });
 });

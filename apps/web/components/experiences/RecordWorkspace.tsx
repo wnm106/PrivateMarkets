@@ -9,6 +9,7 @@ import { domainHref } from '@/lib/domain-routes';
 import { useTemporalStore } from '@/lib/store';
 import type { EntityData } from '@/components/detail/types';
 import { DashboardRunner } from '@/components/reporting/DashboardRunner';
+import { AllocationBoard } from '@/components/allocation/AllocationBoard';
 import type { DataQuerySpec, ReportParameter } from '@/lib/reporting';
 import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
@@ -89,11 +90,12 @@ function today() {
 
 /** A many-record relationship and a dashboard each occupy their own tab. A one-to-one form stays on the canvas unless the experience places it on a tab. */
 function isOwnTab(section: ExperienceSection) {
-  return section.kind === 'GRID' || section.kind === 'DASHBOARD' || section.placement === 'TAB';
+  return section.kind === 'GRID' || section.kind === 'DASHBOARD' || section.kind === 'ALLOCATION' || section.placement === 'TAB';
 }
 
 export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: string; entityId: string }) {
   const asOfDate = useTemporalStore((state) => state.asOfDate);
+  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const [experience, setExperience] = useState<RecordExperience | null>(null);
   const [anchor, setAnchor] = useState<EntityData | null>(null);
   const [related, setRelated] = useState<Record<string, EntityData>>({});
@@ -106,15 +108,15 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const loadAnchor = useCallback(async () => {
-    const result = await graphqlQuery<{ entity: EntityData | null }, { id: string; asOfDate: string }>(
+    const result = await graphqlQuery<{ entity: EntityData | null }, { id: string; asOfDate: string; knowledgeDate: string }>(
       ENTITY_QUERY,
-      { id: entityId, asOfDate },
+      { id: entityId, asOfDate, knowledgeDate },
       'network-only',
     );
     if (result.error) throw new Error(result.error.message || 'Could not load the record');
     if (!result.data?.entity) throw new Error('Record not found');
     return result.data.entity;
-  }, [asOfDate, entityId]);
+  }, [asOfDate, knowledgeDate, entityId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -234,9 +236,9 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
     if (!relatedKey) return;
     let cancelled = false;
     const ids = relatedKey.split(',');
-    Promise.all(ids.map((id) => graphqlQuery<{ entity: EntityData | null }, { id: string; asOfDate: string }>(
+    Promise.all(ids.map((id) => graphqlQuery<{ entity: EntityData | null }, { id: string; asOfDate: string; knowledgeDate: string }>(
       ENTITY_QUERY,
-      { id, asOfDate },
+      { id, asOfDate, knowledgeDate },
       'network-only',
     ))).then((results) => {
       if (cancelled) return;
@@ -250,7 +252,7 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
       });
     });
     return () => { cancelled = true; };
-  }, [asOfDate, relatedKey]);
+  }, [asOfDate, knowledgeDate, relatedKey]);
 
   const remember = (entity: EntityData) => {
     if (anchor && entity.id === anchor.id) setAnchor(entity);
@@ -258,9 +260,9 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
   };
 
   const reloadEntity = async (id: string) => {
-    const result = await graphqlQuery<{ entity: EntityData | null }, { id: string; asOfDate: string }>(
+    const result = await graphqlQuery<{ entity: EntityData | null }, { id: string; asOfDate: string; knowledgeDate: string }>(
       ENTITY_QUERY,
-      { id, asOfDate },
+      { id, asOfDate, knowledgeDate },
       'network-only',
     );
     if (result.data?.entity) remember(result.data.entity);
@@ -393,6 +395,12 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
           </div>
         </div>
         <div className="page-actions">
+          {anchor.domainCode === 'DEAL' && (
+            <Link href={`/deals/${anchor.id}/allocation`} className="btn btn-primary">Allocation</Link>
+          )}
+          {anchor.domainCode === 'FUND' && (
+            <Link href={`/funds/${anchor.id}/overview`} className="btn btn-primary">Fund surface</Link>
+          )}
           <Link href={`${domainHref(anchor.domainCode)}/${anchor.id}`} className="btn">Golden record</Link>
         </div>
       </div>
@@ -496,6 +504,10 @@ function SectionBody({
   const fields = catalog && section.domainCode
     ? fieldsForSection(catalog.attributes, catalog.assigned, section.domainCode, section.columns || [])
     : [];
+
+  if (section.kind === 'ALLOCATION') {
+    return <AllocationBoard dealId={anchor.id} dealName={anchor.entityName} />;
+  }
 
   if (section.kind === 'DASHBOARD') {
     const dashboard = section.dashboardCode ? dashboards[section.dashboardCode] : undefined;

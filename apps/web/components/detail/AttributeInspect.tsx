@@ -19,7 +19,7 @@ export interface AttributeInspectTarget {
   attributeCode: string;
   attributeName: string;
   dataType?: string;
-  /** Shown while lineage loads, and if the attribute has no stored sources. */
+  /** Value from the grid that opened this drawer. The drawer shows the as-of lineage instead. */
   value?: string;
   domainCode?: string;
   onChanged?: () => void;
@@ -170,7 +170,6 @@ function AttributeInspectBody({ target }: { target: AttributeInspectTarget }) {
         dataType: meta?.dataType || target.dataType,
         calculated,
         formula: calculated ? (meta?.derivationFormula || 'Calculated') : undefined,
-        fallbackValue: target.value,
       }));
     });
     return () => { cancelled = true; };

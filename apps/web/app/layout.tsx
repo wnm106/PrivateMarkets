@@ -1,22 +1,15 @@
 import type { Metadata } from 'next';
-import { IBM_Plex_Sans, IBM_Plex_Mono, Outfit } from 'next/font/google';
+import { Inter, IBM_Plex_Mono } from 'next/font/google';
 import { AppChrome } from '@/components/layout/AppChrome';
 import { AuthSync } from '@/components/auth/AuthSync';
 import { SignedOutGate } from '@/components/auth/SignedOutGate';
 import '../styles/globals.css';
 
-const ibmPlexSans = IBM_Plex_Sans({
-  subsets: ['latin'],
-  weight: ['300', '400', '500', '600', '700'],
-  variable: '--font-ibm-plex-sans',
-  display: 'swap',
-});
-
-// Geometric display face that echoes the tapestr.ai wordmark
-const brandDisplay = Outfit({
+// Single UI face: Inter has tabular numerals and stays legible at 11-13px in dense grids.
+const inter = Inter({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
-  variable: '--font-display',
+  variable: '--font-inter',
   display: 'swap',
 });
 
@@ -38,7 +31,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${ibmPlexSans.variable} ${brandDisplay.variable} ${ibmPlexMono.variable}`}>
+    <html lang="en" className={`${inter.variable} ${ibmPlexMono.variable}`}>
       <body>
         <AuthSync />
         <SignedOutGate />

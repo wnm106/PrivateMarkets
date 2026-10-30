@@ -697,8 +697,10 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
             )}
           </div>
         )}
-        {messages.map((msg, idx) => (
-          <div key={idx} className={`chat-row ${msg.role === 'user' ? 'user' : 'model'}`}>
+        {messages.map((msg, idx) => {
+          const structured = msg.role === 'model' && msg.text.includes('```answer');
+          return (
+          <div key={idx} className={`chat-row ${msg.role === 'user' ? 'user' : 'model'}${structured ? ' has-answer' : ''}`}>
             {msg.role === 'user' ? (
               <div style={{ fontSize: '22px', flexShrink: 0 }} aria-hidden>👤</div>
             ) : (
@@ -774,7 +776,8 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
         {isLoading && (
           <div className="chat-row model">
             <Image

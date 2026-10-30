@@ -125,9 +125,9 @@ export default function PositionDetailPage() {
     ]).then(async ([ixResult, attrResult]) => {
       if (cancelled) return;
       if (!ixResult.data?.intersection) {
-        const entityResult = await graphqlQuery<any, { id: string; asOfDate: string }>(
+        const entityResult = await graphqlQuery<any, { id: string; asOfDate: string; knowledgeDate: string }>(
           ENTITY_QUERY,
-          { id, asOfDate },
+          { id, asOfDate, knowledgeDate },
           'network-only'
         );
         if (cancelled) return;
@@ -151,6 +151,8 @@ export default function PositionDetailPage() {
               required: a.isRequired || false,
               displaySection: a.displaySection || 'Position',
               sortOrder: a.displayGroup || 0,
+              spanColumns: a.displaySpanColumns,
+              spanRows: a.displaySpanRows,
               isDerived: a.isDerived === true,
               derivationFormula: a.derivationFormula,
             }));
@@ -185,6 +187,8 @@ export default function PositionDetailPage() {
             required: a.isRequired || false,
             displaySection: a.displaySection || 'General',
             sortOrder: a.displayGroup || 0,
+            spanColumns: a.displaySpanColumns,
+            spanRows: a.displaySpanRows,
             isDerived: a.isDerived === true,
             derivationFormula: a.derivationFormula,
           }));
@@ -256,9 +260,9 @@ export default function PositionDetailPage() {
     const saveError = result.error?.message || result.data?.addCompetingSource?.errors?.[0]?.message;
     if (saveError || !result.data?.addCompetingSource?.success) throw new Error(saveError || 'Could not save the value');
     if (isMasterEntity) {
-      const entityResult = await graphqlQuery<any, { id: string; asOfDate: string }>(
+      const entityResult = await graphqlQuery<any, { id: string; asOfDate: string; knowledgeDate: string }>(
         ENTITY_QUERY,
-        { id: entity.id, asOfDate },
+        { id: entity.id, asOfDate, knowledgeDate },
         'network-only',
       );
       if (entityResult.data?.entity) setEntity(entityResult.data.entity);

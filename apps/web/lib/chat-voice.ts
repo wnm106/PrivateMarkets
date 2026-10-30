@@ -31,7 +31,7 @@ const INSTRUCTIONS: Record<ChatVoice, string> = {
 Lead with the answer in everyday language: the value, what it means, whether it changed, and since when.
 Name a source the way a person would (for example "internal records" or "Bloomberg"), not as a system code.
 Leave out attribute codes, precedence ranks, golden-record mechanics, bi-temporal records, system time, and other schema terms unless the user asks for them.
-Use a short sentence or a few scannable bullets. ${DESIGNER_CAVEAT}`,
+A single figure is one or two sentences. When the data guide describes an answer block, a breakdown, ranking, comparison, or statement uses that block, with the rows in the bars and the grid rather than a bullet for each row. ${DESIGNER_CAVEAT}`,
 
   steward: `Speak to a data steward or operations user who maintains the record.
 Explain where a value came from, whether sources disagree, when it took effect, and any quality issue, in operational language.

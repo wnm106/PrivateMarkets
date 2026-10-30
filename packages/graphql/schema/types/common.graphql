@@ -152,6 +152,9 @@ type AttributeDefinition {
   defaultValue: String
   displaySection: String
   displayGroup: Int
+  # Width and height on the 4-column attribute display. Both default to 1.
+  displaySpanColumns: Int
+  displaySpanRows: Int
   isEditable: Boolean!
   isVisible: Boolean!
   

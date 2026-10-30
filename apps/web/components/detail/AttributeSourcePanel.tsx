@@ -201,8 +201,8 @@ export function AttributeSourcePanel({
                     <span
                       className="src-pill-sm"
                       style={{
-                        color: c.muted ? 'var(--ink-4)' : '#fff',
-                        background: c.muted ? 'var(--bg-alt)' : cSrc.hex,
+                        color: c.muted ? 'var(--ink-4)' : `color-mix(in srgb, ${cSrc.hex} 70%, #000)`,
+                        background: c.muted ? 'var(--bg-alt)' : `color-mix(in srgb, ${cSrc.hex} 14%, #fff)`,
                       }}
                     >
                       {cSrc.name}
