@@ -188,19 +188,23 @@ function suggestedAsOf(assignments: ColumnAssignment[], rows: Record<string, str
   return dates.size === 1 ? [...dates][0] : null;
 }
 
-export async function createImportInstance(fileName: string, mediaType: string, bytes: Buffer, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
-  assertLocalSupabase(client);
-  const table = parseTabularFile(fileName, bytes);
+async function columnsForTable(client: SupabaseClient, headers: string[], rows: Record<string, string>[]): Promise<{ columnMappings: ColumnAssignment[]; identity: LoadMapIdentity }> {
   const [catalog, lists] = await Promise.all([attributeCatalog(client), listReferenceLists(client)]);
-  const signature = headerSignature(table.headers);
-  const stored = await findStoredMap(client, signature);
-  let suggested = suggestAssignments(table.headers, table.rows, catalog.attributes);
+  const stored = await findStoredMap(client, headerSignature(headers));
+  let suggested = suggestAssignments(headers, rows, catalog.attributes);
   if (stored) suggested = overlayStoredMap(suggested, stored.template, stored.name);
   const reviewed = await reviewWithModel(suggested, catalog.attributes);
   const columnMappings = applyListSuggestions(reviewed, catalog.attributes, lists);
   const identity: LoadMapIdentity = stored
     ? { mapCode: stored.mapCode, sourceCode: stored.sourceCode, name: stored.name, description: stored.description }
-    : proposeLoadIdentity(table.headers, columnMappings);
+    : proposeLoadIdentity(headers, columnMappings);
+  return { columnMappings, identity };
+}
+
+export async function createImportInstance(fileName: string, mediaType: string, bytes: Buffer, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
+  assertLocalSupabase(client);
+  const table = parseTabularFile(fileName, bytes);
+  const { columnMappings, identity } = await columnsForTable(client, table.headers, table.rows);
   const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', identity.sourceCode).maybeSingle();
   if (source.error || !source.data) throw new Error(source.error?.message || `Source ${identity.sourceCode} was not found`);
   const inserted = await client.schema('entity_instances').from('import_instances').insert({
@@ -219,6 +223,29 @@ export async function createImportInstance(fileName: string, mediaType: string, 
   }).select('id').single();
   if (inserted.error || !inserted.data) throw new Error(inserted.error?.message || 'The file could not be stored');
   return getImportInstance(inserted.data.id, client);
+}
+
+/** Re-read the stored file and replace the column mapping. Load history stays. */
+export async function refreshImportInstance(id: string, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
+  assertLocalSupabase(client);
+  const existing = await client.schema('entity_instances').from('import_instances').select('id, file_name, source_base64').eq('id', id).single();
+  if (existing.error || !existing.data) throw new Error(existing.error?.message || 'Import instance not found');
+  if (!existing.data.source_base64) throw new Error('The original file is not stored, so it cannot be read again.');
+  const table = parseTabularFile(existing.data.file_name, Buffer.from(existing.data.source_base64, 'base64'));
+  const { columnMappings, identity } = await columnsForTable(client, table.headers, table.rows);
+  const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', identity.sourceCode).maybeSingle();
+  if (source.error) throw new Error(source.error.message);
+  const updated = await client.schema('entity_instances').from('import_instances').update({
+    headers: table.headers,
+    parsed_rows: table.rows,
+    column_mappings: columnMappings,
+    row_count: table.rows.length,
+    as_of_date: suggestedAsOf(columnMappings, table.rows),
+    map_code: identity.mapCode,
+    ...(source.data?.id ? { source_id: source.data.id } : {}),
+  }).eq('id', id);
+  if (updated.error) throw new Error(updated.error.message);
+  return getImportInstance(id, client);
 }
 
 export async function getImportInstance(id: string, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {

@@ -82,6 +82,7 @@ export default function PositionFilePage() {
   const [asOfDate, setAsOfDate] = useState(todayIso());
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mappingRevision, setMappingRevision] = useState(0);
 
   usePublishViewContext(
     detail
@@ -198,6 +199,23 @@ export default function PositionFilePage() {
     });
   }
 
+  async function reloadFile(instanceId: string) {
+    setBusy('reload');
+    setError(null);
+    try {
+      const response = await fetch(`/api/feeds/position-file/${instanceId}/refresh`, { method: 'POST' });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'The file could not be read again');
+      setMappingRevision((revision) => revision + 1);
+      openDetail(body);
+      await refreshQueue();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function processInstance(instanceId: string, mappings?: ColumnAssignment[]) {
     setBusy(instanceId);
     setError(null);
@@ -235,6 +253,8 @@ export default function PositionFilePage() {
           resultText={detail.resultSummary ? resultText(detail) : null}
           errorMessage={detail.errorMessage}
           loading={busy === detail.id}
+          reloading={busy === 'reload'}
+          mappingRevision={mappingRevision}
           asOfMode={asOfMode}
           asOfDate={asOfDate}
           chosenDate={chosenDate()}
@@ -242,6 +262,7 @@ export default function PositionFilePage() {
           onAsOfDate={setAsOfDate}
           onChange={updateAssignment}
           onLoad={() => processInstance(detail.id, detail.columnMappings)}
+          onReload={() => reloadFile(detail.id)}
           mapNote={detail.mapSaved
             ? `This file matches the saved map${detail.mapName ? ` ${detail.mapName}` : ''}. Columns already on that map are confirmed. Anything new still needs a decision, and loading updates the map.`
             : 'This file shape is new. Suggestions come from the column names and, where those are not enough, from an AI review. Loading saves the map for the next file with these columns.'}

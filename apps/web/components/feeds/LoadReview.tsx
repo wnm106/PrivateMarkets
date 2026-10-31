@@ -124,6 +124,7 @@ export function LoadReview({
   fileId,
   fileName,
   rowCount,
+  mappingRevision,
   assignments,
   targets,
   lists,
@@ -131,6 +132,7 @@ export function LoadReview({
   errorMessage,
   mapNote,
   loading,
+  reloading,
   asOfMode,
   asOfDate,
   chosenDate,
@@ -138,11 +140,13 @@ export function LoadReview({
   onAsOfDate,
   onChange,
   onLoad,
+  onReload,
   onClose,
 }: {
   fileId: string;
   fileName: string;
   rowCount: number;
+  mappingRevision: number;
   assignments: ColumnAssignment[];
   targets: MappingTarget[];
   lists: ReferenceListCatalog[];
@@ -150,6 +154,7 @@ export function LoadReview({
   errorMessage: string | null;
   mapNote?: string | null;
   loading: boolean;
+  reloading: boolean;
   asOfMode: 'today' | 'specific';
   asOfDate: string;
   chosenDate: string;
@@ -157,18 +162,21 @@ export function LoadReview({
   onAsOfDate: (value: string) => void;
   onChange: (index: number, next: ColumnAssignment) => void;
   onLoad: () => void;
+  onReload: () => void;
   onClose: () => void;
 }) {
   const columnsRef = useRef<HTMLElement>(null);
   const baselineFile = useRef(fileId);
+  const baselineRevision = useRef(mappingRevision);
   const baselineStore = useRef<Record<string, ColumnAssignment>>({});
   const [fundHint, setFundHint] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [editKey, setEditKey] = useState('');
   const [drafts, setDrafts] = useState<Record<string, { choice: 'suggested' | 'other' | 'skip'; otherKey: string }>>({});
 
-  if (baselineFile.current !== fileId) {
+  if (baselineFile.current !== fileId || baselineRevision.current !== mappingRevision) {
     baselineFile.current = fileId;
+    baselineRevision.current = mappingRevision;
     baselineStore.current = {};
   }
   for (const assignment of assignments) {
@@ -182,7 +190,7 @@ export function LoadReview({
     setDrafts({});
     setEditing(null);
     setFundHint(false);
-  }, [fileId]);
+  }, [fileId, mappingRevision]);
 
   const nameAsIdentity = useMemo(() => {
     const domains = new Set<string>();
@@ -335,8 +343,13 @@ export function LoadReview({
             <span className="sep">›</span>
             <span className="crumb-current">{fileName}</span>
           </div>
-          <h1 className="load-title">Load {fileName}</h1>
-          <p className="load-sub">{rowCount.toLocaleString()} rows. Three steps: check what’s in the file, confirm where each column goes, then load.</p>
+          <div className="load-title-row">
+            <h1 className="load-title">Load {fileName}</h1>
+            <button type="button" className="btn" disabled={reloading || loading} onClick={onReload}>
+              {reloading ? 'Reading file…' : 'Reload file'}
+            </button>
+          </div>
+          <p className="load-sub">{rowCount.toLocaleString()} rows. Three steps: check what’s in the file, confirm where each column goes, then load. Reload file reads the stored copy again and replaces this mapping.</p>
           {mapNote && <p className="load-sub" style={{ marginTop: 8 }}>{mapNote}</p>}
           {resultText && (
             <p className="load-sub" style={{ marginTop: -8 }}>
@@ -521,8 +534,11 @@ export function LoadReview({
             <div className="load-pb"><i style={{ width: `${assignments.length === 0 ? 0 : (confident / assignments.length) * 100}%` }} /></div>
           </div>
           <span className="load-bar-actions">
-            <button type="button" className="load-btn sec" disabled={loading} onClick={onClose}>Cancel</button>
-            <button type="button" className="load-btn" disabled={!ready || loading} onClick={onLoad}>
+            <button type="button" className="btn" disabled={reloading || loading} onClick={onReload}>
+              {reloading ? 'Reading file…' : 'Reload file'}
+            </button>
+            <button type="button" className="load-btn sec" disabled={loading || reloading} onClick={onClose}>Cancel</button>
+            <button type="button" className="load-btn" disabled={!ready || loading || reloading} onClick={onLoad}>
               {loading ? 'Loading…' : `Load ${loadCount.toLocaleString()} records`}
             </button>
           </span>
