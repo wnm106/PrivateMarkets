@@ -293,7 +293,7 @@ export function DataSpecialist() {
 
       <div className="section-title">
         <h2>Recent files</h2>
-        <span className="hint">Eastern time</span>
+        <span className="hint">Open a file to map the stored rows again</span>
       </div>
       <div className="data-table" style={{ marginBottom: 22 }}>
         <div className="tbl-head" style={{ gridTemplateColumns: '190px 1.4fr 80px 120px 1fr' }}>
@@ -321,8 +321,29 @@ export function DataSpecialist() {
           <section>
             <div className="section-title">
               <h2>{detail.fileName}</h2>
-              <span className="hint">{detail.extractionNote}</span>
+              <button
+                className="btn"
+                disabled={busy !== null}
+                onClick={async () => {
+                  setBusy('refresh');
+                  setError(null);
+                  try {
+                    const response = await fetch(`/api/feeds/specialist/${detail.id}/refresh`, { method: 'POST' });
+                    const body = await response.json();
+                    if (!response.ok) throw new Error(body.error || 'The mapping could not be refreshed');
+                    show(body);
+                    await refreshLibrary();
+                  } catch (err: any) {
+                    setError(err.message);
+                  } finally {
+                    setBusy(null);
+                  }
+                }}
+              >
+                {busy === 'refresh' ? 'Refreshing…' : 'Refresh mapping'}
+              </button>
             </div>
+            <p className="page-meta" style={{ marginTop: 0 }}>{detail.extractionNote} The stored file is read again and compared with the current maps. The as-of date and source you already chose stay in place.</p>
             {reading.findings.map((finding) => (
               <p key={finding} className="specialist-note">{finding}</p>
             ))}

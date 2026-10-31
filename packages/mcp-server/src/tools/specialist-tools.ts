@@ -10,6 +10,7 @@ import {
   getLoadSession,
   listLoadSessions,
   listSourceMaps,
+  refreshLoadSession,
   runLoadSession,
   saveSourceMap,
   startLoadSession,
@@ -91,6 +92,18 @@ const answerLoadSessionTool: ToolDefinition = {
   ),
 };
 
+const refreshLoadSessionTool: ToolDefinition = {
+  name: 'refresh_load_session',
+  description: 'Re-read a stored file and run the current mapping on it. Use this when an older upload should be compared with saved maps again, including fields added since that map was written. Keeps the source, as-of date, and other answers already given. Does not load entities.',
+  category: 'import',
+  inputSchema: {
+    type: 'object',
+    properties: { sessionId: { type: 'string' } },
+    required: ['sessionId'],
+  } as JSONSchema7,
+  execute: async (args, supabase) => refreshLoadSession(String(args.sessionId), supabase),
+};
+
 const saveSourceMapTool: ToolDefinition = {
   name: 'save_source_map',
   description: 'Save the session\'s map so a later file with the same columns can reuse it. Does not load entities.',
@@ -124,6 +137,7 @@ export function registerSpecialistTools(registry: ToolRegistry): void {
   registry.registerTool(startLoadSessionTool);
   registry.registerTool(readLoadSessionTool);
   registry.registerTool(answerLoadSessionTool);
+  registry.registerTool(refreshLoadSessionTool);
   registry.registerTool(saveSourceMapTool);
   registry.registerTool(runLoadSessionTool);
 }

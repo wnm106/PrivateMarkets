@@ -245,6 +245,59 @@ export async function answerLoadSession(
   return getLoadSession(id, client);
 }
 
+/** Re-read the stored file and run the current mapping against it. Previous answers are kept. */
+export async function refreshLoadSession(id: string, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
+  assertLocalSupabase(client);
+  const row = await client.schema('entity_instances').from('load_sessions').select('*').eq('id', id).single();
+  if (row.error || !row.data) throw new Error(row.error?.message || 'Load session not found');
+  const current = row.data;
+  let tables = storedTables(current.tables);
+  let method = current.extraction_method;
+  let note = current.extraction_note;
+  if (current.source_base64) {
+    try {
+      const intake = await intakeFile(current.file_name, current.media_type || 'application/octet-stream', Buffer.from(current.source_base64, 'base64'));
+      if (intake.tables.length > 0) {
+        tables = intake.tables.map((table) => ({
+          id: table.id,
+          name: table.name,
+          headers: table.table.headers,
+          rows: table.table.rows,
+        }));
+        method = intake.method;
+        note = intake.note;
+      }
+    } catch {
+      // Keep the table already stored when the original bytes cannot be read again.
+    }
+  }
+  const answers = current.answers && typeof current.answers === 'object' ? current.answers : {};
+  const dismissed = Array.isArray(current.dismissed_recommendations) ? current.dismissed_recommendations : [];
+  const accepted = Array.isArray(current.accepted_recommendations) ? current.accepted_recommendations : [];
+  const nextRow = {
+    ...current,
+    tables,
+    extraction_method: method,
+    extraction_note: note,
+    answers,
+    accepted_recommendations: accepted,
+    dismissed_recommendations: dismissed,
+  };
+  const reading = await readingFor(nextRow, client);
+  const stored = await client.schema('entity_instances').from('load_sessions').update({
+    tables,
+    extraction_method: method,
+    extraction_note: note,
+  }).eq('id', id);
+  if (stored.error) throw new Error(stored.error.message);
+  await persist(client, id, nextRow, reading, answers, dismissed);
+  if (current.status === 'LOADED' || current.status === 'FAILED') {
+    const kept = await client.schema('entity_instances').from('load_sessions').update({ status: current.status }).eq('id', id);
+    if (kept.error) throw new Error(kept.error.message);
+  }
+  return getLoadSession(id, client);
+}
+
 async function ensureSource(client: SupabaseClient, code: string, name: string): Promise<string> {
   const existing = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', code).maybeSingle();
   if (existing.error) throw new Error(existing.error.message);
