@@ -19,7 +19,7 @@ All requests require authentication via Bearer token:
 curl -X POST https://api.meridian-mdm.com/graphql \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"query": "{ funds { id entityName } }"}'
+  -d '{"query": "{ entities(filter: { domainCode: \"FUND\" }) { edges { node { id entityName } } } }"}'
 ```
 
 ## Schema Overview
@@ -39,150 +39,26 @@ enum DomainType {
 
 ### Core Types
 
-#### Fund
+Funds, issuers, securities, deals, positions, and prices are all `Entity` records. The domain is `domainCode`. Attribute values live in `attributes`, keyed by attribute code. Related entities live in `parentRelationships` and `childRelationships`.
 
 ```graphql
-type Fund {
+type Entity {
   id: ID!
   entityCode: String!
   entityName: String!
+  domainCode: String!
+  domainName: String!
+  templateCode: String
+  templateName: String
   description: String
   isActive: Boolean!
-  
-  # Attributes
-  nav: Float
-  navCurrency: String
-  navDate: Date
-  inceptionDate: Date
-  fundStatus: String
-  fundType: String
-  manager: String
-  aum: Float
-  
-  # Metadata
-  source: String
-  lastUpdated: DateTime
+  attributes: JSONObject!
+  parentRelationships: [EntityRelationship!]!
+  childRelationships: [EntityRelationship!]!
+  lineage: [FieldLineage!]
+  metadata: JSONObject
   createdAt: DateTime!
   updatedAt: DateTime!
-}
-```
-
-#### Issuer
-
-```graphql
-type Issuer {
-  id: ID!
-  entityCode: String!
-  entityName: String!
-  description: String
-  isActive: Boolean!
-  
-  # Attributes
-  lei: String
-  country: String
-  sector: String
-  industry: String
-  marketCap: Float
-  creditRating: String
-  
-  # Metadata
-  createdAt: DateTime!
-  updatedAt: DateTime!
-}
-```
-
-#### Security
-
-```graphql
-type Security {
-  id: ID!
-  entityCode: String!
-  entityName: String!
-  description: String
-  isActive: Boolean!
-  
-  # Attributes
-  isin: String
-  cusip: String
-  ticker: String
-  securityType: String
-  currency: String
-  exchange: String
-  price: Float
-  priceDate: Date
-  
-  # Relationships
-  issuer: Issuer
-  
-  # Metadata
-  createdAt: DateTime!
-  updatedAt: DateTime!
-}
-```
-
-#### Deal
-
-```graphql
-type Deal {
-  id: ID!
-  entityCode: String!
-  entityName: String!
-  description: String
-  isActive: Boolean!
-  
-  # Attributes
-  dealDate: Date
-  dealType: String
-  dealValue: Float
-  currency: String
-  status: String
-  
-  # Relationships
-  issuer: Issuer
-  fund: Fund
-  
-  # Metadata
-  createdAt: DateTime!
-  updatedAt: DateTime!
-}
-```
-
-#### Position
-
-```graphql
-type Position {
-  id: ID!
-  intersectionCode: String!
-  positionType: PositionType!
-  quantity: Float
-  currency: String!
-  
-  # Relationships
-  fund: Fund
-  issuer: Issuer
-  deal: Deal
-  security: Security
-  
-  # Metrics
-  marketValue: Float
-  costBasis: Float
-  unrealizedGainLoss: Float
-  dailyReturn: Float
-  ytdReturn: Float
-  
-  # Temporal
-  validFrom: Date!
-  validTo: Date!
-  createdAt: DateTime!
-  updatedAt: DateTime!
-}
-
-enum PositionType {
-  EQUITY
-  DEBT
-  FUND_INTEREST
-  DERIVATIVE
-  OTHER
 }
 ```
 
@@ -221,9 +97,11 @@ type SourceValue {
 
 ### List Funds
 
+`funds` is `entities` filtered to `domainCode: FUND`. The same query with another domain code lists issuers, securities, deals, or positions.
+
 ```graphql
 query ListFunds(
-  $filter: FundFilter
+  $filter: EntityFilter
   $pagination: PaginationInput
   $asOfDate: Date
 ) {
@@ -233,9 +111,7 @@ query ListFunds(
         id
         entityCode
         entityName
-        nav
-        navDate
-        fundStatus
+        attributes
       }
     }
     pageInfo {
@@ -249,24 +125,21 @@ query ListFunds(
 }
 ```
 
-### Get Fund by ID
+### Get Entity by ID
 
 ```graphql
-query GetFund($id: ID!, $asOfDate: Date) {
-  fund(id: $id, asOfDate: $asOfDate) {
+query GetEntity($id: ID!, $asOfDate: Date) {
+  entity(id: $id, asOfDate: $asOfDate) {
     id
     entityCode
     entityName
-    nav
-    navCurrency
-    navDate
-    inceptionDate
-    fundStatus
-    fundType
-    manager
-    aum
-    source
-    lastUpdated
+    domainCode
+    attributes
+    parentRelationships {
+      parentEntityCode
+      parentDomainCode
+      relationshipCode
+    }
   }
 }
 ```
@@ -352,15 +225,16 @@ query ListDQExceptions(
 
 ## Mutations
 
-### Create Fund
+### Create Entity
 
 ```graphql
-mutation CreateFund($input: CreateFundInput!) {
-  createFund(input: $input) {
-    fund {
+mutation CreateEntity($input: CreateEntityInput!) {
+  createEntity(input: $input) {
+    entity {
       id
       entityCode
       entityName
+      domainCode
     }
     errors {
       field
@@ -369,23 +243,17 @@ mutation CreateFund($input: CreateFundInput!) {
   }
 }
 
-input CreateFundInput {
+input CreateEntityInput {
   entityCode: String!
   entityName: String!
+  domainCode: String!
+  templateCode: String
   description: String
-  templateId: ID
-  attributes: [AttributeInput!]
-}
-
-input AttributeInput {
-  attributeCode: String!
-  value: String
-  validFrom: Date
-  sourceId: ID
+  attributes: JSONObject!
 }
 ```
 
-### Update Fund Attribute
+### Update Attribute
 
 ```graphql
 mutation UpdateFundAttribute($input: UpdateAttributeInput!) {
@@ -486,16 +354,15 @@ enum DQExceptionStatus {
 
 ## Subscriptions
 
-### Fund Updated
+### Entity Updated
 
 ```graphql
-subscription OnFundUpdated($fundId: ID) {
-  fundUpdated(fundId: $fundId) {
+subscription OnEntityUpdated($entityId: ID) {
+  entityUpdated(entityId: $entityId) {
     id
     entityCode
     entityName
-    nav
-    navDate
+    domainCode
     updatedAt
   }
 }
@@ -519,18 +386,16 @@ subscription OnDQExceptionCreated {
 
 ## Filter Types
 
-### FundFilter
+### EntityFilter
 
 ```graphql
-input FundFilter {
-  entityCode: StringFilter
-  entityName: StringFilter
-  fundStatus: StringFilter
-  fundType: StringFilter
-  manager: StringFilter
-  navRange: FloatRangeFilter
-  navDateRange: DateRangeFilter
+input EntityFilter {
+  domainCode: String
+  templateCode: String
+  entityCode: String
+  entityName: String
   isActive: Boolean
+  attributes: JSONObject
 }
 
 input StringFilter {
@@ -613,15 +478,14 @@ X-RateLimit-Reset: 1640995200
 ### Complete Fund Query with Lineage
 
 ```graphql
-query CompleteFundQuery {
-  fund(id: "fund-123") {
+query CompleteEntityQuery {
+  entity(id: "fund-123") {
     id
     entityCode
     entityName
-    nav
-    navDate
-    
-    # Get lineage for all fields
+    domainCode
+    attributes
+
     lineage {
       attributeCode
       currentValue
@@ -652,19 +516,18 @@ query TemporalAnalysis {
     source
   }
   
-  # Get current positions
-  positions(
-    filter: { fundId: { equals: "fund-123" } }
-    asOfDate: "2024-03-31"
-  ) {
+  # Positions are entities. Fund and security links are relationships.
+  positions(asOfDate: "2024-03-31") {
     edges {
       node {
-        security {
-          entityName
-          ticker
+        entityCode
+        entityName
+        attributes
+        parentRelationships {
+          parentDomainCode
+          parentEntityCode
+          relationshipCode
         }
-        quantity
-        marketValue
       }
     }
   }
@@ -694,11 +557,11 @@ query ListOpenExceptions {
 
 # 2. Get entity details
 query GetEntityDetails($entityId: ID!) {
-  fund(id: $entityId) {
+  entity(id: $entityId) {
     entityCode
     entityName
-    nav
-    navDate
+    domainCode
+    attributes
     lineage {
       attributeCode
       competingValues {

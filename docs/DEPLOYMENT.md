@@ -83,7 +83,7 @@ RLS policies are included in migrations. Verify they're active:
 ```sql
 SELECT schemaname, tablename, policyname
 FROM pg_policies
-WHERE schemaname IN ('metadata_register', 'entity_instances', 'golden_master', 'position_master', 'data_quality');
+WHERE schemaname IN ('metadata_register', 'entity_instances', 'golden_master', 'data_quality');
 ```
 
 ### 5. Create Database Roles
