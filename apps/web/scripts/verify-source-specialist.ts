@@ -142,6 +142,32 @@ const sleeveRecommendation = sleeve.recommendations.find((item) => item.id === s
 assert(sleeveRecommendation?.payload.attributeCode === 'SLEEVE', `expected a new SLEEVE attribute, got ${sleeveRecommendation?.payload.attributeCode}`);
 assert(sleeve.map?.domains[0].identityColumn === 'fund code', 'fund code stays the entity id when another fund field is unmapped');
 
+const positionsOnly = readSource({
+  fileName: 'positions.csv',
+  headers: ['position code', 'security code', 'security name'],
+  rows: [
+    { 'position code': 'P1', 'security code': 'S1', 'security name': 'Alpha' },
+    { 'position code': 'P2', 'security code': 'S1', 'security name': 'Alpha' },
+  ],
+  catalog,
+  answers: { as_of: 'date:2026-10-31' },
+  acceptedRecommendationIds: [],
+  dismissedRecommendationIds: [],
+});
+assert(positionsOnly.fundMissing, 'positions with no fund column are flagged');
+assert(positionsOnly.records.find((record) => record.domainCode === 'POSITION')?.count === 2, 'position records are counted from the stored rows');
+const withFund = readSource({
+  fileName: 'positions.csv',
+  headers: ['position code', 'security code', 'security name', 'account'],
+  rows: [{ 'position code': 'P1', 'security code': 'S1', 'security name': 'Alpha', account: 'F1' }],
+  catalog,
+  answers: { as_of: 'date:2026-10-31', fund_column: 'account' },
+  acceptedRecommendationIds: [],
+  dismissedRecommendationIds: [],
+});
+assert(withFund.fundMissing === false, 'choosing a fund column links positions to a fund');
+assert(withFund.map?.domains.some((domain) => domain.domainCode === 'FUND' && domain.identityColumn === 'account'), 'the chosen column becomes the fund id');
+
 const securityReading = readSource({
   fileName: 'securities.csv',
   headers: ['security code', 'security name', 'isin', 'issuer code'],
