@@ -139,7 +139,7 @@ await context.supabase
 **Location**: `dq_rules`, `dq_exceptions` tables
 
 **Key Signals**:
-- `rule_expression` with SQL-like syntax
+- `rule_expression` is a SQL predicate that is true when a record fails
 - `severity` levels (CRITICAL, HIGH, MEDIUM, LOW)
 - `status` transitions (OPEN → IN_REVIEW → RESOLVED)
 

@@ -2,6 +2,7 @@ import { createYoga } from 'graphql-yoga';
 import { createClient } from '@supabase/supabase-js';
 import { schema } from '@tapestrai/graphql';
 import { NextRequest } from 'next/server';
+// GraphQL route.
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://yxougybcfuignxydipes.supabase.co';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';

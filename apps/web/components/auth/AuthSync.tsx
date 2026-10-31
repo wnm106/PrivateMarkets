@@ -1,26 +1,30 @@
 'use client';
 
 import { useEffect } from 'react';
+import { readBrowserAccessToken } from '@/lib/auth-token';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
 
 /**
- * Keeps `localStorage.auth_token` (read by lib/graphql.ts on every GraphQL
- * request) in sync with the current Supabase session, including on silent
- * token refresh. Mounted once in the root layout.
+ * Keeps `localStorage.auth_token` aligned with the Supabase session cookie.
+ * GraphQL reads the cookie directly; this copy stays available for anything
+ * that still looks in localStorage. Mounted once in the root layout.
  */
 export function AuthSync() {
   useEffect(() => {
     const supabase = supabaseBrowserClient();
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      syncToken(session?.access_token ?? null);
-    });
+    const sync = () => syncToken(readBrowserAccessToken());
+    sync();
 
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
-      syncToken(session?.access_token ?? null);
+      syncToken(session?.access_token ?? readBrowserAccessToken());
     });
+    window.addEventListener('focus', sync);
 
-    return () => subscription.subscription.unsubscribe();
+    return () => {
+      subscription.subscription.unsubscribe();
+      window.removeEventListener('focus', sync);
+    };
   }, []);
 
   return null;

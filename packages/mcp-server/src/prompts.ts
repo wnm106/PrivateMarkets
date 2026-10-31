@@ -143,9 +143,9 @@ Shows: FUND→POSITION, SECURITY→ISSUER, etc.
 → Read \`tapestrai://template/{CODE}\` for specific templates
 Shows which attributes are expected for each entity type
 
-## 6. Browse Data
-→ Call \`list_entities\` to see entities of a domain
-→ Call \`get_entity\` to see all data for a specific entity
+## 6. Ask a question
+→ Call \`query_data\`. grain "value" counts and filters prevailing field values and their sources across every record. grain "entity" does the same for whole records.
+→ Call \`get_entity\` or \`get_field_lineage\` only when the question is about one record.
 
 **For "${goal}", start with steps 1-4, then step 6. If building a compliance rule, also read \`tapestrai://model/compliance-guide\`.**`,
       },

@@ -1,0 +1,95 @@
+type ReconciliationCell {
+  key: String!
+  label: String!
+  value: String
+  numeric: Float
+}
+
+type ReconciliationIdentity {
+  code: String!
+  name: String!
+  calculated: Float
+  compareValue: Float
+  variance: Float
+  passed: Boolean!
+  message: String
+}
+
+type ReconciliationDefinition {
+  id: ID!
+  definitionCode: String!
+  definitionName: String!
+  description: String
+  domainCode: String!
+  compareMode: String!
+  grain: String!
+  relationshipCode: String
+  relationshipDirection: String!
+  measures: JSON!
+  identityChecks: JSON!
+  stages: [String!]!
+  isActive: Boolean!
+}
+
+type ReconciliationLine {
+  id: ID!
+  lineEntityId: ID!
+  lineCode: String!
+  lineName: String!
+  attributeCode: String!
+  attributeName: String!
+  breakKind: String!
+  cells: [ReconciliationCell!]!
+  goldenValue: String
+  variance: Float
+  isBreak: Boolean!
+  status: String!
+  resolutionSourceCode: String
+  resolutionValue: String
+  resolutionNotes: String
+}
+
+type ReconciliationRun {
+  id: ID!
+  definition: ReconciliationDefinition!
+  anchorEntityId: ID!
+  anchorEntityCode: String!
+  anchorEntityName: String!
+  domainCode: String!
+  asOfDate: Date!
+  compareAsOfDate: Date
+  status: String!
+  stageIndex: Int!
+  assignedTo: String
+  identities: [ReconciliationIdentity!]!
+  lines: [ReconciliationLine!]!
+  openBreakCount: Int!
+  decidedAt: DateTime
+  decisionNotes: String
+  createdAt: DateTime!
+}
+
+input OpenReconciliationRunInput {
+  definitionCode: String!
+  entityId: ID!
+  asOfDate: Date!
+  compareAsOfDate: Date
+}
+
+input ResolveReconciliationLineInput {
+  lineId: ID!
+  status: String!
+  sourceCode: String
+  notes: String
+}
+
+input DecideReconciliationRunInput {
+  runId: ID!
+  decision: String!
+  notes: String
+}
+
+type ReconciliationRunResult {
+  run: ReconciliationRun
+  errors: [MutationError!]!
+}

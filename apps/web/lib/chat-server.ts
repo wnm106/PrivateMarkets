@@ -51,4 +51,24 @@ export function asUuid(value: unknown): string | null {
 }
 
 export const CONVERSATION_COLUMNS =
+  'id, title, tool_context, page_context, domain_code, entity_id, message_count, last_message_at, created_at, updated_at, skill_state';
+
+/** Threads created before the skill ledger migration. */
+export const CONVERSATION_COLUMNS_LEGACY =
   'id, title, tool_context, page_context, domain_code, entity_id, message_count, last_message_at, created_at, updated_at';
+
+export function missingSkillColumn(message?: string): boolean {
+  return !!message && /skill_state/i.test(message);
+}
+
+/**
+ * Reads conversation rows, falling back when skill_state has not been migrated.
+ * The ledger then lives on the client until the column exists.
+ */
+export async function selectConversationRows<T>(
+  run: (columns: string) => PromiseLike<{ data: T; error: { message: string } | null }>
+): Promise<{ data: T; error: { message: string } | null }> {
+  const first = await run(CONVERSATION_COLUMNS);
+  if (!first.error || !missingSkillColumn(first.error.message)) return first;
+  return run(CONVERSATION_COLUMNS_LEGACY);
+}

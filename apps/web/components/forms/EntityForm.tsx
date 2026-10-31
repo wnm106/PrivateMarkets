@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { DomainKey } from '@/lib/mock-data'; // Only keeping DomainKey type, removing function imports
+import { domainCodeFromRoute } from '@/lib/domain-routes';
 import { graphqlQuery, DOMAIN_TEMPLATES_QUERY, RELATIONSHIP_TYPES_QUERY, ENTITIES_QUERY } from '@/lib/graphql';
+import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
+import { SchemaScopeField } from '@/components/admin/SchemaScopeField';
 
 interface EntityFormProps {
-  domain: DomainKey;
+  domain: string;
   mode: 'create' | 'edit';
   initialData?: any;
   onSubmit: (data: any) => void;
@@ -49,19 +51,8 @@ interface RelationshipEntry {
   validFrom: string;
 }
 
-// Maps the lowercase-plural route keys used across the app to the real,
-// singular uppercase domain_code values stored in metadata_register.domain_types.
-const DOMAIN_KEY_TO_CODE: Record<string, string> = {
-  funds: 'FUND',
-  issuers: 'ISSUER',
-  securities: 'SECURITY',
-  deals: 'DEAL',
-  investors: 'INVESTOR',
-  positions: 'POSITION',
-};
-
 export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: EntityFormProps) {
-  const domainCode = DOMAIN_KEY_TO_CODE[domain] || domain.toUpperCase();
+  const domainCode = domainCodeFromRoute(domain);
 
   const [templates, setTemplates] = useState<DomainTemplate[]>([]);
   const [relationshipTypes, setRelationshipTypes] = useState<RelationshipType[]>([]);
@@ -76,6 +67,7 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
     sources: [] as string[],
     parentRelationships: [] as RelationshipEntry[],
     childRelationships: [] as RelationshipEntry[],
+    clientId: null as string | null,
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -132,10 +124,12 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
   const selectedTemplate = templates.find(t => t.templateCode === formData.template);
   const templateAttributes = (selectedTemplate?.attributes || []).slice().sort((a, b) => a.displayOrder - b.displayOrder);
 
-  // Relationship types that plausibly involve this entity type on either side
-  const relevantRelationshipTypes = relationshipTypes.filter(
-    r => r.parentDomainCode === domainCode || r.childDomainCode === domainCode
-  );
+  // A blank parent or child domain means the relationship can connect any entity type,
+  // so beneficial-ownership, counterparty, and facility edges are offered everywhere.
+  const relevantRelationshipTypes = relationshipTypes.filter((r) => {
+    if (!r.parentDomainCode || !r.childDomainCode) return true;
+    return r.parentDomainCode === domainCode || r.childDomainCode === domainCode;
+  });
 
   return (
     <div className="builder-card">
@@ -147,6 +141,15 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
       </div>
       <div className="builder-body">
         <div className="form-grid">
+          {mode === 'create' && (
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <SchemaScopeField
+                value={formData.clientId}
+                allowGlobal={false}
+                onChange={(clientId) => handleChange('clientId', clientId)}
+              />
+            </div>
+          )}
           <div className="field">
             <label>Entity Code *</label>
             <input
@@ -204,7 +207,7 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
         {/* Template Attributes */}
         {templateAttributes.length > 0 && (
           <div style={{ marginTop: '24px' }}>
-            <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
+            <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
               Template Attributes
             </div>
             <div className="form-grid">
@@ -214,28 +217,13 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
                     {tplAttr.displayLabel || tplAttr.attribute.attributeName}
                     {tplAttr.isRequired && <span style={{ color: 'var(--red)', marginLeft: '4px' }}>*</span>}
                   </label>
-                  {tplAttr.attribute.dataType === 'FLOAT' || tplAttr.attribute.dataType === 'INTEGER' || tplAttr.attribute.dataType === 'NUMBER' ? (
-                    <input
-                      className="text-input mono"
-                      type="number"
-                      value={formData.attributes[tplAttr.attribute.attributeCode] || ''}
-                      onChange={(e) => handleAttributeChange(tplAttr.attribute.attributeCode, e.target.value)}
-                    />
-                  ) : tplAttr.attribute.dataType === 'DATE' ? (
-                    <input
-                      className="text-input mono"
-                      type="date"
-                      value={formData.attributes[tplAttr.attribute.attributeCode] || ''}
-                      onChange={(e) => handleAttributeChange(tplAttr.attribute.attributeCode, e.target.value)}
-                    />
-                  ) : (
-                    <input
-                      className="text-input"
-                      value={formData.attributes[tplAttr.attribute.attributeCode] || ''}
-                      onChange={(e) => handleAttributeChange(tplAttr.attribute.attributeCode, e.target.value)}
-                      placeholder={`Enter ${(tplAttr.displayLabel || tplAttr.attribute.attributeName).toLowerCase()}`}
-                    />
-                  )}
+                  <AttributeValueInput
+                    attributeCode={tplAttr.attribute.attributeCode}
+                    dataType={tplAttr.attribute.dataType}
+                    value={formData.attributes[tplAttr.attribute.attributeCode] || ''}
+                    onChange={(value) => handleAttributeChange(tplAttr.attribute.attributeCode, value)}
+                    placeholder={`Enter ${(tplAttr.displayLabel || tplAttr.attribute.attributeName).toLowerCase()}`}
+                  />
                 </div>
               ))}
             </div>
@@ -244,7 +232,7 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
         
         {/* Parent Relationships Section */}
         <div style={{ marginTop: '24px' }}>
-          <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
             Parent Relationships
           </div>
           <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginBottom: '10px' }}>
@@ -259,7 +247,7 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
         
         {/* Child Relationships Section */}
         <div style={{ marginTop: '18px' }}>
-          <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
             Child Relationships
           </div>
           <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginBottom: '10px' }}>
@@ -367,7 +355,7 @@ function RelationshipEditor({
                 <strong>{entry.entityName}</strong>
                 <span style={{ color: 'var(--ink-3)', marginLeft: '6px' }}>({entry.domainCode} · {entry.entityCode})</span>
                 {entry.isPrimary && (
-                  <span style={{ marginLeft: '8px', fontSize: '10px', color: 'var(--accent)', fontWeight: 600, textTransform: 'uppercase' }}>Primary</span>
+                  <span style={{ marginLeft: '8px', fontSize: '11px', color: 'var(--accent)', fontWeight: 600, textTransform: 'none' }}>Primary</span>
                 )}
               </div>
               <button

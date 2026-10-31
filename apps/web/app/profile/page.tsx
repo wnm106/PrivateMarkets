@@ -99,7 +99,7 @@ export default function ProfilePage() {
   if (!me) return <div className="p-8 text-ink-3">Loading…</div>;
 
   return (
-    <div className="max-w-xl mx-auto p-8 space-y-8 text-ink">
+    <div className="max-w-xl mx-auto space-y-8 text-ink">
       <h1 className="text-xl font-semibold">Manage profile</h1>
       {msg && (
         <div className={msg.kind === 'ok' ? 'text-green-600 text-sm' : 'text-red-600 text-sm'}>{msg.text}</div>

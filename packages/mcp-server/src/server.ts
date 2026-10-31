@@ -18,8 +18,10 @@ import { registerOverrideTools } from './tools/override-tools';
 import { registerDQTools } from './tools/dq-tools';
 import { registerImportMapTools } from './tools/import-map-tools';
 import { registerPositionFileTools } from './tools/position-file-tools';
+import { registerSpecialistTools } from './tools/specialist-tools';
 import { registerComplianceTools } from './tools/compliance-tools';
 import { registerReportingTools } from './tools/reporting-tools';
+import { registerQueryTools } from './tools/query-data';
 import { ToolRegistry } from './lib/tool-registry';
 import { listResources, readResource } from './resources';
 import { PROMPTS, getPromptMessages } from './prompts';
@@ -112,8 +114,10 @@ registerOverrideTools(toolRegistry);
 registerDQTools(toolRegistry);
 registerImportMapTools(toolRegistry);
 registerPositionFileTools(toolRegistry);
+registerSpecialistTools(toolRegistry);
 registerComplianceTools(toolRegistry);
 registerReportingTools(toolRegistry);
+registerQueryTools(toolRegistry);
 
 // Handle tool listing
 server.setRequestHandler(ListToolsRequestSchema, async () => {

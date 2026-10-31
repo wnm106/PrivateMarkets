@@ -67,7 +67,7 @@ input UpdateReferenceListInput {
 }
 
 input AddReferenceListValueInput {
-  listId: ID!
+  listCode: String!
   valueCode: String!
   valueLabel: String!
   displayOrder: Int

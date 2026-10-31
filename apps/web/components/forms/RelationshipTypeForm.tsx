@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { SchemaScopeField } from '@/components/admin/SchemaScopeField';
 
 interface RelationshipTypeFormProps {
   mode: 'create' | 'edit';
   initialData?: any;
   domainOptions?: { domainCode: string; domainName: string }[];
+  owner?: { id: string; name: string } | null;
   onSubmit: (data: any) => void;
   onCancel: () => void;
 }
@@ -25,6 +27,7 @@ export function RelationshipTypeForm({
   mode, 
   initialData, 
   domainOptions,
+  owner,
   onSubmit, 
   onCancel 
 }: RelationshipTypeFormProps) {
@@ -48,6 +51,7 @@ export function RelationshipTypeForm({
   });
   
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [clientId, setClientId] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialData) {
@@ -86,7 +90,7 @@ export function RelationshipTypeForm({
     if (validate()) {
       // Remove isRequired - not in GraphQL schema
       const { isRequired, ...submitData } = formData;
-      onSubmit(submitData);
+      onSubmit(mode === 'create' ? { ...submitData, clientId } : submitData);
     }
   };
 
@@ -203,6 +207,12 @@ export function RelationshipTypeForm({
             </div>
           )}
           
+          {mode === 'create' && (
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <SchemaScopeField value={clientId} owner={owner} onChange={setClientId} />
+            </div>
+          )}
+
           <div className="field" style={{ gridColumn: '1 / -1' }}>
             <label>Description</label>
             <textarea

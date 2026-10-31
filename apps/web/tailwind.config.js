@@ -8,41 +8,41 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['var(--font-ibm-plex-sans)', 'system-ui', 'sans-serif'],
-        serif: ['var(--font-display)', 'var(--font-ibm-plex-sans)', 'sans-serif'],
-        display: ['var(--font-display)', 'var(--font-ibm-plex-sans)', 'sans-serif'],
+        sans: ['var(--font-inter)', 'Segoe UI', 'system-ui', 'sans-serif'],
+        serif: ['var(--font-inter)', 'Segoe UI', 'system-ui', 'sans-serif'],
+        display: ['var(--font-inter)', 'Segoe UI', 'system-ui', 'sans-serif'],
         mono: ['var(--font-ibm-plex-mono)', 'Menlo', 'Monaco', 'monospace'],
       },
       colors: {
         // tapestr.ai design system
-        bg: '#f5f8fc',
-        'bg-alt': '#e8eff8',
+        bg: '#f8fafc',
+        'bg-alt': '#f1f5f9',
         surface: '#ffffff',
         ink: {
-          DEFAULT: '#0a1628',
-          2: '#1e3050',
-          3: '#566a88',
-          4: '#93a3bb',
+          DEFAULT: '#0f172a',
+          2: '#334155',
+          3: '#6b7280',
+          4: '#9ca3af',
         },
         line: {
-          DEFAULT: '#dde6f1',
-          strong: '#b9c8dc',
+          DEFAULT: '#e2e8f0',
+          strong: '#cbd5e1',
         },
         accent: {
-          DEFAULT: '#1a8cff',     // tapestr.ai bright blue
-          2: '#1e40af',           // tapestr blue
+          DEFAULT: '#00334e',     // navy
+          2: '#0e7490',           // teal
         },
         brand: {
-          navy: '#0a1628',
-          blue: '#1e40af',
-          sky: '#0a84e0',
-          cyan: '#00a3ff',
-          'ai-blue': '#1a8cff',
+          navy: '#00334e',
+          blue: '#00334e',
+          sky: '#0e7490',
+          cyan: '#06b6d4',
+          'ai-blue': '#0e7490',
         },
-        gold: '#c89c3f',
-        green: '#2f7d4f',
-        red: '#b53030',
-        amber: '#c98a0c',
+        gold: '#b45309',
+        green: '#15803d',
+        red: '#b91c1c',
+        amber: '#b45309',
         // Source colors
         src: {
           bloomberg: '#c2410c',
@@ -70,9 +70,9 @@ module.exports = {
         'tighter': '-1px',
         'tight': '-0.5px',
         'widget': '-0.3px',
-        'wide': '1px',
-        'wider': '1.5px',
-        'widest': '2.5px',
+        'wide': '0',
+        'wider': '0',
+        'widest': '0',
       },
     },
   },

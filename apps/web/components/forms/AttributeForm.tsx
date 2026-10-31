@@ -224,7 +224,7 @@ export function AttributeForm({ mode, initialData, onSubmit, onCancel }: Attribu
 
         {formData.isDerived && (
           <div style={{ marginTop: '18px', padding: '14px', background: '#fef6ec', border: '1px solid var(--accent)' }}>
-            <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--accent)', fontWeight: 600, marginBottom: '10px' }}>
+            <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--accent)', fontWeight: 600, marginBottom: '10px' }}>
               Derived Attribute Configuration
             </div>
             <div className="form-grid">
@@ -357,7 +357,7 @@ export function AttributeForm({ mode, initialData, onSubmit, onCancel }: Attribu
         )}
 
         <div style={{ marginTop: '18px', padding: '14px', background: 'var(--bg)', border: '1px solid var(--line)' }}>
-          <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
             Validation Rules
           </div>
           <div className="form-grid">

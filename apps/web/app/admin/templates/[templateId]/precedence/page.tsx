@@ -142,8 +142,8 @@ export default function TemplatePrecedencePage() {
     }
   };
 
-  if (loading) return <div className="p-8">Loading...</div>;
-  if (!template) return <div className="p-8">Template not found</div>;
+  if (loading) return <div>Loading...</div>;
+  if (!template) return <div>Template not found</div>;
 
   return null; // Placeholder - will be replaced
 }

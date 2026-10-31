@@ -209,7 +209,7 @@ export function EntityIdentifierDefinitionForm({
                       />
                       <div style={{ flex: 1 }}>
                         <span style={{ fontSize: '12px', fontWeight: 500 }}>{attr.attributeName}</span>
-                        <span style={{ fontSize: '10px', color: 'var(--ink-3)', marginLeft: '8px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--ink-3)', marginLeft: '8px' }}>
                           <span className="mono">{attr.attributeCode}</span> · {attr.dataType}
                         </span>
                       </div>

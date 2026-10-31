@@ -21,6 +21,7 @@ export function ImpersonationBanner() {
   const [clients, setClients] = useState<{ id: string; clientName: string }[]>([]);
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
     const result = await graphqlClient.query(ME_QUERY, {}).toPromise();
@@ -41,17 +42,27 @@ export function ImpersonationBanner() {
   const handleStart = async () => {
     if (!selected) return;
     setBusy(true);
-    await graphqlClient.mutation(START_IMPERSONATION_MUTATION, { clientId: selected, reason: 'support' }).toPromise();
-    setBusy(false);
-    await load();
+    setError(null);
+    const result = await graphqlClient.mutation(START_IMPERSONATION_MUTATION, { clientId: selected, reason: 'support' }).toPromise();
+    const message = result.data?.startImpersonation?.errors?.[0]?.message || result.error?.message;
+    if (message || !result.data?.startImpersonation?.success) {
+      setError(message || 'Could not simulate that client.');
+      setBusy(false);
+      return;
+    }
     window.location.reload();
   };
 
   const handleStop = async () => {
     setBusy(true);
-    await graphqlClient.mutation(STOP_IMPERSONATION_MUTATION, {}).toPromise();
-    setBusy(false);
-    await load();
+    setError(null);
+    const result = await graphqlClient.mutation(STOP_IMPERSONATION_MUTATION, {}).toPromise();
+    const message = result.data?.stopImpersonation?.errors?.[0]?.message || result.error?.message;
+    if (message || !result.data?.stopImpersonation?.success) {
+      setError(message || 'Could not stop simulation.');
+      setBusy(false);
+      return;
+    }
     window.location.reload();
   };
 
@@ -106,6 +117,7 @@ export function ImpersonationBanner() {
           </button>
         </>
       )}
+      {error && <span style={{ color: '#fecaca' }}>{error}</span>}
     </div>
   );
 }

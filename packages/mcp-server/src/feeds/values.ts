@@ -77,8 +77,10 @@ export function normalizeToList(
   );
 }
 
-export function applyTransform(raw: string, transform?: { kind: string; find?: string; replaceWith?: string } | null): string {
-  const text = raw ?? '';
+export function applyTransform(raw: string, transform?: { kind: string; find?: string; replaceWith?: string; values?: { from: string; to: string }[] } | null): string {
+  let text = raw ?? '';
+  const replacement = transform?.values?.find((entry) => entry.from.trim().toLowerCase() === text.trim().toLowerCase());
+  if (replacement?.to) text = replacement.to;
   switch (transform?.kind) {
     case 'none':
       return text;

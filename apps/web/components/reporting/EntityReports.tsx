@@ -16,6 +16,7 @@ interface EntityReportsProps {
   domainCode: string;
   entityId: string;
   asOfDate?: string;
+  embedded?: boolean;
 }
 
 type Selection = { kind: 'dashboard'; id: string } | { kind: 'narrative'; id: string } | null;
@@ -24,7 +25,7 @@ type Selection = { kind: 'dashboard'; id: string } | { kind: 'narrative'; id: st
  * Shows every active dashboard and narrative attached to this entity's type,
  * rendered for the entity currently being viewed.
  */
-export function EntityReports({ domainCode, entityId, asOfDate }: EntityReportsProps) {
+export function EntityReports({ domainCode, entityId, asOfDate, embedded = false }: EntityReportsProps) {
   const [dashboards, setDashboards] = useState<DashboardTemplate[]>([]);
   const [narratives, setNarratives] = useState<NarrativeTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,7 +55,9 @@ export function EntityReports({ domainCode, entityId, asOfDate }: EntityReportsP
   const activeDashboard = selected?.kind === 'dashboard' ? dashboards.find((d) => d.id === selected.id) : undefined;
   const activeNarrative = selected?.kind === 'narrative' ? narratives.find((n) => n.id === selected.id) : undefined;
 
-  if (loading) return null;
+  if (loading) {
+    return embedded ? <div className="value-timeline-empty">Loading dashboards…</div> : null;
+  }
 
   if (dashboards.length === 0 && narratives.length === 0) {
     return (
@@ -76,9 +79,9 @@ export function EntityReports({ domainCode, entityId, asOfDate }: EntityReportsP
   });
 
   return (
-    <div style={{ marginTop: '28px' }}>
+    <div style={{ marginTop: embedded ? 0 : '28px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', marginRight: '8px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', marginRight: '8px' }}>
           Dashboards &amp; Narratives
         </div>
         {dashboards.map((d) => (

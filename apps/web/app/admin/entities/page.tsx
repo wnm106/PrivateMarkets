@@ -9,6 +9,8 @@ import {
   DOMAIN_TEMPLATES_QUERY,
   CREATE_DOMAIN_TYPE_MUTATION,
 } from '@/lib/graphql';
+import { SchemaScopeBadge, SchemaScopeField } from '@/components/admin/SchemaScopeField';
+import { domainColor } from '@/lib/domain-routes';
 
 interface DomainType {
   id: string;
@@ -16,6 +18,8 @@ interface DomainType {
   domainName: string;
   description?: string;
   isActive: boolean;
+  clientId?: string | null;
+  clientName?: string | null;
 }
 
 interface Attribute {
@@ -63,24 +67,21 @@ export default function EntityManagementPage() {
 
   const handleCreateDomain = async (data: any) => {
     try {
-      await graphqlClient.mutation(CREATE_DOMAIN_TYPE_MUTATION, { input: data }).toPromise();
+      const result = await graphqlClient.mutation(CREATE_DOMAIN_TYPE_MUTATION, { input: data }).toPromise();
+      const errors = result.data?.createDomainType?.errors;
+      if (errors && errors.length > 0) {
+        window.alert(errors[0].message);
+        return;
+      }
+      if (result.error) {
+        window.alert(result.error.message);
+        return;
+      }
       setShowCreateDomainModal(false);
       loadData();
     } catch (error) {
       console.error('Error creating domain:', error);
     }
-  };
-
-  const getDomainColor = (domainCode: string) => {
-    const colors: Record<string, string> = {
-      FUND: '#1b3a4b',
-      ISSUER: '#6d28d9',
-      SECURITY: '#c2410c',
-      DEAL: '#047857',
-      INVESTOR: '#be185d',
-      POSITION: '#0369a1'
-    };
-    return colors[domainCode] || '#6b7280';
   };
 
   if (loading) {
@@ -141,7 +142,7 @@ export default function EntityManagementPage() {
                 display: 'block',
                 textDecoration: 'none',
                 color: 'inherit',
-                '--card-accent': getDomainColor(domain.domainCode)
+                '--card-accent': domainColor(domain.domainCode)
               } as React.CSSProperties}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '12px' }}>
@@ -149,8 +150,11 @@ export default function EntityManagementPage() {
                   <div style={{ fontSize: '16px', fontWeight: 600, marginBottom: '4px' }}>
                     {domain.domainName}
                   </div>
-                  <div className="mono" style={{ fontSize: '11px', color: 'var(--ink-3)' }}>
-                    {domain.domainCode}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div className="mono" style={{ fontSize: '11px', color: 'var(--ink-3)' }}>
+                      {domain.domainCode}
+                    </div>
+                    <SchemaScopeBadge clientId={domain.clientId} clientName={domain.clientName} />
                   </div>
                 </div>
                 <div
@@ -158,7 +162,7 @@ export default function EntityManagementPage() {
                     width: '32px',
                     height: '32px',
                     borderRadius: '6px',
-                    background: getDomainColor(domain.domainCode),
+                    background: domainColor(domain.domainCode),
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -208,7 +212,8 @@ function CreateDomainModal({ onClose, onSubmit }: { onClose: () => void; onSubmi
   const [formData, setFormData] = useState({
     domainCode: '',
     domainName: '',
-    description: ''
+    description: '',
+    clientId: null as string | null,
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -291,6 +296,10 @@ function CreateDomainModal({ onClose, onSubmit }: { onClose: () => void; onSubmi
                   rows={3}
                 />
               </div>
+              <SchemaScopeField
+                value={formData.clientId}
+                onChange={(clientId) => setFormData(prev => ({ ...prev, clientId }))}
+              />
             </div>
           </div>
 

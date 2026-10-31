@@ -1,5 +1,7 @@
 import { Context } from '../context';
 import { getComplianceEngine } from '../lib/compliance-engine';
+import { commitAllocation, loadAllocationDraft, type AllocationHold } from '../lib/allocation-store';
+import type { AllocationAdjustment } from '../lib/allocation-engine';
 import {
   matchPopulationEntity,
   targetsAlongPath,
@@ -103,6 +105,10 @@ export const complianceResolvers = {
 
     compliancePopulationPreview: async (_: any, args: { input: any }, context: Context) => {
       return previewPopulation(context, args.input);
+    },
+
+    complianceFundBoard: async (_: any, __: any, context: Context) => {
+      return loadFundBoard(context);
     },
   },
 
@@ -211,11 +217,14 @@ export const complianceResolvers = {
             denominator_attribute_code: input.denominatorAttributeCode,
             denominator_aggregation: input.denominatorAggregation,
             denominator_scope: input.denominatorScope || 'SAME_GROUP',
+            denominator_source: input.denominatorSource || 'BASE',
             denominator_constant_value: input.denominatorConstantValue,
             result_unit: input.resultUnit || 'RATIO',
             limit_direction: input.limitDirection,
             soft_limit_value: input.softLimitValue,
             hard_limit_value: input.hardLimitValue,
+            hard_limit_attribute_code: input.hardLimitAttributeCode,
+            soft_limit_factor: input.softLimitFactor,
             default_source_scope: input.defaultSourceScope || 'GOLDEN',
             metadata: input.metadata || {},
             created_by: context.user?.id,
@@ -275,6 +284,44 @@ export const complianceResolvers = {
       }
     },
 
+    upsertComplianceThreshold: async (_: any, args: { input: any }, context: Context) => {
+      try {
+        const input = args.input;
+        const row = {
+          rule_id: input.ruleId,
+          entity_id: input.entityId || null,
+          group_value: input.groupValue ? String(input.groupValue).trim() : null,
+          rank_from: input.rankFrom ?? null,
+          rank_to: input.rankTo ?? null,
+          soft_limit_value: input.softLimitValue ?? null,
+          hard_limit_value: input.hardLimitValue ?? null,
+          applies: input.applies !== false,
+          notes: input.notes || null,
+          updated_at: new Date().toISOString(),
+        };
+        const query = input.id
+          ? cx(context).from('rule_thresholds').update(row).eq('id', input.id)
+          : cx(context).from('rule_thresholds').insert(row);
+        const { data, error } = await query.select().single();
+        if (error) throw error;
+        return { threshold: mapThreshold(data), errors: [] };
+      } catch (error: any) {
+        console.error('Error saving compliance threshold:', error);
+        return { threshold: null, errors: [{ field: 'general', message: error.message, code: 'SAVE_FAILED' }] };
+      }
+    },
+
+    deleteComplianceThreshold: async (_: any, args: { id: string }, context: Context) => {
+      try {
+        const { error } = await cx(context).from('rule_thresholds').delete().eq('id', args.id);
+        if (error) throw error;
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        console.error('Error deleting compliance threshold:', error);
+        return { success: false, errors: [{ field: 'general', message: error.message, code: 'DELETE_FAILED' }] };
+      }
+    },
+
     deleteComplianceScopeAssignment: async (_: any, args: { id: string }, context: Context) => {
       try {
         const { error } = await cx(context).from('rule_scope_assignments').delete().eq('id', args.id);
@@ -295,6 +342,7 @@ export const complianceResolvers = {
           knowledgeDate: args.input.knowledgeDate,
           sourceScope: args.input.sourceScope,
           triggeredBy: context.user?.id,
+          anchorEntityId: args.input.entityId || undefined,
         });
 
         const { data: ruleRow } = await cx(context).from('rules').select('*').eq('id', run.ruleId).maybeSingle();
@@ -321,6 +369,103 @@ export const complianceResolvers = {
       } catch (error: any) {
         console.error('Error evaluating compliance rule:', error);
         return { run: null, errors: [{ field: 'general', message: error.message, code: 'EVALUATE_FAILED' }] };
+      }
+    },
+
+    scoreDealCompliance: async (_: any, args: { dealId: string; asOfDate?: string | null; holds?: any[] | null; adjustments?: any[] | null }, context: Context) => {
+      try {
+        const holds: AllocationHold[] | null = args.holds
+          ? args.holds.map((item) => ({ trancheId: item.trancheId, holdPct: Number(item.holdPct) }))
+          : null;
+        const adjustments: AllocationAdjustment[] | null = args.adjustments
+          ? args.adjustments.map((item) => ({
+            fundId: item.fundId,
+            trancheId: item.trancheId,
+            type: item.type === 'exclude' ? 'exclude' : 'override',
+            amount: item.amount == null ? undefined : Number(item.amount),
+            reason: item.reasonCode || undefined,
+            note: item.note || undefined,
+          }))
+          : null;
+        // Proposed positions are engine rows, not a user edit. The caller's JWT
+        // cannot insert them under the entity RLS policies, so the sync uses the
+        // service role. The rule itself still runs as the compliance function.
+        const writer = context.supabaseAdmin || context.supabase;
+        const draft = await loadAllocationDraft(writer, args.dealId, args.asOfDate, holds, adjustments);
+        const preview = await commitAllocation(writer, draft, context.user?.id ?? null, { proposalsOnly: true });
+        const fundIds = new Set(preview.rows.map((row) => row.fundId));
+
+        const { data: ruleRows, error: ruleError } = await cx(context)
+          .from('rules')
+          .select('*')
+          .eq('anchor_domain_code', 'FUND')
+          .eq('is_active', true);
+        if (ruleError) throw new Error(ruleError.message);
+        const rules = ruleRows || [];
+        const ruleIds = rules.map((row) => row.id);
+        const { data: versionRows, error: versionError } = ruleIds.length
+          ? await cx(context).from('rule_versions').select('*').in('rule_id', ruleIds).eq('is_active', true)
+          : { data: [], error: null };
+        if (versionError) throw new Error(versionError.message);
+        const versionByRule = new Map<string, any>();
+        for (const version of versionRows || []) {
+          const current = versionByRule.get(version.rule_id);
+          if (!current || version.version_number > current.version_number) versionByRule.set(version.rule_id, version);
+        }
+
+        const engine = getComplianceEngine(writer);
+        const results: any[] = [];
+        for (const rule of rules) {
+          const scored = await engine.evaluateRule({
+            ruleCode: rule.rule_code,
+            asOfDate: draft.asOf,
+            scenarioCode: draft.dealCode,
+            triggeredBy: context.user?.id,
+          });
+          for (const result of scored.results) {
+            if (fundIds.has(result.anchorEntityId)) results.push(result);
+          }
+        }
+
+        const { data: scenarioAttribute } = await writer
+          .from('attribute_register')
+          .select('id')
+          .eq('attribute_code', 'POSITION_SCENARIO_CODE')
+          .maybeSingle();
+        const { data: scenarioRows } = scenarioAttribute
+          ? await writer
+            .from('entity_attribute_values')
+            .select('entity_id')
+            .eq('attribute_id', scenarioAttribute.id)
+            .eq('golden_value', draft.dealCode)
+            .gte('system_to', new Date().toISOString())
+          : { data: [] };
+        const proposalIds = new Set((scenarioRows || []).map((row) => row.entity_id));
+        const impacted = proposalIds.size
+          ? results.filter((result) => (result.contributingEntityIds || []).some((id: string) => proposalIds.has(id)))
+          : results;
+
+        return {
+          rules: rules.map((row) => {
+            const version = versionByRule.get(row.id);
+            return {
+              id: row.id,
+              ruleCode: row.rule_code,
+              ruleName: row.rule_name,
+              ruleCategory: row.rule_category,
+              resultUnit: version?.result_unit || null,
+              limitDirection: version?.limit_direction || null,
+              groupByAttributeCode: version?.group_by_attribute_code || null,
+              consolidateDescendants: Boolean(version?.consolidate_descendants),
+              isActive: row.is_active,
+            };
+          }),
+          results: impacted,
+          errors: [],
+        };
+      } catch (error: any) {
+        console.error('Error scoring deal compliance:', error);
+        return { rules: [], results: [], errors: [{ field: 'general', message: error.message, code: 'EVALUATE_FAILED' }] };
       }
     },
   },
@@ -470,12 +615,16 @@ function mapVersion(row: any, conditions: any[]) {
     denominatorAttributeCode: row.denominator_attribute_code,
     denominatorAggregation: row.denominator_aggregation,
     denominatorScope: row.denominator_scope,
+    denominatorSource: row.denominator_source || 'BASE',
     denominatorConstantValue: row.denominator_constant_value,
     resultUnit: row.result_unit,
     limitDirection: row.limit_direction,
     softLimitValue: row.soft_limit_value,
     hardLimitValue: row.hard_limit_value,
+    hardLimitAttributeCode: row.hard_limit_attribute_code,
+    softLimitFactor: row.soft_limit_factor,
     defaultSourceScope: row.default_source_scope,
+    consolidateDescendants: Boolean(row.consolidate_descendants),
     isActive: row.is_active,
     conditions: conditions.map(mapCondition),
     metadata: row.metadata,
@@ -533,6 +682,138 @@ function mapRun(row: any) {
   };
 }
 
+function mapThreshold(row: any, rule?: { rule_code?: string; rule_name?: string }, entity?: { entity_code?: string; entity_name?: string }) {
+  return {
+    id: row.id,
+    ruleId: row.rule_id,
+    ruleCode: rule?.rule_code || null,
+    ruleName: rule?.rule_name || null,
+    entityId: row.entity_id,
+    entityCode: entity?.entity_code || null,
+    entityName: entity?.entity_name || null,
+    groupValue: row.group_value,
+    rankFrom: row.rank_from,
+    rankTo: row.rank_to,
+    softLimitValue: row.soft_limit_value,
+    hardLimitValue: row.hard_limit_value,
+    applies: row.applies !== false,
+    notes: row.notes,
+  };
+}
+
+async function loadFundBoard(context: Context) {
+  const { data: fundRows, error: fundError } = await context.supabase
+    .schema('entity_instances')
+    .from('master_entities')
+    .select('id, entity_code, entity_name')
+    .eq('domain_code', 'FUND')
+    .eq('is_active', true)
+    .order('entity_code');
+  if (fundError) throw new Error(fundError.message);
+  const funds = (fundRows || []).filter((row) => !String(row.entity_code).startsWith('BENCH-'));
+  const fundIds = funds.map((row) => row.id);
+
+  const { data: parentRows, error: parentError } = fundIds.length
+    ? await context.supabase
+      .schema('entity_instances')
+      .from('entity_relationships')
+      .select('parent_entity_id, child_entity_id')
+      .eq('relationship_code', 'FUND_PARENT')
+      .in('child_entity_id', fundIds)
+    : { data: [], error: null };
+  if (parentError) throw new Error(parentError.message);
+  const parentOf = new Map((parentRows || []).map((row) => [row.child_entity_id, row.parent_entity_id]));
+
+  const { data: ruleRows, error: ruleError } = await cx(context)
+    .from('rules')
+    .select('*')
+    .eq('anchor_domain_code', 'FUND')
+    .eq('is_active', true)
+    .order('rule_name');
+  if (ruleError) throw new Error(ruleError.message);
+  const rules = ruleRows || [];
+  const ruleIds = rules.map((row) => row.id);
+
+  const { data: versionRows, error: versionError } = ruleIds.length
+    ? await cx(context).from('rule_versions').select('*').in('rule_id', ruleIds).eq('is_active', true)
+    : { data: [], error: null };
+  if (versionError) throw new Error(versionError.message);
+  const versionByRule = new Map<string, any>();
+  for (const version of versionRows || []) {
+    const current = versionByRule.get(version.rule_id);
+    if (!current || version.version_number > current.version_number) versionByRule.set(version.rule_id, version);
+  }
+
+  const { data: thresholdRows, error: thresholdError } = ruleIds.length
+    ? await cx(context).from('rule_thresholds').select('*').in('rule_id', ruleIds).eq('valid_to', '9999-12-31')
+    : { data: [], error: null };
+  if (thresholdError) throw new Error(thresholdError.message);
+
+  // A later run may score only one fund. Keep the newest result for each
+  // fund and group so that partial run does not hide the other funds.
+  const { data: scenarioRuns, error: scenarioError } = ruleIds.length
+    ? await cx(context).from('rule_evaluation_runs').select('id, metadata').in('rule_id', ruleIds)
+    : { data: [], error: null };
+  if (scenarioError) throw new Error(scenarioError.message);
+  const scenarioRunIds = new Set((scenarioRuns || []).filter((row) => row.metadata?.scenario_code).map((row) => row.id));
+
+  const latestResult = new Map<string, any>();
+  const pageSize = 1000;
+  for (let offset = 0; ruleIds.length && offset < 20000; offset += pageSize) {
+    const { data: page, error: resultError } = await cx(context)
+      .from('rule_evaluation_results')
+      .select('*')
+      .in('rule_id', ruleIds)
+      .order('evaluated_at', { ascending: false })
+      .range(offset, offset + pageSize - 1);
+    if (resultError) throw new Error(resultError.message);
+    const rows = page || [];
+    for (const row of rows) {
+      if (scenarioRunIds.has(row.run_id)) continue;
+      const key = `${row.rule_id}|${row.anchor_entity_id}|${row.group_by_value || ''}|${row.rank_position ?? ''}`;
+      if (!latestResult.has(key)) latestResult.set(key, row);
+    }
+    if (rows.length < pageSize) break;
+  }
+  const scored = new Set<string>();
+  for (const row of latestResult.values()) {
+    if (row.status !== 'NO_DATA') scored.add(`${row.rule_id}|${row.anchor_entity_id}`);
+  }
+  const resultRows = [...latestResult.values()].filter((row) => (
+    row.status !== 'NO_DATA' || !scored.has(`${row.rule_id}|${row.anchor_entity_id}`)
+  ));
+
+  const fundById = new Map(funds.map((row) => [row.id, row]));
+  const ruleById = new Map(rules.map((row) => [row.id, row]));
+
+  return {
+    funds: funds.map((row) => ({
+      entityId: row.id,
+      entityCode: row.entity_code,
+      entityName: row.entity_name,
+      parentEntityId: parentOf.get(row.id) || null,
+    })),
+    rules: rules.map((row) => {
+      const version = versionByRule.get(row.id);
+      return {
+        id: row.id,
+        ruleCode: row.rule_code,
+        ruleName: row.rule_name,
+        ruleCategory: row.rule_category,
+        resultUnit: version?.result_unit || null,
+        limitDirection: version?.limit_direction || null,
+        groupByAttributeCode: version?.group_by_attribute_code || null,
+        consolidateDescendants: Boolean(version?.consolidate_descendants),
+        isActive: row.is_active,
+      };
+    }),
+    thresholds: (thresholdRows || []).map((row) => mapThreshold(row, ruleById.get(row.rule_id), row.entity_id ? fundById.get(row.entity_id) : undefined)),
+    results: (resultRows || [])
+      .filter((row) => fundById.has(row.anchor_entity_id))
+      .map(mapResult),
+  };
+}
+
 function mapResult(row: any) {
   return {
     id: row.id,
@@ -554,6 +835,7 @@ function mapResult(row: any) {
     breachAmount: row.breach_amount,
     contributingEntityIds: row.contributing_entity_ids,
     contributingCount: row.contributing_count,
+    rankPosition: row.rank_position,
     detail: row.detail,
     evaluatedAt: row.evaluated_at,
   };
@@ -620,6 +902,7 @@ async function previewPopulation(context: Context, input: any) {
       conditions,
       (id, path) => targetsAlongPath(id, path, hopMaps),
       (id, code) => textOfAttribute(attributes.get(id), code),
+      asOf,
     );
     if (result.match) {
       matches.push({
@@ -731,19 +1014,20 @@ async function fetchAttributeValues(
   const attributeIds = [...codeById.keys()];
   if (!attributeIds.length) return;
 
+  // winning_attribute_values seeks idx_eav_entity_attr_source_asof once per
+  // (entity, attribute, source) instead of scanning every historical slice.
   const chunk = 200;
   for (let i = 0; i < ids.length; i += chunk) {
     const slice = ids.slice(i, i + chunk);
     const { data, error } = await supabase
       .schema('golden_master')
-      .from('entity_attribute_values')
-      .select('entity_id, attribute_id, golden_value, precedence_rank')
-      .in('entity_id', slice)
-      .in('attribute_id', attributeIds)
-      .lte('valid_from', asOf)
-      .gte('valid_to', asOf)
-      .lte('system_from', now)
-      .gte('system_to', now);
+      .rpc('winning_attribute_values', {
+        p_entity_ids: slice,
+        p_attribute_ids: attributeIds,
+        p_as_of: asOf,
+        p_knowledge: now,
+        p_require_text: false,
+      });
     if (error) throw new Error(`Failed to load attribute values: ${error.message}`);
     for (const row of data || []) {
       const code = codeById.get(row.attribute_id);

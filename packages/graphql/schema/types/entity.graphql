@@ -19,6 +19,9 @@ type Entity {
   
   # Lineage
   lineage: [FieldLineage!]
+
+  # Materialized calculations for this entity, including whether a recalc is pending.
+  calculatedAttributes: [CalculatedAttributeState!]!
   
   # Metadata
   metadata: JSONObject
@@ -38,6 +41,15 @@ type EntityRelationship {
   relationshipType: String!
   relationshipCode: String!
   isPrimary: Boolean!
+  # Constituents of a composite related entity, such as a position's fund and security.
+  members: [RelationshipMember!]!
+}
+
+type RelationshipMember {
+  entityId: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
 }
 
 type EntityConnection {
@@ -76,6 +88,7 @@ input CreateEntityInput {
   domainCode: String!
   templateCode: String
   description: String
+  clientId: ID
   attributes: JSONObject!
   parentRelationships: [EntityRelationshipInput!]
   childRelationships: [EntityRelationshipInput!]
@@ -87,6 +100,8 @@ input UpdateEntityInput {
   description: String
   isActive: Boolean
   attributes: JSONObject
+  """Date the attribute edit is effective. Use the date on screen so the new value is visible there."""
+  asOfDate: Date
   parentRelationships: [EntityRelationshipInput!]
   childRelationships: [EntityRelationshipInput!]
 }
@@ -122,6 +137,8 @@ type RelationshipType {
   isRequired: Boolean!
   cardinality: String!
   compositeKey: [String!]!
+  clientId: ID
+  clientName: String
 }
 
 type CreateRelationshipResult {
@@ -151,6 +168,7 @@ input CreateDomainTypeInput {
   domainCode: String!
   domainName: String!
   description: String
+  clientId: ID
 }
 
 type CreateDomainTypeResult {
@@ -168,6 +186,7 @@ input CreateAttributeInput {
   isRequired: Boolean
   isMultiValued: Boolean
   referenceDomainCode: String
+  clientId: ID
 }
 
 type CreateAttributeResult {
@@ -180,6 +199,7 @@ input CreateTemplateInput {
   domainCode: String!
   templateName: String!
   description: String
+  clientId: ID
 }
 
 type CreateTemplateResult {
@@ -194,9 +214,21 @@ input AssignAttributeInput {
   precedenceRank: Int
   displayOrder: Int
   displayLabel: String
+  defaultPrecedenceChain: [String!]
 }
 
 type AssignAttributeResult {
+  assignment: TemplateAttribute
+  errors: [MutationError!]!
+}
+
+input UpdateTemplateSourcePreferenceInput {
+  templateId: ID!
+  attributeId: ID!
+  defaultPrecedenceChain: [String!]!
+}
+
+type UpdateTemplateSourcePreferenceResult {
   assignment: TemplateAttribute
   errors: [MutationError!]!
 }
@@ -213,6 +245,15 @@ type DomainTypeRecord {
   isActive: Boolean!
   createdAt: DateTime!
   updatedAt: DateTime!
+  clientId: ID
+  clientName: String
+}
+
+# Active-record count for one entity type. Counted from master entities,
+# not the aggregated read projection, so large domains stay fast.
+type DomainRecordCount {
+  domainCode: String!
+  totalCount: Int!
 }
 
 # Domain Type mutation inputs and results

@@ -1,6 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import type { ColDef } from 'ag-grid-community';
+import { AppGrid } from '@/components/grid/AppGrid';
+import { usePublishViewContext } from '@/lib/view-context';
 import Link from 'next/link';
 import { graphqlQuery, DOMAIN_TEMPLATES_QUERY, DOMAIN_TYPES_QUERY } from '@/lib/graphql';
 
@@ -62,6 +65,30 @@ export default function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [domainConfigs, setDomainConfigs] = useState<DomainConfig[]>([]);
   const [loading, setLoading] = useState(true);
+
+  usePublishViewContext(
+    editingTemplate
+      ? {
+          activity: 'editing',
+          kind: 'template',
+          label: editingTemplate.name,
+          id: editingTemplate.id,
+          domainCode: editingTemplate.domain,
+          summary: editingTemplate.description,
+          snapshot: {
+            code: editingTemplate.code,
+            name: editingTemplate.name,
+            domain: editingTemplate.domain,
+            description: editingTemplate.description,
+            attributes: editingTemplate.attributes.map((attribute) => attribute.attributeCode),
+          },
+        }
+      : showCreateForm
+        ? { activity: 'creating', kind: 'template', label: 'New template' }
+        : filterDomain !== 'all'
+          ? { activity: 'viewing', kind: 'templates', label: `${filterDomain} templates`, domainCode: filterDomain }
+          : null
+  );
 
   useEffect(() => {
     const fetchData = async () => {
@@ -223,13 +250,13 @@ export default function TemplatesPage() {
                   </div>
                 </div>
                 <span style={{
-                  fontSize: '10px',
+                  fontSize: '11px',
                   padding: '3px 8px',
                   background: 'var(--bg)',
                   color: 'var(--ink-2)',
                   fontWeight: 500,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px',
+                  textTransform: 'none',
+                  letterSpacing: 0,
                   border: '1px solid var(--line)',
                 }}>
                   {tpl.statementKind ? `${tpl.statementKind} · ` : ''}{tpl.domain}
@@ -240,7 +267,7 @@ export default function TemplatesPage() {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', margin: '0 0 14px 0', fontSize: '11px' }}>
                 <div>
-                  <div style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.7px', fontSize: '9px', marginBottom: '3px' }}>
+                  <div style={{ color: 'var(--ink-3)', textTransform: 'none', letterSpacing: 0, fontSize: '11px', marginBottom: '3px' }}>
                     Attributes
                   </div>
                   <div className="mono" style={{ color: 'var(--ink)', fontWeight: 600 }}>
@@ -248,7 +275,7 @@ export default function TemplatesPage() {
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.7px', fontSize: '9px', marginBottom: '3px' }}>
+                  <div style={{ color: 'var(--ink-3)', textTransform: 'none', letterSpacing: 0, fontSize: '11px', marginBottom: '3px' }}>
                     Entities
                   </div>
                   <div className="mono" style={{ color: 'var(--ink)', fontWeight: 600 }}>
@@ -256,7 +283,7 @@ export default function TemplatesPage() {
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.7px', fontSize: '9px', marginBottom: '3px' }}>
+                  <div style={{ color: 'var(--ink-3)', textTransform: 'none', letterSpacing: 0, fontSize: '11px', marginBottom: '3px' }}>
                     Updated
                   </div>
                   <div style={{ color: 'var(--ink-2)', fontSize: '11px' }}>
@@ -266,9 +293,6 @@ export default function TemplatesPage() {
               </div>
               <div style={{ display: 'flex', gap: '6px' }}>
                 <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setEditingTemplate(tpl); }}>Edit</button>
-                <Link href={`/admin/precedence/${tpl.code}`}>
-                  <button className="btn btn-sm" onClick={(e) => e.stopPropagation()}>Precedence</button>
-                </Link>
               </div>
             </div>
           );
@@ -298,56 +322,7 @@ export default function TemplatesPage() {
         <h2>Template-Attribute Matrix</h2>
         <span className="hint">Which attributes belong to which templates</span>
       </div>
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-          <thead>
-            <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--line)' }}>
-              <th style={{ padding: '12px 18px', textAlign: 'left', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', fontWeight: 600, position: 'sticky', left: 0, background: 'var(--bg)', zIndex: 1 }}>
-                Attribute
-              </th>
-              {filteredTemplates.map(tpl => (
-                <th key={tpl.id} style={{ padding: '12px 18px', textAlign: 'center', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', fontWeight: 600, minWidth: '100px' }}>
-                  {tpl.code}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {Array.from(new Set(filteredTemplates.flatMap(t => t.attributes.map(a => a.attributeCode)))).map(attrCode => (
-              <tr key={attrCode} style={{ borderBottom: '1px solid var(--line)' }}>
-                <td style={{ padding: '10px 18px', fontFamily: 'var(--font-ibm-plex-mono), monospace', color: 'var(--accent)', fontWeight: 500, fontSize: '11px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
-                  {attrCode}
-                </td>
-                {filteredTemplates.map(tpl => {
-                  const hasAttr = tpl.attributes.some(a => a.attributeCode === attrCode);
-                  const tplAttr = tpl.attributes.find(a => a.attributeCode === attrCode);
-                  return (
-                    <td key={tpl.id} style={{ padding: '10px 18px', textAlign: 'center' }}>
-                      {hasAttr ? (
-                        <span style={{
-                          display: 'inline-block',
-                          width: '24px',
-                          height: '24px',
-                          background: tplAttr?.required ? 'var(--green)' : 'var(--accent-2)',
-                          color: '#fff',
-                          borderRadius: '50%',
-                          lineHeight: '24px',
-                          fontSize: '10px',
-                          fontWeight: 600,
-                        }}>
-                          {tplAttr?.required ? 'R' : '✓'}
-                        </span>
-                      ) : (
-                        <span style={{ color: 'var(--ink-4)' }}>—</span>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <TemplateMatrix templates={filteredTemplates} />
 
       {/* Create/Edit Modal */}
       {(showCreateForm || editingTemplate) && (
@@ -374,7 +349,7 @@ export default function TemplatesPage() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <div>
-                <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--accent)', fontWeight: 600, marginBottom: '4px' }}>
+                <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--accent)', fontWeight: 600, marginBottom: '4px' }}>
                   {showCreateForm ? 'Create' : 'Edit'}
                 </div>
                 <div style={{ fontFamily: 'var(--font-ibm-plex-serif), serif', fontSize: '18px', fontWeight: 600 }}>
@@ -432,7 +407,7 @@ export default function TemplatesPage() {
 
             {editingTemplate && (
               <div style={{ marginTop: '18px' }}>
-                <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
+                <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
                   Assigned Attributes ({editingTemplate.attributes.length})
                 </div>
                 <div style={{ background: 'var(--bg)', border: '1px solid var(--line)', padding: '14px' }}>
@@ -454,7 +429,7 @@ export default function TemplatesPage() {
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        fontSize: '9px',
+                        fontSize: '11px',
                         fontWeight: 700,
                       }}>
                         {tplAttr.sortOrder}
@@ -463,7 +438,7 @@ export default function TemplatesPage() {
                         <div style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '12px' }}>
                           {tplAttr.attributeName}
                         </div>
-                        <div style={{ fontSize: '10px', color: 'var(--ink-3)' }}>
+                        <div style={{ fontSize: '11px', color: 'var(--ink-3)' }}>
                           <span className="mono">{tplAttr.attributeCode}</span> · {tplAttr.displaySection}
                           {tplAttr.required && <span style={{ color: 'var(--green)', marginLeft: '8px' }}>Required</span>}
                         </div>
@@ -487,5 +462,60 @@ export default function TemplatesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+
+function TemplateMatrix({ templates }: { templates: Template[] }) {
+  const attrCodes = useMemo(
+    () => Array.from(new Set(templates.flatMap((template) => template.attributes.map((attribute) => attribute.attributeCode)))),
+    [templates],
+  );
+  const rows = useMemo(() => attrCodes.map((attributeCode) => ({ attributeCode })), [attrCodes]);
+  const columns = useMemo<ColDef[]>(() => [
+    {
+      field: 'attributeCode',
+      headerName: 'Attribute',
+      pinned: 'left',
+      minWidth: 200,
+      cellClass: 'mono',
+    },
+    ...templates.map((template) => ({
+      colId: template.id,
+      headerName: template.code,
+      width: 120,
+      sortable: false,
+      filter: false,
+      cellStyle: { textAlign: 'center' as const },
+      cellRenderer: (params: any) => {
+        const match = template.attributes.find((attribute) => attribute.attributeCode === params.data.attributeCode);
+        if (!match) return <span style={{ color: 'var(--ink-4)' }}>—</span>;
+        return (
+          <span style={{
+            display: 'inline-block',
+            width: '24px',
+            height: '24px',
+            background: match.required ? 'var(--green)' : 'var(--accent-2)',
+            color: '#fff',
+            borderRadius: '50%',
+            lineHeight: '24px',
+            fontSize: '11px',
+            fontWeight: 600,
+          }}>
+            {match.required ? 'R' : '✓'}
+          </span>
+        );
+      },
+    })),
+  ], [templates]);
+  return (
+    <AppGrid
+      rows={rows}
+      columns={columns}
+      getRowId={(row) => row.attributeCode}
+      autoHeight={rows.length < 40}
+      height={rows.length < 40 ? undefined : '70vh'}
+      emptyMessage="No attributes on these templates."
+    />
   );
 }

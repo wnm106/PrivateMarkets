@@ -7,7 +7,11 @@ export const dynamic = 'force-dynamic';
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_FILES = 8;
-const geminiApiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
+const geminiApiKey =
+  process.env.GEMINI_API_KEY ||
+  process.env.GOOGLE_AI_API_KEY ||
+  process.env.NEXT_PUBLIC_GEMINI_API_KEY ||
+  '';
 const geminiModel = 'gemini-2.0-flash';
 
 const VISION_PROMPT = `You are reading a fund NAV statement or a company financial statement.

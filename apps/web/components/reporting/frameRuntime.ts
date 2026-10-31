@@ -119,14 +119,25 @@ const RUNTIME = String.raw`
     rows = rows || [];
     var cols = columns || (rows[0] ? Object.keys(rows[0]) : []);
     var h = '<table style="border-collapse:collapse;width:100%;font-size:13px"><thead><tr>';
-    cols.forEach(function (c) { h += '<th style="text-align:left;border-bottom:2px solid #ddd;padding:6px 8px;font-weight:600">' + esc(c) + '</th>'; });
+    cols.forEach(function (c) {
+      var kind = '';
+      for (var i = 0; i < rows.length; i++) {
+        var v = rows[i][c];
+        if (v == null || v === '') continue;
+        var next = typeof v === 'number' ? 'num' : (/^\d{4}-\d{2}-\d{2}/.test(String(v)) ? 'date' : 'text');
+        if (!kind) kind = next;
+        else if (kind !== next) { kind = 'text'; break; }
+      }
+      h += '<th style="text-align:' + (kind === 'num' || kind === 'date' ? 'right' : 'left') + ';border-bottom:2px solid #ddd;padding:6px 8px;font-weight:600">' + esc(c) + '</th>';
+    });
     h += '</tr></thead><tbody>';
     rows.forEach(function (r) {
       h += '<tr>';
       cols.forEach(function (c) {
         var v = r[c];
         var isN = typeof v === 'number';
-        h += '<td style="border-bottom:1px solid #eee;padding:6px 8px;' + (isN ? 'text-align:right;font-variant-numeric:tabular-nums' : '') + '">' + esc(isN ? fmt.number(v) : v) + '</td>';
+        var isD = !isN && /^\d{4}-\d{2}-\d{2}/.test(String(v == null ? '' : v));
+        h += '<td style="border-bottom:1px solid #eee;padding:6px 8px;' + (isN || isD ? 'text-align:right;font-variant-numeric:tabular-nums' : '') + '">' + esc(isN ? fmt.number(v) : v) + '</td>';
       });
       h += '</tr>';
     });

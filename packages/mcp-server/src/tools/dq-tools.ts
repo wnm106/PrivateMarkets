@@ -3,7 +3,7 @@ import { ToolDefinition } from '../lib/types';
 
 const listDQExceptions: ToolDefinition = {
   name: 'list_dq_exceptions',
-  description: 'List data quality exceptions with optional filtering by status, severity, and domain.',
+  description: 'One page of stored data-quality exceptions. status is OPEN, IN_REVIEW, RESOLVED, WAIVED, or FALSE_POSITIVE. severity is CRITICAL, HIGH, MEDIUM, or LOW. domainCode comes from list_domain_types. first defaults to 20. For how many field values match a filter, use query_data.',
   category: 'dq',
   inputSchema: {
     type: 'object',
@@ -54,7 +54,7 @@ const listDQExceptions: ToolDefinition = {
 
 const resolveDQException: ToolDefinition = {
   name: 'resolve_dq_exception',
-  description: 'Resolve a data quality exception by updating its status and adding resolution notes.',
+  description: 'Set the status of one stored exception. exceptionId comes from list_dq_exceptions. status is OPEN, IN_REVIEW, RESOLVED, WAIVED, or FALSE_POSITIVE. This does not change the underlying field value. To change the value, use submit_manual_override.',
   category: 'dq',
   inputSchema: {
     type: 'object',
@@ -86,7 +86,7 @@ const resolveDQException: ToolDefinition = {
 
 const getDQSummary: ToolDefinition = {
   name: 'get_dq_summary',
-  description: 'Get a summary of data quality metrics including exception counts by severity and domain.',
+  description: 'Counts of stored data-quality exceptions by severity and domain. This is the exception register, not a count of field values. For field values, use query_data.',
   category: 'dq',
   inputSchema: {
     type: 'object',

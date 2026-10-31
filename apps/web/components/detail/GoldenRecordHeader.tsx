@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { sources, qualityColor } from '@/lib/data';
 
@@ -15,6 +16,8 @@ interface GoldenRecordHeaderProps {
   listPath: string;
   listLabel: string;
   accentColor: string;
+  onRename?: (name: string) => Promise<void>;
+  mergeHref?: string;
 }
 
 export function GoldenRecordHeader({
@@ -29,7 +32,47 @@ export function GoldenRecordHeader({
   listPath,
   listLabel,
   accentColor,
+  onRename,
+  mergeHref,
 }: GoldenRecordHeaderProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const [saving, setSaving] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!editing) setDraft(name);
+  }, [name, editing]);
+
+  const cancelRename = () => {
+    setDraft(name);
+    setRenameError(null);
+    setEditing(false);
+  };
+
+  const saveRename = async () => {
+    const next = draft.trim();
+    if (!next) {
+      setRenameError('Name is required');
+      return;
+    }
+    if (!onRename || next === name) {
+      setEditing(false);
+      setRenameError(null);
+      return;
+    }
+    setSaving(true);
+    setRenameError(null);
+    try {
+      await onRename(next);
+      setEditing(false);
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : 'Could not save name');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <>
       {/* Breadcrumb */}
@@ -54,7 +97,36 @@ export function GoldenRecordHeader({
               )}
               <span className="rec-time">Last reviewed {lastReviewed}</span>
             </div>
-            <div className="gr-name">{name}</div>
+            {onRename && editing ? (
+              <form
+                className="gr-name-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void saveRename();
+                }}
+              >
+                <input
+                  className="text-input gr-name-input"
+                  value={draft}
+                  autoFocus
+                  disabled={saving}
+                  aria-label="Entity name"
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') cancelRename();
+                  }}
+                />
+                <button className="btn btn-sm btn-primary" type="submit" disabled={saving || !draft.trim()}>
+                  {saving ? 'Saving' : 'Save'}
+                </button>
+                <button className="btn btn-sm" type="button" onClick={cancelRename} disabled={saving}>
+                  Cancel
+                </button>
+              </form>
+            ) : (
+              <div className="gr-name">{name}</div>
+            )}
+            {renameError && <div className="gr-name-error">{renameError}</div>}
             <div className="gr-type">{type}</div>
           </div>
         </div>
@@ -71,9 +143,19 @@ export function GoldenRecordHeader({
 
         <div className="gr-header-right">
           <div className="gr-actions">
+            {onRename && !editing && (
+              <button className="btn btn-sm" type="button" onClick={() => setEditing(true)}>
+                Rename
+              </button>
+            )}
             <Link href={`${entityPath}/lineage`}>
               <button className="btn btn-sm">View Lineage</button>
             </Link>
+            {mergeHref && (
+              <Link href={mergeHref}>
+                <button className="btn btn-sm">Find matches</button>
+              </Link>
+            )}
             {conflicts > 0 && (
               <Link href="/resolve">
                 <button className="btn btn-sm btn-primary">Resolve Conflicts</button>

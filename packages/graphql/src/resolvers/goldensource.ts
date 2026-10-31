@@ -1,6 +1,17 @@
 ﻿import { Context } from "../context";
 import { evaluatePrecedence } from "../lib/rule-engine";
 
+const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+
+function receiptIsStale(receivedAt: string | null | undefined, sourceCode: string | null | undefined): boolean {
+  const code = (sourceCode || '').toUpperCase();
+  if (code === 'DERIVED' || code === 'CALCULATED') return false;
+  if (!receivedAt) return false;
+  const time = new Date(receivedAt).getTime();
+  if (Number.isNaN(time)) return false;
+  return Date.now() - time > STALE_AFTER_MS;
+}
+
 /**
  * Golden Source Resolver
  * Handles: resolving/persisting golden source, O(1) reads, batch re-resolution,
@@ -35,7 +46,7 @@ export const goldenSourceResolvers = {
         resolutionVersion: data.resolution_version,
         resolvedAt: data.resolved_at,
         competingValues: data.competing_values || [],
-        isStale: false,
+        isStale: receiptIsStale(data.last_received_at || data.system_from, data.source_registry?.source_code),
       };
     },
 
@@ -59,7 +70,7 @@ export const goldenSourceResolvers = {
         resolutionVersion: row.resolution_version,
         resolvedAt: row.resolved_at,
         competingValues: row.competing_values || [],
-        isStale: false,
+        isStale: receiptIsStale(row.last_received_at || row.system_from, row.source_registry?.source_code),
       }));
     },
 
@@ -167,37 +178,34 @@ export const goldenSourceResolvers = {
 
 async function resolveAndPersistGolden(
   context: Context, entityId: string, attributeCode: string,
-  domainCode: string, templateId: string | null, validFrom: string
-): Promise<{ winningSource: string; goldenValueId: string | null; goldenValue: string | null }> {
-  const result = await evaluatePrecedence(context.supabase, entityId, attributeCode, domainCode, templateId);
+  _domainCode: string, _templateId: string | null, _validFrom: string
+): Promise<{ winningSource: string | null; goldenValueId: string | null; goldenValue: string | null }> {
   const { data: attr } = await context.supabase.from("attribute_register").select("id").eq("attribute_code", attributeCode).single();
   if (!attr) throw new Error(`Attribute not found: ${attributeCode}`);
 
-  const winningCandidate = result.allCandidates.find((c) => c.source === result.winningSource);
-
-  await context.supabase.from("entity_attribute_values")
-    .update({ system_to: new Date().toISOString() })
+  const current = () => context.supabase.from("entity_attribute_values")
     .eq("entity_id", entityId).eq("attribute_id", attr.id)
     .eq("valid_to", "9999-12-31").eq("system_to", "9999-12-31 23:59:59");
 
-  const { data, error } = await context.supabase.from("entity_attribute_values").insert({
-    entity_id: entityId, attribute_id: attr.id,
-    source_id: result.winningSourceId || null,
-    golden_source_id: result.winningSourceId || null,
-    golden_value: winningCandidate?.value || null,
-    valid_from: validFrom, valid_to: "9999-12-31",
-    system_from: new Date().toISOString(), system_to: "9999-12-31 23:59:59",
-    precedence_rank: winningCandidate?.rank || 999,
-    is_manual_override: result.winningSource === "MANUAL",
-    resolution_rule_applied: result.appliedRule?.ruleCode || null,
-    resolution_version: result.resolutionVersion,
-    resolved_at: new Date().toISOString(),
-    competing_values: JSON.stringify(result.allCandidates),
-    created_by: context.user?.id,
-  }).select().single();
+  const { data: sample, error: sampleError } = await current().select("id").limit(1).maybeSingle();
+  if (sampleError) throw sampleError;
+  if (!sample?.id) return { winningSource: null, goldenValueId: null, goldenValue: null };
 
+  const { error: touchError } = await context.supabase.from("entity_attribute_values")
+    .update({ resolved_at: new Date().toISOString() })
+    .eq("id", sample.id);
+  if (touchError) throw touchError;
+
+  const { data: rows, error } = await current().select("id, source_id, golden_source_id, golden_value");
   if (error) throw error;
-  return { winningSource: result.winningSource, goldenValueId: data?.id || null, goldenValue: winningCandidate?.value || null };
+  const winner = (rows || []).find((row) => row.golden_source_id && row.source_id === row.golden_source_id);
+  let winningSource: string | null = null;
+  if (winner?.source_id) {
+    const { data: source } = await context.supabase.schema("entity_instances").from("source_registry")
+      .select("source_code").eq("id", winner.source_id).maybeSingle();
+    winningSource = source?.source_code ?? null;
+  }
+  return { winningSource, goldenValueId: winner?.id || null, goldenValue: winner?.golden_value || null };
 }
 
 async function batchReresolve(

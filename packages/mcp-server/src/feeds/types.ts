@@ -9,6 +9,11 @@ export interface FeedParentColumn {
   /** Column on this row whose value is the parent domain's identity code. */
   column: string;
   parentDomainCode: string;
+  /**
+   * The parent is already in the system. Load order does not wait for it,
+   * and the loader resolves the code from stored entities.
+   */
+  existing?: boolean;
 }
 
 export interface FeedDomainSpec {
@@ -31,6 +36,8 @@ export interface ColumnTransform {
   kind: TransformKind;
   find?: string;
   replaceWith?: string;
+  /** Source text replaced before the transform runs. `to` is the value that gets stored. */
+  values?: { from: string; to: string }[];
 }
 
 export interface FeedMap {

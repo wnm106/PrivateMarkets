@@ -1,12 +1,15 @@
 import { FormulaEngine, DerivationContext } from '../lib/formula-engine';
 import { SupabaseClient } from '@supabase/supabase-js';
+import { Context } from '../context';
+import { withClientNames } from './schema-scope';
 
 export const metadataResolvers = {
   Query: {
     /**
      * Get all attributes, optionally filtered by domain
      */
-    attributeRegister: async (_: any, args: { domainCode?: string; includeDerived?: boolean }, { supabase }: { supabase: SupabaseClient }) => {
+    attributeRegister: async (_: any, args: { domainCode?: string; includeDerived?: boolean }, context: Context) => {
+      const { supabase } = context;
       console.log('[attributeRegister] Called with args:', args);
       
       // Use RPC function to bypass PostgREST schema cache for aggregation fields
@@ -24,10 +27,6 @@ export const metadataResolvers = {
           .from('attribute_register')
           .select('*')
           .order('attribute_code');
-
-        if (!args.includeDerived) {
-          query = query.or('is_derived.eq.false,is_derived.is.null');
-        }
 
         const { data: fallbackData, error: fallbackError } = await query;
 
@@ -77,7 +76,7 @@ export const metadataResolvers = {
           );
         }
         
-        return attributes;
+        return withClientNames(context, attributes);
       }
 
       // RPC returns JSONB array, parse it
@@ -85,10 +84,9 @@ export const metadataResolvers = {
       
       console.log('[attributeRegister] Parsed attributes count:', allAttributes.length);
       
-      // Filter out derived attributes unless explicitly requested
-      let filtered = args.includeDerived 
-        ? allAttributes 
-        : allAttributes.filter((attr: any) => !attr.is_derived);
+      // The catalog RPC omits calculated attributes. Merge them back so a visible
+      // value such as position market value still appears on the entity.
+      let filtered = await withDerivedAttributes(supabase, allAttributes);
 
       // If domainCode is specified, filter to show:
       // 1. Attributes with matching domain_code, OR
@@ -146,10 +144,73 @@ export const metadataResolvers = {
 
       console.log('[attributeRegister] Returning filtered count:', filtered.length);
       const withChains = await attachPrecedenceMetadata(supabase, filtered);
-      return withChains.map(mapAttributeDefinition);
+      return withClientNames(context, withChains.map(mapAttributeDefinition));
     },
 
-    domainTemplates: async (_: any, args: { domainCode?: string }, { supabase }: { supabase: SupabaseClient }) => {
+    attributeSections: async (_: any, args: { domainCode: string }, { supabase }: Context) => {
+      const domainCode = String(args.domainCode || '').trim();
+      if (!domainCode) return [];
+      const { data: domain, error: domainError } = await supabase
+        .from('domain_types')
+        .select('domain_code, client_id')
+        .eq('domain_code', domainCode)
+        .maybeSingle();
+      if (domainError) throw new Error(domainError.message);
+      if (!domain) return [];
+
+      const { data: attributes, error: attributeError } = await supabase
+        .from('attribute_register')
+        .select('display_section')
+        .eq('domain_code', domainCode);
+      if (attributeError) throw new Error(attributeError.message);
+
+      const { data: existing, error: existingError } = await supabase
+        .from('attribute_sections')
+        .select('section_name, display_order')
+        .eq('domain_code', domainCode);
+      if (existingError) throw new Error(existingError.message);
+
+      const known = new Set((existing || []).map((row) => String(row.section_name || '').toLowerCase()));
+      const missing: string[] = [];
+      const remember = (raw: string | null | undefined) => {
+        const name = String(raw || 'General').trim() || 'General';
+        const key = name.toLowerCase();
+        if (known.has(key)) return;
+        known.add(key);
+        missing.push(name);
+      };
+      remember('General');
+      for (const row of attributes || []) remember(row.display_section);
+
+      if (missing.length > 0) {
+        let order = (existing || []).reduce((max, row) => Math.max(max, Number(row.display_order) || 0), -10);
+        const { error: insertError } = await supabase.from('attribute_sections').insert(
+          missing.map((sectionName) => {
+            order += 10;
+            return {
+              domain_code: domainCode,
+              section_name: sectionName,
+              display_order: order,
+              client_id: domain.client_id,
+            };
+          }),
+        );
+        if (insertError && !/duplicate|unique/i.test(insertError.message)) {
+          console.error('[attributeSections] could not add missing sections:', insertError.message);
+        }
+      }
+
+      const { data, error } = await supabase
+        .from('attribute_sections')
+        .select('id, domain_code, section_name, display_order, column_count')
+        .eq('domain_code', domainCode)
+        .order('display_order', { ascending: true });
+      if (error) throw new Error(error.message);
+      return (data || []).map(mapAttributeSection);
+    },
+
+    domainTemplates: async (_: any, args: { domainCode?: string }, context: Context) => {
+      const { supabase } = context;
       let query = supabase
         .from('domain_templates')
         .select('*')
@@ -197,7 +258,7 @@ export const metadataResolvers = {
         .in('template_id', templateIds);
       const sectionById = new Map<string, any>((sections || []).map((section: any) => [section.id, section]));
 
-      return templates.map((t: any) => ({
+      return withClientNames(context, templates.map((t: any) => ({
         id: t.id,
         templateCode: t.template_code,
         domainCode: t.domain_code,
@@ -205,6 +266,7 @@ export const metadataResolvers = {
         description: t.description,
         isActive: t.is_active,
         applicabilityRules: t.applicability_rules || {},
+        clientId: t.client_id ?? null,
         attributes: (assignmentsByTemplate.get(t.id) || []).map((a: any) => ({
           attributeId: a.attribute_id,
           attribute: mapAttributeDefinition(a.attribute_register),
@@ -214,8 +276,10 @@ export const metadataResolvers = {
           displayLabel: a.display_label,
           sectionCode: sectionById.get(a.section_id)?.section_code || null,
           sectionName: sectionById.get(a.section_id)?.section_name || null,
+          defaultPrecedenceChain: Array.isArray(a.default_precedence_chain) ? a.default_precedence_chain : [],
+          chainVersion: Number.isFinite(Number(a.chain_version)) ? Number(a.chain_version) : 1,
         })),
-      }));
+      })));
     },
 
     /**
@@ -400,6 +464,28 @@ export const metadataResolvers = {
         if (input.defaultValue !== undefined) updateData.default_value = input.defaultValue;
         if (input.displaySection !== undefined) updateData.display_section = input.displaySection;
         if (input.displayGroup !== undefined) updateData.display_group = input.displayGroup;
+        if (input.displaySpanColumns !== undefined) {
+          const span = boundedSpan(input.displaySpanColumns, 4);
+          if (span == null) {
+            return {
+              success: false,
+              attribute: null,
+              errors: [{ field: 'displaySpanColumns', message: 'Width must be a whole number from 1 to 4.', code: 'VALIDATION' }],
+            };
+          }
+          updateData.display_span_columns = span;
+        }
+        if (input.displaySpanRows !== undefined) {
+          const span = boundedSpan(input.displaySpanRows, 3);
+          if (span == null) {
+            return {
+              success: false,
+              attribute: null,
+              errors: [{ field: 'displaySpanRows', message: 'Height must be a whole number from 1 to 3.', code: 'VALIDATION' }],
+            };
+          }
+          updateData.display_span_rows = span;
+        }
         if (input.isEditable !== undefined) updateData.is_editable = input.isEditable;
         if (input.isVisible !== undefined) updateData.is_visible = input.isVisible;
         
@@ -431,6 +517,10 @@ export const metadataResolvers = {
             attribute: null,
             errors: [{ field: 'general', message: error.message, code: 'DATABASE_ERROR' }],
           };
+        }
+
+        if (input.displaySection !== undefined && data?.domain_code) {
+          await ensureAttributeSection(supabase, data.domain_code, input.displaySection, data.client_id);
         }
 
         // Update aggregation fields using RPC function (bypasses schema cache)
@@ -525,8 +615,275 @@ export const metadataResolvers = {
 
       return { success: true, errors: [] };
     },
+
+    createAttributeSection: async (
+      _: any,
+      args: { domainCode: string; sectionName: string },
+      { supabase }: Context,
+    ) => {
+      const domainCode = String(args.domainCode || '').trim();
+      const sectionName = String(args.sectionName || '').trim();
+      if (!domainCode) return sectionError('domainCode', 'Choose an entity type.');
+      if (!sectionName) return sectionError('sectionName', 'Enter a section name.');
+      const { data: domain, error: domainError } = await supabase
+        .from('domain_types')
+        .select('client_id')
+        .eq('domain_code', domainCode)
+        .maybeSingle();
+      if (domainError) return sectionError('general', domainError.message);
+      if (!domain) return sectionError('domainCode', 'Entity type not found.');
+      const duplicate = await sectionNameTaken(supabase, domainCode, sectionName);
+      if (duplicate) return sectionError('sectionName', 'That section name is already used for this entity type.');
+      const { data: last } = await supabase
+        .from('attribute_sections')
+        .select('display_order')
+        .eq('domain_code', domainCode)
+        .order('display_order', { ascending: false })
+        .limit(1);
+      const displayOrder = (Number(last?.[0]?.display_order) || 0) + 10;
+      const { data, error } = await supabase
+        .from('attribute_sections')
+        .insert({
+          domain_code: domainCode,
+          section_name: sectionName,
+          display_order: displayOrder,
+          client_id: domain.client_id,
+        })
+        .select('id, domain_code, section_name, display_order, column_count')
+        .single();
+      if (error) return sectionError('general', error.message);
+      return { success: true, section: mapAttributeSection(data), sections: null, errors: [] };
+    },
+
+    renameAttributeSection: async (
+      _: any,
+      args: { id: string; sectionName: string },
+      { supabase }: Context,
+    ) => {
+      const sectionName = String(args.sectionName || '').trim();
+      if (!sectionName) return sectionError('sectionName', 'Enter a section name.');
+      const { data: current, error: readError } = await supabase
+        .from('attribute_sections')
+        .select('id, domain_code, section_name, display_order, column_count')
+        .eq('id', args.id)
+        .maybeSingle();
+      if (readError) return sectionError('general', readError.message);
+      if (!current) return sectionError('id', 'Section not found.');
+      if (current.section_name !== sectionName) {
+        const duplicate = await sectionNameTaken(supabase, current.domain_code, sectionName, current.id);
+        if (duplicate) return sectionError('sectionName', 'That section name is already used for this entity type.');
+        const { error: attributeError } = await supabase
+          .from('attribute_register')
+          .update({ display_section: sectionName, updated_at: new Date().toISOString() })
+          .eq('domain_code', current.domain_code)
+          .eq('display_section', current.section_name);
+        if (attributeError) return sectionError('general', attributeError.message);
+        const { error } = await supabase
+          .from('attribute_sections')
+          .update({ section_name: sectionName, updated_at: new Date().toISOString() })
+          .eq('id', current.id);
+        if (error) return sectionError('general', error.message);
+      }
+      return {
+        success: true,
+        section: mapAttributeSection({ ...current, section_name: sectionName }),
+        sections: null,
+        errors: [],
+      };
+    },
+
+    reorderAttributeSections: async (
+      _: any,
+      args: { domainCode: string; orderedIds: string[] },
+      { supabase }: Context,
+    ) => {
+      const domainCode = String(args.domainCode || '').trim();
+      const orderedIds = Array.isArray(args.orderedIds) ? args.orderedIds : [];
+      const { data: rows, error: readError } = await supabase
+        .from('attribute_sections')
+        .select('id')
+        .eq('domain_code', domainCode);
+      if (readError) return sectionError('general', readError.message);
+      const known = new Set((rows || []).map((row) => row.id));
+      if (orderedIds.length !== known.size || orderedIds.some((id) => !known.has(id))) {
+        return sectionError('orderedIds', 'The section order must include every section for this entity type.');
+      }
+      const updates = await Promise.all(orderedIds.map((id, index) => (
+        supabase
+          .from('attribute_sections')
+          .update({ display_order: (index + 1) * 10, updated_at: new Date().toISOString() })
+          .eq('id', id)
+          .eq('domain_code', domainCode)
+      )));
+      const failed = updates.find((result) => result.error);
+      if (failed?.error) return sectionError('general', failed.error.message);
+      const { data, error } = await supabase
+        .from('attribute_sections')
+        .select('id, domain_code, section_name, display_order, column_count')
+        .eq('domain_code', domainCode)
+        .order('display_order', { ascending: true });
+      if (error) return sectionError('general', error.message);
+      return { success: true, section: null, sections: (data || []).map(mapAttributeSection), errors: [] };
+    },
+
+    updateAttributeSection: async (
+      _: any,
+      args: { id: string; columnCount: number },
+      { supabase }: Context,
+    ) => {
+      const columnCount = boundedSpan(args.columnCount, 4);
+      if (columnCount == null) return sectionError('columnCount', 'Column width must be a whole number from 1 to 4.');
+      const { data, error } = await supabase
+        .from('attribute_sections')
+        .update({ column_count: columnCount, updated_at: new Date().toISOString() })
+        .eq('id', args.id)
+        .select('id, domain_code, section_name, display_order, column_count')
+        .maybeSingle();
+      if (error) return sectionError('general', error.message);
+      if (!data) return sectionError('id', 'Section not found.');
+      return { success: true, section: mapAttributeSection(data), sections: null, errors: [] };
+    },
+
+    deleteAttributeSection: async (_: any, args: { id: string }, { supabase }: Context) => {
+      const { data: current, error: readError } = await supabase
+        .from('attribute_sections')
+        .select('id, domain_code, section_name')
+        .eq('id', args.id)
+        .maybeSingle();
+      if (readError) return sectionError('general', readError.message);
+      if (!current) return sectionError('id', 'Section not found.');
+      const { count, error: countError } = await supabase
+        .from('attribute_register')
+        .select('id', { count: 'exact', head: true })
+        .eq('domain_code', current.domain_code)
+        .eq('display_section', current.section_name);
+      if (countError) return sectionError('general', countError.message);
+      if ((count || 0) > 0) {
+        return sectionError('sectionName', 'Move the attributes out of this section before deleting it.');
+      }
+      const { error } = await supabase.from('attribute_sections').delete().eq('id', current.id);
+      if (error) return sectionError('general', error.message);
+      return { success: true, section: null, sections: null, errors: [] };
+    },
+
+    reorderSectionAttributes: async (
+      _: any,
+      args: { domainCode: string; sectionName: string; attributeIds: string[] },
+      { supabase }: Context,
+    ) => {
+      const domainCode = String(args.domainCode || '').trim();
+      const sectionName = String(args.sectionName || '').trim() || 'General';
+      const attributeIds = Array.isArray(args.attributeIds) ? args.attributeIds.filter(Boolean) : [];
+      if (!domainCode) return sectionError('domainCode', 'Choose an entity type.');
+      const updates = await Promise.all(attributeIds.map((id, index) => (
+        supabase
+          .from('attribute_register')
+          .update({
+            display_section: sectionName,
+            display_group: (index + 1) * 10,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', id)
+          .eq('domain_code', domainCode)
+          .select('id')
+      )));
+      const failed = updates.find((result) => result.error);
+      if (failed?.error) return sectionError('general', failed.error.message);
+      const updated = updates.reduce((sum, result) => sum + (result.data?.length || 0), 0);
+      if (updated !== attributeIds.length) {
+        return sectionError('attributeIds', 'One or more attributes are not part of this entity type.');
+      }
+      await ensureAttributeSection(supabase, domainCode, sectionName);
+      return { success: true, section: null, sections: null, errors: [] };
+    },
   },
 };
+
+function boundedSpan(value: unknown, max: number): number | null {
+  const span = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(span) || span < 1 || span > max) return null;
+  return span;
+}
+
+function mapAttributeSection(row: any) {
+  return {
+    id: row.id,
+    domainCode: row.domain_code,
+    sectionName: row.section_name,
+    displayOrder: row.display_order || 0,
+    columnCount: boundedSpan(row.column_count, 4) ?? 4,
+  };
+}
+
+function sectionError(field: string, message: string) {
+  return { success: false, section: null, sections: null, errors: [{ field, message, code: 'VALIDATION' }] };
+}
+
+async function sectionNameTaken(
+  supabase: SupabaseClient,
+  domainCode: string,
+  sectionName: string,
+  exceptId?: string,
+) {
+  const { data, error } = await supabase
+    .from('attribute_sections')
+    .select('id, section_name')
+    .eq('domain_code', domainCode);
+  if (error) throw new Error(error.message);
+  const key = sectionName.toLowerCase();
+  return (data || []).some((row) => row.id !== exceptId && String(row.section_name || '').toLowerCase() === key);
+}
+
+async function ensureAttributeSection(
+  supabase: SupabaseClient,
+  domainCode: string,
+  sectionName: string,
+  clientId?: string | null,
+) {
+  const name = String(sectionName || 'General').trim() || 'General';
+  if (!domainCode) return;
+  const taken = await sectionNameTaken(supabase, domainCode, name);
+  if (taken) return;
+  let ownerId = clientId;
+  if (ownerId === undefined) {
+    const { data: domain } = await supabase
+      .from('domain_types')
+      .select('client_id')
+      .eq('domain_code', domainCode)
+      .maybeSingle();
+    ownerId = domain?.client_id ?? null;
+  }
+  const { data: last } = await supabase
+    .from('attribute_sections')
+    .select('display_order')
+    .eq('domain_code', domainCode)
+    .order('display_order', { ascending: false })
+    .limit(1);
+  const displayOrder = (Number(last?.[0]?.display_order) || 0) + 10;
+  const { error } = await supabase.from('attribute_sections').insert({
+    domain_code: domainCode,
+    section_name: name,
+    display_order: displayOrder,
+    client_id: ownerId,
+  });
+  if (error && !/duplicate|unique/i.test(error.message)) {
+    console.error('[ensureAttributeSection]', error.message);
+  }
+}
+
+/** Calculated attributes are omitted by get_attributes_with_aggregation. */
+async function withDerivedAttributes(supabase: SupabaseClient, rows: any[]): Promise<any[]> {
+  const { data, error } = await supabase
+    .from('attribute_register')
+    .select('*')
+    .eq('is_derived', true);
+  if (error || !data?.length) return rows;
+  const seen = new Set(rows.map((row) => row.id || row.attribute_code));
+  return [
+    ...rows,
+    ...data.filter((row) => !seen.has(row.id) && !seen.has(row.attribute_code)),
+  ];
+}
 
 /**
  * Map database row to GraphQL AttributeDefinition type
@@ -559,10 +916,13 @@ function mapAttributeDefinition(row: any) {
     defaultValue: row.default_value,
     displaySection: row.display_section || 'General',
     displayGroup: row.display_group || 0,
+    displaySpanColumns: boundedSpan(row.display_span_columns, 4) ?? 1,
+    displaySpanRows: boundedSpan(row.display_span_rows, 3) ?? 1,
     isEditable: row.is_editable !== false,
     isVisible: row.is_visible !== false,
     // Reference list link
     referenceListCode: row.reference_list_code || null,
+    clientId: row.client_id ?? null,
     // Aggregation and precision
     aggregationType: row.aggregation_type || 'NONE',
     weightAttributeCode: row.weight_attribute_code,
@@ -641,6 +1001,8 @@ interface UpdateAttributeDefinitionInput {
   defaultValue?: string;
   displaySection?: string;
   displayGroup?: number;
+  displaySpanColumns?: number;
+  displaySpanRows?: number;
   isEditable?: boolean;
   isVisible?: boolean;
   // Reference list link

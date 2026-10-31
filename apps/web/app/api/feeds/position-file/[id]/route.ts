@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const user = await requireFeedUser();
-  if (!user) return NextResponse.json({ error: 'Sign in to load a position file' }, { status: 401 });
+  if (!user) return NextResponse.json({ error: 'Sign in to load a file' }, { status: 401 });
   const { id } = await context.params;
   try {
     return NextResponse.json(await getImportInstance(id));
@@ -18,7 +18,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
 
 export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const user = await requireFeedUser();
-  if (!user) return NextResponse.json({ error: 'Sign in to load a position file' }, { status: 401 });
+  if (!user) return NextResponse.json({ error: 'Sign in to load a file' }, { status: 401 });
   const { id } = await context.params;
   const body = await request.json();
   const columnMappings = body.columnMappings as ColumnAssignment[];

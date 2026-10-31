@@ -15,6 +15,8 @@
  * No SQL or code is ever stored or executed from a spec. No runtime dependencies.
  */
 
+import { overlayTemporalAttributes } from './temporal-attributes';
+
 export type DataQueryAggregation =
   | 'SUM' | 'AVG' | 'MIN' | 'MAX' | 'COUNT' | 'COUNT_DISTINCT' | 'WEIGHTED_AVG';
 
@@ -85,7 +87,7 @@ export interface DataQuerySpec {
   description?: string;
   /** CONTEXT = begin at the entity being viewed. DOMAIN = begin with all entities of `domainCode`. */
   start: 'CONTEXT' | 'DOMAIN';
-  /** Required for DOMAIN. For CONTEXT it restricts the final result to that entity type. */
+  /** DOMAIN: optional entity type. Omit to cover every type. CONTEXT: keep only this type at the end of the path. */
   domainCode?: string;
   /** Relationship traversal from the starting set. */
   path?: DataQueryHop[];
@@ -165,7 +167,7 @@ A data query is a JSON object. A dashboard/narrative holds an array of them.
   "key": "positions_by_industry",      // unique name. Dashboard HTML reads data.<key>
   "label": "Positions by industry",
   "start": "CONTEXT" | "DOMAIN",        // CONTEXT = start at the entity being viewed; DOMAIN = all entities of domainCode
-  "domainCode": "POSITION",             // DOMAIN: required. CONTEXT: keep only this entity type at the end of the path
+  "domainCode": "POSITION",             // DOMAIN: optional. Omit it to cover every entity type. CONTEXT: keep only this entity type at the end of the path
   "path": [                             // optional relationship traversal (CONTEXT or DOMAIN start)
     { "direction": "DOWN",              // DOWN = to children, UP = to parents
       "relationshipCode": "POSITION_FUND", // optional, omit for any relationship
@@ -299,13 +301,15 @@ export async function runDataQueries(
     anchorRow = await fetchAnchor(supabase, ctx.entityId, ctx.entityCode);
     if (!anchorRow) warnings.push('The context entity could not be found or is not accessible.');
   }
+  const asOfDate = normalizeDate(ctx.asOfDate ?? params.asOfDate);
+  const knowledgeDate = ctx.knowledgeDate || params.knowledgeDate || null;
   if (anchorRow) {
     params.entityId = params.entityId ?? anchorRow.entity_id;
     params.entityCode = params.entityCode ?? anchorRow.entity_code;
+    const timed = { id: anchorRow.entity_id as string, attributes: (anchorRow.attributes || {}) as Record<string, unknown> };
+    await overlayTemporalAttributes(supabase, [timed], asOfDate, knowledgeDate, anchorRow.domain_code);
+    anchorRow.attributes = timed.attributes;
   }
-
-  const asOfDate = normalizeDate(ctx.asOfDate ?? params.asOfDate);
-  const knowledgeDate = ctx.knowledgeDate || params.knowledgeDate || null;
   if (asOfDate) params.asOfDate = asOfDate;
 
   const catalogCache = new Map<string, any[]>();
@@ -432,7 +436,6 @@ export function specToGridRequest(
   asOfDate: string | null,
   knowledgeDate: string | null
 ): GridRequest {
-  if (spec.start === 'DOMAIN' && !spec.domainCode) throw new Error('start=DOMAIN requires domainCode');
   if (spec.start === 'CONTEXT' && !anchorEntityId) throw new Error('start=CONTEXT requires an entity context (none supplied).');
   const aggregate = (spec.metrics && spec.metrics.length > 0);
   const limit = clamp(spec.limit ?? DEFAULT_ROW_LIMIT, 1, MAX_ROW_LIMIT);
@@ -542,7 +545,6 @@ export function validateDataQueries(specs: any): string[] {
     else if (keys.has(s.key)) errors.push(`${where}: duplicate key`);
     else keys.add(s.key);
     if (s.start !== 'CONTEXT' && s.start !== 'DOMAIN') errors.push(`${where}: "start" must be CONTEXT or DOMAIN`);
-    if (s.start === 'DOMAIN' && !s.domainCode) errors.push(`${where}: DOMAIN start requires domainCode`);
     (s.path || []).forEach((h: any, j: number) => {
       if (h.direction !== 'DOWN' && h.direction !== 'UP') errors.push(`${where}.path[${j}]: direction must be DOWN or UP`);
     });
