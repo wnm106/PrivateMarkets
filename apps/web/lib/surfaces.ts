@@ -6,6 +6,7 @@ export interface SurfaceDefinition {
   surfaceName: string;
   domainCode: string;
   description?: string | null;
+  isPrimary?: boolean;
 }
 
 export interface SurfaceExperience {
@@ -116,7 +117,7 @@ export interface SurfaceResolution {
 }
 
 const SURFACE_FIELDS = `
-  id surfaceCode surfaceName domainCode description
+  id surfaceCode surfaceName domainCode description isPrimary
 `;
 
 export const SURFACES_QUERY = `
@@ -153,8 +154,8 @@ const RESOLUTION_FIELDS = `
 `;
 
 export const RESOLVE_SURFACE_QUERY = `
-  query ResolveSurface($surfaceCode: String!, $profileCode: String, $entityId: ID, $entityCode: String) {
-    resolveSurface(surfaceCode: $surfaceCode, profileCode: $profileCode, entityId: $entityId, entityCode: $entityCode) {
+  query ResolveSurface($surfaceCode: String!, $profileCode: String, $entityId: ID, $entityCode: String, $facts: JSON) {
+    resolveSurface(surfaceCode: $surfaceCode, profileCode: $profileCode, entityId: $entityId, entityCode: $entityCode, facts: $facts) {
       ${RESOLUTION_FIELDS}
     }
   }
@@ -189,12 +190,14 @@ export function loadSurfaceResolution(variables: {
   profileCode?: string;
   entityId?: string;
   entityCode?: string;
+  facts?: Record<string, unknown>;
 }) {
   return graphqlQuery<{ resolveSurface: SurfaceResolution | null }, {
     surfaceCode: string;
     profileCode?: string;
     entityId?: string;
     entityCode?: string;
+    facts?: Record<string, unknown>;
   }>(
     RESOLVE_SURFACE_QUERY,
     variables,

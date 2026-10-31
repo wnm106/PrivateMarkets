@@ -3291,6 +3291,7 @@ type SurfaceDefinition {
   domainCode: String!
   description: String
   isActive: Boolean!
+  isPrimary: Boolean!
 }
 
 type SurfaceExperience {

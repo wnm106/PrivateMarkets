@@ -19,6 +19,7 @@ interface SurfaceRow {
   domain_code: string;
   description: string | null;
   is_active: boolean;
+  is_primary?: boolean;
 }
 
 interface ExperienceRow {
@@ -94,6 +95,7 @@ function mapSurface(row: SurfaceRow) {
     domainCode: row.domain_code,
     description: row.description,
     isActive: row.is_active,
+    isPrimary: row.is_primary === true,
   };
 }
 
@@ -332,10 +334,21 @@ async function resolveForSurface(
     const entity = await loadEntityFacts(context, args.entityId, args.entityCode);
     if (!entity) throw new Error(`No entity found for ${args.entityCode || args.entityId}.`);
     const facts = overlay ? mergeFacts(entity.facts, overlay) : entity.facts;
-    const note = entity.domainCode === catalog.surface.domain_code
-      ? null
-      : `This entity is a ${entity.domainCode} record. The ${catalog.surface.surface_name} expects ${catalog.surface.domain_code}. The facts were still evaluated.`;
-    return presentResolution(catalog, entity.name, 'ENTITY', entity.templateCode, facts.labeled, facts.map, note);
+    const notes = [
+      entity.domainCode === catalog.surface.domain_code
+        ? null
+        : `This entity is a ${entity.domainCode} record. The ${catalog.surface.surface_name} expects ${catalog.surface.domain_code}. The facts were still evaluated.`,
+      typeSwapNote(entity.facts.map, facts.map),
+    ].filter((note): note is string => Boolean(note));
+    return presentResolution(
+      catalog,
+      entity.name,
+      'ENTITY',
+      effectiveTemplate(facts.map, entity.templateCode),
+      facts.labeled,
+      facts.map,
+      notes.length > 0 ? notes.join(' ') : null,
+    );
   }
 
   const profile = args.profileCode
@@ -349,11 +362,28 @@ async function resolveForSurface(
     catalog,
     profile?.profile_name ?? 'Ad hoc profile',
     'PROFILE',
-    profile?.template_code ?? (typeof facts.map.TEMPLATE_CODE === 'string' ? facts.map.TEMPLATE_CODE : null),
+    effectiveTemplate(facts.map, profile?.template_code ?? null),
     facts.labeled,
     facts.map,
-    null,
+    typeSwapNote(base.map, facts.map),
   );
+}
+
+function effectiveTemplate(
+  facts: Record<string, string | number | boolean | null>,
+  fallback: string | null,
+): string | null {
+  return typeof facts.TEMPLATE_CODE === 'string' ? facts.TEMPLATE_CODE : fallback;
+}
+
+function typeSwapNote(
+  before: Record<string, string | number | boolean | null>,
+  after: Record<string, string | number | boolean | null>,
+): string | null {
+  const from = before.FUND_STRUCTURE;
+  const to = after.FUND_STRUCTURE;
+  if (!from || !to || String(from) === String(to)) return null;
+  return `Fund type swapped from ${from} to ${to}. The same sample fund is resolved again under the new type.`;
 }
 
 export const surfaceResolvers = {
@@ -454,6 +484,7 @@ export const surfaceResolvers = {
         .select('surface_code')
         .eq('domain_code', entity.domainCode)
         .eq('is_active', true)
+        .eq('is_primary', true)
         .order('surface_code')
         .limit(1)
         .maybeSingle();

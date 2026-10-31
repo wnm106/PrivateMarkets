@@ -255,6 +255,103 @@ describe('resolveSurfaceComposition', () => {
     expect(describeRules(rules('REPORTING_FRAMEWORK', 'GAAP'), false)).toBe('REPORTING_FRAMEWORK equals GAAP.');
   });
 
+  it('adds and removes a conditional page when the fund type swaps', () => {
+    const catalog: SurfaceCatalogInput = {
+      experiences: [
+        { id: 'base', code: 'FUND_BASELINE', name: 'Fund baseline', isBaseline: true, priority: 100, displayOrder: 1, rules: {} },
+        { id: 'filings', code: 'BDC_FILINGS', name: 'Shareholder filings', isBaseline: false, priority: 10, displayOrder: 2, rules: rules('FUND_STRUCTURE', 'PUBLIC_BDC') },
+        { id: 'capital', code: 'CLOSED_END_CAPITAL', name: 'Closed-end capital accounts', isBaseline: false, priority: 10, displayOrder: 3, rules: rules('FUND_STRUCTURE', 'CLOSED_END') },
+      ],
+      slots: [
+        { id: 'overview', code: 'OVERVIEW', name: 'Overview', displayOrder: 1, optionality: 'always' },
+        { id: 'filings', code: 'FILINGS', name: 'Shareholder filings', displayOrder: 2, optionality: 'when_qualified' },
+        { id: 'capital', code: 'CAPITAL', name: 'Capital accounts', displayOrder: 3, optionality: 'when_qualified' },
+      ],
+      variants: [
+        { id: 'overview', slotId: 'overview', code: 'FUND_OVERVIEW', name: 'Fund overview', priority: 100, requiredExperienceIds: [] },
+        { id: 'filings', slotId: 'filings', code: 'SHAREHOLDER_FILINGS', name: 'Shareholder filings', priority: 10, requiredExperienceIds: ['filings'] },
+        { id: 'capital', slotId: 'capital', code: 'PARTNER_CAPITAL', name: 'Partner capital', priority: 10, requiredExperienceIds: ['capital'] },
+      ],
+      components: [
+        { id: 'identity', code: 'IDENTITY', name: 'Identity and terms', slotId: 'overview', variantId: 'overview', experienceId: 'base', displayOrder: 1 },
+        { id: 'filings', code: 'SHAREHOLDER_FILINGS', name: 'Shareholder filings', slotId: 'filings', variantId: 'filings', experienceId: 'filings', displayOrder: 1 },
+        { id: 'capital', code: 'PARTNER_CAPITAL', name: 'Partner capital accounts', slotId: 'capital', variantId: 'capital', experienceId: 'capital', displayOrder: 1 },
+      ],
+    };
+
+    const harbor = resolveSurfaceComposition(catalog, normalizeFacts(
+      { attributes: { FUND_STRUCTURE: 'PUBLIC_BDC' } },
+      'FUND_NAV_BDC',
+    ).map);
+    expect(harbor.pages.filter((page) => page.status === 'RENDERED').map((page) => page.slotCode)).toEqual(['OVERVIEW', 'FILINGS']);
+    expect(byCode(harbor.components, 'SHAREHOLDER_FILINGS').status).toBe('QUALIFIED');
+    expect(byCode(harbor.components, 'PARTNER_CAPITAL').status).toBe('NOT_QUALIFIED');
+
+    const swapped = mergeFacts(
+      normalizeFacts({ attributes: { FUND_STRUCTURE: 'PUBLIC_BDC' } }, 'FUND_NAV_BDC'),
+      normalizeFacts({ attributes: { FUND_STRUCTURE: 'CLOSED_END', TEMPLATE_CODE: 'FUND_NAV_PE' } }),
+    );
+    const harborClosed = resolveSurfaceComposition(catalog, swapped.map);
+    expect(harborClosed.pages.filter((page) => page.status === 'RENDERED').map((page) => page.slotCode)).toEqual(['OVERVIEW', 'CAPITAL']);
+    expect(byCode(harborClosed.components, 'IDENTITY').status).toBe('QUALIFIED');
+    expect(byCode(harborClosed.components, 'PARTNER_CAPITAL').status).toBe('QUALIFIED');
+    expect(byCode(harborClosed.components, 'SHAREHOLDER_FILINGS').ruleTrace).toContain('Rule requires PUBLIC_BDC');
+  });
+
+  it('keeps every page on a fluid surface and swaps the variant with the fund type', () => {
+    const catalog: SurfaceCatalogInput = {
+      experiences: [
+        { id: 'base', code: 'FUND_BASELINE', name: 'Fund baseline', isBaseline: true, priority: 100, displayOrder: 1, rules: {} },
+        { id: 'bdc', code: 'PUBLIC_BDC_PERFORMANCE', name: 'Public BDC performance', isBaseline: false, priority: 10, displayOrder: 2, rules: rules('FUND_STRUCTURE', 'PUBLIC_BDC') },
+        { id: 'closed', code: 'CLOSED_END_PERFORMANCE', name: 'Closed-end performance', isBaseline: false, priority: 10, displayOrder: 3, rules: rules('FUND_STRUCTURE', 'CLOSED_END') },
+        { id: 'bdc-coa', code: 'BDC_CHART', name: 'BDC chart of accounts', isBaseline: false, priority: 10, displayOrder: 4, rules: rules('TEMPLATE_CODE', 'FUND_NAV_BDC') },
+        { id: 'pe-coa', code: 'PE_CHART', name: 'PE chart of accounts', isBaseline: false, priority: 10, displayOrder: 5, rules: rules('TEMPLATE_CODE', 'FUND_NAV_PE') },
+      ],
+      slots: [
+        { id: 'overview', code: 'OVERVIEW', name: 'Overview', displayOrder: 1, optionality: 'always' },
+        { id: 'performance', code: 'PERFORMANCE', name: 'Performance', displayOrder: 2, optionality: 'always' },
+        { id: 'nav', code: 'NAV', name: 'NAV statement', displayOrder: 3, optionality: 'always' },
+      ],
+      variants: [
+        { id: 'overview-default', slotId: 'overview', code: 'FUND_OVERVIEW', name: 'Fund overview', priority: 100, requiredExperienceIds: [] },
+        { id: 'overview-bdc', slotId: 'overview', code: 'BDC_OVERVIEW', name: 'BDC overview', priority: 10, requiredExperienceIds: ['bdc'] },
+        { id: 'perf-default', slotId: 'performance', code: 'PERFORMANCE_DEFAULT', name: 'Performance summary', priority: 100, requiredExperienceIds: [] },
+        { id: 'perf-bdc', slotId: 'performance', code: 'BDC_TOTAL_RETURN', name: 'BDC total return', priority: 10, requiredExperienceIds: ['bdc'] },
+        { id: 'perf-closed', slotId: 'performance', code: 'CLOSED_END_IRR', name: 'Closed-end IRR', priority: 20, requiredExperienceIds: ['closed'] },
+        { id: 'nav-default', slotId: 'nav', code: 'NAV_SUMMARY', name: 'NAV summary', priority: 100, requiredExperienceIds: [] },
+        { id: 'nav-bdc', slotId: 'nav', code: 'BDC_COA', name: 'BDC chart of accounts', priority: 10, requiredExperienceIds: ['bdc-coa'] },
+        { id: 'nav-pe', slotId: 'nav', code: 'PE_COA', name: 'Private-equity chart of accounts', priority: 10, requiredExperienceIds: ['pe-coa'] },
+      ],
+      components: [
+        { id: 'bdc-return', code: 'BDC_RETURN', name: 'BDC total return', slotId: 'performance', variantId: 'perf-bdc', experienceId: 'bdc', displayOrder: 1 },
+        { id: 'irr', code: 'IRR_BRIDGE', name: 'IRR bridge', slotId: 'performance', variantId: 'perf-closed', experienceId: 'closed', displayOrder: 1 },
+        { id: 'summary', code: 'PERF_SUMMARY', name: 'Performance summary', slotId: 'performance', variantId: 'perf-default', experienceId: null, displayOrder: 1 },
+        { id: 'bdc-nav', code: 'BDC_NAV_LINES', name: 'BDC NAV lines', slotId: 'nav', variantId: 'nav-bdc', experienceId: 'bdc-coa', displayOrder: 1 },
+        { id: 'pe-nav', code: 'PE_NAV_LINES', name: 'PE NAV lines', slotId: 'nav', variantId: 'nav-pe', experienceId: 'pe-coa', displayOrder: 1 },
+        { id: 'nav-summary', code: 'NAV_SUMMARY', name: 'NAV summary', slotId: 'nav', variantId: 'nav-default', experienceId: null, displayOrder: 1 },
+      ],
+    };
+
+    const rendered = (facts: ReturnType<typeof normalizeFacts>) =>
+      resolveSurfaceComposition(catalog, facts.map).pages.filter((page) => page.status === 'RENDERED').map((page) => page.slotCode);
+
+    const harbor = normalizeFacts({ attributes: { FUND_STRUCTURE: 'PUBLIC_BDC' } }, 'FUND_NAV_BDC');
+    const harborResolved = resolveSurfaceComposition(catalog, harbor.map);
+    expect(rendered(harbor)).toEqual(['OVERVIEW', 'PERFORMANCE', 'NAV']);
+    expect(harborResolved.pages.find((page) => page.slotCode === 'PERFORMANCE')?.variantCode).toBe('BDC_TOTAL_RETURN');
+    expect(harborResolved.pages.find((page) => page.slotCode === 'NAV')?.variantCode).toBe('BDC_COA');
+    expect(byCode(harborResolved.components, 'PERF_SUMMARY').status).toBe('SUPERSEDED');
+
+    const northline = normalizeFacts({ attributes: { FUND_STRUCTURE: 'CLOSED_END' } }, 'FUND_NAV_PE');
+    const northlineResolved = resolveSurfaceComposition(catalog, northline.map);
+    expect(rendered(northline)).toEqual(['OVERVIEW', 'PERFORMANCE', 'NAV']);
+    expect(northlineResolved.pages.find((page) => page.slotCode === 'PERFORMANCE')?.variantCode).toBe('CLOSED_END_IRR');
+    expect(northlineResolved.pages.find((page) => page.slotCode === 'NAV')?.variantCode).toBe('PE_COA');
+    expect(northlineResolved.pages.find((page) => page.slotCode === 'OVERVIEW')?.variantCode).toBe('FUND_OVERVIEW');
+    expect(byCode(northlineResolved.components, 'BDC_RETURN').status).toBe('NOT_QUALIFIED');
+    expect(byCode(northlineResolved.components, 'IRR_BRIDGE').status).toBe('QUALIFIED');
+  });
+
   it('breaks priority ties by variant code', () => {
     const catalog: SurfaceCatalogInput = {
       experiences: [

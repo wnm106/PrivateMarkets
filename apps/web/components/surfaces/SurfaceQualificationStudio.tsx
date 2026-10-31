@@ -16,6 +16,17 @@ import { QualificationTable, StatusBadge } from './QualificationTable';
 
 type Mode = 'profile' | 'entity';
 
+const SURFACE_ORDER = ['FUND_CONDITIONAL_PAGE', 'FUND_FLUID_SURFACE', 'FUND_SURFACE', 'DEAL_PIPELINE', 'COMPANY_SURFACE'];
+
+const FUND_TYPES = {
+  PUBLIC_BDC: { structure: 'PUBLIC_BDC', listing: 'LISTED', basis: 'GAAP', template: 'FUND_NAV_BDC', label: 'public BDC' },
+  CLOSED_END: { structure: 'CLOSED_END', listing: 'PRIVATE', basis: 'FAIR_VALUE', template: 'FUND_NAV_PE', label: 'closed-end' },
+};
+
+function oppositeFundType(structure: string) {
+  return structure === 'PUBLIC_BDC' ? FUND_TYPES.CLOSED_END : FUND_TYPES.PUBLIC_BDC;
+}
+
 export function SurfaceQualificationStudio() {
   const searchParams = useSearchParams();
   const [surfaces, setSurfaces] = useState<SurfaceDefinition[]>([]);
@@ -27,6 +38,7 @@ export function SurfaceQualificationStudio() {
   const [entityDraft, setEntityDraft] = useState(searchParams.get('entity') || '');
   const [resolution, setResolution] = useState<SurfaceResolution | null>(null);
   const [ledger, setLedger] = useState<'all' | 'rendered'>('all');
+  const [swapped, setSwapped] = useState(false);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [loadingResolution, setLoadingResolution] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +59,12 @@ export function SurfaceQualificationStudio() {
         setLoadingCatalog(false);
         setError('No surfaces are defined yet.');
       }
-      setSurfaceCode((current) => current || rows[0]?.surfaceCode || '');
+      setSurfaceCode((current) => {
+        if (current) return current;
+        return rows.find((row) => row.surfaceCode === 'FUND_CONDITIONAL_PAGE')?.surfaceCode
+          || rows[0]?.surfaceCode
+          || '';
+      });
     })();
     return () => { cancelled = true; };
   }, []);
@@ -78,16 +95,34 @@ export function SurfaceQualificationStudio() {
   }, [surfaceCode]);
 
   useEffect(() => {
+    setSwapped(false);
+  }, [surfaceCode, profileCode, mode]);
+
+  useEffect(() => {
     if (!surfaceCode || !catalog || catalog.surface.surfaceCode !== surfaceCode) return;
     if (mode === 'profile' && !catalog.sampleProfiles.some((profile) => profile.profileCode === profileCode)) return;
     if (mode === 'entity' && !entityCode) return;
+    const profile = catalog.sampleProfiles.find((candidate) => candidate.profileCode === profileCode);
+    const nativeStructure = profile?.facts?.attributes?.FUND_STRUCTURE;
+    const target = swapped && nativeStructure ? oppositeFundType(nativeStructure) : null;
+    const facts = target
+      ? {
+          attributes: {
+            FUND_STRUCTURE: target.structure,
+            LISTING_STATUS: target.listing,
+            ACCOUNTING_BASIS: target.basis,
+            TEMPLATE_CODE: target.template,
+          },
+          relationships: [] as string[],
+        }
+      : undefined;
     let cancelled = false;
     setLoadingResolution(true);
     (async () => {
       const result = await loadSurfaceResolution(
         mode === 'entity'
           ? { surfaceCode, entityCode }
-          : { surfaceCode, profileCode },
+          : { surfaceCode, profileCode, facts },
       );
       if (cancelled) return;
       if (result.error) {
@@ -100,12 +135,21 @@ export function SurfaceQualificationStudio() {
       setLoadingResolution(false);
     })();
     return () => { cancelled = true; };
-  }, [surfaceCode, catalog, mode, profileCode, entityCode]);
+  }, [surfaceCode, catalog, mode, profileCode, entityCode, swapped]);
 
   const experienceName = (code: string) =>
     catalog?.experiences.find((experience) => experience.experienceCode === code)?.experienceName || code;
 
+  const orderedSurfaces = [...surfaces].sort((left, right) => {
+    const leftIndex = SURFACE_ORDER.indexOf(left.surfaceCode);
+    const rightIndex = SURFACE_ORDER.indexOf(right.surfaceCode);
+    return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
+  });
+  const selectedProfile = catalog?.sampleProfiles.find((profile) => profile.profileCode === profileCode);
+  const nativeStructure = mode === 'profile' ? selectedProfile?.facts?.attributes?.FUND_STRUCTURE : undefined;
+  const swapTarget = nativeStructure ? oppositeFundType(nativeStructure) : null;
   const renderedPages = resolution?.pages.filter((page) => page.status === 'RENDERED') ?? [];
+  const hiddenPages = resolution?.pages.filter((page) => page.status === 'HIDDEN') ?? [];
   const qualifiedComponents = resolution?.components.filter((component) => component.status === 'QUALIFIED') ?? [];
   const visibleComponents = ledger === 'rendered'
     ? qualifiedComponents
@@ -134,9 +178,9 @@ export function SurfaceQualificationStudio() {
       </div>
 
       <p style={{ maxWidth: '760px', color: 'var(--ink-2)', fontSize: '14px', lineHeight: 1.5, marginTop: 0 }}>
-        A surface stays one shell for its domain. The profile decides which experiences qualify,
-        which page variant wins each slot, and which components render. Every row below keeps the
-        supporting logic, including components that stayed hidden or lost a priority contest.
+        Harbor Street BDC and Northline PE Fund III are the sample funds. Swap either fund’s type
+        to see two custom surfaces. On the conditional page, one page is added and the other is
+        removed. On the fluid surface, every page stays and the variant inside it changes.
       </p>
 
       {error && (
@@ -147,7 +191,7 @@ export function SurfaceQualificationStudio() {
 
       <div className="filter-bar" style={{ marginBottom: '18px' }}>
         <div className="filter-label">Surface</div>
-        {surfaces.map((surface) => (
+        {orderedSurfaces.map((surface) => (
           <button
             key={surface.surfaceCode}
             type="button"
@@ -220,6 +264,7 @@ export function SurfaceQualificationStudio() {
                   className={`filter-pill ${mode === 'profile' && profile.profileCode === profileCode ? 'active' : ''}`}
                   onClick={() => {
                     setMode('profile');
+                    setSwapped(false);
                     setProfileCode(profile.profileCode);
                     setEntityCode('');
                     setEntityDraft('');
@@ -257,6 +302,18 @@ export function SurfaceQualificationStudio() {
               <button className="btn btn-primary" type="submit">Resolve entity</button>
             </form>
 
+            {swapTarget && (
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '12px', color: 'var(--ink-2)' }}>
+                  Fund type {swapped ? swapTarget.structure : nativeStructure}
+                  {swapped ? ` · template ${swapTarget.template}` : selectedProfile?.templateCode ? ` · template ${selectedProfile.templateCode}` : ''}
+                </span>
+                <button type="button" className="btn" onClick={() => setSwapped((current) => !current)}>
+                  {swapped ? `Restore ${nativeStructure === 'PUBLIC_BDC' ? FUND_TYPES.PUBLIC_BDC.label : FUND_TYPES.CLOSED_END.label}` : `Swap type to ${swapTarget.label}`}
+                </button>
+              </div>
+            )}
+
             {loadingResolution && <div style={{ color: 'var(--ink-3)', fontSize: '13px' }}>Resolving…</div>}
 
             {resolution && (
@@ -270,6 +327,14 @@ export function SurfaceQualificationStudio() {
                   </div>
                   {resolution.note && (
                     <div style={{ marginTop: '8px', fontSize: '12px', color: '#92400e' }}>{resolution.note}</div>
+                  )}
+                  <div style={{ marginTop: '8px', fontSize: '13px', color: 'var(--ink)' }}>
+                    Rendered: {renderedPages.map((page) => `${page.slotName} (${page.variantName})`).join(', ') || 'none'}
+                  </div>
+                  {hiddenPages.length > 0 && (
+                    <div style={{ marginTop: '4px', fontSize: '13px', color: 'var(--ink-3)' }}>
+                      Hidden: {hiddenPages.map((page) => page.slotName).join(', ')}
+                    </div>
                   )}
                 </div>
 
