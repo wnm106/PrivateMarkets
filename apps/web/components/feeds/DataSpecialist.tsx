@@ -34,10 +34,30 @@ interface Recommendation {
   };
 }
 
+interface Assignment {
+  sourceColumn: string;
+  samples: string[];
+  role: string;
+  domainCode: string | null;
+  attributeCode: string | null;
+  parentDomainCode: string | null;
+  parentExisting?: boolean;
+}
+
+interface UnmappedColumn {
+  column: string;
+  samples: string[];
+  domainCode: string | null;
+  recommendationId: string | null;
+  reason: string;
+}
+
 interface Reading {
   findings: string[];
   questions: Question[];
   recommendations: Recommendation[];
+  assignments: Assignment[];
+  unmappedColumns: UnmappedColumn[];
   map: {
     mapCode: string;
     name: string;
@@ -176,7 +196,9 @@ export function DataSpecialist() {
 
   const reading = detail?.reading;
   const openRecommendations = (reading?.recommendations || []).filter((item) =>
-    !reading?.acceptedRecommendationIds.includes(item.id) && !detail?.dismissedRecommendationIds.includes(item.id)
+    item.kind !== 'attribute'
+    && !reading?.acceptedRecommendationIds.includes(item.id)
+    && !detail?.dismissedRecommendationIds.includes(item.id)
   );
   const ready = Boolean(reading && reading.blockedReasons.length === 0 && reading.map);
 
@@ -188,6 +210,10 @@ export function DataSpecialist() {
           .specialist-grid { grid-template-columns: minmax(320px, 460px) minmax(0, 1fr); }
         }
         .specialist-note { border-left: 3px solid #1b3a4b; padding: 2px 0 2px 12px; margin: 0 0 10px; }
+        .entity-map { border: 1px solid var(--line); margin-bottom: 10px; background: var(--surface); }
+        .entity-map > summary { cursor: pointer; padding: 10px 12px; font-weight: 600; }
+        .entity-map > summary::-webkit-details-marker { display: none; }
+        .field-row { display: grid; grid-template-columns: minmax(120px, 1.1fr) minmax(90px, 1fr) minmax(140px, 1.2fr); gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 13px; align-items: start; }
       `}</style>
       <div className="crumbs">
         <Link href="/" className="crumb-link">Home</Link>
@@ -368,37 +394,22 @@ export function DataSpecialist() {
               </>
             )}
 
+            <UnmappedAlert
+              columns={(reading.unmappedColumns || []).filter((column) => column.recommendationId)}
+              recommendations={reading.recommendations}
+              busy={busy !== null}
+              onAccept={(id) => send({ accepted: [...reading.acceptedRecommendationIds, id] })}
+              onDismiss={(id) => send({ dismissed: [...detail.dismissedRecommendationIds, id] })}
+            />
+
             <div className="section-title">
               <h2>{reading.map ? reading.map.name : 'Map'}</h2>
               <span className="hint">{reading.map ? reading.map.mapCode : 'Waiting on a decision'}</span>
             </div>
-            {reading.map && reading.map.domains.length > 0 ? (
-              <div className="data-table" style={{ marginBottom: 14 }}>
-                <div className="tbl-head" style={{ gridTemplateColumns: '140px 1fr 1.3fr' }}>
-                  <div>Entity</div>
-                  <div>Identity</div>
-                  <div>Depends on</div>
-                </div>
-                {reading.map.domains.map((domain) => (
-                  <div key={domain.domainCode} className="tbl-row" style={{ gridTemplateColumns: '140px 1fr 1.3fr', cursor: 'default' }}>
-                    <div className="row-id">{domain.domainCode}</div>
-                    <div>
-                      {domain.identityColumn}
-                      {domain.nameColumn !== domain.identityColumn ? ` · ${domain.nameColumn}` : ''}
-                      {domain.attributes.length > 0 && (
-                        <div className="page-meta">{domain.attributes.map((attribute) => attribute.attributeCode).join(', ')}</div>
-                      )}
-                    </div>
-                    <div>{domain.parents.length === 0 ? '—' : domain.parents.map((parent) => `${parent.parentDomainCode}${parent.existing ? ' (already stored)' : ''}`).join(', ')}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p>I do not have an entity id yet, so there is nothing to load.</p>
-            )}
             {reading.loadWaves.length > 0 && (
               <p className="page-meta">Load order {reading.loadWaves.map((wave) => wave.join(' + ')).join(' → ')}</p>
             )}
+            <EntityMaps reading={reading} />
             {reading.blockedReasons.length > 0 && (
               <div className="filter-bar" style={{ marginBottom: 12 }}>{reading.blockedReasons[0]}</div>
             )}
@@ -463,21 +474,136 @@ export function DataSpecialist() {
                 {detail.result.warnings.slice(0, 4).map((warning) => <div key={warning} className="page-meta">{warning}</div>)}
               </div>
             )}
-            {reading.sampleRows.length > 0 && (
-              <div className="data-table" style={{ marginTop: 16, overflowX: 'auto' }}>
-                <div className="tbl-head" style={{ gridTemplateColumns: `repeat(${Math.min(Object.keys(reading.sampleRows[0]).length, 6)}, minmax(120px, 1fr))` }}>
-                  {Object.keys(reading.sampleRows[0]).slice(0, 6).map((header) => <div key={header}>{header}</div>)}
-                </div>
-                {reading.sampleRows.slice(0, 4).map((row, index) => (
-                  <div key={index} className="tbl-row" style={{ gridTemplateColumns: `repeat(${Math.min(Object.keys(reading.sampleRows[0]).length, 6)}, minmax(120px, 1fr))`, cursor: 'default' }}>
-                    {Object.keys(reading.sampleRows[0]).slice(0, 6).map((header) => <div key={header}>{row[header] || '—'}</div>)}
-                  </div>
-                ))}
-              </div>
-            )}
           </section>
         </div>
       )}
     </div>
+  );
+}
+
+function fieldTarget(assignment: Assignment) {
+  if (assignment.role === 'identity') return 'Entity id';
+  if (assignment.role === 'name') return 'Name';
+  if (assignment.role === 'attribute') return assignment.attributeCode || 'Attribute';
+  if (assignment.role === 'parent') {
+    return assignment.parentExisting ? `Link to ${assignment.parentDomainCode} already stored` : `Parent ${assignment.parentDomainCode}`;
+  }
+  if (assignment.role === 'as_of') return 'As-of date';
+  if (assignment.role === 'filter') return 'Keeps these rows';
+  return assignment.role;
+}
+
+function UnmappedAlert({
+  columns,
+  recommendations,
+  busy,
+  onAccept,
+  onDismiss,
+}: {
+  columns: UnmappedColumn[];
+  recommendations: Recommendation[];
+  busy: boolean;
+  onAccept: (id: string) => void;
+  onDismiss: (id: string) => void;
+}) {
+  if (columns.length === 0) return null;
+  return (
+    <div style={{ border: '1px solid #b42318', background: '#fdf4f3', padding: '12px 14px', marginBottom: 14 }}>
+      <div style={{ fontWeight: 600 }}>{columns.length} field{columns.length === 1 ? ' is' : 's are'} not mapped</div>
+      <p style={{ margin: '6px 0 10px' }}>
+        These source fields are not on the map. Where nothing already matched, the recommendation is a new attribute. Accept it to keep the values, or leave the field out.
+      </p>
+      {columns.map((column) => {
+        const recommendation = recommendations.find((item) => item.id === column.recommendationId);
+        return (
+          <div key={column.column} className="field-row" style={{ borderTop: '1px solid #f0d2ce', paddingLeft: 0, paddingRight: 0 }}>
+            <div>
+              <div className="row-id">{column.column}</div>
+              <div className="page-meta">{column.domainCode || 'No entity'}</div>
+            </div>
+            <div>{column.samples.join(' · ') || '—'}</div>
+            <div>
+              <div>{recommendation?.title || column.reason}</div>
+              {column.recommendationId && (
+                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                  <button className="btn btn-primary" disabled={busy} onClick={() => onAccept(column.recommendationId as string)}>Track it</button>
+                  <button className="btn" disabled={busy} onClick={() => onDismiss(column.recommendationId as string)}>Leave it out</button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function EntityMaps({ reading }: { reading: Reading }) {
+  const assignments = reading.assignments || [];
+  const fileFields = assignments.filter((assignment) => assignment.role === 'as_of' || assignment.role === 'filter');
+  const order = reading.loadWaves.flat();
+  const domains = [...(reading.map?.domains || [])].sort((left, right) => {
+    const leftIndex = order.indexOf(left.domainCode);
+    const rightIndex = order.indexOf(right.domainCode);
+    return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
+  });
+  if (!reading.map || domains.length === 0) {
+    return <p>I do not have an entity id yet, so there is nothing to load.</p>;
+  }
+  return (
+    <div style={{ marginBottom: 14 }}>
+      {fileFields.length > 0 && (
+        <details className="entity-map" open>
+          <summary>File · {fileFields.length} field{fileFields.length === 1 ? '' : 's'}</summary>
+          <FieldRows assignments={fileFields} />
+        </details>
+      )}
+      {domains.map((domain) => {
+        const fields = assignments.filter((assignment) => assignment.domainCode === domain.domainCode);
+        const unmapped = (reading.unmappedColumns || []).filter((column) => column.domainCode === domain.domainCode);
+        const parents = domain.parents.map((parent) => `${parent.parentDomainCode}${parent.existing ? ' (already stored)' : ''}`).join(', ');
+        return (
+          <details key={domain.domainCode} className="entity-map" open>
+            <summary>
+              {domain.domainCode} · {fields.length} field{fields.length === 1 ? '' : 's'}
+              <span className="page-meta" style={{ fontWeight: 400, marginLeft: 8 }}>
+                id {domain.identityColumn}
+                {parents ? ` · after ${parents}` : ''}
+                {unmapped.length > 0 ? ` · ${unmapped.length} not mapped` : ''}
+              </span>
+            </summary>
+            <FieldRows assignments={fields} />
+            {unmapped.map((column) => (
+              <div key={column.column} className="field-row">
+                <div className="row-id">{column.column}</div>
+                <div>{column.samples.join(' · ') || '—'}</div>
+                <div style={{ color: '#b42318' }}>Not mapped</div>
+              </div>
+            ))}
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
+function FieldRows({ assignments }: { assignments: Assignment[] }) {
+  const order = ['identity', 'name', 'parent', 'attribute', 'as_of', 'filter'];
+  const sorted = [...assignments].sort((left, right) => order.indexOf(left.role) - order.indexOf(right.role) || left.sourceColumn.localeCompare(right.sourceColumn));
+  return (
+    <>
+      <div className="field-row" style={{ color: 'var(--ink-3)', fontSize: 12 }}>
+        <div>Source field</div>
+        <div>Values</div>
+        <div>Maps to</div>
+      </div>
+      {sorted.map((assignment) => (
+        <div key={`${assignment.role}:${assignment.sourceColumn}`} className="field-row">
+          <div className="row-id">{assignment.sourceColumn}</div>
+          <div>{assignment.samples.join(' · ') || '—'}</div>
+          <div>{fieldTarget(assignment)}</div>
+        </div>
+      ))}
+    </>
   );
 }

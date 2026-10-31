@@ -110,12 +110,21 @@ export interface SchemaRecommendation {
   };
 }
 
+export interface UnmappedColumn {
+  column: string;
+  samples: string[];
+  domainCode: string | null;
+  recommendationId: string | null;
+  reason: string;
+}
+
 export interface SpecialistReading {
   briefing: string;
   findings: string[];
   questions: SpecialistQuestion[];
   recommendations: SchemaRecommendation[];
   assignments: ColumnAssignment[];
+  unmappedColumns: UnmappedColumn[];
   map: FeedMap | null;
   loadWaves: string[][];
   blockedReasons: string[];
@@ -509,7 +518,7 @@ export function readSource(input: SpecialistInput): SpecialistReading {
 
   if (headers.length === 0 || rows.length === 0) {
     findings.push('I do not have a table yet. Upload a CSV, Excel, or JSON file, or extract a document first.');
-    return finish(findings, questions, recommendations, [], null, null, null, []);
+    return finish(findings, questions, recommendations, [], [], null, null, null, []);
   }
 
   findings.push(`I read ${rows.length} row${rows.length === 1 ? '' : 's'} and ${headers.length} column${headers.length === 1 ? '' : 's'} from ${input.fileName}.`);
@@ -738,34 +747,15 @@ export function readSource(input: SpecialistInput): SpecialistReading {
     }
   }
 
-  const claimed = new Set((proposedDomains).flatMap((proposed) => (proposed.payload.columns || []).map((column) => column.column)));
-  const dominant = dominantDomain(assignments);
-  for (const column of unassigned) {
-    if (consumed.has(column) || claimed.has(column)) continue;
-    if (!dominant) continue;
-    const profile = profiles.get(column);
-    if (!profile || profile.inferred === 'empty') continue;
-    const created = recommendAttribute(column, dominant, profile, `“${column}” has no attribute on ${dominant}. I can add one rather than drop the values.`);
-    if (input.catalog.attributes.some((attribute) => attribute.attributeCode === created.payload.attributeCode)) continue;
-    if (dismissed.has(created.id)) continue;
-    recommendations.push(created);
-    if (!accepted.has(created.id)) continue;
-    consumed.add(column);
-    assignments.push(newAttributeAssignment(column, rows, dominant, created));
-  }
-
-  const recommendedColumns = new Set(recommendations.map((item) => item.payload.column).filter((column): column is string => Boolean(column)));
-  const ignored = headers.filter((header) => {
-    if (held.has(header) || claimed.has(header) || recommendedColumns.has(header)) return false;
-    if (isAsOfHeader(header) && profiles.get(header)?.inferred === 'date') return false;
-    if (assignments.some((assignment) => assignment.sourceColumn === header)) return false;
-    if (questions.some((item) => item.id === `column:${header}`)) return false;
-    return true;
-  });
-  if (ignored.length > 0) {
-    findings.push(ignored.length === 1
-      ? `I left “${ignored[0]}” out because it does not match an entity, an attribute, or a date.`
-      : `I left out ${ignored.length} columns that do not match an entity or an attribute.`);
+  const claimed = new Set(proposedDomains.flatMap((proposed) => (proposed.payload.columns || []).map((column) => column.column)));
+  const unmapped = collectUnmapped(unassigned, claimed, groups, knownDomains, profiles, assignments, input.catalog.attributes, rows, recommendations, accepted, dismissed);
+  const pending = unmapped.filter((column) => column.recommendationId);
+  if (pending.length > 0) {
+    const names = pending.map((column) => column.column);
+    const listed = names.slice(0, 8).join(', ');
+    findings.push(
+      `${pending.length} field${pending.length === 1 ? ' is' : 's are'} not mapped: ${listed}${names.length > 8 ? '…' : ''}. Where I could not match an attribute, I recommended a new one on that entity.`
+    );
   }
 
   if (asOf.column && asOf.date && !assignments.some((assignment) => assignment.sourceColumn === asOf.column)) {
@@ -875,7 +865,7 @@ export function readSource(input: SpecialistInput): SpecialistReading {
     findings.push('Some columns describe an entity this system does not have yet. I will not invent it unless you accept it.');
   }
 
-  return finish(findings, questions, recommendations, assignments, map, asOf.date, source?.code || null, rows.slice(0, 4), blocked, [...accepted]);
+  return finish(findings, questions, recommendations, assignments, unmapped, map, asOf.date, source?.code || null, rows.slice(0, 4), blocked, [...accepted]);
 }
 
 function finish(
@@ -883,6 +873,7 @@ function finish(
   questions: SpecialistQuestion[],
   recommendations: SchemaRecommendation[],
   assignments: ColumnAssignment[],
+  unmappedColumns: UnmappedColumn[] = [],
   map: FeedMap | null,
   asOfDate: string | null,
   sourceCode: string | null,
@@ -897,6 +888,7 @@ function finish(
     questions,
     recommendations,
     assignments,
+    unmappedColumns,
     map,
     loadWaves: map && map.domains.length > 0 ? safeWaves(map) : [],
     blockedReasons,
@@ -1129,6 +1121,82 @@ function proposeDomains(
     });
   }
   return proposed;
+}
+
+function collectUnmapped(
+  unassigned: string[],
+  claimed: Set<string>,
+  groups: Map<string, string[]>,
+  knownDomains: Set<string>,
+  profiles: Map<string, ColumnProfile>,
+  assignments: ColumnAssignment[],
+  attributes: AttributeChoice[],
+  rows: Record<string, string>[],
+  recommendations: SchemaRecommendation[],
+  accepted: Set<string>,
+  dismissed: Set<string>
+): UnmappedColumn[] {
+  const unmapped: UnmappedColumn[] = [];
+  const homeOf = (column: string): string | null => {
+    for (const [domainCode, columns] of groups) {
+      if (columns.includes(column)) return domainCode;
+    }
+    return domainFromHeader(column, knownDomains);
+  };
+  for (const column of unassigned) {
+    if (claimed.has(column) || assignments.some((assignment) => assignment.sourceColumn === column)) continue;
+    const profile = profiles.get(column);
+    if (!profile || profile.inferred === 'empty') continue;
+    const home = homeOf(column) || dominantDomain(assignments);
+    if (!home) {
+      unmapped.push({
+        column,
+        samples: profile.samples,
+        domainCode: null,
+        recommendationId: null,
+        reason: 'I cannot tell which entity this field belongs to.',
+      });
+      continue;
+    }
+    const best = bestAttribute(column, home, attributes);
+    const created = best && best.score >= 0.45
+      ? {
+          id: `attr:${home}:${best.attribute.attributeCode}`,
+          kind: 'attribute' as const,
+          title: `Map “${column}” to ${best.attribute.attributeName} on ${home}`,
+          rationale: `“${column}” is close to ${best.attribute.attributeName} on ${home}, but not close enough to assign without you.`,
+          payload: {
+            domainCode: home,
+            attributeCode: best.attribute.attributeCode,
+            attributeName: best.attribute.attributeName,
+            dataType: best.attribute.dataType,
+            column,
+          },
+        }
+      : recommendAttribute(
+          column,
+          home,
+          profile,
+          `“${column}” does not match an attribute on ${home}. Add one so these values are kept.`
+        );
+    if (!recommendations.some((item) => item.id === created.id) && !dismissed.has(created.id)) recommendations.push(created);
+    if (accepted.has(created.id)) {
+      if (best && best.score >= 0.45 && created.payload.attributeCode === best.attribute.attributeCode) {
+        assignments.push(attributeAssignment(column, rows, home, best.attribute, 'You accepted this match', 1, 'manual'));
+      } else {
+        assignments.push(newAttributeAssignment(column, rows, home, created));
+      }
+      continue;
+    }
+    unmapped.push({
+      column,
+      samples: profile.samples,
+      domainCode: home,
+      recommendationId: dismissed.has(created.id) ? null : created.id,
+      reason: dismissed.has(created.id) ? 'You left this field out.' : created.rationale,
+    });
+  }
+  return unmapped;
 }
 
 function dominantDomain(assignments: ColumnAssignment[]): string | null {

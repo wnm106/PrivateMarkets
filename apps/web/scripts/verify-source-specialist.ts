@@ -59,6 +59,10 @@ const positionReading = readSource({
   dismissedRecommendationIds: [],
 });
 
+const fundDomain = positionReading.map?.domains.find((domain) => domain.domainCode === 'FUND');
+assert(fundDomain?.identityColumn === 'fund code', `fund code should identify FUND, got ${fundDomain?.identityColumn}`);
+assert((fundDomain?.attributes.length || 0) > 0, 'fund attributes are on the map');
+assert(!positionReading.unmappedColumns.some((column) => column.column === 'fund code'), 'fund code is not left unmapped');
 assert(positionReading.map?.mapCode === 'POSITION_FILE', `expected the position file map, got ${positionReading.map?.mapCode}`);
 assert(positionReading.sourceCode === 'POSITION_FILE', 'position file keeps its source');
 assert(positionReading.asOfDate === '2026-09-30', `expected 2026-09-30, got ${positionReading.asOfDate}`);
@@ -106,6 +110,22 @@ assert(fundReading.map?.domains[0].attributes.some((attribute) => attribute.attr
 assert(fundReading.asOfDate === '2026-01-15', `fund as-of ${fundReading.asOfDate}`);
 assert(fundReading.sourceCode === 'FUNDS', `new source from the file name, got ${fundReading.sourceCode}`);
 assert(fundReading.blockedReasons.length === 0, fundReading.blockedReasons.join(' | '));
+
+const sleeve = readSource({
+  fileName: 'funds.csv',
+  headers: ['fund code', 'fund name', 'nav', 'fund sleeve'],
+  rows: [{ 'fund code': 'F1', 'fund name': 'Alpha', nav: '10', 'fund sleeve': 'Growth' }],
+  catalog,
+  answers: {},
+  acceptedRecommendationIds: [],
+  dismissedRecommendationIds: [],
+});
+const sleeveField = sleeve.unmappedColumns.find((column) => column.column === 'fund sleeve');
+assert(sleeveField?.domainCode === 'FUND', `fund sleeve should sit on FUND, got ${sleeveField?.domainCode}`);
+assert(sleeveField?.recommendationId, 'an unmatched fund field recommends an attribute');
+const sleeveRecommendation = sleeve.recommendations.find((item) => item.id === sleeveField?.recommendationId);
+assert(sleeveRecommendation?.payload.attributeCode === 'SLEEVE', `expected a new SLEEVE attribute, got ${sleeveRecommendation?.payload.attributeCode}`);
+assert(sleeve.map?.domains[0].identityColumn === 'fund code', 'fund code stays the entity id when another fund field is unmapped');
 
 const securityReading = readSource({
   fileName: 'securities.csv',
