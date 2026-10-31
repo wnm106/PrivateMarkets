@@ -143,8 +143,12 @@ async function loadCatalog(db: SupabaseClient, map: FeedMap): Promise<Catalog> {
   const [client, source, templates, attributes, listValues, relationshipTypes] = await Promise.all([
     db.from('tenant_clients').select('id').eq('client_code', CLIENT_CODE).single(),
     db.schema('entity_instances').from('source_registry').select('id, precedence_rank').eq('source_code', map.sourceCode).single(),
-    db.schema('metadata_register').from('domain_templates').select('id, template_code').in('template_code', templateCodes),
-    db.schema('metadata_register').from('attribute_register').select('id, attribute_code, data_type, reference_list_code').in('attribute_code', attributeCodes),
+    templateCodes.length
+      ? db.schema('metadata_register').from('domain_templates').select('id, template_code').in('template_code', templateCodes)
+      : Promise.resolve({ data: [], error: null }),
+    attributeCodes.length
+      ? db.schema('metadata_register').from('attribute_register').select('id, attribute_code, data_type, reference_list_code').in('attribute_code', attributeCodes)
+      : Promise.resolve({ data: [], error: null }),
     db.schema('metadata_register').from('reference_list_values').select('value_code, value_label, synonyms, list:reference_lists!inner(list_code)'),
     db.schema('metadata_register').from('relationship_types').select('relationship_code, parent_domain_code, child_domain_code, is_required').eq('is_active', true),
   ]);
@@ -152,7 +156,7 @@ async function loadCatalog(db: SupabaseClient, map: FeedMap): Promise<Catalog> {
   const failure = client.error || source.error || templates.error || attributes.error || listValues.error || relationshipTypes.error;
   if (failure) throw new Error(failure.message);
   if (!client.data?.id) throw new Error(`Client ${CLIENT_CODE} was not found`);
-  if (!source.data?.id) throw new Error(`Source ${map.sourceCode} was not found. Apply the position file migration.`);
+  if (!source.data?.id) throw new Error(`Source ${map.sourceCode} is not in the source registry.`);
 
   const lists: ListValueRow[] = (listValues.data || []).map((row: any) => ({
     list_code: row.list?.list_code,
@@ -306,13 +310,34 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
   await rememberMap(db, map, catalog.sourceId);
 
   const ids = new Map<string, Map<string, string>>();
+  const domainByCode = new Map(map.domains.map((domain) => [domain.domainCode, domain]));
+  const externalByDomain = new Map<string, Set<string>>();
+  for (const domain of map.domains) {
+    for (const parent of domain.parents) {
+      if (domainByCode.has(parent.parentDomainCode) || !parent.existing) continue;
+      const codes = externalByDomain.get(parent.parentDomainCode) || new Set<string>();
+      for (const entity of drafts.get(domain.domainCode) || []) {
+        const code = entity.parents.get(parent.parentDomainCode);
+        if (code) codes.add(code);
+      }
+      externalByDomain.set(parent.parentDomainCode, codes);
+    }
+  }
+  const externalIds = new Map<string, Map<string, string>>();
+  for (const [domainCode, codes] of externalByDomain) {
+    const list = [...codes];
+    const found = list.length
+      ? await db.schema('entity_instances').from('master_entities').select('id, entity_code').eq('domain_code', domainCode).in('entity_code', list)
+      : { data: [], error: null };
+    if (found.error) throw new Error(found.error.message);
+    externalIds.set(domainCode, new Map((found.data || []).map((row: any) => [row.entity_code, row.id])));
+  }
   const domainStats: DomainLoadStats[] = [];
   const warnings: string[] = [];
   const errors: string[] = [];
   const hits: NormalizationHit[] = [];
   const attributeStats = { created: 0, updated: 0, unchanged: 0 };
   const relationshipStats = { created: 0, matched: 0, failed: 0 };
-  const domainByCode = new Map(map.domains.map((domain) => [domain.domainCode, domain]));
 
   for (const domainCode of order) {
     const domain = domainByCode.get(domainCode);
@@ -496,7 +521,7 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
           errors.push(`${domainCode} ${entity.code} is missing ${parent.parentDomainCode}`);
           continue;
         }
-        const parentId = ids.get(parent.parentDomainCode)?.get(parentCode);
+        const parentId = ids.get(parent.parentDomainCode)?.get(parentCode) || externalIds.get(parent.parentDomainCode)?.get(parentCode);
         if (!parentId) {
           relationshipStats.failed += 1;
           errors.push(`${domainCode} ${entity.code} references unknown ${parent.parentDomainCode} ${parentCode}`);

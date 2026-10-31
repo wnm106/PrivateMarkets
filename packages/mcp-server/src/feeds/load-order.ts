@@ -7,6 +7,21 @@ export interface RelationshipTypeRow {
   is_required: boolean | null;
 }
 
+/** Parent domains this map loads itself. A parent marked existing is resolved from stored entities. */
+export function loadDependencies(domain: FeedDomainSpec, known: Set<string>): string[] {
+  const parents: string[] = [];
+  for (const parent of domain.parents) {
+    if (!known.has(parent.parentDomainCode)) {
+      if (parent.existing) continue;
+      throw new Error(
+        `${domain.domainCode} depends on ${parent.parentDomainCode}, which is not in this source map`
+      );
+    }
+    if (!parents.includes(parent.parentDomainCode)) parents.push(parent.parentDomainCode);
+  }
+  return parents;
+}
+
 /**
  * Topological order of domains from the map's parent-key edges.
  * A domain is loaded only after every domain it references.
@@ -20,19 +35,11 @@ export function dependencyLoadOrder(domains: FeedDomainSpec[]): string[] {
   const childrenOf = new Map<string, string[]>();
 
   for (const domain of domains) {
-    const seenParents = new Set<string>();
-    for (const parent of domain.parents) {
-      if (!known.has(parent.parentDomainCode)) {
-        throw new Error(
-          `${domain.domainCode} depends on ${parent.parentDomainCode}, which is not in this source map`
-        );
-      }
-      if (seenParents.has(parent.parentDomainCode)) continue;
-      seenParents.add(parent.parentDomainCode);
+    for (const parentCode of loadDependencies(domain, known)) {
       indegree.set(domain.domainCode, (indegree.get(domain.domainCode) || 0) + 1);
-      const children = childrenOf.get(parent.parentDomainCode) || [];
+      const children = childrenOf.get(parentCode) || [];
       children.push(domain.domainCode);
-      childrenOf.set(parent.parentDomainCode, children);
+      childrenOf.set(parentCode, children);
     }
   }
 
@@ -57,6 +64,7 @@ export function dependencyLoadOrder(domains: FeedDomainSpec[]): string[] {
 /** Domains that can load together, earliest parents first. */
 export function dependencyLoadWaves(domains: FeedDomainSpec[]): string[][] {
   const byCode = new Map(domains.map((domain) => [domain.domainCode, domain]));
+  const known = new Set(byCode.keys());
   const depthOf = new Map<string, number>();
 
   const depth = (code: string, stack: string[]): number => {
@@ -67,7 +75,7 @@ export function dependencyLoadWaves(domains: FeedDomainSpec[]): string[][] {
     }
     const domain = byCode.get(code);
     if (!domain) throw new Error(`Unknown domain ${code}`);
-    const parents = [...new Set(domain.parents.map((parent) => parent.parentDomainCode))];
+    const parents = loadDependencies(domain, known);
     const value = parents.length === 0 ? 0 : 1 + Math.max(...parents.map((parent) => depth(parent, [...stack, code])));
     depthOf.set(code, value);
     return value;
