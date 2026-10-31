@@ -11,6 +11,7 @@ import { ActiveConflictsPanel } from '@/components/detail/ActiveConflictsPanel';
 import { ActivityFeedPanel } from '@/components/detail/ActivityFeedPanel';
 import { EntityReports } from '@/components/reporting/EntityReports';
 import { EntitySurfacePanel } from '@/components/surfaces/EntitySurfacePanel';
+import { FundConditionalPages } from '@/components/surfaces/FundConditionalPages';
 import { sources, type SourceKey } from '@/lib/data';
 import { getDomainConfig, type DomainKey } from '@/lib/mock-data';
 import { useTemporalStore } from '@/lib/store';
@@ -28,6 +29,7 @@ export default function DynamicEntityDetailPage() {
   const [lineageData, setLineageData] = useState<LineageData[]>([]);
   const [templateAttributes, setTemplateAttributes] = useState<TemplateAttribute[]>([]);
   const asOfDate = useTemporalStore(state => state.asOfDate);
+  const [fundPage, setFundPage] = useState('OVERVIEW');
 
   // Compute derived data
   const conflicts: ConflictData[] = [];
@@ -303,7 +305,16 @@ export default function DynamicEntityDetailPage() {
         accentColor={domainConfig.color}
       />
 
-      <div className="detail-layout">
+      {entity.domainCode === 'FUND' && (
+        <FundConditionalPages
+          entityId={entity.id}
+          entityName={entity.entityName}
+          activePage={fundPage}
+          onPageChange={setFundPage}
+        />
+      )}
+
+      {fundPage === 'OVERVIEW' && <div className="detail-layout">
         <div>
           <GoldenRecordSections
             entity={entity}
@@ -321,7 +332,7 @@ export default function DynamicEntityDetailPage() {
           <ActiveConflictsPanel conflicts={conflicts} entityId={id} />
           <ActivityFeedPanel activities={activities} />
         </div>
-      </div>
+      </div>}
 
       <EntitySurfacePanel entityId={entity.id} entityCode={entity.entityCode} entityName={entity.entityName} />
       <EntityReports domainCode={entity.domainCode} entityId={entity.id} asOfDate={asOfDate} />
