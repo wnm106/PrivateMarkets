@@ -103,14 +103,9 @@ Key fields:
 - `system_from`, `system_to` (system time)
 - `precedence_rank`, `competing_values`
 
-### 4. Position Master
+### 4. Positions
 
-Position-level dimensional data:
-
-```sql
-dimensional_intersections -- Position dimensional data
-position_metrics          -- Calculated metrics
-```
+A position is a `POSITION` entity in `master_entities`. Quantity, cost, and market value are attributes on the golden ledger. The fund and the security are relationships. There is no separate position table.
 
 ### 5. Data Quality
 

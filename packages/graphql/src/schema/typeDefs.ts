@@ -25,14 +25,6 @@ enum SourceType {
   CALCULATED
 }
 
-enum PositionType {
-  EQUITY
-  DEBT
-  FUND_INTEREST
-  DERIVATIVE
-  OTHER
-}
-
 enum DQRuleType {
   COMPLETENESS
   VALIDITY
@@ -119,7 +111,6 @@ type AttributeDefinition {
   isRequired: Boolean!
   isMultiValued: Boolean!
   referenceDomainCode: String
-  domainCode: String
   defaultPrecedenceRank: Int!
   
   # Derived attribute fields
@@ -730,110 +721,6 @@ type EvaluateComplianceRuleResult {
   errors: [MutationError!]!
 }
 
-# File: deal.graphql
-# Deal Domain Types
-
-type Deal {
-  id: ID!
-  entityCode: String!
-  entityName: String!
-  description: String
-  isActive: Boolean!
-  templateId: ID
-  
-  # Core Attributes
-  dealDate: Date
-  dealType: String
-  dealSubType: String
-  dealValue: Float
-  dealValueCurrency: String
-  enterpriseValue: Float
-  equityValue: Float
-  debtValue: Float
-  status: String
-  closingDate: Date
-  announcementDate: Date
-  transactionStatus: String
-  dealRole: String
-  feePercentage: Float
-  feeAmount: Float
-  
-  # Relationships
-  issuer: Issuer
-  issuerId: ID
-  fund: Fund
-  fundId: ID
-  
-  # Source Tracking
-  lastUpdated: DateTime
-  
-  # Lineage
-  lineage: [FieldLineage!]
-  
-  # Metadata
-  metadata: JSON
-  createdAt: DateTime!
-  updatedAt: DateTime!
-  createdBy: String
-  updatedBy: String
-}
-
-type DealConnection {
-  edges: [DealEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-type DealEdge {
-  node: Deal!
-  cursor: String!
-}
-
-input DealFilter {
-  entityCode: StringFilter
-  entityName: StringFilter
-  dealType: StringFilter
-  dealSubType: StringFilter
-  status: StringFilter
-  transactionStatus: StringFilter
-  dealValueRange: FloatRangeFilter
-  dealDateRange: DateRangeFilter
-  closingDateRange: DateRangeFilter
-  issuerId: IDFilter
-  fundId: IDFilter
-  isActive: Boolean
-}
-
-input CreateDealInput {
-  entityCode: String!
-  entityName: String!
-  description: String
-  templateId: ID
-  issuerId: ID
-  fundId: ID
-  attributes: [AttributeInput!]
-}
-
-input UpdateDealInput {
-  id: ID!
-  entityName: String
-  description: String
-  isActive: Boolean
-  issuerId: ID
-  fundId: ID
-  attributes: [AttributeInput!]
-}
-
-type CreateDealResult {
-  deal: Deal
-  errors: [MutationError!]!
-}
-
-type UpdateDealResult {
-  deal: Deal
-  errors: [MutationError!]!
-}
-
 # File: entity.graphql
 # Generic Entity Type
 type Entity {
@@ -1005,7 +892,6 @@ input CreateAttributeInput {
   isRequired: Boolean
   isMultiValued: Boolean
   referenceDomainCode: String
-  domainCode: String
 }
 
 type CreateAttributeResult {
@@ -1048,30 +934,6 @@ input AssignAttributeInput {
 
 type AssignAttributeResult {
   assignment: TemplateAttribute
-  errors: [MutationError!]!
-}
-
-input UpdateTemplateAttributeInput {
-  templateId: ID!
-  attributeId: ID!
-  isRequired: Boolean
-  precedenceRank: Int
-  displayOrder: Int
-  displayLabel: String
-}
-
-type UpdateTemplateAttributeResult {
-  assignment: TemplateAttribute
-  errors: [MutationError!]!
-}
-
-input ReorderTemplateAttributesInput {
-  templateId: ID!
-  attributeIds: [ID!]!
-}
-
-type ReorderTemplateAttributesResult {
-  success: Boolean!
   errors: [MutationError!]!
 }
 
@@ -1176,96 +1038,6 @@ input AttributeInput {
   validFrom: Date
   sourceId: ID
   confidenceScore: Float
-}
-
-# File: fund.graphql
-# Fund Domain Types
-
-type Fund {
-  id: ID!
-  entityCode: String!
-  entityName: String!
-  description: String
-  isActive: Boolean!
-  templateId: ID
-  
-  # Core Attributes
-  nav: Float
-  navCurrency: String
-  navDate: Date
-  inceptionDate: Date
-  fundStatus: String
-  fundType: String
-  manager: String
-  aum: Float
-  expenseRatio: Float
-  domicile: String
-  legalStructure: String
-  
-  # Source Tracking
-  navSource: String
-  lastUpdated: DateTime
-  
-  # Lineage
-  lineage: [FieldLineage!]
-  
-  # Metadata
-  metadata: JSON
-  createdAt: DateTime!
-  updatedAt: DateTime!
-  createdBy: String
-  updatedBy: String
-}
-
-type FundConnection {
-  edges: [FundEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-type FundEdge {
-  node: Fund!
-  cursor: String!
-}
-
-input FundFilter {
-  entityCode: StringFilter
-  entityName: StringFilter
-  fundStatus: StringFilter
-  fundType: StringFilter
-  manager: StringFilter
-  domicile: StringFilter
-  navRange: FloatRangeFilter
-  aumRange: FloatRangeFilter
-  navDateRange: DateRangeFilter
-  inceptionDateRange: DateRangeFilter
-  isActive: Boolean
-}
-
-input CreateFundInput {
-  entityCode: String!
-  entityName: String!
-  description: String
-  templateId: ID
-  attributes: [AttributeInput!]
-}
-
-input UpdateFundInput {
-  id: ID!
-  entityName: String
-  description: String
-  isActive: Boolean
-  attributes: [AttributeInput!]
-}
-
-type CreateFundResult {
-  fund: Fund
-  errors: [MutationError!]!
-}
-
-type UpdateFundResult {
-  fund: Fund
-  errors: [MutationError!]!
 }
 
 # File: intersection.graphql
@@ -1416,297 +1188,6 @@ type DeleteIntersectionResult {
   errors: [MutationError!]!
 }
 
-# File: issuer.graphql
-# Issuer Domain Types
-
-type Issuer {
-  id: ID!
-  entityCode: String!
-  entityName: String!
-  description: String
-  isActive: Boolean!
-  templateId: ID
-  
-  # Core Attributes
-  lei: String
-  country: String
-  sector: String
-  industry: String
-  subIndustry: String
-  marketCap: Float
-  marketCapCurrency: String
-  creditRating: String
-  ratingAgency: String
-  employeeCount: Int
-  website: String
-  foundedDate: Date
-  isPublic: Boolean
-  tickerSymbol: String
-  exchange: String
-  
-  # Source Tracking
-  lastUpdated: DateTime
-  
-  # Relationships
-  securities: SecurityConnection
-  
-  # Lineage
-  lineage: [FieldLineage!]
-  
-  # Metadata
-  metadata: JSON
-  createdAt: DateTime!
-  updatedAt: DateTime!
-  createdBy: String
-  updatedBy: String
-}
-
-type IssuerConnection {
-  edges: [IssuerEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-type IssuerEdge {
-  node: Issuer!
-  cursor: String!
-}
-
-input IssuerFilter {
-  entityCode: StringFilter
-  entityName: StringFilter
-  country: StringFilter
-  sector: StringFilter
-  industry: StringFilter
-  creditRating: StringFilter
-  marketCapRange: FloatRangeFilter
-  isPublic: Boolean
-  isActive: Boolean
-}
-
-input CreateIssuerInput {
-  entityCode: String!
-  entityName: String!
-  description: String
-  templateId: ID
-  attributes: [AttributeInput!]
-}
-
-input UpdateIssuerInput {
-  id: ID!
-  entityName: String
-  description: String
-  isActive: Boolean
-  attributes: [AttributeInput!]
-}
-
-type CreateIssuerResult {
-  issuer: Issuer
-  errors: [MutationError!]!
-}
-
-type UpdateIssuerResult {
-  issuer: Issuer
-  errors: [MutationError!]!
-}
-
-# File: position.graphql
-# Position Domain Types
-
-type Position {
-  id: ID!
-  intersectionCode: String!
-  positionType: PositionType!
-  quantity: Float
-  currency: String!
-  isActive: Boolean!
-  
-  # Relationships
-  fund: Fund
-  fundId: ID
-  issuer: Issuer
-  issuerId: ID
-  deal: Deal
-  dealId: ID
-  security: Security
-  securityId: ID
-  
-  # Metrics
-  marketValue: Float
-  costBasis: Float
-  unrealizedGainLoss: Float
-  realizedGainLoss: Float
-  dailyReturn: Float
-  mtdReturn: Float
-  ytdReturn: Float
-  sinceInceptionReturn: Float
-  beta: Float
-  volatility: Float
-  var95: Float
-  metricsDate: Date
-  
-  # Temporal
-  validFrom: Date!
-  validTo: Date!
-  
-  # Metadata
-  metadata: JSON
-  createdAt: DateTime!
-  updatedAt: DateTime!
-  createdBy: String
-}
-
-type PositionConnection {
-  edges: [PositionEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-type PositionEdge {
-  node: Position!
-  cursor: String!
-}
-
-input PositionFilter {
-  intersectionCode: StringFilter
-  positionType: StringFilter
-  currency: StringFilter
-  fundId: IDFilter
-  issuerId: IDFilter
-  dealId: IDFilter
-  securityId: IDFilter
-  marketValueRange: FloatRangeFilter
-  validFromRange: DateRangeFilter
-  isActive: Boolean
-}
-
-input CreatePositionInput {
-  intersectionCode: String!
-  positionType: PositionType!
-  fundId: ID
-  issuerId: ID
-  dealId: ID
-  securityId: ID
-  quantity: Float
-  currency: String!
-  validFrom: Date!
-  metadata: JSON
-}
-
-input UpdatePositionInput {
-  id: ID!
-  quantity: Float
-  metadata: JSON
-}
-
-type CreatePositionResult {
-  position: Position
-  errors: [MutationError!]!
-}
-
-type UpdatePositionResult {
-  position: Position
-  errors: [MutationError!]!
-}
-
-# File: price.graphql
-# Price Domain Types
-
-type Price {
-  id: ID!
-  entityCode: String!
-  entityName: String!
-  description: String
-  isActive: Boolean!
-  templateId: ID
-  
-  # Core Attributes
-  price: Float!
-  priceDate: Date!
-  priceTime: DateTime
-  priceType: String
-  currency: String!
-  exchange: String
-  bidPrice: Float
-  askPrice: Float
-  midPrice: Float
-  lastTradePrice: Float
-  openPrice: Float
-  highPrice: Float
-  lowPrice: Float
-  volume: Float
-  adjustedClosePrice: Float
-  
-  # Relationships
-  security: Security
-  securityId: ID
-  
-  # Source Tracking
-  source: String
-  confidenceScore: Float
-  
-  # Lineage
-  lineage: [FieldLineage!]
-  
-  # Metadata
-  metadata: JSON
-  createdAt: DateTime!
-  updatedAt: DateTime!
-  createdBy: String
-  updatedBy: String
-}
-
-type PriceConnection {
-  edges: [PriceEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-type PriceEdge {
-  node: Price!
-  cursor: String!
-}
-
-input PriceFilter {
-  entityCode: StringFilter
-  priceRange: FloatRangeFilter
-  priceDateRange: DateRangeFilter
-  priceType: StringFilter
-  currency: StringFilter
-  exchange: StringFilter
-  securityId: IDFilter
-  source: StringFilter
-  isActive: Boolean
-}
-
-input CreatePriceInput {
-  entityCode: String!
-  entityName: String!
-  securityId: ID!
-  price: Float!
-  priceDate: Date!
-  currency: String!
-  priceType: String
-  attributes: [AttributeInput!]
-}
-
-input UpdatePriceInput {
-  id: ID!
-  price: Float
-  priceDate: Date
-  attributes: [AttributeInput!]
-}
-
-type CreatePriceResult {
-  price: Price
-  errors: [MutationError!]!
-}
-
-type UpdatePriceResult {
-  price: Price
-  errors: [MutationError!]!
-}
-
 # File: tenancy.graphql
 # Multi-tenant client/user management: tenants, membership, RBAC, entity ACLs, impersonation
 
@@ -1837,9 +1318,8 @@ type ReferenceListSummary {
   domainCode: String
   description: String
   isActive: Boolean!
-  activeValueCount: Int!
-  totalValueCount: Int!
-  totalSynonymCount: Int!
+  valueCount: Int!
+  synonymCount: Int!
   linkedAttributeCount: Int!
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -1852,9 +1332,8 @@ type ReferenceListDetail {
   domainCode: String
   description: String
   isActive: Boolean!
-  activeValueCount: Int!
-  totalValueCount: Int!
-  totalSynonymCount: Int!
+  valueCount: Int!
+  synonymCount: Int!
   linkedAttributeCount: Int!
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -2014,13 +1493,6 @@ type Query {
   precedenceRules(domainCode: String, attributeCode: String, isActive: Boolean): [PrecedenceRule!]!
   precedenceRule(id: ID!): PrecedenceRule
 
-  # Golden Source queries
-  goldenSource(entityId: ID!, attributeCode: String!): GoldenSource
-  goldenSourcesForEntity(entityId: ID!): [GoldenSource!]!
-  templatePrecedenceChain(templateId: ID!, attributeCode: String!): TemplatePrecedenceChain
-  qualifyEntityTemplate(entityId: ID!, domainCode: String!): TemplateQualificationResult!
-  evaluateGoldenSource(entityId: ID!, attributeCode: String!, domainCode: String!, templateId: ID): EvaluateGoldenSourceResult!
-
   # Tenancy queries
   me: Me!
   clients: [Client!]!
@@ -2080,9 +1552,7 @@ type Mutation {
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
   updateTemplate(id: ID!, input: UpdateTemplateInput!): UpdateTemplateResult!
   assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
-  updateTemplateAttribute(input: UpdateTemplateAttributeInput!): UpdateTemplateAttributeResult!
   unassignAttributeFromTemplate(templateId: ID!, attributeId: ID!): MutationResult!
-  reorderTemplateAttributes(input: ReorderTemplateAttributesInput!): ReorderTemplateAttributesResult!
   applyStatementTemplate(input: ApplyStatementTemplateInput!): ApplyStatementTemplateResult!
   
   # DQ mutations
@@ -2140,11 +1610,6 @@ type Mutation {
   deletePrecedenceRule(id: ID!): DeletePrecedenceRuleResult!
   updateAttributeDefaultPrecedence(attributeCode: String!, chain: [String!]!): UpdateDefaultPrecedenceResult!
   reorderPrecedenceChain(ruleId: String!, chain: [PrecedenceChainInput!]!): ReorderPrecedenceChainResult!
-
-  # Golden Source mutations
-  resolveGoldenSource(entityId: ID!, attributeCode: String!, domainCode: String!, templateId: ID, validFrom: Date): ResolveGoldenSourceResult!
-  batchResolveGoldenSources(domainCode: String!, attributeCode: String!, templateCode: String): BatchResolveGoldenSourcesResult!
-  updateTemplatePrecedenceChain(templateId: ID!, attributeCode: String!, chain: [String!]!): UpdateTemplatePrecedenceChainResult!
 
   # Tenancy mutations
   createClient(input: CreateClientInput!): MutationResult!
@@ -2262,21 +1727,6 @@ type AddCompetingSourceResult {
 # Metadata Types
 input UpdateAttributeDefinitionInput {
   id: ID!
-  attributeName: String
-  description: String
-  dataType: String
-  unitOfMeasure: String
-  isRequired: Boolean
-  isMultiValued: Boolean
-  referenceDomainCode: String
-  defaultPrecedenceRank: Int
-  isDerived: Boolean
-  derivationType: String
-  derivationFormula: String
-  derivationDependencies: [String!]
-  formulaLanguage: String
-  isTimeVarying: Boolean
-  timeDimension: String
   displayFormat: String
   listValues: [String!]
   validationRules: JSON
@@ -2288,8 +1738,6 @@ input UpdateAttributeDefinitionInput {
   aggregationType: String
   weightAttributeCode: String
   numericPrecision: Int
-  referenceListCode: String
-  domainCode: String
 }
 
 type UpdateAttributeDefinitionResult {
@@ -2726,69 +2174,6 @@ type ReorderPrecedenceChainResult {
   errors: [MutationError!]!
 }
 
-# Golden Source Types
-type GoldenSource {
-  entityId: ID!
-  attributeCode: String
-  attributeName: String
-  goldenValue: String
-  goldenSourceCode: String
-  goldenSourceName: String
-  goldenSourceId: ID
-  precedenceRank: Int
-  isManualOverride: Boolean!
-  resolutionRuleApplied: String
-  resolutionVersion: Int
-  resolvedAt: DateTime
-  competingValues: JSON
-  isStale: Boolean!
-}
-
-type TemplatePrecedenceChain {
-  templateId: ID!
-  attributeCode: String!
-  chain: [String!]!
-  chainVersion: Int!
-}
-
-type TemplateQualificationResult {
-  templateId: ID
-  templateCode: String
-  matched: Boolean!
-}
-
-type EvaluateGoldenSourceResult {
-  winningSource: String!
-  winningSourceId: ID
-  tierUsed: Int!
-  isDefault: Boolean!
-  resolutionVersion: Int!
-  appliedRuleCode: String
-  appliedRuleName: String
-  allCandidates: JSON
-}
-
-type ResolveGoldenSourceResult {
-  success: Boolean!
-  winningSource: String
-  goldenValueId: ID
-  goldenValue: String
-  errors: [MutationError!]!
-}
-
-type BatchResolveGoldenSourcesResult {
-  success: Boolean!
-  entitiesResolved: Int!
-  errors: [MutationError!]!
-}
-
-type UpdateTemplatePrecedenceChainResult {
-  success: Boolean!
-  chainVersion: Int!
-  entitiesResolved: Int!
-  errors: [MutationError!]!
-}
-
 # Data Connection Result Types
 type CreateDataConnectionResult {
   connection: DataConnection
@@ -3077,114 +2462,6 @@ input UpdateRelationshipTypeInput {
   isActive: Boolean
   cardinality: String
   compositeKey: [String!]
-}
-
-# File: security.graphql
-# Security Domain Types
-
-type Security {
-  id: ID!
-  entityCode: String!
-  entityName: String!
-  description: String
-  isActive: Boolean!
-  templateId: ID
-  
-  # Core Attributes
-  isin: String
-  cusip: String
-  sedol: String
-  ticker: String
-  securityType: String
-  assetClass: String
-  currency: String
-  exchange: String
-  country: String
-  sector: String
-  industry: String
-  price: Float
-  priceDate: Date
-  priceCurrency: String
-  parValue: Float
-  maturityDate: Date
-  couponRate: Float
-  dividendYield: Float
-  peRatio: Float
-  pbRatio: Float
-  
-  # Relationships
-  issuer: Issuer
-  issuerId: ID
-  
-  # Source Tracking
-  priceSource: String
-  lastUpdated: DateTime
-  
-  # Lineage
-  lineage: [FieldLineage!]
-  
-  # Metadata
-  metadata: JSON
-  createdAt: DateTime!
-  updatedAt: DateTime!
-  createdBy: String
-  updatedBy: String
-}
-
-type SecurityConnection {
-  edges: [SecurityEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-type SecurityEdge {
-  node: Security!
-  cursor: String!
-}
-
-input SecurityFilter {
-  entityCode: StringFilter
-  entityName: StringFilter
-  isin: StringFilter
-  cusip: StringFilter
-  ticker: StringFilter
-  securityType: StringFilter
-  assetClass: StringFilter
-  currency: StringFilter
-  exchange: StringFilter
-  country: StringFilter
-  sector: StringFilter
-  priceRange: FloatRangeFilter
-  priceDateRange: DateRangeFilter
-  isActive: Boolean
-}
-
-input CreateSecurityInput {
-  entityCode: String!
-  entityName: String!
-  description: String
-  templateId: ID
-  issuerId: ID
-  attributes: [AttributeInput!]
-}
-
-input UpdateSecurityInput {
-  id: ID!
-  entityName: String
-  description: String
-  isActive: Boolean
-  issuerId: ID
-  attributes: [AttributeInput!]
-}
-
-type CreateSecurityResult {
-  security: Security
-  errors: [MutationError!]!
-}
-
-type UpdateSecurityResult {
-  security: Security
-  errors: [MutationError!]!
 }
 
 

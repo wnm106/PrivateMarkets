@@ -38,7 +38,6 @@ meridian-mdm/
 - **metadata_register**: Domain types, attributes, templates, reference lists
 - **entity_instances**: Master entities, source registry, feed lineage
 - **golden_master**: Bi-temporal EAV ledger with golden record resolution
-- **position_master**: Position-level dimensional data and metrics
 - **data_quality**: DQ rules and exception tracking
 - **read_projections**: Denormalized views for CQRS pattern
 
