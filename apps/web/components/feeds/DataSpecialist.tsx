@@ -59,6 +59,14 @@ interface MapChange {
   note: string;
 }
 
+interface FileRecord {
+  domainCode: string;
+  label: string;
+  identifiedBy: string;
+  count: number;
+  needs: string;
+}
+
 interface Reading {
   findings: string[];
   questions: Question[];
@@ -66,6 +74,8 @@ interface Reading {
   assignments: Assignment[];
   unmappedColumns: UnmappedColumn[];
   changes: MapChange[];
+  records: FileRecord[];
+  fundMissing: boolean;
   map: {
     mapCode: string;
     name: string;
@@ -143,6 +153,7 @@ export function DataSpecialist() {
   const [mapName, setMapName] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [addingFund, setAddingFund] = useState(false);
 
   async function refreshLibrary() {
     const response = await fetch('/api/feeds/specialist');
@@ -316,7 +327,10 @@ export function DataSpecialist() {
         ))}
       </div>
 
-      {detail && reading && (
+      {busy === 'refresh' && (
+        <div className="filter-bar" style={{ marginBottom: 16 }}>Reading {detail?.fileName || 'the file'} again…</div>
+      )}
+      {busy !== 'refresh' && detail && reading && (
         <div className="specialist-grid">
           <section>
             <div className="section-title">
@@ -327,23 +341,79 @@ export function DataSpecialist() {
                 onClick={async () => {
                   setBusy('refresh');
                   setError(null);
+                  setAddingFund(false);
+                  const controller = new AbortController();
+                  const timer = window.setTimeout(() => controller.abort(), 20000);
                   try {
-                    const response = await fetch(`/api/feeds/specialist/${detail.id}/refresh`, { method: 'POST' });
+                    const response = await fetch(`/api/feeds/specialist/${detail.id}/refresh`, { method: 'POST', signal: controller.signal });
                     const body = await response.json();
-                    if (!response.ok) throw new Error(body.error || 'The mapping could not be refreshed');
+                    if (!response.ok) throw new Error(body.error || 'The file could not be read again');
                     show(body);
                     await refreshLibrary();
                   } catch (err: any) {
-                    setError(err.message);
+                    setError(err?.name === 'AbortError' ? 'Reading the file again took too long. The previous view is still here.' : err.message);
                   } finally {
+                    window.clearTimeout(timer);
                     setBusy(null);
                   }
                 }}
               >
-                {busy === 'refresh' ? 'Refreshing…' : 'Refresh mapping'}
+                Reload file
               </button>
             </div>
-            <p className="page-meta" style={{ marginTop: 0 }}>{detail.extractionNote} The stored file is read again and compared with the current maps. The as-of date and source you already chose stay in place.</p>
+            <p className="page-meta" style={{ marginTop: 0 }}>{detail.rowCount} rows. {detail.extractionNote} Reload file reads the stored copy again and replaces this mapping.</p>
+            {(reading.records || []).length > 0 && (
+              <div className="data-table" style={{ margin: '12px 0' }}>
+                <div className="tbl-head" style={{ gridTemplateColumns: '40px 1.2fr 1fr 1fr' }}>
+                  <div></div>
+                  <div>Record type</div>
+                  <div>Records in file</div>
+                  <div>Needs first</div>
+                </div>
+                {reading.records.map((record, index) => (
+                  <div key={record.domainCode} className="tbl-row" style={{ gridTemplateColumns: '40px 1.2fr 1fr 1fr', cursor: 'default' }}>
+                    <div>{index + 1}</div>
+                    <div>
+                      <div className="row-id">{record.label}</div>
+                      <div className="page-meta">Identified by {record.identifiedBy}</div>
+                    </div>
+                    <div>{record.count}</div>
+                    <div>{record.needs}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {reading.fundMissing && (
+              <div className="filter-bar" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
+                <span>No fund column was found, so positions will not be linked to a fund.</span>
+                <button className="btn" onClick={() => setAddingFund((open) => !open)}>Add a fund column</button>
+              </div>
+            )}
+            {addingFund && (
+              <div className="filter-bar" style={{ marginBottom: 12 }}>
+                <label>
+                  Fund column
+                  <select
+                    defaultValue=""
+                    onChange={(event) => {
+                      const column = event.target.value;
+                      if (!column) return;
+                      setAddingFund(false);
+                      send({ answers: { fund_column: column } });
+                    }}
+                    style={{ marginLeft: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '6px 8px' }}
+                  >
+                    <option value="">Choose a column</option>
+                    {(reading.assignments || []).map((assignment) => (
+                      <option key={assignment.sourceColumn} value={assignment.sourceColumn}>{assignment.sourceColumn}</option>
+                    ))}
+                    {(reading.unmappedColumns || []).map((column) => (
+                      <option key={column.column} value={column.column}>{column.column}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
             {reading.findings.map((finding) => (
               <p key={finding} className="specialist-note">{finding}</p>
             ))}

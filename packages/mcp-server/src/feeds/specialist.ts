@@ -125,6 +125,14 @@ export interface MapChange {
   note: string;
 }
 
+export interface FileRecord {
+  domainCode: string;
+  label: string;
+  identifiedBy: string;
+  count: number;
+  needs: string;
+}
+
 export interface SpecialistReading {
   briefing: string;
   findings: string[];
@@ -133,6 +141,8 @@ export interface SpecialistReading {
   assignments: ColumnAssignment[];
   unmappedColumns: UnmappedColumn[];
   changes: MapChange[];
+  records: FileRecord[];
+  fundMissing: boolean;
   map: FeedMap | null;
   loadWaves: string[][];
   blockedReasons: string[];
@@ -536,7 +546,7 @@ export function readSource(input: SpecialistInput): SpecialistReading {
 
   if (headers.length === 0 || rows.length === 0) {
     findings.push('I do not have a table yet. Upload a CSV, Excel, or JSON file, or extract a document first.');
-    return finish(findings, questions, recommendations, [], [], [], null, null, null, []);
+    return finish(findings, questions, recommendations, [], [], [], [], false, null, null, null, []);
   }
 
   findings.push(`I read ${rows.length} row${rows.length === 1 ? '' : 's'} and ${headers.length} column${headers.length === 1 ? '' : 's'} from ${input.fileName}.`);
@@ -797,6 +807,17 @@ export function readSource(input: SpecialistInput): SpecialistReading {
     });
   }
 
+  const fundColumn = answers.fund_column;
+  if (fundColumn && headers.includes(fundColumn)) {
+    const existing = assignments.findIndex((assignment) => assignment.sourceColumn === fundColumn);
+    if (existing >= 0) assignments.splice(existing, 1);
+    assignments.push({
+      ...blankAssignment(fundColumn, rows, 'identity'),
+      domainCode: 'FUND',
+      suggestion: { method: 'manual', confidence: 1, reason: 'You chose this column as the fund' },
+    });
+  }
+
   const identity = mapIdentity(reused, source, input.fileName);
   let map = identity ? feedMapFromAssignments(assignments, identity) : null;
   if (map && !reused) {
@@ -897,7 +918,14 @@ export function readSource(input: SpecialistInput): SpecialistReading {
   }
 
   const changes = describeChanges(reused, mapDiff, assignments, unmapped);
-  return finish(findings, questions, recommendations, assignments, unmapped, changes, map, asOf.date, source?.code || null, rows.slice(0, 4), blocked, [...accepted]);
+  const records = map ? fileRecords(map, rows) : [];
+  const fundMissing = Boolean(map?.domains.some((domain) => domain.domainCode === 'POSITION')
+    && !map.domains.some((domain) => domain.domainCode === 'FUND')
+    && !map.domains.some((domain) => domain.parents.some((parent) => parent.parentDomainCode === 'FUND')));
+  if (fundMissing) {
+    findings.push('No fund column was found, so positions will not be linked to a fund.');
+  }
+  return finish(findings, questions, recommendations, assignments, unmapped, changes, records, fundMissing, map, asOf.date, source?.code || null, rows.slice(0, 4), blocked, [...accepted]);
 }
 
 function finish(
@@ -907,6 +935,8 @@ function finish(
   assignments: ColumnAssignment[],
   unmappedColumns: UnmappedColumn[] = [],
   changes: MapChange[] = [],
+  records: FileRecord[] = [],
+  fundMissing = false,
   map: FeedMap | null,
   asOfDate: string | null,
   sourceCode: string | null,
@@ -923,6 +953,8 @@ function finish(
     assignments,
     unmappedColumns,
     changes,
+    records,
+    fundMissing,
     map,
     loadWaves: map && map.domains.length > 0 ? safeWaves(map) : [],
     blockedReasons,
@@ -1231,6 +1263,46 @@ function collectUnmapped(
     });
   }
   return unmapped;
+}
+
+const RECORD_LABELS: Record<string, string> = {
+  ISSUER: 'Issuers',
+  SECURITY: 'Securities',
+  POSITION: 'Positions',
+  FUND: 'Funds',
+  DEAL: 'Deals',
+  CASH_FLOW: 'Cash flows',
+  INVESTOR: 'Investors',
+};
+
+function fileRecords(map: FeedMap, rows: Record<string, string>[]): FileRecord[] {
+  let waves: string[][] = [];
+  try {
+    waves = dependencyLoadWaves(map.domains);
+  } catch {
+    waves = [map.domains.map((domain) => domain.domainCode)];
+  }
+  const order = waves.flat();
+  const domains = [...map.domains].sort((left, right) => order.indexOf(left.domainCode) - order.indexOf(right.domainCode));
+  return domains.map((domain) => {
+    const values = new Set<string>();
+    for (const row of rows) {
+      const code = (row[domain.identityColumn] || '').trim();
+      if (code) values.add(code);
+    }
+    const label = RECORD_LABELS[domain.domainCode] || titleCase(domain.domainCode);
+    const identifiedBy = domain.nameColumn && domain.nameColumn !== domain.identityColumn
+      ? `${label.replace(/s$/, '')} · Name`
+      : `${label.replace(/s$/, '')} · Code`;
+    const parents = [...new Set(domain.parents.map((parent) => RECORD_LABELS[parent.parentDomainCode] || titleCase(parent.parentDomainCode)))];
+    return {
+      domainCode: domain.domainCode,
+      label,
+      identifiedBy,
+      count: values.size,
+      needs: parents.length === 0 ? 'Nothing, loads first' : parents.join(', '),
+    };
+  });
 }
 
 function columnDomain(map: FeedMap, column: string): string | null {
