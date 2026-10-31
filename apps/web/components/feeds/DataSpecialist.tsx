@@ -52,12 +52,20 @@ interface UnmappedColumn {
   reason: string;
 }
 
+interface MapChange {
+  column: string;
+  change: 'added' | 'missing';
+  domainCode: string | null;
+  note: string;
+}
+
 interface Reading {
   findings: string[];
   questions: Question[];
   recommendations: Recommendation[];
   assignments: Assignment[];
   unmappedColumns: UnmappedColumn[];
+  changes: MapChange[];
   map: {
     mapCode: string;
     name: string;
@@ -394,6 +402,7 @@ export function DataSpecialist() {
               </>
             )}
 
+            <MapChanges changes={reading.changes || []} />
             <UnmappedAlert
               columns={(reading.unmappedColumns || []).filter((column) => column.recommendationId)}
               recommendations={reading.recommendations}
@@ -477,6 +486,34 @@ export function DataSpecialist() {
           </section>
         </div>
       )}
+    </div>
+  );
+}
+
+function MapChanges({ changes }: { changes: MapChange[] }) {
+  if (changes.length === 0) return null;
+  const added = changes.filter((change) => change.change === 'added');
+  const missing = changes.filter((change) => change.change === 'missing');
+  return (
+    <div style={{ border: '1px solid #1b3a4b', padding: '12px 14px', marginBottom: 14 }}>
+      <div style={{ fontWeight: 600 }}>Changes from the saved map</div>
+      <p style={{ margin: '6px 0 10px' }}>
+        The file matches a map. I placed the fields that map already knows, then checked anything new.
+      </p>
+      {added.map((change) => (
+        <div key={`added:${change.column}`} className="field-row" style={{ paddingLeft: 0, paddingRight: 0 }}>
+          <div className="row-id">{change.column}</div>
+          <div>New</div>
+          <div>{change.note}</div>
+        </div>
+      ))}
+      {missing.map((change) => (
+        <div key={`missing:${change.column}`} className="field-row" style={{ paddingLeft: 0, paddingRight: 0 }}>
+          <div className="row-id">{change.column}</div>
+          <div>Missing</div>
+          <div>{change.note}</div>
+        </div>
+      ))}
     </div>
   );
 }

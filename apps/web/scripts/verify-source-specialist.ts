@@ -63,6 +63,21 @@ const fundDomain = positionReading.map?.domains.find((domain) => domain.domainCo
 assert(fundDomain?.identityColumn === 'fund code', `fund code should identify FUND, got ${fundDomain?.identityColumn}`);
 assert((fundDomain?.attributes.length || 0) > 0, 'fund attributes are on the map');
 assert(!positionReading.unmappedColumns.some((column) => column.column === 'fund code'), 'fund code is not left unmapped');
+assert(positionReading.changes.some((change) => change.column === 'zzz' && change.change === 'added'), 'a column that is not on the position file map is reported as new');
+
+const widenedHeaders = [...positionHeaders, ...Array.from({ length: 20 }, (_, index) => `extra field ${index}`)];
+const widened = readSource({
+  fileName: 'Position_FIle.csv',
+  headers: widenedHeaders,
+  rows: [row(widenedHeaders, widenedHeaders.map((header) => header === 'valid from' ? '9/30/2026' : header === 'Domai' ? 'POSITION' : `${header}-1`))],
+  catalog,
+  answers: {},
+  acceptedRecommendationIds: [],
+  dismissedRecommendationIds: [],
+});
+assert(widened.map?.mapCode === 'POSITION_FILE', 'new fields do not stop a file from matching the saved map');
+assert(widened.changes.filter((change) => change.change === 'added').length === 20, 'every field past the map is listed as added');
+assert(widened.unmappedColumns.some((column) => column.column === 'extra field 0' && column.recommendationId), 'a new field that does not match an attribute is recommended');
 assert(positionReading.map?.mapCode === 'POSITION_FILE', `expected the position file map, got ${positionReading.map?.mapCode}`);
 assert(positionReading.sourceCode === 'POSITION_FILE', 'position file keeps its source');
 assert(positionReading.asOfDate === '2026-09-30', `expected 2026-09-30, got ${positionReading.asOfDate}`);

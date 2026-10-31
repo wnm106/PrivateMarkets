@@ -118,6 +118,13 @@ export interface UnmappedColumn {
   reason: string;
 }
 
+export interface MapChange {
+  column: string;
+  change: 'added' | 'missing';
+  domainCode: string | null;
+  note: string;
+}
+
 export interface SpecialistReading {
   briefing: string;
   findings: string[];
@@ -125,6 +132,7 @@ export interface SpecialistReading {
   recommendations: SchemaRecommendation[];
   assignments: ColumnAssignment[];
   unmappedColumns: UnmappedColumn[];
+  changes: MapChange[];
   map: FeedMap | null;
   loadWaves: string[][];
   blockedReasons: string[];
@@ -428,17 +436,27 @@ function assignmentsFromMap(map: FeedMap, headers: string[], rows: Record<string
   return assignments;
 }
 
-function matchSavedMap(headers: string[], maps: FeedMap[]): { map: FeedMap; fileCoverage: number } | null {
+interface SavedMapMatch {
+  map: FeedMap;
+  mapCoverage: number;
+  added: string[];
+  missing: string[];
+}
+
+function matchSavedMap(headers: string[], maps: FeedMap[]): SavedMapMatch | null {
   const lookup = headerLookup(headers);
-  let best: { map: FeedMap; fileCoverage: number } | null = null;
+  let best: SavedMapMatch | null = null;
   for (const map of maps) {
     const identities = map.domains.map((domain) => domain.identityColumn.toLowerCase());
     if (identities.length === 0 || identities.some((column) => !lookup.has(column))) continue;
     const used = columnsUsedByMap(map);
-    const known = headers.filter((header) => used.some((column) => column.toLowerCase() === header.toLowerCase())).length;
-    const fileCoverage = known / Math.max(headers.length, 1);
-    if (known < 6 || fileCoverage < 0.7) continue;
-    if (!best || fileCoverage > best.fileCoverage) best = { map, fileCoverage };
+    const present = used.filter((column) => lookup.has(column.toLowerCase()));
+    const mapCoverage = present.length / Math.max(used.length, 1);
+    if (present.length < 6 || mapCoverage < 0.6) continue;
+    const added = headers.filter((header) => !used.some((column) => column.toLowerCase() === header.toLowerCase()));
+    const missing = used.filter((column) => !lookup.has(column.toLowerCase()));
+    const candidate = { map, mapCoverage, added, missing };
+    if (!best || mapCoverage > best.mapCoverage) best = candidate;
   }
   return best;
 }
@@ -518,7 +536,7 @@ export function readSource(input: SpecialistInput): SpecialistReading {
 
   if (headers.length === 0 || rows.length === 0) {
     findings.push('I do not have a table yet. Upload a CSV, Excel, or JSON file, or extract a document first.');
-    return finish(findings, questions, recommendations, [], [], null, null, null, []);
+    return finish(findings, questions, recommendations, [], [], [], null, null, null, []);
   }
 
   findings.push(`I read ${rows.length} row${rows.length === 1 ? '' : 's'} and ${headers.length} column${headers.length === 1 ? '' : 's'} from ${input.fileName}.`);
@@ -527,24 +545,31 @@ export function readSource(input: SpecialistInput): SpecialistReading {
   const maps = mapsWithBuiltin(input.catalog.maps);
   const matched = matchSavedMap(headers, maps);
   let reused: FeedMap | null = null;
+  let mapDiff: { added: string[]; missing: string[] } | null = null;
   if (matched) {
+    const addedNote = matched.added.length === 0
+      ? 'Every field in the file is already on that map.'
+      : `${matched.added.length} field${matched.added.length === 1 ? ' is' : 's are'} new. I will place the known fields and check the new ones.`;
     const reuse = question(
       {
         id: 'reuse_map',
         kind: 'reuse_map',
-        prompt: `This looks like ${matched.map.name}.`,
-        detail: `${Math.round(matched.fileCoverage * 100)}% of the columns are already on that map. Reusing it keeps the same entities, parents, and load order.`,
-        required: matched.fileCoverage < 0.85,
+        prompt: `This matches ${matched.map.name}.`,
+        detail: `${Math.round(matched.mapCoverage * 100)}% of that map is in this file. ${addedNote}`,
+        required: matched.mapCoverage < 0.85,
         options: [
           { id: 'use', label: `Use ${matched.map.name}`, detail: matched.map.description },
           { id: 'discover', label: 'Read it as a new file' },
         ],
       },
       answers,
-      matched.fileCoverage >= 0.85 ? 'use' : null
+      matched.mapCoverage >= 0.85 ? 'use' : null
     );
     questions.push(reuse);
-    if (reuse.answer === 'use') reused = matched.map;
+    if (reuse.answer === 'use') {
+      reused = matched.map;
+      mapDiff = { added: matched.added, missing: matched.missing };
+    }
   }
 
   const fileSourceName = fileBase(input.fileName);
@@ -580,7 +605,13 @@ export function readSource(input: SpecialistInput): SpecialistReading {
     const mapped = assignmentsFromMap(reused, headers, rows);
     assignments.push(...mapped);
     for (const assignment of mapped) consumed.add(assignment.sourceColumn);
-    findings.push(`I am using the ${reused.name} map${reused.domains.length > 1 ? `, which loads ${reused.domains.map((domain) => domain.domainCode).join(', ')}` : ''}.`);
+    const addedText = mapDiff && mapDiff.added.length > 0
+      ? ` ${mapDiff.added.length} field${mapDiff.added.length === 1 ? ' is' : 's are'} new: ${mapDiff.added.slice(0, 8).join(', ')}${mapDiff.added.length > 8 ? '…' : ''}.`
+      : ' No new fields.';
+    const missingText = mapDiff && mapDiff.missing.length > 0
+      ? ` ${mapDiff.missing.length} field${mapDiff.missing.length === 1 ? ' is' : 's are'} on the map but not in this file: ${mapDiff.missing.slice(0, 8).join(', ')}${mapDiff.missing.length > 8 ? '…' : ''}.`
+      : '';
+    findings.push(`I compared this file with ${reused.name}.${addedText}${missingText}`);
   }
 
   const groups = new Map<string, string[]>();
@@ -865,7 +896,8 @@ export function readSource(input: SpecialistInput): SpecialistReading {
     findings.push('Some columns describe an entity this system does not have yet. I will not invent it unless you accept it.');
   }
 
-  return finish(findings, questions, recommendations, assignments, unmapped, map, asOf.date, source?.code || null, rows.slice(0, 4), blocked, [...accepted]);
+  const changes = describeChanges(reused, mapDiff, assignments, unmapped);
+  return finish(findings, questions, recommendations, assignments, unmapped, changes, map, asOf.date, source?.code || null, rows.slice(0, 4), blocked, [...accepted]);
 }
 
 function finish(
@@ -874,6 +906,7 @@ function finish(
   recommendations: SchemaRecommendation[],
   assignments: ColumnAssignment[],
   unmappedColumns: UnmappedColumn[] = [],
+  changes: MapChange[] = [],
   map: FeedMap | null,
   asOfDate: string | null,
   sourceCode: string | null,
@@ -889,6 +922,7 @@ function finish(
     recommendations,
     assignments,
     unmappedColumns,
+    changes,
     map,
     loadWaves: map && map.domains.length > 0 ? safeWaves(map) : [],
     blockedReasons,
@@ -1197,6 +1231,51 @@ function collectUnmapped(
     });
   }
   return unmapped;
+}
+
+function columnDomain(map: FeedMap, column: string): string | null {
+  const key = column.toLowerCase();
+  for (const domain of map.domains) {
+    const columns = [
+      domain.identityColumn,
+      domain.nameColumn,
+      ...domain.attributes.map((attribute) => attribute.column),
+      ...domain.parents.map((parent) => parent.column),
+    ];
+    if (columns.some((item) => item.toLowerCase() === key)) return domain.domainCode;
+  }
+  return null;
+}
+
+function describeChanges(
+  reused: FeedMap | null,
+  diff: { added: string[]; missing: string[] } | null,
+  assignments: ColumnAssignment[],
+  unmapped: UnmappedColumn[]
+): MapChange[] {
+  if (!reused || !diff) return [];
+  const changes: MapChange[] = [];
+  for (const column of diff.added) {
+    const assignment = assignments.find((item) => item.sourceColumn === column);
+    const pending = unmapped.find((item) => item.column === column);
+    const domainCode = assignment?.domainCode || pending?.domainCode || null;
+    let note = 'New field. I could not place it on an entity.';
+    if (assignment?.role === 'attribute' && assignment.attributeCode) note = `New field. Mapped to ${assignment.attributeCode} on ${domainCode}.`;
+    else if (assignment?.role === 'identity') note = `New field. It identifies ${domainCode}.`;
+    else if (assignment?.role === 'name') note = `New field. It names ${domainCode}.`;
+    else if (pending?.recommendationId) note = 'New field. It does not match an attribute, so I recommended one.';
+    else if (pending) note = pending.reason;
+    changes.push({ column, change: 'added', domainCode, note });
+  }
+  for (const column of diff.missing) {
+    changes.push({
+      column,
+      change: 'missing',
+      domainCode: columnDomain(reused, column),
+      note: `On the ${reused.name} map, but not in this file.`,
+    });
+  }
+  return changes;
 }
 
 function dominantDomain(assignments: ColumnAssignment[]): string | null {
