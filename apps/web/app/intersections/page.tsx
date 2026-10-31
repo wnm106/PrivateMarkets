@@ -1,9 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { graphqlQuery, graphqlMutation } from '@/lib/graphql';
 import { useTemporalStore } from '@/lib/store';
+import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
 interface IntersectionMember {
   memberRole: string;
@@ -56,7 +58,16 @@ const INTERSECTIONS_QUERY = `
   }
 `;
 
+function memberText(row: IntersectionNode) {
+  return row.members.map((member) => `${member.memberRole}: ${member.entityName}`).join(', ');
+}
+
+function attributeText(row: IntersectionNode) {
+  return Object.keys(row.attributes || {}).slice(0, 3).map((key) => `${key}: ${String(row.attributes[key]?.value ?? '').slice(0, 20)}`).join(', ');
+}
+
 export default function IntersectionsPage() {
+  const router = useRouter();
   const [intersections, setIntersections] = useState<IntersectionNode[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -77,6 +88,30 @@ export default function IntersectionsPage() {
   useEffect(() => {
     fetchIntersections();
   }, [fetchIntersections]);
+
+  const columns = useMemo<ColDef<IntersectionNode>[]>(() => [
+    { field: 'intersectionCode', headerName: 'Code', minWidth: 160, flex: 1, cellClass: 'mono' },
+    { field: 'intersectionTypeName', headerName: 'Type', minWidth: 140, flex: 1 },
+    {
+      colId: 'members',
+      headerName: 'Members',
+      minWidth: 220,
+      flex: 1.4,
+      autoHeight: true,
+      wrapText: true,
+      valueGetter: (params) => params.data ? memberText(params.data) : '',
+    },
+    {
+      colId: 'attributes',
+      headerName: 'Attributes',
+      minWidth: 220,
+      flex: 1.4,
+      autoHeight: true,
+      wrapText: true,
+      valueGetter: (params) => params.data ? attributeText(params.data) : '',
+    },
+    { field: 'validFrom', headerName: 'Valid From', minWidth: 140 },
+  ], []);
 
   return (
     <div className="view-fade">
@@ -111,42 +146,17 @@ export default function IntersectionsPage() {
       </div>
 
       <div className="data-table">
-        <div className="tbl-head">
-          <div>Code</div>
-          <div>Type</div>
-          <div>Members</div>
-          <div>Attributes</div>
-          <div>Valid From</div>
-        </div>
-        {loading ? (
-          <div className="tbl-row"><div>Loading...</div></div>
-        ) : intersections.length === 0 ? (
-          <div className="tbl-row"><div>No intersections found. Create your first composite entity.</div></div>
-        ) : (
-          intersections.map((intersection) => (
-            <Link key={intersection.id} href={`/intersections/${intersection.intersectionCode}`}>
-              <div className="tbl-row" style={{ cursor: 'pointer' }}>
-                <div className="row-id">{intersection.intersectionCode}</div>
-                <div>{intersection.intersectionTypeName}</div>
-                <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
-                  {intersection.members.map((m, i) => (
-                    <span key={i} style={{ marginRight: '8px' }}>
-                      {m.memberRole}: {m.entityName}
-                    </span>
-                  ))}
-                </div>
-                <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>
-                  {Object.keys(intersection.attributes || {}).slice(0, 3).map(k => (
-                    <span key={k} style={{ marginRight: '8px' }}>
-                      {k}: {String(intersection.attributes[k]?.value ?? '').slice(0, 20)}
-                    </span>
-                  ))}
-                </div>
-                <div style={{ fontSize: '11px', color: 'var(--ink-3)' }}>{intersection.validFrom}</div>
-              </div>
-            </Link>
-          ))
-        )}
+        <AppGrid
+          rows={intersections}
+          columns={columns}
+          getRowId={(row) => row.id}
+          autoHeight={false}
+          height="100%"
+          autoRowHeight
+          loading={loading}
+          emptyMessage="No intersections found."
+          onRowClicked={(row) => router.push(`/intersections/${row.intersectionCode}`)}
+        />
       </div>
     </div>
   );

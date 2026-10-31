@@ -146,6 +146,7 @@ type DQRule {
   attributeCode: String
   ruleType: DQRuleType!
   severity: DQSeverity!
+  "SQL predicate that is true when a record fails this rule."
   ruleExpression: String!
   ruleDescription: String
   thresholdValue: Float
@@ -234,6 +235,7 @@ input CreateDQRuleInput {
   attributeCode: String
   ruleType: DQRuleType!
   severity: DQSeverity!
+  "SQL predicate that is true when a record fails this rule."
   ruleExpression: String!
   ruleDescription: String
   thresholdValue: Float
@@ -243,6 +245,7 @@ input CreateDQRuleInput {
 input UpdateDQRuleInput {
   id: ID!
   ruleName: String
+  "SQL predicate that is true when a record fails this rule."
   ruleExpression: String
   ruleDescription: String
   thresholdValue: Float
@@ -462,6 +465,8 @@ input UpdateEntityInput {
   description: String
   isActive: Boolean
   attributes: JSONObject
+  """Date the attribute edit is effective. Use the date on screen so the new value is visible there."""
+  asOfDate: Date
   parentRelationships: [EntityRelationshipInput!]
   childRelationships: [EntityRelationshipInput!]
 }
@@ -566,9 +571,21 @@ input AssignAttributeInput {
   precedenceRank: Int
   displayOrder: Int
   displayLabel: String
+  defaultPrecedenceChain: [String!]
 }
 
 type AssignAttributeResult {
+  assignment: TemplateAttribute
+  errors: [MutationError!]!
+}
+
+input UpdateTemplateSourcePreferenceInput {
+  templateId: ID!
+  attributeId: ID!
+  defaultPrecedenceChain: [String!]!
+}
+
+type UpdateTemplateSourcePreferenceResult {
   assignment: TemplateAttribute
   errors: [MutationError!]!
 }
@@ -1039,7 +1056,7 @@ type Query {
     asOfDate: Date
   ): EntityConnection!
   
-  entity(id: ID, entityCode: String, asOfDate: Date): Entity
+  entity(id: ID, entityCode: String, asOfDate: Date, knowledgeDate: DateTime): Entity
   
   # Domain-specific queries (for convenience, but use generic entity under the hood)
   funds(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
@@ -1084,6 +1101,7 @@ type Mutation {
   createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
   assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
+  updateTemplateSourcePreference(input: UpdateTemplateSourcePreferenceInput!): UpdateTemplateSourcePreferenceResult!
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
@@ -1178,6 +1196,8 @@ type TemplateAttribute {
   precedenceRank: Int!
   displayOrder: Int!
   displayLabel: String
+  defaultPrecedenceChain: [String!]!
+  chainVersion: Int!
 }
 
 # File: security.graphql

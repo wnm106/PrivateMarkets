@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticate, CONVERSATION_COLUMNS, deriveTitle } from '@/lib/chat-server';
+import { authenticate, deriveTitle, selectConversationRows } from '@/lib/chat-server';
 import { ATTACHMENT_COLUMNS, CHAT_ATTACHMENT_BUCKET } from '@/lib/chat-attachments';
 
 /**
@@ -24,11 +24,9 @@ export async function GET(request: NextRequest, { params }: Params) {
   const { id } = await params;
   if (!UUID_RE.test(id)) return NextResponse.json({ error: 'Invalid conversation id' }, { status: 400 });
 
-  const { data: conversation, error: conversationError } = await auth.supabase
-    .from('chat_conversations')
-    .select(CONVERSATION_COLUMNS)
-    .eq('id', id)
-    .maybeSingle();
+  const { data: conversation, error: conversationError } = await selectConversationRows((columns) =>
+    auth.supabase.from('chat_conversations').select(columns).eq('id', id).maybeSingle()
+  );
 
   if (conversationError) {
     return NextResponse.json({ error: conversationError.message }, { status: 500 });
@@ -87,12 +85,14 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   const title = body.title?.trim();
   if (!title) return NextResponse.json({ error: 'title is required' }, { status: 400 });
 
-  const { data, error } = await auth.supabase
-    .from('chat_conversations')
-    .update({ title: deriveTitle(title, 200) })
-    .eq('id', id)
-    .select(CONVERSATION_COLUMNS)
-    .maybeSingle();
+  const { data, error } = await selectConversationRows((columns) =>
+    auth.supabase
+      .from('chat_conversations')
+      .update({ title: deriveTitle(title, 200) })
+      .eq('id', id)
+      .select(columns)
+      .maybeSingle()
+  );
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!data) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });

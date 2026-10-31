@@ -27,7 +27,7 @@ export function JsonField({ label, hint, value, onChange, rows = 16 }: JsonField
 
   return (
     <div style={{ marginBottom: '14px' }}>
-      <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--ink-3)', marginBottom: '4px' }}>{label}</div>
+      <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', marginBottom: '4px' }}>{label}</div>
       {hint && <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginBottom: '6px' }}>{hint}</div>}
       <textarea
         className="mono"

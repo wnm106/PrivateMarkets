@@ -6,9 +6,10 @@ type Query {
     filter: EntityFilter
     pagination: PaginationInput
     asOfDate: Date
+    knowledgeDate: DateTime
   ): EntityConnection!
   
-  entity(id: ID, entityCode: String, asOfDate: Date): Entity
+  entity(id: ID, entityCode: String, asOfDate: Date, knowledgeDate: DateTime): Entity
   
   # Domain-specific queries (for convenience, but use generic entity under the hood)
   funds(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
@@ -20,20 +21,29 @@ type Query {
   
   # Metadata queries
   domainTypes: [DomainTypeRecord!]!
+  domainRecordCounts: [DomainRecordCount!]!
   attributeRegister(domainCode: String): [AttributeDefinition!]!
+  attributeSections(domainCode: String!): [AttributeSection!]!
   domainTemplates(domainCode: String): [Template!]!
+  calcDefinitions: [CalcDefinition!]!
+  calcBreakdown(entityId: ID!, attributeCode: String!, asOfDate: Date): CalcBreakdown
+  calculatedAttributeStates(entityId: ID!): [CalculatedAttributeState!]!
+  expressionFunctions(category: String): [ExpressionFunction!]!
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
   
   # Lineage and temporal queries
-  fieldLineage(entityId: ID!, asOfDate: Date): [FieldLineage!]!
+  fieldLineage(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime): [FieldLineage!]!
+  entityActivity(entityId: ID!, knowledgeDate: DateTime, attributeCode: String, limit: Int): [AttributeActivity!]!
   temporalHistory(entityId: ID!, attributeCode: String!, fromDate: Date!, toDate: Date!): [TemporalValue!]!
   
   # DQ queries
   dqRule(id: ID!): DQRule
   dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
   dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
+  dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date, knowledgeDate: DateTime, entityId: ID): DataQualityDashboard!
+  staleAttributes(domainCode: String, olderThanDays: Int, asOfDate: Date, knowledgeDate: DateTime, entityId: ID): StaleAttributeReport!
   
   # Source queries
   dataSources(type: String, isActive: Boolean): [DataSource!]!
@@ -68,6 +78,7 @@ type Query {
   complianceEvaluationRun(id: ID!): ComplianceEvaluationRun
   complianceResults(filter: ComplianceResultFilter, pagination: PaginationInput): ComplianceEvaluationResultConnection!
   compliancePopulationPreview(input: CompliancePopulationPreviewInput!): CompliancePopulationPreview!
+  complianceFundBoard: ComplianceFundBoard!
 
   # Reference List (Controlled Vocabulary) queries
   referenceLists(domainCode: String, isActive: Boolean): [ReferenceList!]!
@@ -88,6 +99,9 @@ type Query {
   surfaceCatalog(surfaceCode: String!): SurfaceCatalog
   resolveSurface(surfaceCode: String!, profileCode: String, entityId: ID, entityCode: String, facts: JSON): SurfaceResolution
   entitySurface(entityId: ID, entityCode: String): SurfaceResolution
+  reconciliationDefinitions(domainCode: String): [ReconciliationDefinition!]!
+  reconciliationRuns(status: String, first: Int): [ReconciliationRun!]!
+  reconciliationRun(id: ID!): ReconciliationRun
 }
 
 type Mutation {
@@ -104,6 +118,7 @@ type Mutation {
   updateAttribute(input: UpdateAttributeInput!): UpdateAttributeResult!
   splitValidTime(input: SplitValidTimeInput!): SplitValidTimeResult!
   submitManualOverride(input: ManualOverrideInput!): ManualOverrideResult!
+  clearManualOverride(input: ClearManualOverrideInput!): ClearManualOverrideResult!
   
   # Metadata mutations
   createDomainType(input: CreateDomainTypeInput!): CreateDomainTypeResult!
@@ -111,12 +126,23 @@ type Mutation {
   deleteDomainType(id: ID!): DeleteDomainTypeResult!
   createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
   updateAttributeDefinition(input: UpdateAttributeDefinitionInput!): UpdateAttributeDefinitionResult!
+  createAttributeSection(domainCode: String!, sectionName: String!): AttributeSectionResult!
+  renameAttributeSection(id: ID!, sectionName: String!): AttributeSectionResult!
+  reorderAttributeSections(domainCode: String!, orderedIds: [ID!]!): AttributeSectionResult!
+  updateAttributeSection(id: ID!, columnCount: Int!): AttributeSectionResult!
+  deleteAttributeSection(id: ID!): AttributeSectionResult!
+  reorderSectionAttributes(domainCode: String!, sectionName: String!, attributeIds: [ID!]!): AttributeSectionResult!
+  processCalculatedAttributes(limit: Int): ProcessCalculatedAttributesResult!
+  updateCalcExpression(id: ID!, expression: JSON!, operands: [CalcOperandInput!]): UpdateCalcExpressionResult!
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
   assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
+  updateTemplateSourcePreference(input: UpdateTemplateSourcePreferenceInput!): UpdateTemplateSourcePreferenceResult!
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
+  updateDQRule(input: UpdateDQRuleInput!): UpdateDQRuleResult!
   resolveDQException(input: ResolveDQExceptionInput!): ResolveDQExceptionResult!
+  recordDQDisposition(input: RecordDQDispositionInput!): RecordDQDispositionResult!
   
   # Intersection mutations
   createIntersectionType(input: CreateIntersectionTypeInput!): CreateIntersectionTypeResult!
@@ -178,6 +204,9 @@ type Mutation {
   createComplianceScopeAssignment(input: CreateComplianceScopeAssignmentInput!): CreateComplianceScopeAssignmentResult!
   deleteComplianceScopeAssignment(id: ID!): DeleteComplianceScopeAssignmentResult!
   evaluateComplianceRule(input: EvaluateComplianceRuleInput!): EvaluateComplianceRuleResult!
+  scoreDealCompliance(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealComplianceScore!
+  upsertComplianceThreshold(input: UpsertComplianceThresholdInput!): UpsertComplianceThresholdResult!
+  deleteComplianceThreshold(id: ID!): DeleteComplianceThresholdResult!
 
   # Reference List (Controlled Vocabulary) mutations
   createReferenceList(input: CreateReferenceListInput!): CreateReferenceListResult!
@@ -197,6 +226,10 @@ type Mutation {
   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
   deleteNarrative(id: ID!): DeleteNarrativeResult!
+
+  openReconciliationRun(input: OpenReconciliationRunInput!): ReconciliationRunResult!
+  resolveReconciliationLine(input: ResolveReconciliationLineInput!): ReconciliationRunResult!
+  decideReconciliationRun(input: DecideReconciliationRunInput!): ReconciliationRunResult!
 }
 
 # Root Subscription Type
@@ -238,6 +271,17 @@ input ManualOverrideInput {
   overrideReason: String!
 }
 
+input ClearManualOverrideInput {
+  entityId: ID!
+  attributeCode: String!
+  asOf: Date
+}
+
+type ClearManualOverrideResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
 type UpdateAttributeResult {
   success: Boolean!
   goldenValueId: ID
@@ -259,22 +303,45 @@ type ManualOverrideResult {
 # Metadata Types
 input UpdateAttributeDefinitionInput {
   id: ID!
+  attributeName: String
+  dataType: String
+  description: String
+  unitOfMeasure: String
+  isMultiValued: Boolean
   displayFormat: String
   listValues: [String!]
   validationRules: JSON
   defaultValue: String
   displaySection: String
   displayGroup: Int
+  displaySpanColumns: Int
+  displaySpanRows: Int
   isEditable: Boolean
   isVisible: Boolean
   aggregationType: String
   weightAttributeCode: String
   numericPrecision: Int
+  referenceListCode: String
 }
 
 type UpdateAttributeDefinitionResult {
   success: Boolean!
   attribute: AttributeDefinition
+  errors: [MutationError!]!
+}
+
+type AttributeSection {
+  id: ID!
+  domainCode: String!
+  sectionName: String!
+  displayOrder: Int!
+  columnCount: Int!
+}
+
+type AttributeSectionResult {
+  success: Boolean!
+  section: AttributeSection
+  sections: [AttributeSection!]
   errors: [MutationError!]!
 }
 
@@ -285,6 +352,8 @@ type Template {
   templateName: String!
   description: String
   isActive: Boolean!
+  clientId: ID
+  clientName: String
   attributes: [TemplateAttribute!]!
 }
 
@@ -295,6 +364,8 @@ type TemplateAttribute {
   precedenceRank: Int!
   displayOrder: Int!
   displayLabel: String
+  defaultPrecedenceChain: [String!]!
+  chainVersion: Int!
 }
 
 # Entity Identifier Definition Type
@@ -872,6 +943,7 @@ input CreateRelationshipTypeInput {
   isActive: Boolean
   cardinality: String
   compositeKey: [String!]
+  clientId: ID
 }
 
 input UpdateRelationshipTypeInput {

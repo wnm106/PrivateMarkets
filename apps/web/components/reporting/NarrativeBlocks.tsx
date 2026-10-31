@@ -1,5 +1,7 @@
 'use client';
 
+import type { ColDef } from 'ag-grid-community';
+import { AppGrid } from '@/components/grid/AppGrid';
 import { markdownToHtml } from '@/lib/markdown';
 import { sanitizeHtmlLinks, type NarrativeBlock } from '@/lib/reporting';
 
@@ -18,7 +20,7 @@ export function NarrativeBlocks({ blocks }: { blocks: NarrativeBlock[] }) {
       {blocks.map((b, i) => (
         <section key={`${b.key}-${i}`}>
           {b.title && (
-            <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1.2px', color: 'var(--ink-3)', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', marginBottom: '8px' }}>
               {b.title}
             </div>
           )}
@@ -40,31 +42,38 @@ function BlockBody({ block }: { block: NarrativeBlock }) {
           dangerouslySetInnerHTML={{ __html: sanitizeHtmlLinks(markdownToHtml(block.text)) }}
         />
       );
-    case 'table':
+    case 'table': {
+      const numeric = block.columns.map((_, index) => (
+        block.rows.length > 0
+        && block.rows.every((row) => row[index] == null || row[index] === '' || typeof row[index] === 'number')
+        && block.rows.some((row) => typeof row[index] === 'number')
+      ));
+      const columns: ColDef[] = block.columns.map((name, index) => ({
+        colId: `c${index}`,
+        headerName: name,
+        flex: 1,
+        minWidth: 120,
+        type: numeric[index] ? 'rightAligned' : undefined,
+        valueGetter: (params) => params.data?.[`c${index}`],
+        valueFormatter: (params) => typeof params.value === 'number'
+          ? params.value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+          : String(params.value ?? ''),
+      }));
+      const rows = block.rows.map((row, index) => {
+        const record: Record<string, unknown> = { __id: String(index) };
+        row.forEach((value, cellIndex) => { record[`c${cellIndex}`] = value; });
+        return record;
+      });
       return (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '13px' }}>
-            <thead>
-              <tr>
-                {block.columns.map((c, i) => (
-                  <th key={i} style={{ textAlign: 'left', borderBottom: '2px solid var(--line)', padding: '6px 10px', fontWeight: 600 }}>{c}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {block.rows.map((r, ri) => (
-                <tr key={ri}>
-                  {r.map((c, ci) => (
-                    <td key={ci} style={{ borderBottom: '1px solid var(--line)', padding: '6px 10px', textAlign: typeof c === 'number' ? 'right' : 'left' }}>
-                      {typeof c === 'number' ? c.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(c ?? '')}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <AppGrid
+          rows={rows}
+          columns={columns}
+          getRowId={(row) => String(row.__id)}
+          autoHeight
+          emptyMessage="No rows"
+        />
       );
+    }
     case 'chart':
       return <Chart block={block} />;
     case 'insights':
@@ -74,7 +83,7 @@ function BlockBody({ block }: { block: NarrativeBlock }) {
             const s = SEVERITY[it.severity] || SEVERITY.info;
             return (
               <div key={i} style={{ borderLeft: `3px solid ${s.fg}`, background: s.bg, padding: '10px 14px' }}>
-                <div style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px', color: s.fg }}>{s.label}</div>
+                <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'none', letterSpacing: 0, color: s.fg }}>{s.label}</div>
                 <div style={{ fontWeight: 600, fontSize: '13px', margin: '2px 0' }}>{it.title}</div>
                 <div style={{ fontSize: '13px', color: 'var(--ink-2)' }}>{it.detail}</div>
               </div>

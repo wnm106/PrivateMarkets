@@ -7,6 +7,7 @@ export const sources = {
   spciq: { name: 'S&P Capital IQ', color: '#be185d', hex: '#be185d' },
   manual: { name: 'Manual Override', color: '#b45309', hex: '#b45309' },
   derived: { name: 'Derived', color: '#475569', hex: '#475569' },
+  calculated: { name: 'Calculated Values', color: '#475569', hex: '#475569' },
 } as const;
 
 export type SourceKey = keyof typeof sources;
@@ -98,6 +99,8 @@ export interface Candidate {
   value: string;
   updated: string;
   synced: string;
+  /** When this source last delivered the value, including an unchanged restatement. */
+  receivedAt?: string | null;
   reliability: number | null;
   status: 'winner' | 'applied' | 'eligible' | 'skipped' | 'no-data';
   stale?: boolean;
@@ -175,17 +178,6 @@ export function getFieldDrilldown(fieldLabel: string, winningSource: SourceKey, 
     ],
   };
 }
-
-// ============== PRECEDENCE RULES ==============
-export const precedenceRules = [
-  { field: 'Spread (bps)', cond: 'WHEN Instrument Type IN (Term Loan B, Unitranche, Revolver, DDTL, Second Lien)', chain: ['wso', 'manual', 'bloomberg'] as SourceKey[], note: 'Loan products primary from WSO; Bloomberg coverage limited' },
-  { field: 'Spread (bps)', cond: 'WHEN Instrument Type IN (Bond, Convertible, Note)', chain: ['bloomberg', 'spciq', 'manual'] as SourceKey[], note: 'Public bond instruments primary from Bloomberg' },
-  { field: 'Maturity Date', cond: 'ALWAYS (no conditions)', chain: ['wso', 'bloomberg', 'manual'] as SourceKey[], note: 'WSO authoritative for loan paper; falls back to Bloomberg' },
-  { field: 'Issuer Name', cond: 'WHEN Manual Override IS NOT NULL', chain: ['manual', 'spciq', 'bloomberg', 'wso'] as SourceKey[], note: 'Manual overrides win for legal name normalization' },
-  { field: 'GICS Industry', cond: 'ALWAYS', chain: ['spciq', 'bloomberg'] as SourceKey[], note: 'S&P Capital IQ is GICS publisher of record', standardized: true },
-  { field: 'S&P Rating', cond: 'ALWAYS', chain: ['spciq', 'bloomberg'] as SourceKey[], note: 'S&P primary for own ratings', standardized: true },
-  { field: 'Position (Par)', cond: 'ALWAYS', chain: ['allvue'] as SourceKey[], note: 'Allvue is sole authority for fund holdings' },
-];
 
 // ============== QUALITY MATRIX ==============
 export const qualityMatrix = [

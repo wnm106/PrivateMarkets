@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { usePublishViewContext } from '@/lib/view-context';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -19,6 +20,7 @@ import {
   UPDATE_TEMPLATE_MUTATION,
   ASSIGN_ATTRIBUTE_TO_TEMPLATE_MUTATION,
   UNASSIGN_ATTRIBUTE_FROM_TEMPLATE_MUTATION,
+  UPDATE_TEMPLATE_SOURCE_PREFERENCE_MUTATION,
   RELATIONSHIP_TYPES_QUERY,
   CREATE_RELATIONSHIP_TYPE_MUTATION,
   UPDATE_RELATIONSHIP_TYPE_MUTATION,
@@ -37,11 +39,13 @@ import {
   REORDER_TEMPLATE_ATTRIBUTES_MUTATION,
 } from '@/lib/graphql';
 import { RelationshipTypeForm } from '@/components/forms/RelationshipTypeForm';
+import { SchemaScopeBadge, SchemaScopeField } from '@/components/admin/SchemaScopeField';
 import { EntityIdentifierDefinitionForm } from '@/components/forms/EntityIdentifierDefinitionForm';
 import { TemplateAttributePicker, type PickerAttribute } from '@/components/forms/TemplateAttributePicker';
-import { AttributeExpandPanel } from '@/components/admin/AttributeExpandPanel';
+import { EntityAttributeGrid } from '@/components/admin/EntityAttributeGrid';
+import { AttributeSectionsPanel } from '@/components/admin/AttributeSectionsPanel';
 
-type TabType = 'attributes' | 'templates' | 'relationships' | 'identifiers' | 'intersections';
+type TabType = 'attributes' | 'sections' | 'templates' | 'relationships' | 'identifiers' | 'intersections';
 
 interface DomainType {
   id: string;
@@ -49,6 +53,8 @@ interface DomainType {
   domainName: string;
   description?: string;
   isActive: boolean;
+  clientId?: string | null;
+  clientName?: string | null;
 }
 
 interface Attribute {
@@ -67,6 +73,8 @@ interface Attribute {
   defaultValue?: string;
   displaySection?: string;
   displayGroup?: number;
+  displaySpanColumns?: number | null;
+  displaySpanRows?: number | null;
   isEditable?: boolean;
   isVisible?: boolean;
   aggregationType?: string;
@@ -75,6 +83,10 @@ interface Attribute {
   unitOfMeasure?: string;
   referenceListCode?: string;
   defaultPrecedenceChain?: string[];
+  isDerived?: boolean;
+  derivationFormula?: string | null;
+  clientId?: string | null;
+  clientName?: string | null;
 }
 
 interface TemplateAttribute {
@@ -90,6 +102,20 @@ interface TemplateAttribute {
   displayLabel?: string;
 }
 
+interface TemplateAttributeAssignment {
+  attributeId: string;
+  attribute: {
+    attributeCode: string;
+    attributeName: string;
+    dataType: string;
+  };
+  isRequired: boolean;
+  precedenceRank: number;
+  displayOrder: number;
+  displayLabel?: string;
+  defaultPrecedenceChain?: string[];
+}
+
 interface Template {
   id: string;
   templateCode: string;
@@ -98,7 +124,9 @@ interface Template {
   description?: string;
   isActive: boolean;
   applicabilityRules?: any;
-  attributes?: TemplateAttribute[];
+  attributes?: TemplateAttributeAssignment[];
+  clientId?: string | null;
+  clientName?: string | null;
 }
 
 interface RelationshipType {
@@ -110,6 +138,8 @@ interface RelationshipType {
   description?: string;
   isActive: boolean;
   isRequired?: boolean;
+  clientId?: string | null;
+  clientName?: string | null;
 }
 
 interface EntityIdentifierDefinition {
@@ -166,6 +196,7 @@ export default function EntityTypeDetailPage() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showCreateAttributeModal, setShowCreateAttributeModal] = useState(false);
   const [showCreateTemplateModal, setShowCreateTemplateModal] = useState(false);
+  const [preferenceTemplate, setPreferenceTemplate] = useState<Template | null>(null);
   const [showCreateRelationshipModal, setShowCreateRelationshipModal] = useState(false);
   const [showCreateIdentifierModal, setShowCreateIdentifierModal] = useState(false);
   const [showCreateIntersectionModal, setShowCreateIntersectionModal] = useState(false);
@@ -176,6 +207,105 @@ export default function EntityTypeDetailPage() {
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('attributes');
+  const [sectionCount, setSectionCount] = useState(0);
+
+  const viewFocus = useMemo(() => {
+    if (editingTemplate) {
+      return {
+        activity: 'editing' as const,
+        kind: 'template',
+        label: editingTemplate.templateName,
+        id: editingTemplate.id,
+        domainCode,
+        snapshot: {
+          templateCode: editingTemplate.templateCode,
+          templateName: editingTemplate.templateName,
+          description: editingTemplate.description,
+          attributes: (editingTemplate.attributes || []).map((attribute) => attribute.attribute.attributeCode),
+        },
+      };
+    }
+    if (editingRelationship) {
+      return {
+        activity: 'editing' as const,
+        kind: 'relationship',
+        label: editingRelationship.relationshipName,
+        id: editingRelationship.id,
+        domainCode,
+        snapshot: {
+          relationshipCode: editingRelationship.relationshipCode,
+          parentDomainCode: editingRelationship.parentDomainCode,
+          childDomainCode: editingRelationship.childDomainCode,
+          description: editingRelationship.description,
+        },
+      };
+    }
+    if (editingIdentifier) {
+      return {
+        activity: 'editing' as const,
+        kind: 'identifier',
+        label: editingIdentifier.identifierName,
+        id: editingIdentifier.id,
+        domainCode,
+        snapshot: {
+          identifierCode: editingIdentifier.identifierCode,
+          attributeCodes: editingIdentifier.attributeCodes,
+          isPrimary: editingIdentifier.isPrimary,
+        },
+      };
+    }
+    if (editingIntersection) {
+      return {
+        activity: 'editing' as const,
+        kind: 'intersection',
+        label: editingIntersection.intersectionName,
+        id: editingIntersection.id,
+        domainCode,
+        snapshot: {
+          intersectionCode: editingIntersection.intersectionCode,
+          members: editingIntersection.members.map((member) => ({
+            domainCode: member.domainCode,
+            memberRole: member.memberRole,
+          })),
+        },
+      };
+    }
+    const expanded = attributes.find((attribute) => attribute.id === expandedAttributeId);
+    if (expanded) {
+      return {
+        activity: 'editing' as const,
+        kind: 'attribute',
+        label: expanded.attributeName || expanded.attributeCode,
+        id: expanded.id,
+        domainCode,
+        snapshot: {
+          attributeCode: expanded.attributeCode,
+          dataType: expanded.dataType,
+          description: expanded.description,
+          isDerived: expanded.isDerived,
+          derivationFormula: expanded.derivationFormula,
+          aggregationType: expanded.aggregationType,
+          referenceListCode: expanded.referenceListCode,
+        },
+      };
+    }
+    return {
+      activity: 'viewing' as const,
+      kind: 'entity-type',
+      label: domain?.domainName || domainCode,
+      domainCode,
+      summary: `Configuring ${activeTab}`,
+      snapshot: {
+        domainName: domain?.domainName,
+        description: domain?.description,
+        tab: activeTab,
+      },
+    };
+  }, [
+    editingTemplate, editingRelationship, editingIdentifier, editingIntersection,
+    attributes, expandedAttributeId, domain, domainCode, activeTab,
+  ]);
+  usePublishViewContext(viewFocus);
 
   const refreshAttributes = useCallback(async () => {
     const attrsResult = await graphqlClient.query(ATTRIBUTE_REGISTER_QUERY, { domainCode }, { requestPolicy: 'network-only' }).toPromise();
@@ -289,7 +419,16 @@ export default function EntityTypeDetailPage() {
 
   const handleCreateAttribute = async (data: any) => {
     try {
-      await graphqlClient.mutation(CREATE_ATTRIBUTE_MUTATION, { input: { ...data, domainCode } }).toPromise();
+      const result = await graphqlClient.mutation(CREATE_ATTRIBUTE_MUTATION, { input: { ...data, domainCode } }).toPromise();
+      const errors = result.data?.createAttribute?.errors;
+      if (errors && errors.length > 0) {
+        window.alert(errors[0].message);
+        return;
+      }
+      if (result.error) {
+        window.alert(result.error.message);
+        return;
+      }
       setShowCreateAttributeModal(false);
       loadData();
     } catch (error) {
@@ -317,7 +456,16 @@ export default function EntityTypeDetailPage() {
 
   const handleCreateTemplate = async (data: any) => {
     try {
-      await graphqlClient.mutation(CREATE_TEMPLATE_MUTATION, { input: data }).toPromise();
+      const result = await graphqlClient.mutation(CREATE_TEMPLATE_MUTATION, { input: data }).toPromise();
+      const errors = result.data?.createTemplate?.errors;
+      if (errors && errors.length > 0) {
+        window.alert(errors[0].message);
+        return;
+      }
+      if (result.error) {
+        window.alert(result.error.message);
+        return;
+      }
       setShowCreateTemplateModal(false);
       loadData();
     } catch (error) {
@@ -670,15 +818,16 @@ export default function EntityTypeDetailPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <div className="page-title">{domain.domainName}</div>
               <span className="mono" style={{ fontSize: '12px', color: 'var(--ink-3)' }}>{domain.domainCode}</span>
+              <SchemaScopeBadge clientId={domain.clientId} clientName={domain.clientName} />
               {!domain.isActive && (
                 <span style={{
-                  fontSize: '10px',
+                  fontSize: '11px',
                   padding: '2px 8px',
                   background: 'var(--bg-alt)',
                   color: 'var(--ink-3)',
                   fontWeight: 600,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px',
+                  textTransform: 'none',
+                  letterSpacing: 0,
                 }}>
                   Inactive
                 </span>
@@ -723,6 +872,11 @@ export default function EntityTypeDetailPage() {
           onClick={() => setActiveTab('attributes')}
         />
         <TabButton
+          label={`Sections (${sectionCount})`}
+          isActive={activeTab === 'sections'}
+          onClick={() => setActiveTab('sections')}
+        />
+        <TabButton
           label={`Templates (${templates.length})`}
           isActive={activeTab === 'templates'}
           onClick={() => setActiveTab('templates')}
@@ -748,74 +902,35 @@ export default function EntityTypeDetailPage() {
       {activeTab === 'attributes' && (
         <Section
           title={`Attributes (${domainAttributes.length})`}
-          subtitle="Click an attribute to edit its values. The source sequence at the bottom is the global default; templates only override it."
+          subtitle="Fields are columns. Expand a row to edit that attribute in place."
           action={<button className="btn" onClick={() => setShowCreateAttributeModal(true)}>+ Attribute</button>}
         >
-          {domainAttributes.length > 0 ? (
-            <div style={{ display: 'grid', gap: '8px' }}>
-              {domainAttributes.map(attr => {
-                const expanded = expandedAttributeId === attr.id;
-                const sequence = (attr.defaultPrecedenceChain || []).filter((code) => code && code !== 'MANUAL');
-                return (
-                <div
-                  key={attr.id}
-                  style={{
-                    ...rowStyle,
-                    flexDirection: 'column',
-                    alignItems: 'stretch',
-                    gap: expanded ? '12px' : 0,
-                    cursor: 'pointer',
-                    borderColor: expanded ? 'var(--accent, #2563eb)' : 'var(--line)',
-                  }}
-                  onClick={() => setExpandedAttributeId(expanded ? null : attr.id)}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
-                    <div>
-                      <div style={{ fontSize: '14px', fontWeight: 500 }}>
-                        {expanded ? '▾' : '▸'} {attr.attributeName}
-                        {attr.isRequired && <span style={{ color: 'var(--red)', marginLeft: '4px' }}>*</span>}
-                      </div>
-                      <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: 'var(--ink-3)', marginTop: '2px', flexWrap: 'wrap' }}>
-                        <span className="mono">{attr.attributeCode}</span>
-                        <span>Type: {attr.dataType}</span>
-                        {attr.isMultiValued && <span>Multi-valued</span>}
-                        {attr.referenceListCode && (
-                          <span style={{ color: 'var(--accent-2)' }}>
-                            📋 {attr.referenceListCode}
-                          </span>
-                        )}
-                        {sequence.length > 0 && (
-                          <span>Sequence: Manual → {sequence.join(' → ')}</span>
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      className="btn"
-                      style={{ color: 'var(--red)', fontSize: '12px', padding: '4px 10px' }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleDeleteAttribute(attr);
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                  {expanded && (
-                    <AttributeExpandPanel
-                      attribute={attr}
-                      weightAttributes={attributes}
-                      referenceLists={referenceLists}
-                      onSaved={() => { void refreshAttributes(); }}
-                      onCancel={() => setExpandedAttributeId(null)}
-                    />
-                  )}
-                </div>
-                );
-              })}
-            </div>
-          ) : (
-            <EmptyNote text="No attributes defined for this entity type yet." />
-          )}
+          <EntityAttributeGrid
+            domainCode={domain.domainCode}
+            attributes={domainAttributes}
+            referenceLists={referenceLists}
+            expandedId={expandedAttributeId}
+            onExpandedId={setExpandedAttributeId}
+            onDelete={handleDeleteAttribute}
+            onRefresh={() => { void refreshAttributes(); }}
+            onPatch={(id, patch) => {
+              setAttributes((current) => current.map((attribute) => attribute.id === id ? { ...attribute, ...patch } : attribute));
+            }}
+          />
+        </Section>
+      )}
+
+      {activeTab === 'sections' && (
+        <Section
+          title={`Sections (${sectionCount})`}
+          subtitle="Drag to reorder. Set how many columns each section uses, then click a section to preview it."
+        >
+          <AttributeSectionsPanel
+            domainCode={domain.domainCode}
+            attributes={domainAttributes}
+            onAttributesChanged={() => { void refreshAttributes(); }}
+            onCountChange={setSectionCount}
+          />
         </Section>
       )}
 
@@ -832,8 +947,9 @@ export default function EntityTypeDetailPage() {
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500 }}>{template.templateName}</span>
+                      <SchemaScopeBadge clientId={template.clientId} clientName={template.clientName} />
                       {!template.isActive && (
-                        <span style={{ fontSize: '10px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>Inactive</span>
+                        <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none' }}>Inactive</span>
                       )}
                     </div>
                     {template.description && (
@@ -854,6 +970,14 @@ export default function EntityTypeDetailPage() {
                       onClick={() => setEditingTemplate(template)}
                     >
                       Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{ fontSize: '12px', padding: '4px 10px' }}
+                      onClick={() => setPreferenceTemplate(template)}
+                    >
+                      Source preference
                     </button>
                   </div>
                 </div>
@@ -878,17 +1002,18 @@ export default function EntityTypeDetailPage() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <span className="mono" style={{ fontSize: '12px', color: 'var(--ink-3)' }}>{rel.relationshipCode}</span>
                     <span style={{ fontSize: '13px', fontWeight: 500 }}>{rel.relationshipName}</span>
+                    <SchemaScopeBadge clientId={rel.clientId} clientName={rel.clientName} />
                     <span style={{ fontSize: '12px', color: 'var(--ink-3)' }}>
                       {rel.parentDomainCode || '—'} → {rel.childDomainCode || '—'}
                     </span>
                     {rel.isRequired && (
-                      <span style={{ fontSize: '10px', color: 'var(--red)', textTransform: 'uppercase', fontWeight: 600 }}>Required</span>
+                      <span style={{ fontSize: '11px', color: 'var(--red)', textTransform: 'none', fontWeight: 600 }}>Required</span>
                     )}
                     {!rel.isRequired && rel.parentDomainCode && (
-                      <span style={{ fontSize: '10px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>Optional</span>
+                      <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none' }}>Optional</span>
                     )}
                     {!rel.isActive && (
-                      <span style={{ fontSize: '10px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>Inactive</span>
+                      <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none' }}>Inactive</span>
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: '8px' }}>
@@ -935,12 +1060,12 @@ export default function EntityTypeDetailPage() {
                     </span>
                     {identifier.isPrimary && (
                       <span style={{
-                        fontSize: '10px',
+                        fontSize: '11px',
                         padding: '2px 8px',
                         background: 'var(--accent)',
                         color: 'white',
                         fontWeight: 600,
-                        textTransform: 'uppercase',
+                        textTransform: 'none',
                         borderRadius: '4px',
                       }}>
                         Primary
@@ -1044,8 +1169,20 @@ export default function EntityTypeDetailPage() {
       {showCreateAttributeModal && (
         <CreateAttributeModal
           domainTypes={allDomainTypes}
+          owner={domain.clientId ? { id: domain.clientId, name: domain.clientName || 'This client' } : null}
           onClose={() => setShowCreateAttributeModal(false)}
           onSubmit={handleCreateAttribute}
+        />
+      )}
+
+      {preferenceTemplate && (
+        <SourcePreferenceModal
+          template={preferenceTemplate}
+          onClose={() => setPreferenceTemplate(null)}
+          onSaved={async () => {
+            setPreferenceTemplate(null);
+            await loadData();
+          }}
         />
       )}
 
@@ -1054,6 +1191,7 @@ export default function EntityTypeDetailPage() {
         <CreateTemplateModal
           fixedDomainCode={domain.domainCode}
           fixedDomainName={domain.domainName}
+          owner={domain.clientId ? { id: domain.clientId, name: domain.clientName || 'This client' } : null}
           onClose={() => setShowCreateTemplateModal(false)}
           onSubmit={handleCreateTemplate}
         />
@@ -1066,6 +1204,7 @@ export default function EntityTypeDetailPage() {
             mode="create"
             initialData={{ parentDomainCode: domain.domainCode }}
             domainOptions={allDomainTypes.map(d => ({ domainCode: d.domainCode, domainName: d.domainName }))}
+            owner={domain.clientId ? { id: domain.clientId, name: domain.clientName || 'This client' } : null}
             onCancel={() => setShowCreateRelationshipModal(false)}
             onSubmit={handleCreateRelationshipType}
           />
@@ -1411,10 +1550,12 @@ function EditDomainModal({
 // Create Attribute Modal
 function CreateAttributeModal({
   domainTypes,
+  owner,
   onClose,
   onSubmit
 }: {
   domainTypes: DomainType[];
+  owner?: { id: string; name: string } | null;
   onClose: () => void;
   onSubmit: (data: any) => void;
 }) {
@@ -1425,7 +1566,8 @@ function CreateAttributeModal({
     description: '',
     referenceDomainCode: '',
     isRequired: false,
-    isMultiValued: false
+    isMultiValued: false,
+    clientId: null as string | null,
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1560,6 +1702,11 @@ function CreateAttributeModal({
                   Multi-valued
                 </label>
               </div>
+              <SchemaScopeField
+                value={formData.clientId}
+                owner={owner}
+                onChange={(clientId) => setFormData(prev => ({ ...prev, clientId }))}
+              />
             </div>
           </div>
 
@@ -1579,23 +1726,245 @@ function CreateAttributeModal({
   );
 }
 
+const SOURCE_PREFERENCE_OPTIONS = [
+  { code: 'BLOOMBERG', name: 'Bloomberg' },
+  { code: 'WSO', name: 'WSO' },
+  { code: 'DEALCLOUD', name: 'DealCloud' },
+  { code: 'ALLVUE', name: 'Allvue' },
+  { code: 'SP_CAPITAL_IQ', name: 'S&P Capital IQ' },
+  { code: 'INTERNAL', name: 'Internal' },
+  { code: 'MANUAL', name: 'Manual' },
+  { code: 'CALCULATED', name: 'Calculated' },
+];
+
+function sourceLabel(code: string) {
+  return SOURCE_PREFERENCE_OPTIONS.find(option => option.code === code)?.name || code;
+}
+
+// Ordered source list saved on template_attribute_assignments.default_precedence_chain.
+// Earlier entries win when a golden value is resolved for that attribute.
+function SourcePreferenceModal({
+  template,
+  onClose,
+  onSaved,
+}: {
+  template: Template;
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+}) {
+  const attributes = [...(template.attributes || [])].sort(
+    (a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0)
+  );
+  const [chains, setChains] = useState<Record<string, string[]>>(() => {
+    const initial: Record<string, string[]> = {};
+    for (const attribute of attributes) {
+      initial[attribute.attributeId] = [...(attribute.defaultPrecedenceChain || [])];
+    }
+    return initial;
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const move = (attributeId: string, index: number, direction: -1 | 1) => {
+    setChains(prev => {
+      const chain = [...(prev[attributeId] || [])];
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= chain.length) return prev;
+      const [item] = chain.splice(index, 1);
+      chain.splice(nextIndex, 0, item);
+      return { ...prev, [attributeId]: chain };
+    });
+  };
+
+  const remove = (attributeId: string, code: string) => {
+    setChains(prev => ({
+      ...prev,
+      [attributeId]: (prev[attributeId] || []).filter(entry => entry !== code),
+    }));
+  };
+
+  const add = (attributeId: string, code: string) => {
+    if (!code) return;
+    setChains(prev => {
+      const chain = prev[attributeId] || [];
+      if (chain.includes(code)) return prev;
+      return { ...prev, [attributeId]: [...chain, code] };
+    });
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      for (const attribute of attributes) {
+        const result = await graphqlClient.mutation(UPDATE_TEMPLATE_SOURCE_PREFERENCE_MUTATION, {
+          input: {
+            templateId: template.id,
+            attributeId: attribute.attributeId,
+            defaultPrecedenceChain: chains[attribute.attributeId] || [],
+          },
+        }).toPromise();
+
+        const mutationError = result.data?.updateTemplateSourcePreference?.errors?.[0];
+        if (mutationError) {
+          setError(mutationError.message);
+          return;
+        }
+        if (result.error) {
+          setError(result.error.message);
+          return;
+        }
+      }
+      await onSaved();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save source preference');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="overlay"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        background: 'rgba(0,0,0,0.5)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--bg)',
+          borderRadius: '12px',
+          width: '100%',
+          maxWidth: '680px',
+          maxHeight: '90vh',
+          overflow: 'auto',
+          border: '1px solid var(--line)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--line)' }}>
+          <div style={{ fontSize: '18px', fontWeight: 600 }}>Source preference</div>
+          <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginTop: '4px' }}>
+            {template.templateName} — earlier sources win for each attribute
+          </div>
+        </div>
+
+        <div style={{ padding: '24px', display: 'grid', gap: '16px' }}>
+          {error && (
+            <div style={{
+              padding: '10px 12px',
+              background: '#fdecec',
+              border: '1px solid var(--red)',
+              color: 'var(--red)',
+              fontSize: '13px',
+              borderRadius: '6px',
+            }}>
+              Failed: {error}
+            </div>
+          )}
+
+          {attributes.length === 0 && (
+            <div style={{ fontSize: '13px', color: 'var(--ink-3)' }}>
+              This template has no attributes yet. Assign attributes before setting a source preference.
+            </div>
+          )}
+
+          {attributes.map(attribute => {
+            const chain = chains[attribute.attributeId] || [];
+            const remaining = SOURCE_PREFERENCE_OPTIONS.filter(option => !chain.includes(option.code));
+            return (
+              <div key={attribute.attributeId} style={{
+                border: '1px solid var(--line)',
+                borderRadius: '8px',
+                padding: '12px 14px',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '14px', fontWeight: 500 }}>{attribute.attribute.attributeName}</div>
+                    <div className="mono" style={{ fontSize: '11px', color: 'var(--ink-3)' }}>{attribute.attribute.attributeCode}</div>
+                  </div>
+                </div>
+                {chain.length === 0 ? (
+                  <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginBottom: '8px' }}>
+                    No source preference. The attribute default rank is used.
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: '6px', marginBottom: '8px' }}>
+                    {chain.map((code, index) => (
+                      <div key={code} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className="mono" style={{ width: '18px', fontSize: '11px', color: 'var(--ink-3)' }}>{index + 1}</span>
+                        <span style={{ flex: 1, fontSize: '13px' }}>{sourceLabel(code)}</span>
+                        <button type="button" className="btn" style={{ fontSize: '12px', padding: '2px 8px' }} onClick={() => move(attribute.attributeId, index, -1)} disabled={index === 0}>Up</button>
+                        <button type="button" className="btn" style={{ fontSize: '12px', padding: '2px 8px' }} onClick={() => move(attribute.attributeId, index, 1)} disabled={index === chain.length - 1}>Down</button>
+                        <button type="button" className="btn" style={{ fontSize: '12px', padding: '2px 8px', color: 'var(--red)' }} onClick={() => remove(attribute.attributeId, code)}>Remove</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <select
+                  className="select"
+                  value=""
+                  aria-label={`Add source for ${attribute.attribute.attributeName}`}
+                  onChange={e => add(attribute.attributeId, e.target.value)}
+                >
+                  <option value="">Add source…</option>
+                  {remaining.map(option => (
+                    <option key={option.code} value={option.code}>{option.name}</option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{
+          padding: '16px 24px',
+          borderTop: '1px solid var(--line)',
+          display: 'flex',
+          justifyContent: 'flex-end',
+          gap: '8px',
+        }}>
+          <button type="button" className="btn" onClick={onClose} disabled={saving}>Cancel</button>
+          <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving || attributes.length === 0}>
+            {saving ? 'Saving…' : 'Save source preference'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Create Template Modal -- domain is fixed to the entity type being managed,
 // since templates are always created in the context of drilling into one entity type.
 function CreateTemplateModal({
   fixedDomainCode,
   fixedDomainName,
+  owner,
   onClose,
   onSubmit
 }: {
   fixedDomainCode: string;
   fixedDomainName: string;
+  owner?: { id: string; name: string } | null;
   onClose: () => void;
   onSubmit: (data: any) => void;
 }) {
   const [formData, setFormData] = useState({
     templateCode: '',
     templateName: '',
-    description: ''
+    description: '',
+    clientId: null as string | null,
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1678,6 +2047,11 @@ function CreateTemplateModal({
                   rows={3}
                 />
               </div>
+              <SchemaScopeField
+                value={formData.clientId}
+                owner={owner}
+                onChange={(clientId) => setFormData(prev => ({ ...prev, clientId }))}
+              />
             </div>
           </div>
 
@@ -2321,7 +2695,7 @@ function TemplateEditorOverlay({
                   color: activeSection === section ? 'var(--ink)' : 'var(--ink-3)',
                   background: 'none', border: 'none',
                   borderBottom: activeSection === section ? '2px solid var(--accent)' : '2px solid transparent',
-                  cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.5px',
+                  cursor: 'pointer', textTransform: 'none', letterSpacing: 0,
                 }}
               >
                 {section === 'details' ? 'Details' : section === 'rules' ? 'Applicability Rules' : section === 'attributes' ? 'Attributes' : 'Source Preferences'}
@@ -2750,7 +3124,7 @@ function SourceChainEditor({
         }}>
           <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#b45309' }} />
           <span style={{ fontSize: '12px', fontWeight: 600, color: '#b45309' }}>Manual Override</span>
-          <span style={{ fontSize: '9px', color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>always #1</span>
+          <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none', letterSpacing: 0 }}>always #1</span>
         </div>
         <span style={{ color: 'var(--ink-3)' }}>→</span>
         {(() => {
@@ -2779,7 +3153,7 @@ function SourceChainEditor({
                         style={{
                           width: '16px', height: '16px', borderRadius: '50%',
                           background: 'white', border: '1px solid #e5e7eb',
-                          fontSize: '10px', cursor: 'pointer',
+                          fontSize: '11px', cursor: 'pointer',
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                         }}
                       >
@@ -2792,7 +3166,7 @@ function SourceChainEditor({
                         style={{
                           width: '16px', height: '16px', borderRadius: '50%',
                           background: 'white', border: '1px solid #e5e7eb',
-                          fontSize: '10px', cursor: 'pointer',
+                          fontSize: '11px', cursor: 'pointer',
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                         }}
                       >
@@ -2804,7 +3178,7 @@ function SourceChainEditor({
                       style={{
                         width: '16px', height: '16px', borderRadius: '50%',
                         background: 'white', border: '1px solid #fecaca',
-                        fontSize: '10px', color: '#ef4444', cursor: 'pointer',
+                        fontSize: '11px', color: '#ef4444', cursor: 'pointer',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                       }}
                     >
@@ -2814,7 +3188,7 @@ function SourceChainEditor({
                 )}
                 <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: color }} />
                 <span style={{ fontSize: '12px', fontWeight: 500, color }}>{srcCode}</span>
-                <span style={{ fontSize: '9px', color: 'var(--ink-3)' }}>#{idx + 2}</span>
+                <span style={{ fontSize: '11px', color: 'var(--ink-3)' }}>#{idx + 2}</span>
               </div>
               {idx < shownChain.length - 1 && <span style={{ color: 'var(--ink-3)' }}>→</span>}
             </div>

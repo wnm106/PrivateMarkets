@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { AttributeRegisterGrid } from '@/components/admin/AttributeRegisterGrid';
+import { usePublishViewContext } from '@/lib/view-context';
 import {
   graphqlClient,
   ATTRIBUTE_REGISTER_QUERY,
@@ -68,6 +70,32 @@ export default function AdminAttributesPage() {
   const [showBulkEdit, setShowBulkEdit] = useState(false);
   const [bulkEditForm, setBulkEditForm] = useState<Partial<Attribute>>({});
   const [newListValue, setNewListValue] = useState('');
+  const editingAttribute = attributes.find((attribute) => attribute.id === editingId) || null;
+
+  usePublishViewContext(
+    showBulkEdit
+      ? {
+          activity: 'editing',
+          kind: 'attributes',
+          label: `${selectedIds.size} attributes`,
+          summary: 'Bulk edit',
+          snapshot: { count: selectedIds.size, changes: bulkEditForm },
+        }
+      : editingAttribute
+        ? {
+            activity: 'editing',
+            kind: 'attribute',
+            label: editingAttribute.attributeName || editingAttribute.attributeCode,
+            id: editingAttribute.id,
+            snapshot: {
+              attributeCode: editingAttribute.attributeCode,
+              attributeName: editingAttribute.attributeName,
+              dataType: editingAttribute.dataType,
+              ...editForm,
+            },
+          }
+        : null
+  );
 
   useEffect(() => {
     loadAttributes();
@@ -229,13 +257,13 @@ export default function AdminAttributesPage() {
     setBulkEditForm({ ...bulkEditForm, listValues: value.split(',').map(v => v.trim()).filter(v => v) });
   };
 
-  if (loading) return <div className="p-8">Loading...</div>;
-  if (error) return <div className="p-8">Error: {error}</div>;
+  if (loading) return <div className="screen">Loading...</div>;
+  if (error) return <div className="screen">Error: {error}</div>;
 
   return (
-    <div className="p-8">
-      <h1 className="text-3xl font-bold mb-6">Attribute Management</h1>
-      <p className="text-gray-600 mb-6">
+    <div className="screen">
+      <h1 className="text-3xl font-bold mb-2">Attribute Management</h1>
+      <p className="text-gray-600 mb-3">
         Configure display formats, list values, validation rules, and other metadata for attributes.
       </p>
 
@@ -331,7 +359,7 @@ export default function AdminAttributesPage() {
                       padding: '3px 6px 3px 8px',
                       background: '#eff6ff',
                       border: '1px solid #bfdbfe',
-                      color: '#1e40af',
+                      color: '#00334e',
                       fontSize: '11px',
                       borderRadius: '3px',
                       fontWeight: 500,
@@ -420,355 +448,22 @@ export default function AdminAttributesPage() {
         </div>
       )}
 
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left">
-                <input
-                  type="checkbox"
-                  checked={selectedIds.size === attributes.length && attributes.length > 0}
-                  onChange={handleSelectAll}
-                  className="rounded"
-                />
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Code
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Name
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Description
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Data Type
-              </th>
-              {/* Aggregation and Precision columns */}
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Aggregation
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Precision
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Display Format
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Section
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                List Values
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {attributes.map(attr => (
-              <tr key={attr.id} className={editingId === attr.id ? 'bg-blue-50' : selectedIds.has(attr.id) ? 'bg-blue-50' : ''}>
-                <td className="px-6 py-4">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(attr.id)}
-                    onChange={() => handleSelectOne(attr.id)}
-                    className="rounded"
-                  />
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                  {attr.attributeCode}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {attr.attributeName}
-                </td>
-                <td className="px-6 py-4 text-sm text-gray-500 max-w-xs">
-                  {editingId === attr.id ? (
-                    <textarea
-                      value={editForm.description || ''}
-                      onChange={e => setEditForm({ ...editForm, description: e.target.value })}
-                      placeholder="Enter description for MCP context..."
-                      className="border border-gray-300 rounded px-2 py-1 text-sm w-full"
-                      rows={2}
-                      style={{ resize: 'vertical', minWidth: '200px' }}
-                    />
-                  ) : (
-                    attr.description || <span style={{ color: '#d1d5db', fontStyle: 'italic' }}>No description</span>
-                  )}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {attr.dataType}
-                </td>
-
-                {editingId === attr.id ? (
-                  <>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <select
-                        value={editForm.aggregationType || 'NONE'}
-                        onChange={e => {
-                          const newAgg = e.target.value;
-                          setEditForm({
-                            ...editForm,
-                            aggregationType: newAgg,
-                            // Clear weight if not weighted avg
-                            weightAttributeCode: newAgg === 'WEIGHTED_AVG' ? editForm.weightAttributeCode : '',
-                          });
-                        }}
-                        className="border border-gray-300 rounded px-2 py-1 text-sm"
-                      >
-                        <option value="NONE">None</option>
-                        <option value="MIN">Min</option>
-                        <option value="MAX">Max</option>
-                        <option value="SUM">Sum</option>
-                        <option value="AVG">Average</option>
-                        <option value="WEIGHTED_AVG">Weighted Avg</option>
-                      </select>
-                      {editForm.aggregationType === 'WEIGHTED_AVG' && (
-                        <select
-                          value={editForm.weightAttributeCode || ''}
-                          onChange={e => setEditForm({ ...editForm, weightAttributeCode: e.target.value })}
-                          className="border border-gray-300 rounded px-2 py-1 text-sm mt-1 w-full"
-                        >
-                          <option value="">-- Select weight attribute --</option>
-                          {attributes
-                            .filter(attr => ['NUMBER', 'INTEGER', 'DECIMAL', 'FLOAT', 'CURRENCY', 'PERCENTAGE', 'PERCENT'].includes(attr.dataType))
-                            .map(attr => (
-                              <option key={attr.id} value={attr.attributeCode}>
-                                {attr.attributeName} ({attr.attributeCode})
-                              </option>
-                            ))
-                          }
-                        </select>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <input
-                        type="number"
-                        min="0"
-                        value={editForm.numericPrecision ?? ''}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setEditForm({ ...editForm, numericPrecision: val === '' ? null : parseInt(val, 10) });
-                        }}
-                        placeholder="Default"
-                        className="border border-gray-300 rounded px-2 py-1 text-sm w-20"
-                      />
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <select
-                        value={editForm.displayFormat || ''}
-                        onChange={e => setEditForm({ ...editForm, displayFormat: e.target.value })}
-                        className="border border-gray-300 rounded px-2 py-1 text-sm"
-                      >
-                        <option value="">None</option>
-                        <option value="currency">Currency</option>
-                        <option value="percentage">Percentage</option>
-                        <option value="date">Date</option>
-                        <option value="number">Number</option>
-                      </select>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <input
-                        type="text"
-                        value={editForm.displaySection || ''}
-                        onChange={e => setEditForm({ ...editForm, displaySection: e.target.value })}
-                        className="border border-gray-300 rounded px-2 py-1 text-sm w-32"
-                      />
-                    </td>
-                    <td className="px-6 py-4">
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '260px' }}>
-                        {/* Current list values as removable chips */}
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', minHeight: '28px' }}>
-                          {(editForm.listValues || []).length === 0 && (
-                            <span style={{ fontSize: '11px', color: '#9ca3af', fontStyle: 'italic' }}>No values defined</span>
-                          )}
-                          {(editForm.listValues || []).map((val) => (
-                            <span
-                              key={val}
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                padding: '3px 6px 3px 8px',
-                                background: '#eff6ff',
-                                border: '1px solid #bfdbfe',
-                                color: '#1e40af',
-                                fontSize: '11px',
-                                borderRadius: '3px',
-                                fontWeight: 500,
-                              }}
-                            >
-                              {val}
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveListValue(val)}
-                                style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  cursor: 'pointer',
-                                  color: '#6b7280',
-                                  padding: '0 2px',
-                                  fontSize: '14px',
-                                  lineHeight: 1,
-                                  fontWeight: 700,
-                                }}
-                                title={`Remove "${val}"`}
-                              >
-                                ×
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                        {/* Add new value input */}
-                        <div style={{ display: 'flex', gap: '4px' }}>
-                          <input
-                            type="text"
-                            value={newListValue}
-                            onChange={e => setNewListValue(e.target.value)}
-                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddListValue(); } }}
-                            placeholder="Add value..."
-                            className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleAddListValue}
-                            disabled={!newListValue.trim()}
-                            className="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            + Add
-                          </button>
-                        </div>
-                        {/* Multi-select toggle */}
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#374151', cursor: 'pointer' }}>
-                          <input
-                            type="checkbox"
-                            checked={editForm.isMultiValued || false}
-                            onChange={e => setEditForm({ ...editForm, isMultiValued: e.target.checked })}
-                            style={{ width: '14px', height: '14px' }}
-                          />
-                          Allow multiple selections
-                        </label>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <button
-                        onClick={handleSave}
-                        className="text-blue-600 hover:text-blue-900 mr-3"
-                      >
-                        Save
-                      </button>
-                      <button
-                        onClick={handleCancel}
-                        className="text-gray-600 hover:text-gray-900"
-                      >
-                        Cancel
-                      </button>
-                    </td>
-                  </>
-                ) : (
-                  <>
-                    {/* Aggregation and Precision cells */}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                        <span>
-                          {attr.aggregationType && attr.aggregationType !== 'NONE' ? (
-                            <span style={{
-                              display: 'inline-block',
-                              padding: '2px 8px',
-                              background: attr.aggregationType === 'WEIGHTED_AVG' ? '#fef3c7' : '#e0e7ff',
-                              border: `1px solid ${attr.aggregationType === 'WEIGHTED_AVG' ? '#fcd34d' : '#a5b4fc'}`,
-                              color: attr.aggregationType === 'WEIGHTED_AVG' ? '#92400e' : '#3730a3',
-                              fontSize: '11px',
-                              borderRadius: '3px',
-                              fontWeight: 600,
-                            }}>
-                              {attr.aggregationType === 'WEIGHTED_AVG' ? 'Weighted Avg' : attr.aggregationType}
-                            </span>
-                          ) : (
-                            <span style={{ color: '#d1d5db', fontStyle: 'italic' }}>None</span>
-                          )}
-                        </span>
-                        {attr.aggregationType === 'WEIGHTED_AVG' && attr.weightAttributeCode && (
-                          <span style={{ fontSize: '10px', color: '#6b7280' }}>
-                            weight: <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: '2px' }}>{attr.weightAttributeCode}</code>
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {attr.numericPrecision !== null && attr.numericPrecision !== undefined ? (
-                        <span style={{
-                          display: 'inline-block',
-                          padding: '2px 8px',
-                          background: '#f3f4f6',
-                          border: '1px solid #e5e7eb',
-                          fontSize: '11px',
-                          borderRadius: '3px',
-                          fontWeight: 500,
-                        }}>
-                          {attr.numericPrecision} decimal{attr.numericPrecision !== 1 ? 's' : ''}
-                        </span>
-                      ) : (
-                        <span style={{ color: '#d1d5db', fontStyle: 'italic' }}>Default</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {attr.displayFormat || '-'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {attr.displaySection || 'General'}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                        {attr.listValues && attr.listValues.length > 0 ? (
-                          <>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
-                              {attr.listValues.slice(0, 3).map(v => (
-                                <span
-                                  key={v}
-                                  style={{
-                                    display: 'inline-block',
-                                    padding: '1px 6px',
-                                    background: '#f3f4f6',
-                                    border: '1px solid #e5e7eb',
-                                    fontSize: '10px',
-                                    borderRadius: '2px',
-                                    color: '#374151',
-                                  }}
-                                >
-                                  {v}
-                                </span>
-                              ))}
-                              {attr.listValues.length > 3 && (
-                                <span style={{ fontSize: '10px', color: '#9ca3af' }}>+{attr.listValues.length - 3} more</span>
-                              )}
-                            </div>
-                            {attr.isMultiValued && (
-                              <span style={{ fontSize: '9px', color: '#6366f1', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                                Multi-select
-                              </span>
-                            )}
-                          </>
-                        ) : (
-                          <span>-</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <button
-                        onClick={() => handleEdit(attr)}
-                        className="text-blue-600 hover:text-blue-900"
-                      >
-                        Edit
-                      </button>
-                    </td>
-                  </>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <AttributeRegisterGrid
+        attributes={attributes}
+        editingId={editingId}
+        editForm={editForm}
+        selectedIds={selectedIds}
+        newListValue={newListValue}
+        onSelectAll={handleSelectAll}
+        onSelectOne={handleSelectOne}
+        onEdit={handleEdit}
+        onCancel={handleCancel}
+        onSave={handleSave}
+        onEditForm={setEditForm}
+        onNewListValue={setNewListValue}
+        onAddListValue={handleAddListValue}
+        onRemoveListValue={handleRemoveListValue}
+      />
     </div>
   );
 }

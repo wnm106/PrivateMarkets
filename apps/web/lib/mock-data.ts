@@ -135,10 +135,16 @@ export const domainConfigs: DomainConfig[] = [
   { key: 'deals', name: 'Deals', color: '#047857', count: 612, templates: ['DIRECT_LENDING', 'UNITRANCHE', 'SECOND_LIEN', 'EQUITY'] },
   { key: 'investors', name: 'Investors', color: '#be185d', count: 218, templates: ['PENSION', 'ENDOWMENT', 'FAMILY_OFFICE', 'FUND_OF_FUNDS', 'INSURANCE'] },
   { key: 'positions', name: 'Positions', color: '#475569', count: 892, templates: ['DIRECT', 'FUND_LP', 'CO_INVEST'] },
+  { key: 'sponsors', name: 'Sponsors', color: '#0f766e', count: 0, templates: ['SPONSOR_STANDARD'] },
 ];
 
 export function getDomainConfig(key: string): DomainConfig {
-  return domainConfigs.find(d => d.key === key) || domainConfigs[2];
+  const found = domainConfigs.find(d => d.key === key);
+  if (found) return found;
+  const name = key
+    .replace(/[_-]/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return { key, name, color: '#475569', count: 0, templates: [] };
 }
 
 // ============== ATTRIBUTES ==============

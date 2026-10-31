@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'crypto';
-import { authenticate, CONVERSATION_COLUMNS } from '@/lib/chat-server';
+import { authenticate, selectConversationRows } from '@/lib/chat-server';
 import {
   ATTACHMENT_COLUMNS,
   CHAT_ATTACHMENT_BUCKET,
@@ -56,22 +56,22 @@ export async function POST(request: NextRequest) {
     typeof requestedConversationId === 'string' && requestedConversationId ? requestedConversationId : null;
 
   if (conversationId) {
-    const { data } = await auth.supabase
-      .from('chat_conversations')
-      .select(CONVERSATION_COLUMNS)
-      .eq('id', conversationId)
-      .maybeSingle();
+    const { data } = await selectConversationRows((columns) =>
+      auth.supabase.from('chat_conversations').select(columns).eq('id', conversationId).maybeSingle()
+    );
     if (!data) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
   } else {
-    const { data: created, error } = await auth.supabase
-      .from('chat_conversations')
-      .insert({ created_by: auth.userId, title: 'New chat' })
-      .select(CONVERSATION_COLUMNS)
-      .single();
+    const { data: created, error } = await selectConversationRows((columns) =>
+      auth.supabase
+        .from('chat_conversations')
+        .insert({ created_by: auth.userId, title: 'New chat' })
+        .select(columns)
+        .single()
+    );
     if (error || !created) {
       return NextResponse.json({ error: error?.message || 'Could not start a conversation' }, { status: 500 });
     }
-    conversationId = created.id;
+    conversationId = (created as { id: string }).id;
   }
 
   // Enforce the per-turn cap against what is already staged on this thread.

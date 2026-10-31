@@ -164,9 +164,9 @@ export function EntityAttributeTree({
           }}
           onClick={() => toggleExpand(pathKey)}
         >
-          <span style={{ fontSize: '9px', color: 'var(--ink-3)', width: '10px' }}>{node.expanded ? '▼' : '▶'}</span>
+          <span style={{ fontSize: '11px', color: 'var(--ink-3)', width: '10px' }}>{node.expanded ? '▼' : '▶'}</span>
           <span style={{ fontWeight: 600, fontSize: '12px' }}>{node.domainCode}</span>
-          <span style={{ fontSize: '10px', color: 'var(--ink-3)' }}>({attrs.length})</span>
+          <span style={{ fontSize: '11px', color: 'var(--ink-3)' }}>({attrs.length})</span>
         </div>
 
         {node.expanded && (
@@ -186,7 +186,7 @@ export function EntityAttributeTree({
                 title={attr.description || attr.attributeCode}
               >
                 <span style={{ fontWeight: 500 }}>{attr.attributeName}</span>
-                <span style={{ color: 'var(--ink-4)', marginLeft: '6px', fontSize: '10px' }}>{attr.dataType}</span>
+                <span style={{ color: 'var(--ink-4)', marginLeft: '6px', fontSize: '11px' }}>{attr.dataType}</span>
               </div>
             ))}
             {node.children.map((child) => {
@@ -204,12 +204,12 @@ export function EntityAttributeTree({
                     }}
                     onClick={() => handleChildClick(pathKey, child.targetDomainCode, { relationshipCode: child.relationshipCode, direction: child.direction })}
                   >
-                    <span style={{ fontSize: '9px', color: 'var(--ink-3)' }}>{childExpanded ? '▼' : '▶'}</span>
-                    <span style={{ color: child.direction === 'DOWN' ? 'var(--green)' : 'var(--accent)', fontSize: '10px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--ink-3)' }}>{childExpanded ? '▼' : '▶'}</span>
+                    <span style={{ color: child.direction === 'DOWN' ? 'var(--green)' : 'var(--accent)', fontSize: '11px' }}>
                       {child.direction === 'DOWN' ? '↓' : '↑'}
                     </span>
                     <span style={{ fontWeight: 500 }}>{child.relationshipName}</span>
-                    <span style={{ color: 'var(--ink-3)', fontSize: '10px' }}>→ {child.targetDomainCode}</span>
+                    <span style={{ color: 'var(--ink-3)', fontSize: '11px' }}>→ {child.targetDomainCode}</span>
                   </div>
                   {childLoaded && childExpanded && renderNode(childPathKey, depth + 1)}
                 </div>

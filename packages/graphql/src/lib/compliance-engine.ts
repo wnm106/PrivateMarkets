@@ -34,6 +34,10 @@ export interface EvaluateRuleOptions {
     /** 'GOLDEN' (default) or a specific source_registry.source_code. */
     sourceScope?: string;
     triggeredBy?: string;
+    /** When set, only this fund (or other anchor) is scored. Child positions still roll into it. */
+    anchorEntityId?: string;
+    /** When set, the book plus hypothetical positions for this deal code. A blank scenario is the booked book only. */
+    scenarioCode?: string | null;
 }
 
 export interface ComplianceEvaluationRun {
@@ -72,6 +76,7 @@ export interface ComplianceEvaluationResult {
     breachAmount: number | null;
     contributingEntityIds: string[] | null;
     contributingCount: number | null;
+    rankPosition: number | null;
     detail: Record<string, unknown>;
     evaluatedAt: string;
 }
@@ -101,6 +106,8 @@ export class ComplianceEngine {
             p_knowledge_date: options.knowledgeDate ?? new Date().toISOString(),
             p_source_scope: options.sourceScope ?? null,
             p_triggered_by: options.triggeredBy ?? null,
+            p_anchor_entity_id: options.anchorEntityId ?? null,
+            p_scenario_code: options.scenarioCode ?? null,
         });
 
         if (error) {
@@ -231,6 +238,7 @@ function mapResult(row: any): ComplianceEvaluationResult {
         breachAmount: row.breach_amount,
         contributingEntityIds: row.contributing_entity_ids,
         contributingCount: row.contributing_count,
+        rankPosition: row.rank_position ?? null,
         detail: row.detail || {},
         evaluatedAt: row.evaluated_at,
     };

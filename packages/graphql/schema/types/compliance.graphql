@@ -167,13 +167,18 @@ type ComplianceRuleVersion {
   denominatorAttributeCode: String
   denominatorAggregation: ComplianceAggregation
   denominatorScope: ComplianceDenominatorScope!
+  # BASE aggregates the denominator over positions. ANCHOR reads it on the fund.
+  denominatorSource: String!
   denominatorConstantValue: Float
   resultUnit: ComplianceResultUnit!
   # Limits
   limitDirection: ComplianceLimitDirection!
   softLimitValue: Float
   hardLimitValue: Float
+  hardLimitAttributeCode: String
+  softLimitFactor: Float
   defaultSourceScope: String!
+  consolidateDescendants: Boolean!
   isActive: Boolean!
   conditions: [ComplianceRuleCondition!]!
   metadata: JSON
@@ -250,8 +255,85 @@ type ComplianceEvaluationResult {
   breachAmount: Float
   contributingEntityIds: [ID!]
   contributingCount: Int
+  rankPosition: Int
   detail: JSON
   evaluatedAt: DateTime!
+}
+
+# A limit stored on a fund (or as the rule default when entityId is null).
+# groupValue sets the limit for one industry or other group.
+# rankFrom/rankTo is an inclusive band. rankTo null means that rank and every later rank.
+type ComplianceThreshold {
+  id: ID!
+  ruleId: ID!
+  ruleCode: String
+  ruleName: String
+  entityId: ID
+  entityCode: String
+  entityName: String
+  groupValue: String
+  rankFrom: Int
+  rankTo: Int
+  softLimitValue: Float
+  hardLimitValue: Float
+  applies: Boolean!
+  notes: String
+}
+
+type ComplianceFundNode {
+  entityId: ID!
+  entityCode: String!
+  entityName: String
+  parentEntityId: ID
+}
+
+type ComplianceFundRule {
+  id: ID!
+  ruleCode: String!
+  ruleName: String!
+  ruleCategory: String!
+  resultUnit: String
+  limitDirection: String
+  groupByAttributeCode: String
+  consolidateDescendants: Boolean!
+  isActive: Boolean!
+}
+
+type ComplianceFundBoard {
+  funds: [ComplianceFundNode!]!
+  rules: [ComplianceFundRule!]!
+  thresholds: [ComplianceThreshold!]!
+  results: [ComplianceEvaluationResult!]!
+}
+
+input UpsertComplianceThresholdInput {
+  id: ID
+  ruleId: ID!
+  entityId: ID
+  groupValue: String
+  rankFrom: Int
+  rankTo: Int
+  softLimitValue: Float
+  hardLimitValue: Float
+  applies: Boolean
+  notes: String
+}
+
+type UpsertComplianceThresholdResult {
+  threshold: ComplianceThreshold
+  errors: [MutationError!]!
+}
+
+type DeleteComplianceThresholdResult {
+  success: Boolean!
+  errors: [MutationError!]!
+}
+
+# Booked positions plus one deal's proposed allocation.
+type DealComplianceScore {
+  rules: [ComplianceFundRule!]!
+  results: [ComplianceEvaluationResult!]!
+  errors: [MutationError!]!
 }
 
 type ComplianceEvaluationResultConnection {
@@ -329,11 +411,14 @@ input CreateComplianceRuleVersionInput {
   denominatorAttributeCode: String
   denominatorAggregation: ComplianceAggregation
   denominatorScope: ComplianceDenominatorScope
+  denominatorSource: String
   denominatorConstantValue: Float
   resultUnit: ComplianceResultUnit
   limitDirection: ComplianceLimitDirection!
   softLimitValue: Float
   hardLimitValue: Float
+  hardLimitAttributeCode: String
+  softLimitFactor: Float
   defaultSourceScope: String
   conditions: [ComplianceRuleConditionInput!]
   metadata: JSON
@@ -365,6 +450,7 @@ input EvaluateComplianceRuleInput {
   asOfDate: Date!
   knowledgeDate: DateTime
   sourceScope: String
+  entityId: ID
 }
 
 # Draft filter drill-down: which records of a domain qualify before the rule is saved.

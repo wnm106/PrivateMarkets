@@ -174,7 +174,6 @@ export const reportingResolvers = {
     gridQuery: async (_: any, args: { input: any }, { supabase }: Context) => {
       const i = args.input || {};
       if (i.start !== 'CONTEXT' && i.start !== 'DOMAIN') throw new Error('start must be CONTEXT or DOMAIN');
-      if (i.start === 'DOMAIN' && !i.domainCode) throw new Error('DOMAIN start requires domainCode');
       let contextEntityId: string | null = null;
       if (i.start === 'CONTEXT') {
         contextEntityId = await resolveEntityId(supabase, i.entityId, i.entityCode);

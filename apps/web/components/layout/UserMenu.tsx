@@ -21,16 +21,31 @@ export function initialsFor(name: string | null | undefined, email: string | nul
 }
 
 export async function signOutAndRedirect() {
-  await supabaseBrowserClient().auth.signOut();
+  try {
+    await supabaseBrowserClient().auth.signOut();
+  } catch {
+    /* Still leave the app if the auth server cannot be reached. */
+  }
   try {
     localStorage.removeItem('auth_token');
   } catch {
     /* ignore */
   }
-  window.location.href = '/login';
+  window.location.href = '/welcome';
 }
 
-export function UserMenu() {
+/** Where the account menu opens from its trigger. */
+export type UserMenuAnchor = 'down-end' | 'up-start' | 'side';
+
+export function UserMenu({
+  anchor = 'down-end',
+  showLabel = true,
+  variant = 'bar',
+}: {
+  anchor?: UserMenuAnchor;
+  showLabel?: boolean;
+  variant?: 'bar' | 'sidebar';
+}) {
   const [me, setMe] = useState<MeData | null>(null);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -66,8 +81,9 @@ export function UserMenu() {
 
   if (!me) {
     return (
-      <Link href="/login" className="user-chip" style={{ textDecoration: 'none' }}>
-        <div style={{ fontSize: '11px', color: 'var(--accent)', fontWeight: 600 }}>Sign in</div>
+      <Link href="/login" className={`user-chip ${variant === 'sidebar' ? 'user-chip-sidebar' : ''}`} style={{ textDecoration: 'none' }}>
+        <div className="avatar">?</div>
+        {showLabel && <div style={{ fontSize: '12px', color: 'var(--accent)', fontWeight: 600 }}>Sign in</div>}
       </Link>
     );
   }
@@ -86,32 +102,45 @@ export function UserMenu() {
     textDecoration: 'none',
   };
 
+  const menuPosition: React.CSSProperties =
+    anchor === 'up-start'
+      ? { bottom: 'calc(100% + 8px)', left: 0 }
+      : anchor === 'side'
+        ? { left: 'calc(100% + 10px)', bottom: 0 }
+        : { top: 'calc(100% + 8px)', right: 0 };
+
   return (
-    <div ref={ref} style={{ position: 'relative' }}>
+    <div ref={ref} className={`user-menu ${variant === 'sidebar' ? 'user-menu-sidebar' : ''}`}>
       <button
-        className="user-chip"
+        className={`user-chip ${variant === 'sidebar' ? 'user-chip-sidebar' : ''}`}
         onClick={() => setOpen(!open)}
-        style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+        type="button"
         aria-haspopup="menu"
         aria-expanded={open}
+        title={label}
       >
-        <div style={{ fontSize: '11px', color: 'var(--ink-2)' }}>{label}</div>
         <div className="avatar">{initialsFor(me.displayName, me.email)}</div>
+        {showLabel && (
+          <span className="user-chip-text">
+            <span className="user-chip-name">{label}</span>
+            {variant === 'sidebar' && me.email && me.displayName && (
+              <span className="user-chip-email">{me.email}</span>
+            )}
+          </span>
+        )}
       </button>
       {open && (
         <div
           role="menu"
           style={{
             position: 'absolute',
-            top: '100%',
-            right: 0,
-            marginTop: '8px',
+            ...menuPosition,
             background: 'var(--surface)',
             border: '1px solid var(--line)',
             borderRadius: '10px',
             boxShadow: '0 12px 32px rgba(10, 22, 40, 0.14)',
             minWidth: '240px',
-            zIndex: 1000,
+            zIndex: 80,
             overflow: 'hidden',
           }}
         >

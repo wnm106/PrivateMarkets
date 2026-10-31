@@ -8,6 +8,7 @@ type DQRule {
   attributeCode: String
   ruleType: DQRuleType!
   severity: DQSeverity!
+  "SQL predicate that is true when a record fails this rule."
   ruleExpression: String!
   ruleDescription: String
   thresholdValue: Float
@@ -96,6 +97,7 @@ input CreateDQRuleInput {
   attributeCode: String
   ruleType: DQRuleType!
   severity: DQSeverity!
+  "SQL predicate that is true when a record fails this rule."
   ruleExpression: String!
   ruleDescription: String
   thresholdValue: Float
@@ -105,6 +107,11 @@ input CreateDQRuleInput {
 input UpdateDQRuleInput {
   id: ID!
   ruleName: String
+  domainCode: DomainType
+  attributeCode: String
+  ruleType: DQRuleType
+  severity: DQSeverity
+  "SQL predicate that is true when a record fails this rule."
   ruleExpression: String
   ruleDescription: String
   thresholdValue: Float
@@ -131,4 +138,248 @@ type UpdateDQRuleResult {
 type ResolveDQExceptionResult {
   success: Boolean!
   errors: [MutationError!]!
+}
+
+type StaleAttribute {
+  entityId: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  attributeCode: String!
+  attributeName: String!
+  sourceCode: String!
+  sourceName: String!
+  value: String
+  receivedAt: DateTime!
+  ageDays: Int!
+}
+
+type StaleAttributeReport {
+  olderThanDays: Int!
+  asOfDate: Date!
+  count: Int!
+  attributes: [StaleAttribute!]!
+}
+
+type DataQualityDashboard {
+  fromDate: Date!
+  toDate: Date!
+  domains: [String!]!
+  summary: DataQualitySummary!
+  availability: [AttributeAvailability!]!
+  quality: [RuleQuality!]!
+  trajectory: [AttributeTrajectory!]!
+  overrideMatches: [OverrideMatch!]!
+  entities: [EntityQualityResult!]!
+}
+
+type DataQualitySummary {
+  entityCount: Int!
+  requiredSlots: Int!
+  populatedSlots: Int!
+  missingSlots: Int!
+  entitiesMissingRequired: Int!
+  availabilityPercent: Float
+  rulesEvaluated: Int!
+  passingChecks: Int!
+  failingChecks: Int!
+  entitiesFailingRules: Int!
+  qualityPercent: Float
+  changedAttributeCount: Int!
+  changedEntityCount: Int!
+  attributeChangeCount: Int!
+  clearEntityCount: Int!
+  availabilityResolvedCount: Int!
+  availabilityIntroducedCount: Int!
+  qualityResolvedCount: Int!
+  qualityIntroducedCount: Int!
+  overrideMatchCount: Int!
+}
+
+type MeasureShift {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  previousValue: String
+  currentValue: String
+}
+
+type OverrideMatch {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  attributeCode: String!
+  attributeName: String!
+  overrideValue: String!
+  overrideReason: String
+  prioritySourceCode: String
+  prioritySourceName: String
+  priorityValue: String
+  ready: Boolean!
+}
+
+type QualityEntityRef {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+}
+
+type AvailabilityEntity {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  value: String
+}
+
+type AttributeAvailability {
+  attributeCode: String!
+  attributeName: String!
+  domainCode: String
+  requiredCount: Int!
+  missingCount: Int!
+  availabilityPercent: Float
+  resolvedCount: Int!
+  introducedCount: Int!
+  missingEntities: [QualityEntityRef!]!
+  resolvedEntities: [MeasureShift!]!
+  introducedEntities: [MeasureShift!]!
+  entities: [AvailabilityEntity!]
+}
+
+type RuleFailure {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  attributeCode: String
+  attributeName: String
+  message: String
+  actualValue: String
+}
+
+type AcceptedException {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  status: String!
+  notes: String
+}
+
+type RuleQuality {
+  ruleId: ID!
+  ruleCode: String!
+  ruleName: String!
+  ruleType: String!
+  severity: String!
+  domainCode: String
+  ruleExpression: String!
+  ruleDescription: String
+  attributeCode: String
+  attributeName: String
+  evaluated: Boolean!
+  evaluationMessage: String
+  entityCount: Int!
+  failingCount: Int!
+  passingCount: Int!
+  acceptedCount: Int!
+  failingEntities: [RuleFailure!]!
+  acceptedEntities: [AcceptedException!]!
+  resolvedCount: Int!
+  introducedCount: Int!
+  resolvedEntities: [MeasureShift!]!
+  introducedEntities: [MeasureShift!]!
+}
+
+type AttributeChange {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  previousValue: String
+  currentValue: String
+}
+
+type AttributeTrajectory {
+  attributeCode: String!
+  attributeName: String!
+  domainCode: String
+  changeCount: Int!
+  changes: [AttributeChange!]!
+}
+
+type MissingAttribute {
+  attributeCode: String!
+  attributeName: String!
+}
+
+type EntityRuleFailure {
+  ruleId: ID!
+  ruleCode: String!
+  ruleName: String!
+  severity: String!
+  attributeCode: String
+  attributeName: String
+  message: String
+  actualValue: String
+}
+
+type EntityAcceptedRule {
+  ruleId: ID!
+  ruleCode: String!
+  ruleName: String!
+  severity: String!
+  attributeCode: String
+  attributeName: String
+  status: String!
+  notes: String
+}
+
+input RecordDQDispositionInput {
+  ruleId: ID!
+  entityId: ID!
+  status: DQExceptionStatus!
+  resolutionNotes: String
+  asOf: Date
+}
+
+type RecordDQDispositionResult {
+  success: Boolean!
+  exceptionId: ID
+  errors: [MutationError!]!
+}
+
+type EntityAttributeChange {
+  attributeCode: String!
+  attributeName: String!
+  previousValue: String
+  currentValue: String
+}
+
+type EntityQualityResult {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  requiredCount: Int!
+  missingCount: Int!
+  availabilityPercent: Float
+  missingAttributes: [MissingAttribute!]!
+  ruleCount: Int!
+  failingRuleCount: Int!
+  qualityPercent: Float
+  failingRules: [EntityRuleFailure!]!
+  acceptedRules: [EntityAcceptedRule!]!
+  changeCount: Int!
+  changes: [EntityAttributeChange!]!
+  availabilityResolvedCount: Int!
+  availabilityIntroducedCount: Int!
+  qualityResolvedCount: Int!
+  qualityIntroducedCount: Int!
+  overrideMatchCount: Int!
+  overrideCount: Int!
 }

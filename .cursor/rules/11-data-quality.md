@@ -28,13 +28,13 @@ The **Data Quality (DQ)** framework ensures data accuracy, completeness, and con
 
 ## DQ Rule Types
 
-| Type | Purpose | Example |
+| Type | Purpose | Example failure predicate |
 |------|---------|---------|
-| COMPLETENESS | Ensure required data exists | `IS NOT NULL` |
-| VALIDITY | Validate value format | `IS IN ('USD', 'EUR', 'GBP')` |
-| CONSISTENCY | Check cross-field logic | `amount > 0 AND currency IS NOT NULL` |
-| TIMELINESS | Verify data freshness | `updated_at > NOW() - INTERVAL '30 days'` |
-| UNIQUENESS | Prevent duplicates | `COUNT(*) = 1` |
+| COMPLETENESS | Ensure required data exists | `name IS NULL` |
+| VALIDITY | Validate value format | `currency IS NULL OR currency NOT IN ('USD', 'EUR', 'GBP')` |
+| CONSISTENCY | Check cross-field logic | `amount IS NULL OR amount <= 0 OR currency IS NULL` |
+| TIMELINESS | Verify data freshness | `updated_at IS NULL OR updated_at <= NOW() - INTERVAL '30 days'` |
+| UNIQUENESS | Prevent duplicates | `duplicate_count > 1` |
 
 ## DQ Severity Levels
 
@@ -47,25 +47,27 @@ The **Data Quality (DQ)** framework ensures data accuracy, completeness, and con
 
 ## Rule Expression Syntax
 
+`rule_expression` is a SQL boolean predicate that is **true for records that fail**. Running it as a `WHERE` clause returns the violation population. A record passes only when the predicate is false. `NULL` does not match, so include `IS NULL` when a missing value is a failure.
+
 ```sql
--- Null check
-IS NULL / IS NOT NULL
+-- Missing value
+name IS NULL
 
--- Value check
-IN ('value1', 'value2')
-> 100
-< 1000
-BETWEEN 10 AND 100
+-- Value not in the allowed set (missing counts as a failure)
+currency IS NULL OR currency NOT IN ('USD', 'EUR', 'GBP')
 
--- String check
-LIKE '%pattern%'
-starts_with(column, 'prefix')
+-- Out of range
+price IS NULL OR price < 0
+nav IS NULL OR nav NOT BETWEEN 10 AND 100
 
--- Count check
-COUNT(*) > 0
+-- Pattern mismatch
+isin IS NULL OR isin !~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$'
 
--- Custom logic
-CASE WHEN condition THEN true ELSE false END
+-- Stale timestamp
+updated_at IS NULL OR updated_at <= NOW() - INTERVAL '30 days'
+
+-- Custom failure
+CASE WHEN status = 'CLOSED' AND close_date IS NULL THEN true ELSE false END
 ```
 
 ## Creating a DQ Rule
@@ -80,7 +82,7 @@ await context.supabase
     domain_code: 'FUND',
     rule_type: 'COMPLETENESS',
     severity: 'CRITICAL',
-    rule_expression: 'name IS NOT NULL',
+    rule_expression: 'name IS NULL',
     rule_description: 'All funds must have a name',
   });
 ```
@@ -89,6 +91,8 @@ await context.supabase
 - On entity creation/update
 - On attribute value changes
 - Scheduled batch evaluation
+
+A record fails when `rule_expression` is true. `data_quality.entities_failing_rule(rule_id)` returns that population.
 
 ### Step 3: Exception Created (if needed)
 ```sql

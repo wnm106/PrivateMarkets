@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticate, CONVERSATION_COLUMNS, deriveTitle } from '@/lib/chat-server';
+import { authenticate, deriveTitle, selectConversationRows } from '@/lib/chat-server';
 
 /**
  * GET  /api/chat/conversations        -- list the caller's threads, most recent first
@@ -21,12 +21,14 @@ export async function GET(request: NextRequest) {
     MAX_LIMIT
   );
 
-  const { data, error } = await auth.supabase
-    .from('chat_conversations')
-    .select(CONVERSATION_COLUMNS)
-    .order('last_message_at', { ascending: false, nullsFirst: false })
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  const { data, error } = await selectConversationRows((columns) =>
+    auth.supabase
+      .from('chat_conversations')
+      .select(columns)
+      .order('last_message_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
+      .limit(limit)
+  );
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -50,18 +52,20 @@ export async function POST(request: NextRequest) {
     body = {};
   }
 
-  const { data, error } = await auth.supabase
-    .from('chat_conversations')
-    .insert({
-      created_by: auth.userId,
-      title: deriveTitle(body.title ?? ''),
-      tool_context: body.toolContext ?? null,
-      page_context: body.context?.page ?? null,
-      domain_code: body.context?.domainCode ?? null,
-      entity_id: null,
-    })
-    .select(CONVERSATION_COLUMNS)
-    .single();
+  const { data, error } = await selectConversationRows((columns) =>
+    auth.supabase
+      .from('chat_conversations')
+      .insert({
+        created_by: auth.userId,
+        title: deriveTitle(body.title ?? ''),
+        tool_context: body.toolContext ?? null,
+        page_context: body.context?.page ?? null,
+        domain_code: body.context?.domainCode ?? null,
+        entity_id: null,
+      })
+      .select(columns)
+      .single()
+  );
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

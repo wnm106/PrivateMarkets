@@ -3,14 +3,34 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ColDef, FilterChangedEvent, SortChangedEvent } from 'ag-grid-community';
+import { attributeDisplayKind, formatAttributeDisplay, type TableCellAlign, tableCellAlign } from '@/lib/attribute-display';
+import { AppGrid, type GridApi } from '@/components/grid/AppGrid';
 import { ATTRIBUTE_REGISTER_QUERY, graphqlQuery } from '@/lib/graphql';
 import { GRID_QUERY, type GridResultPayload } from '@/lib/reporting';
+import { useAttributeInspect } from '@/components/detail/AttributeInspect';
+import { isRowAttributeCode } from '@/components/detail/attribute-source';
 
 const NO_RELATED: RelatedAttributeColumn[] = [];
-const PAGE_SIZE = 20;
-const FACET_LIMIT = 200;
-const FALLBACK_SCAN = 2000;
+const CLIENT_LIMIT = 10000;
+const FALLBACK_SCAN = 10000;
 const BLANK = '__blank__';
+
+const TEXT_OPS: Record<string, string> = {
+  contains: 'contains',
+  equals: 'eq',
+  notEqual: 'neq',
+  startsWith: 'startsWith',
+};
+const NUMBER_OPS: Record<string, string> = {
+  equals: 'eq',
+  notEqual: 'neq',
+  greaterThan: 'gt',
+  greaterThanOrEqual: 'gte',
+  lessThan: 'lt',
+  lessThanOrEqual: 'lte',
+  inRange: 'between',
+};
 
 export interface RelatedAttributeColumn {
   alias: string;
@@ -29,29 +49,34 @@ interface CatalogAttr {
   dataType: string;
   listValues?: string[] | null;
   domainCode?: string | null;
+  aggregationType?: string | null;
+  weightAttributeCode?: string | null;
 }
 
 interface Col {
   code: string;
   name: string;
-  kind: 'text' | 'num' | 'date';
+  kind: 'text' | 'num' | 'date' | 'bool';
+  align: TableCellAlign;
+  dataType?: string;
   listValues: string[];
-}
-
-interface Facet {
-  values: string[];
-  hasBlank: boolean;
-  truncated: boolean;
+  aggregationType?: string | null;
+  weightAttributeCode?: string | null;
 }
 
 type Filter = { field: string; op: string; value?: any };
 
-const kindOf = (dataType: string): Col['kind'] =>
-  ['NUMBER', 'CURRENCY', 'PERCENTAGE', 'INTEGER', 'DECIMAL', 'FLOAT', 'NUMERIC'].includes((dataType || '').toUpperCase())
-    ? 'num'
-    : ['DATE', 'TIMESTAMP', 'DATETIME'].includes((dataType || '').toUpperCase())
-      ? 'date'
-      : 'text';
+function kindOf(dataType: string): Col['kind'] {
+  const kind = attributeDisplayKind({ dataType });
+  if (kind === 'date') return 'date';
+  if (kind === 'boolean') return 'bool';
+  if (kind === 'text') return 'text';
+  return 'num';
+}
+
+function columnMeta(dataType: string): Pick<Col, 'kind' | 'align'> {
+  return { kind: kindOf(dataType), align: tableCellAlign(dataType) };
+}
 
 function errorText(error: any): string {
   if (!error) return '';
@@ -68,14 +93,43 @@ function cellText(value: any): string {
   return String(value);
 }
 
-function formatCell(value: any, kind: Col['kind']): string {
+function columnAggFunc(col: Col): string | ((params: any) => number | null) | undefined {
+  if (col.kind !== 'num') return undefined;
+  const type = String(col.aggregationType || 'NONE').toUpperCase();
+  if (type === 'SUM') return 'sum';
+  if (type === 'AVG' || type === 'AVERAGE') return 'avg';
+  if (type === 'MIN') return 'min';
+  if (type === 'MAX') return 'max';
+  if (type === 'COUNT') return 'count';
+  if (type === 'WEIGHTED_AVG') {
+    const weightCode = col.weightAttributeCode;
+    if (!weightCode) return 'avg';
+    const weightedAvg = (params: any) => {
+      let weighted = 0;
+      let weightTotal = 0;
+      for (const leaf of params.rowNode?.allLeafChildren || []) {
+        const value = filterValue(leaf.data?.[col.code], col);
+        const weight = Number(leaf.data?.[weightCode]);
+        if (typeof value === 'number' && Number.isFinite(weight)) {
+          weighted += value * weight;
+          weightTotal += weight;
+        }
+      }
+      return weightTotal ? weighted / weightTotal : null;
+    };
+    Object.defineProperty(weightedAvg, 'name', { value: 'weighted avg' });
+    return weightedAvg;
+  }
+  return undefined;
+}
+
+function formatCell(value: any, col: Pick<Col, 'kind' | 'dataType'>): string {
   const text = cellText(value);
   if (!text) return '';
-  if (kind === 'num' || typeof value === 'number') {
-    const n = Number(text);
-    if (Number.isFinite(n)) return n.toLocaleString(undefined, { maximumFractionDigits: 6 });
+  if (col.kind === 'num' || typeof value === 'number') {
+    return formatAttributeDisplay(text, { dataType: col.dataType }) || text;
   }
-  if (kind === 'date' && /^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  if (col.kind === 'date' && /^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
   return text;
 }
 
@@ -102,12 +156,82 @@ export function buildAttributeFilters(
   return filters;
 }
 
-function sameRecord(a: Record<string, string>, b: Record<string, string>): boolean {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  for (const key of keys) {
-    if ((a[key] || '') !== (b[key] || '')) return false;
+function filterValue(value: any, col: Col) {
+  if (value == null || value === '') return null;
+  if (col.kind === 'num') {
+    const numeric = Number(String(value).replace(/,/g, ''));
+    return Number.isFinite(numeric) ? numeric : null;
   }
-  return true;
+  if (col.kind === 'date') {
+    const day = dayValue(value);
+    return day ? new Date(`${day}T00:00:00`) : null;
+  }
+  const text = cellText(value);
+  return text || null;
+}
+
+function dayValue(value: unknown): string {
+  const text = String(value || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
+}
+
+/** Translate an AG Grid filter model into the server grid operators. */
+function filtersFromGridModel(model: Record<string, any> | null | undefined): Filter[] {
+  const filters: Filter[] = [];
+  for (const [field, raw] of Object.entries(model || {})) {
+    if (!raw || raw.operator === 'OR') continue;
+    const conditions = Array.isArray(raw.conditions) ? raw.conditions : [raw];
+    for (const condition of conditions) {
+      const mapped = mapGridCondition(field, condition);
+      if (mapped) filters.push(mapped);
+    }
+  }
+  return filters;
+}
+
+function mapGridCondition(field: string, model: any): Filter | null {
+  if (!model?.type) return null;
+  const type = String(model.type);
+  if (type === 'blank') return { field, op: 'isNull' };
+  if (type === 'notBlank') return { field, op: 'notNull' };
+  if (model.filterType === 'date' || model.dateFrom) {
+    const from = dayValue(model.dateFrom || model.filter);
+    const to = dayValue(model.dateTo || model.filterTo);
+    const op = NUMBER_OPS[type];
+    if (!op || !from) return null;
+    if (op === 'between') return to ? { field, op, value: [from, to] } : null;
+    return { field, op, value: from };
+  }
+  if (model.filterType === 'number') {
+    const op = NUMBER_OPS[type];
+    if (!op || model.filter == null || model.filter === '') return null;
+    if (op === 'between') {
+      if (model.filterTo == null || model.filterTo === '') return null;
+      return { field, op, value: [model.filter, model.filterTo] };
+    }
+    return { field, op, value: model.filter };
+  }
+  const op = TEXT_OPS[type];
+  if (!op || model.filter == null || String(model.filter).trim() === '') return null;
+  return { field, op, value: String(model.filter).trim() };
+}
+
+function filterChipLabel(filter: Filter, columns: Col[]): string {
+  const name = columns.find((col) => col.code === filter.field)?.name || filter.field;
+  if (filter.op === 'isNull') return `${name}: blank`;
+  if (filter.op === 'notNull') return `${name}: not blank`;
+  if (filter.op === 'between' && Array.isArray(filter.value)) return `${name}: ${filter.value[0]} – ${filter.value[1]}`;
+  const word: Record<string, string> = {
+    contains: 'contains',
+    eq: 'equals',
+    neq: 'not',
+    gt: '>',
+    gte: '≥',
+    lt: '<',
+    lte: '≤',
+    startsWith: 'starts with',
+  };
+  return `${name} ${word[filter.op] || filter.op} “${filter.value}”`;
 }
 
 function rowMatchesGlobal(row: Record<string, any>, columns: Col[], term: string): boolean {
@@ -119,6 +243,28 @@ function rowMatchesGlobal(row: Record<string, any>, columns: Col[], term: string
   return hay.includes(needle);
 }
 
+function AggregateCell(props: any) {
+  const col = props.col as Col;
+  if (props.node?.group || props.node?.footer) {
+    const value = props.node.aggData?.[props.column?.getColId?.() || col.code] ?? props.value;
+    const text = formatCell(value, col);
+    return text ? <span>{text}</span> : null;
+  }
+  return <span>{props.valueFormatted || formatCell(props.value, col) || ''}</span>;
+}
+
+function EntityLinkCell(props: any) {
+  const code = props.column?.getColId?.() || props.colDef?.colId;
+  const text = props.valueFormatted || props.value || '';
+  if (!props.data?.entity_id) return <span>{text}</span>;
+  const href = `/${props.context.get().domainKey}/${props.data.entity_id}`;
+  return (
+    <Link href={href} className={code === 'entity_code' ? 'row-id entity-link' : 'row-name entity-link'} onClick={(event) => event.stopPropagation()}>
+      {text}
+    </Link>
+  );
+}
+
 export function EntityAttributeTable({
   domainCode,
   domainKey,
@@ -127,6 +273,8 @@ export function EntityAttributeTable({
   emptyMessage,
   related = NO_RELATED,
   onTotalChange,
+  selectedId,
+  onSelect,
 }: {
   domainCode: string;
   domainKey: string;
@@ -135,8 +283,11 @@ export function EntityAttributeTable({
   emptyMessage: string;
   related?: RelatedAttributeColumn[];
   onTotalChange?: (total: number) => void;
+  selectedId?: string | null;
+  onSelect?: (entity: { id: string; name: string; code: string }) => void;
 }) {
   const router = useRouter();
+  const inspect = useAttributeInspect();
   const relatedKey = JSON.stringify(related);
   const stableRelated = useMemo(() => related, [relatedKey]);
   const [catalog, setCatalog] = useState<Col[]>([]);
@@ -145,25 +296,30 @@ export function EntityAttributeTable({
   const [matched, setMatched] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchDraft, setSearchDraft] = useState<Record<string, string>>({});
-  const [columnSearch, setColumnSearch] = useState<Record<string, string>>({});
-  const [columnExact, setColumnExact] = useState<Record<string, string>>({});
   const [globalDraft, setGlobalDraft] = useState('');
   const [globalSearch, setGlobalSearch] = useState('');
+  const [gridFilters, setGridFilters] = useState<Filter[]>([]);
   const [sort, setSort] = useState<{ field: string; dir: 'asc' | 'desc' } | null>(null);
-  const [offset, setOffset] = useState(0);
-  const [facets, setFacets] = useState<Record<string, Facet>>({});
-  const [facetLoading, setFacetLoading] = useState<string | null>(null);
   const [scanNote, setScanNote] = useState<string | null>(null);
+  const gridApi = useRef<GridApi<Record<string, any>> | null>(null);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+
+  useEffect(() => {
+    gridApi.current?.redrawRows();
+  }, [selectedId]);
+  const filterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const filterKey = useRef('[]');
   const reqId = useRef(0);
 
   const columns = useMemo<Col[]>(() => {
-    const id: Col = { code: 'entity_code', name: 'ID', kind: 'text', listValues: [] };
-    const name: Col = { code: 'entity_name', name: 'Name', kind: 'text', listValues: [] };
+    const id: Col = { code: 'entity_code', name: 'ID', kind: 'text', align: 'left', listValues: [] };
+    const name: Col = { code: 'entity_name', name: 'Name', kind: 'text', align: 'left', listValues: [] };
     const relatedCols: Col[] = stableRelated.map((r) => ({
       code: `${r.alias}.${r.field}`,
       name: r.header,
       kind: 'text',
+      align: 'left',
       listValues: [],
     }));
     return [id, name, ...relatedCols, ...catalog];
@@ -192,15 +348,10 @@ export function EntityAttributeTable({
   useEffect(() => {
     const handle = setTimeout(() => {
       const nextGlobal = globalDraft.trim();
-      setColumnSearch((prev) => (sameRecord(prev, searchDraft) ? prev : searchDraft));
       setGlobalSearch((prev) => (prev === nextGlobal ? prev : nextGlobal));
     }, 300);
     return () => clearTimeout(handle);
-  }, [searchDraft, globalDraft]);
-
-  useEffect(() => {
-    setOffset(0);
-  }, [columnSearch, globalSearch, columnExact, refreshKey]);
+  }, [globalDraft]);
 
   useEffect(() => {
     let cancelled = false;
@@ -219,15 +370,21 @@ export function EntityAttributeTable({
         const seen = new Set<string>();
         const cols = attrs
           .filter((a) => {
-            if (!a.attributeCode || seen.has(a.attributeCode)) return false;
+            // The grid reserves "<alias>.<attribute>" for attributes reached through a
+            // declared lookup, so a dotted code is not addressable as a plain column and
+            // fails the whole query. Related columns come from `related` instead.
+            if (!a.attributeCode || a.attributeCode.includes('.') || seen.has(a.attributeCode)) return false;
             seen.add(a.attributeCode);
             return true;
           })
           .map((a) => ({
             code: a.attributeCode,
             name: a.attributeName || a.attributeCode,
-            kind: kindOf(a.dataType),
+            ...columnMeta(a.dataType),
+            dataType: a.dataType,
             listValues: (a.listValues || []).map(String).filter(Boolean),
+            aggregationType: a.aggregationType,
+            weightAttributeCode: a.weightAttributeCode,
           }))
           .sort((a, b) => a.name.localeCompare(b.name));
         setCatalog(cols);
@@ -237,10 +394,11 @@ export function EntityAttributeTable({
     return () => { cancelled = true; };
   }, [domainCode, refreshKey]);
 
-  const filters = useMemo(
-    () => buildAttributeFilters(columns, globalSearch, columnSearch, columnExact),
-    [columns, globalSearch, columnSearch, columnExact]
-  );
+  const filters = useMemo(() => {
+    const global = globalSearch.trim();
+    const base: Filter[] = global ? [{ field: 'entity_code', op: 'searchAny', value: global }] : [];
+    return [...base, ...gridFilters];
+  }, [globalSearch, gridFilters]);
 
   const loadPage = useCallback(async () => {
     if (!catalogReady) return;
@@ -257,8 +415,8 @@ export function EntityAttributeTable({
     const pageInput = {
       ...base,
       filters,
-      offset,
-      limit: PAGE_SIZE,
+      offset: 0,
+      limit: CLIENT_LIMIT,
     };
     const res = await graphqlQuery<{ gridQuery: GridResultPayload }, { input: any }>(
       GRID_QUERY,
@@ -285,8 +443,8 @@ export function EntityAttributeTable({
         return;
       }
       const all = scan.data?.gridQuery.rows || [];
-      const filtered = all.filter((row) => rowMatchesGlobal(row, columns, globalSearch));
-      setRows(filtered.slice(offset, offset + PAGE_SIZE));
+      const filtered = all.filter((row) => rowMatchesGlobal(row, columns, globalSearch)).slice(0, CLIENT_LIMIT);
+      setRows(filtered);
       setMatched(filtered.length);
       setScanNote(
         (scan.data?.gridQuery.total || 0) > all.length
@@ -307,128 +465,61 @@ export function EntityAttributeTable({
       return;
     }
     const grid = res.data?.gridQuery;
-    setRows(grid?.rows || []);
-    setMatched(grid?.total || 0);
-    if (filters.length === 0) onTotalChange?.(grid?.total || 0);
-    setScanNote(null);
+    const loaded = grid?.rows || [];
+    const total = grid?.total || 0;
+    setRows(loaded);
+    setMatched(total);
+    if (filters.length === 0) onTotalChange?.(total);
+    setScanNote(total > loaded.length
+      ? `Row groups and totals use the first ${loaded.length.toLocaleString()} of ${total.toLocaleString()} matching records.`
+      : null);
     setError(null);
     setLoading(false);
-  }, [catalogReady, domainCode, asOfDate, attributeColumns, lookups, sort, filters, offset, columns, globalSearch, onTotalChange]);
+  }, [catalogReady, domainCode, asOfDate, attributeColumns, lookups, sort, filters, columns, globalSearch, onTotalChange]);
 
   useEffect(() => { loadPage(); }, [loadPage, refreshKey]);
 
-  useEffect(() => {
-    if (!catalogReady) return;
-    let cancelled = false;
-    graphqlQuery<{ gridQuery: GridResultPayload }, { input: any }>(
-      GRID_QUERY,
-      {
-        input: {
-          start: 'DOMAIN',
-          domainCode,
-          asOfDate: asOfDate || null,
-          columns: [],
-          offset: 0,
-          limit: 1,
-        },
-      },
-      'network-only'
-    ).then((res) => {
-      if (cancelled || res.error) return;
-      onTotalChange?.(res.data?.gridQuery.total || 0);
-    });
-    return () => { cancelled = true; };
-  }, [catalogReady, domainCode, asOfDate, refreshKey, onTotalChange]);
-
-  const facetScope = useMemo(() => JSON.stringify({
-    filters: filters.filter((f) => f.op !== 'eq' && f.op !== 'isNull'),
-    asOfDate,
-    domainCode,
-  }), [filters, asOfDate, domainCode]);
-
-  useEffect(() => { setFacets({}); }, [facetScope, refreshKey]);
-
-  const loadFacet = async (col: Col) => {
-    if (facets[col.code] || facetLoading === col.code) return;
-    setFacetLoading(col.code);
-    const others = filters.filter((f) => f.field !== col.code && f.op !== 'searchAny');
-    const res = await graphqlQuery<{ gridQuery: GridResultPayload }, { input: any }>(
-      GRID_QUERY,
-      {
-        input: {
-          start: 'DOMAIN',
-          domainCode,
-          asOfDate: asOfDate || null,
-          columns: col.code.includes('.') || !col.code.startsWith('entity_') ? [col.code] : [],
-          lookups,
-          filters: others,
-          groupBy: [col.code],
-          offset: 0,
-          limit: FACET_LIMIT,
-        },
-      },
-      'network-only'
-    );
-    const grid = res.data?.gridQuery;
-    const values = new Set<string>(col.listValues);
-    let hasBlank = false;
-    for (const row of grid?.rows || []) {
-      if (row._key === null || row._key === undefined || row._key === '') hasBlank = true;
-      else values.add(cellText(row._key));
-    }
-    setFacets((prev) => ({
-      ...prev,
-      [col.code]: {
-        values: Array.from(values).filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-        hasBlank,
-        truncated: (grid?.total || 0) > (grid?.rows?.length || 0),
-      },
-    }));
-    setFacetLoading(null);
-  };
-
-  const toggleSort = (field: string) => {
-    setOffset(0);
-    setSort((current) => {
-      if (current?.field !== field) return { field, dir: 'asc' };
-      if (current.dir === 'asc') return { field, dir: 'desc' };
-      return null;
-    });
+  const clearField = (field: string) => {
+    const model = { ...(gridApi.current?.getFilterModel() || {}) };
+    delete model[field];
+    gridApi.current?.setFilterModel(model);
+    const next = filtersFromGridModel(model);
+    filterKey.current = JSON.stringify(next);
+    setGridFilters(next);
   };
 
   const clearAll = () => {
-    setSearchDraft({});
-    setColumnSearch({});
-    setColumnExact({});
+    gridApi.current?.setFilterModel(null);
+    filterKey.current = '[]';
+    setGridFilters([]);
     setGlobalDraft('');
     setGlobalSearch('');
-    setOffset(0);
   };
 
-  const activeChips = columns.flatMap((col) => {
-    const chips: Array<{ key: string; label: string; clear: () => void }> = [];
-    const exact = columnExact[col.code];
-    const search = (columnSearch[col.code] || '').trim();
-    if (exact === BLANK) chips.push({
-      key: `${col.code}-blank`,
-      label: `${col.name}: blank`,
-      clear: () => setColumnExact((f) => ({ ...f, [col.code]: '' })),
-    });
-    else if (exact) chips.push({
-      key: `${col.code}-eq`,
-      label: `${col.name}: ${exact}`,
-      clear: () => setColumnExact((f) => ({ ...f, [col.code]: '' })),
-    });
-    if (search) chips.push({
-      key: `${col.code}-search`,
-      label: `${col.name} contains “${search}”`,
-      clear: () => {
-        setSearchDraft((f) => ({ ...f, [col.code]: '' }));
-        setColumnSearch((f) => ({ ...f, [col.code]: '' }));
-      },
-    });
-    return chips;
-  });
+  const applyGridFilters = (event: FilterChangedEvent) => {
+    if (filterTimer.current) clearTimeout(filterTimer.current);
+    filterTimer.current = setTimeout(() => {
+      const next = filtersFromGridModel(event.api.getFilterModel());
+      const key = JSON.stringify(next);
+      if (key === filterKey.current) return;
+      filterKey.current = key;
+      setGridFilters(next);
+    }, 300);
+  };
+
+  const applyGridSort = (event: SortChangedEvent) => {
+    const sorted = event.api.getColumnState().find((column) => column.sort === 'asc' || column.sort === 'desc');
+    const next = sorted?.colId && (sorted.sort === 'asc' || sorted.sort === 'desc')
+      ? { field: sorted.colId, dir: sorted.sort }
+      : null;
+    setSort((current) => (current?.field === next?.field && current?.dir === next?.dir ? current : next));
+  };
+
+  const activeChips = gridFilters.map((filter) => ({
+    key: `${filter.field}-${filter.op}-${JSON.stringify(filter.value ?? '')}`,
+    label: filterChipLabel(filter, columns),
+    clear: () => clearField(filter.field),
+  }));
   if (globalSearch) {
     activeChips.unshift({
       key: 'global',
@@ -437,9 +528,63 @@ export function EntityAttributeTable({
     });
   }
 
-  const page = Math.floor(offset / PAGE_SIZE) + 1;
-  const pages = Math.max(1, Math.ceil(matched / PAGE_SIZE));
   const shown = rows.length;
+
+  const gridActions = useRef({ domainKey });
+  gridActions.current = { domainKey };
+  const gridContext = useMemo(() => ({ get: () => gridActions.current }), []);
+  const columnDefs = useMemo<ColDef[]>(() => {
+    const defs: ColDef[] = columns.map((col) => {
+      const aggFunc = columnAggFunc(col);
+      return {
+      colId: col.code,
+      headerName: col.name,
+      sortable: true,
+      filter: col.kind === 'num' ? 'agNumberColumnFilter' : col.kind === 'date' ? 'agDateColumnFilter' : 'agSetColumnFilter',
+      floatingFilter: true,
+      filterParams: col.kind === 'text' || col.kind === 'bool'
+        ? { applyMiniFilterWhileTyping: true, defaultToNothingSelected: false }
+        : { maxNumConditions: 2, buttons: ['reset'] },
+      enableRowGroup: true,
+      enableValue: Boolean(aggFunc),
+      aggFunc,
+      allowedAggFuncs: aggFunc ? ['sum', 'avg', 'min', 'max', 'count'] : undefined,
+      sort: col.code === 'entity_name' ? 'asc' : undefined,
+      pinned: col.code === 'entity_code' ? 'left' : undefined,
+      minWidth: col.code === 'entity_code' ? 140 : 160,
+      flex: 1,
+      cellStyle: { textAlign: col.align },
+      cellClass: isRowAttributeCode(col.code) ? 'attr-inspectable' : undefined,
+      valueGetter: (params) => {
+        if (params.node?.group || params.node?.footer) {
+          return params.node.aggData?.[col.code];
+        }
+        return filterValue(params.data?.[col.code], col);
+      },
+      valueFormatter: (params) => {
+        const raw = params.node?.group || params.node?.footer
+          ? params.value
+          : (params.data ? params.data[col.code] : params.value);
+        return formatCell(raw, col) || '';
+      },
+      cellRenderer: col.code === 'entity_code' || col.code === 'entity_name'
+        ? EntityLinkCell
+        : aggFunc ? AggregateCell : undefined,
+      cellRendererParams: aggFunc ? { col } : undefined,
+    };
+    });
+    defs.push({
+      colId: 'status',
+      headerName: 'Status',
+      sortable: false,
+      filter: false,
+      width: 110,
+      maxWidth: 120,
+      valueGetter: () => 'Active',
+      cellRenderer: () => <span className="status-chip active">Active</span>,
+    });
+    return defs;
+  }, [columns]);
 
   return (
     <>
@@ -467,94 +612,63 @@ export function EntityAttributeTable({
       {scanNote && <div className="attr-table-note">{scanNote}</div>}
       {error && <div className="attr-table-error">{error}</div>}
 
-      <div className="data-table attr-table-wrap">
-        <table className="attr-table">
-          <thead>
-            <tr>
-              {columns.map((col) => (
-                <th key={col.code} className={col.code === 'entity_code' ? 'sticky-col' : undefined}>
-                  <button type="button" className="attr-sort" onClick={() => toggleSort(col.code)}>
-                    {col.name}
-                    {sort?.field === col.code ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
-                  </button>
-                  <input
-                    className="attr-col-search"
-                    value={searchDraft[col.code] || ''}
-                    placeholder="Search"
-                    aria-label={`Search ${col.name}`}
-                    onChange={(e) => setSearchDraft((f) => ({ ...f, [col.code]: e.target.value }))}
-                  />
-                  <select
-                    className="attr-col-filter"
-                    aria-label={`Filter ${col.name}`}
-                    value={columnExact[col.code] || ''}
-                    onFocus={() => loadFacet(col)}
-                    onChange={(e) => {
-                      setColumnExact((f) => ({ ...f, [col.code]: e.target.value }));
-                      setOffset(0);
-                    }}
-                  >
-                    <option value="">All</option>
-                    {facetLoading === col.code && <option value="__loading__" disabled>Loading values…</option>}
-                    {facets[col.code]?.hasBlank && <option value={BLANK}>(Blank)</option>}
-                    {(facets[col.code]?.values || []).map((value) => (
-                      <option key={value} value={value}>{formatCell(value, col.kind) || value}</option>
-                    ))}
-                    {facets[col.code]?.truncated && <option value="__more__" disabled>More values — use search</option>}
-                    {columnExact[col.code] && columnExact[col.code] !== BLANK && !(facets[col.code]?.values || []).includes(columnExact[col.code]) && (
-                      <option value={columnExact[col.code]}>{columnExact[col.code]}</option>
-                    )}
-                  </select>
-                </th>
-              ))}
-              <th className="attr-status"><span className="attr-sort">Status</span></th>
-            </tr>
-          </thead>
-            <tbody style={{ opacity: loading ? 0.55 : 1 }}>
-            {!catalogReady || (loading && rows.length === 0) ? (
-              <tr><td className="attr-empty" colSpan={columns.length + 1}>Loading…</td></tr>
-            ) : rows.length === 0 ? (
-              <tr><td className="attr-empty" colSpan={columns.length + 1}>{filters.length > 0 ? 'No records match these filters.' : emptyMessage}</td></tr>
-            ) : rows.map((row) => {
-              const href = `/${domainKey}/${row.entity_id}`;
-              return (
-                <tr key={row.entity_id} onClick={() => router.push(href)}>
-                  {columns.map((col) => {
-                    const text = formatCell(row[col.code], col.kind);
-                    if (col.code === 'entity_code') {
-                      return (
-                        <td key={col.code} className="sticky-col">
-                          <Link href={href} className="row-id" onClick={(e) => e.stopPropagation()}>{text || '—'}</Link>
-                        </td>
-                      );
-                    }
-                    if (col.code === 'entity_name') {
-                      return (
-                        <td key={col.code}>
-                          <Link href={href} className="row-name" onClick={(e) => e.stopPropagation()}>{text || '—'}</Link>
-                        </td>
-                      );
-                    }
-                    return (
-                      <td key={col.code} className={col.kind === 'num' ? 'attr-num' : undefined} title={col.code}>
-                        {text || '—'}
-                      </td>
-                    );
-                  })}
-                  <td className="attr-status"><span className="status-chip active">Active</span></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div className="data-table attr-table-wrap" style={{ opacity: loading && rows.length ? 0.55 : 1 }}>
+        <AppGrid
+          rows={catalogReady ? rows : []}
+          columns={columnDefs}
+          getRowId={(row) => String(row.entity_id || row.entity_code || 'row')}
+          autoHeight={false}
+          height="100%"
+          enableSortFilter
+          loading={!catalogReady || (loading && rows.length === 0)}
+          emptyMessage={!catalogReady || loading ? 'Loading…' : (filters.length > 0 ? 'No records match these filters.' : emptyMessage)}
+          context={gridContext}
+          onGridReady={(api) => { gridApi.current = api; }}
+          onFilterChanged={applyGridFilters}
+          onSortChanged={applyGridSort}
+          rowGroupPanelShow="always"
+          grandTotalRow="bottom"
+          autoGroupColumnDef={{ headerName: 'Group', minWidth: 220 }}
+          getRowClass={(params) => (
+            params.data?.entity_id && String(params.data.entity_id) === selectedIdRef.current
+              ? 'entity-row-selected'
+              : undefined
+          )}
+          onRowClicked={(row) => {
+            if (!row.entity_id) return;
+            if (onSelect) {
+              onSelect({
+                id: String(row.entity_id),
+                name: cellText(row.entity_name),
+                code: cellText(row.entity_code),
+              });
+              return;
+            }
+            router.push(`/${domainKey}/${row.entity_id}`);
+          }}
+          onRowDoubleClicked={onSelect ? (row) => {
+            if (!row.entity_id) return;
+            router.push(`/${domainKey}/${row.entity_id}`);
+          } : undefined}
+          onCellContextMenu={(event) => {
+            const code = event.column?.getColId?.() || '';
+            if (!isRowAttributeCode(code) || !event.data) return;
+            (event.event as MouseEvent | undefined)?.preventDefault();
+            const col = columns.find((item) => item.code === code);
+            if (!col) return;
+            inspect.open({
+              entityId: String(event.data.entity_id),
+              entityName: cellText(event.data.entity_name) || cellText(event.data.entity_code),
+              attributeCode: col.code,
+              attributeName: col.name,
+              dataType: col.dataType,
+              value: formatCell(event.data[col.code], col),
+              domainCode,
+              onChanged: () => { void loadPage(); },
+            });
+          }}
+        />
       </div>
-      {matched > PAGE_SIZE && (
-        <div className="attr-pager">
-          <button type="button" className="btn btn-sm" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Previous</button>
-          <span>Page {page} of {pages}</span>
-          <button type="button" className="btn btn-sm" disabled={page >= pages} onClick={() => setOffset(offset + PAGE_SIZE)}>Next</button>
-        </div>
-      )}
     </>
   );
 }

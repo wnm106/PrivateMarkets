@@ -3,7 +3,7 @@ import { ToolDefinition } from '../lib/types';
 
 const getFieldLineage: ToolDefinition = {
   name: 'get_field_lineage',
-  description: 'Get field-level lineage for an entity, showing all competing source values and the resolved golden record.',
+  description: 'Competing source values and the winning value for one record. entityId is required. attributeCode, when used, comes from search_attributes; omit it for every field on that record. For a source or a field across many records, use query_data with grain "value". An open Manual Entry value wins when one is present.',
   category: 'lineage',
   inputSchema: {
     type: 'object',
@@ -67,7 +67,7 @@ const getFieldLineage: ToolDefinition = {
 
 const getTemporalHistory: ToolDefinition = {
   name: 'get_temporal_history',
-  description: 'Get the bi-temporal history of a specific attribute for an entity, showing all changes over time.',
+  description: 'History of one field on one record between fromDate and toDate (YYYY-MM-DD). attributeCode comes from search_attributes. For the current value across records, use query_data.',
   category: 'lineage',
   inputSchema: {
     type: 'object',

@@ -9,7 +9,7 @@ function cx(supabase: any) {
 
 const listComplianceRules: ToolDefinition = {
   name: 'list_compliance_rules',
-  description: 'List compliance rules (concentration, exposure, diversification, eligibility, leverage, liquidity limits) with optional filtering.',
+  description: 'Compliance rules and their codes. Call this before get, evaluate, or update. Use the returned ruleCode. Do not invent one. anchorDomainCode, when used as a filter, comes from list_domain_types.',
   category: 'compliance',
   inputSchema: {
     type: 'object',
@@ -45,7 +45,7 @@ const listComplianceRules: ToolDefinition = {
 
 const getComplianceRuleVersion: ToolDefinition = {
   name: 'get_compliance_rule_version',
-  description: 'Resolve which rule_version of a compliance rule is bi-temporally in force for a given as-of date (valid time) and knowledge date (system time). Use this to inspect historical rule behavior.',
+  description: 'Which version of a rule is in force on an as-of date and knowledge date. ruleCode comes from list_compliance_rules. asOfDate is YYYY-MM-DD. Use this before describing historical rule behavior.',
   category: 'compliance',
   inputSchema: {
     type: 'object',
@@ -73,7 +73,7 @@ const getComplianceRuleVersion: ToolDefinition = {
 
 const evaluateComplianceRule: ToolDefinition = {
   name: 'evaluate_compliance_rule',
-  description: 'Run a compliance rule for a given as-of date (valid time), knowledge date (system time), and source scope (golden master or a single named source). Rolls up base entities per the rule definition, applies conditions, computes numerator/denominator, and compares against hard/soft limits. Returns the run summary (result/breach counts).',
+  description: 'Run a compliance rule and return result and breach counts. ruleCode comes from list_compliance_rules. asOfDate is YYYY-MM-DD. sourceScope is the golden record or one source code from the source registry. Read get_compliance_rule first if you need to explain the rule. For an ad hoc count that is not a saved rule, use query_data.',
   category: 'compliance',
   inputSchema: {
     type: 'object',
@@ -113,7 +113,7 @@ const evaluateComplianceRule: ToolDefinition = {
 
 const listComplianceBreaches: ToolDefinition = {
   name: 'list_compliance_breaches',
-  description: 'List compliance evaluation results that are in SOFT_BREACH or HARD_BREACH status, optionally scoped to a specific rule or run.',
+  description: 'SOFT_BREACH and HARD_BREACH rows from an evaluation. ruleCode comes from list_compliance_rules. runId comes from evaluate_compliance_rule. Do not treat a missing run as zero breaches.',
   category: 'compliance',
   inputSchema: {
     type: 'object',
@@ -167,7 +167,7 @@ const listComplianceBreaches: ToolDefinition = {
 
 const getComplianceRule: ToolDefinition = {
   name: 'get_compliance_rule',
-  description: 'Get full details of a compliance rule including all versions, conditions, and scope assignments. Use this to inspect a rule before modifying it.',
+  description: 'One rule, including versions, conditions, and scope. ruleCode comes from list_compliance_rules. Read this before changing the rule.',
   category: 'compliance',
   inputSchema: {
     type: 'object',
@@ -231,11 +231,13 @@ function mapVersionRow(v: any) {
     denominatorAggregation: v.denominator_aggregation,
     denominatorDimension: v.denominator_dimension,
     denominatorScope: v.denominator_scope,
+    denominatorSource: v.denominator_source || 'BASE',
     denominatorConstantValue: v.denominator_constant_value,
     groupByDimension: v.group_by_dimension,
     resultTransform: v.result_transform, resultUnit: v.result_unit,
     limitDirection: v.limit_direction,
     softLimitValue: v.soft_limit_value, hardLimitValue: v.hard_limit_value,
+    hardLimitAttributeCode: v.hard_limit_attribute_code, softLimitFactor: v.soft_limit_factor,
     defaultSourceScope: v.default_source_scope, isActive: v.is_active,
     conditions: (v.conditions || []).map((c: any) => ({
       id: c.id, appliesTo: c.applies_to, conditionGroup: c.condition_group,
@@ -250,7 +252,7 @@ function mapVersionRow(v: any) {
 
 const createComplianceRule: ToolDefinition = {
   name: 'create_compliance_rule',
-  description: 'Create a new compliance rule identity. After creating the rule, use create_compliance_rule_version to add the first version with rollup logic, conditions, and limits. Use create_compliance_scope_assignment to assign specific entities if applies_to_all is false.',
+  description: 'Create the identity of a compliance rule. Call list_compliance_rules first so you do not duplicate a ruleCode. anchorDomainCode comes from list_domain_types. This does not define the math. Call create_compliance_rule_version next, then create_compliance_scope_assignment when the rule does not apply to every record.',
   category: 'compliance',
   inputSchema: {
     type: 'object',
@@ -296,7 +298,7 @@ const createComplianceRule: ToolDefinition = {
 
 const updateComplianceRule: ToolDefinition = {
   name: 'update_compliance_rule',
-  description: "Update a compliance rule's metadata (name, category, active status, description). Does NOT change rule logic — use create_compliance_rule_version for that.",
+  description: 'Change a rule name, category, description, or active flag. ruleCode comes from list_compliance_rules. This does not change the math. Call create_compliance_rule_version for that.',
   category: 'compliance',
   inputSchema: {
     type: 'object',
@@ -346,7 +348,7 @@ const updateComplianceRule: ToolDefinition = {
 
 const deleteComplianceRule: ToolDefinition = {
   name: 'delete_compliance_rule',
-  description: 'Delete a compliance rule and all its versions, conditions, scope assignments, and evaluation history. Use with caution. Alternatively, use update_compliance_rule to set isActive=false.',
+  description: 'Delete a rule and its versions, conditions, scope, and evaluation history. ruleCode comes from list_compliance_rules. To keep the history and stop the rule, call update_compliance_rule with isActive false.',
   category: 'compliance',
   inputSchema: {
     type: 'object',
@@ -393,7 +395,7 @@ const deleteComplianceRule: ToolDefinition = {
 
 const createComplianceRuleVersion: ToolDefinition = {
   name: 'create_compliance_rule_version',
-  description: 'Create a new version of a compliance rule with rollup logic, numerator/denominator configuration, limits, and optional conditions. This is the main tool for defining rule logic. The version auto-increments and becomes the current version for the given valid_from date.',
+  description: 'Add the math of a compliance rule: rollup, numerator, denominator, limits, and conditions. ruleCode comes from list_compliance_rules or create_compliance_rule. Attribute codes come from get_template_metadata. Relationship codes come from get_relationship_types. Read the tapestrai://model/compliance-guide resource before choosing the rollup. Do not invent codes. The version becomes current from validFrom.',
   category: 'compliance',
   inputSchema: {
     type: 'object',
@@ -408,17 +410,20 @@ const createComplianceRuleVersion: ToolDefinition = {
       groupByPath: { type: 'array', items: { type: 'object', properties: { relationshipCode: { type: 'string' }, direction: { type: 'string', enum: ['UP', 'DOWN'] }, maxHops: { type: 'number' }, includeEndpoints: { type: 'boolean' } } }, description: 'Hops from base to group-by entity.' },
       groupByAttributeCode: { type: 'string', description: 'Attribute to group by (e.g. "INDUSTRY")' },
       numeratorAttributeCode: { type: 'string', description: 'Attribute for numerator (e.g. "MARKET_VALUE")' },
-      numeratorAggregation: { type: 'string', enum: ['SUM', 'COUNT', 'AVG', 'MAX', 'MIN'] },
+      numeratorAggregation: { type: 'string', enum: ['SUM', 'COUNT', 'AVG', 'MAX', 'MIN', 'VALUE'] },
       numeratorDimension: { type: 'object', description: 'Optional bi-temporal dimension override' },
       denominatorAttributeCode: { type: 'string', description: 'Attribute for denominator (omit if using constant)' },
       denominatorAggregation: { type: 'string', enum: ['SUM', 'COUNT', 'AVG', 'MAX', 'MIN'] },
       denominatorDimension: { type: 'object' },
-      denominatorScope: { type: 'string', enum: ['ROLLUP', 'ANCHOR', 'UNIVERSE'], description: 'Default: ROLLUP' },
+      denominatorScope: { type: 'string', enum: ['SAME_GROUP', 'ANCHOR_TOTAL', 'CONSTANT'], description: 'Default: SAME_GROUP. ANCHOR_TOTAL is the whole fund. Omit the denominator attribute for a count or a total.' },
+      denominatorSource: { type: 'string', enum: ['BASE', 'ANCHOR'], description: 'BASE aggregates positions. ANCHOR reads the denominator attribute on the fund, for example NAV. Default: BASE.' },
       denominatorConstantValue: { type: 'number', description: 'Fixed denominator value' },
       groupByDimension: { type: 'object' },
-      resultTransform: { type: 'string', enum: ['NONE', 'COMPLEMENT_TO_100', 'INVERT'], description: 'Default: NONE' },
-      resultUnit: { type: 'string', enum: ['PERCENT', 'RATIO', 'CURRENCY', 'COUNT'] },
-      limitDirection: { type: 'string', enum: ['LEQ', 'GEQ'], description: 'LEQ=upper, GEQ=lower. Default: LEQ' },
+      resultTransform: { type: 'string', enum: ['NONE', 'DIFFERENCE', 'ABS_DIFFERENCE', 'PCT_CHANGE', 'ABS_PCT_CHANGE'], description: 'Default: NONE' },
+      resultUnit: { type: 'string', enum: ['PERCENTAGE', 'RATIO', 'CURRENCY', 'COUNT'] },
+      limitDirection: { type: 'string', enum: ['MAX', 'MIN'], description: 'MAX breaches above the limit. MIN breaches below it.' },
+      hardLimitAttributeCode: { type: 'string', description: 'Attribute on the anchor that supplies the hard limit. Falls back to hardLimitValue.' },
+      softLimitFactor: { type: 'number', description: 'Warning threshold as a fraction of the anchor hard limit, from 0 to 1.' },
       softLimitValue: { type: 'number', description: 'Soft limit (warning)' },
       hardLimitValue: { type: 'number', description: 'Hard limit (breach)' },
       defaultSourceScope: { type: 'string', description: '"GOLDEN" or source_code. Default: GOLDEN' },
@@ -432,7 +437,7 @@ const createComplianceRuleVersion: ToolDefinition = {
             conditionOrder: { type: 'number' },
             attributeCode: { type: 'string' },
             attributeDimension: { type: 'object' },
-            operator: { type: 'string', enum: ['EQ', 'NEQ', 'GT', 'GTE', 'LT', 'LTE', 'IN', 'NOT_IN', 'IS_NULL', 'IS_NOT_NULL', 'LIKE', 'BETWEEN'] },
+            operator: { type: 'string', enum: ['equals', 'not_equals', 'gt', 'gte', 'lt', 'lte', 'in', 'not_in', 'is_null', 'is_not_null'] },
             value: { description: 'Value to compare against' },
             compareAttributeCode: { type: 'string', description: 'Compare vs another attribute' },
             compareDimension: { type: 'object' },
@@ -475,11 +480,14 @@ const createComplianceRuleVersion: ToolDefinition = {
       denominator_attribute_code: args.denominatorAttributeCode || null,
       denominator_aggregation: args.denominatorAggregation || null,
       denominator_dimension: args.denominatorDimension || null,
-      denominator_scope: args.denominatorScope || 'ROLLUP',
+      denominator_scope: args.denominatorScope || 'SAME_GROUP',
+      denominator_source: args.denominatorSource || 'BASE',
       denominator_constant_value: args.denominatorConstantValue ?? null,
       group_by_dimension: args.groupByDimension || null,
       result_transform: args.resultTransform || 'NONE',
-      result_unit: args.resultUnit || 'PERCENT',
+      result_unit: args.resultUnit || 'PERCENTAGE',
+      hard_limit_attribute_code: args.hardLimitAttributeCode || null,
+      soft_limit_factor: args.softLimitFactor ?? null,
       limit_direction: args.limitDirection,
       soft_limit_value: args.softLimitValue ?? null,
       hard_limit_value: args.hardLimitValue ?? null,
@@ -523,11 +531,13 @@ const createComplianceRuleVersion: ToolDefinition = {
         denominatorAggregation: version.denominator_aggregation,
         denominatorDimension: version.denominator_dimension,
         denominatorScope: version.denominator_scope,
+        denominatorSource: version.denominator_source || 'BASE',
         denominatorConstantValue: version.denominator_constant_value,
         groupByDimension: version.group_by_dimension,
         resultTransform: version.result_transform, resultUnit: version.result_unit,
         limitDirection: version.limit_direction,
         softLimitValue: version.soft_limit_value, hardLimitValue: version.hard_limit_value,
+        hardLimitAttributeCode: version.hard_limit_attribute_code, softLimitFactor: version.soft_limit_factor,
         defaultSourceScope: version.default_source_scope, isActive: version.is_active,
         conditions: createdConditions.map((c: any) => ({
           id: c.id, appliesTo: c.applies_to, conditionGroup: c.condition_group,
@@ -543,7 +553,7 @@ const createComplianceRuleVersion: ToolDefinition = {
 
 const createComplianceScopeAssignment: ToolDefinition = {
   name: 'create_compliance_scope_assignment',
-  description: "Assign an entity to a compliance rule's scope. Use scopeType INCLUDE to add entities when applies_to_all is false, or EXCLUDE to carve out exceptions when applies_to_all is true.",
+  description: 'Add or carve out one record on a rule. ruleCode comes from list_compliance_rules. The entity must already exist. INCLUDE adds a record when the rule is not for everyone. EXCLUDE removes a record when the rule is for everyone.',
   category: 'compliance',
   inputSchema: {
     type: 'object',
@@ -598,7 +608,7 @@ const createComplianceScopeAssignment: ToolDefinition = {
 
 const deleteComplianceScopeAssignment: ToolDefinition = {
   name: 'delete_compliance_scope_assignment',
-  description: 'Remove a scope assignment from a compliance rule.',
+  description: 'Remove one scope row. id comes from get_compliance_rule. This does not delete the rule or the record.',
   category: 'compliance',
   inputSchema: {
     type: 'object',

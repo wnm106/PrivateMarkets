@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { graphqlMutation, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
 import { EntityForm } from '@/components/forms/EntityForm';
-import { EntityAttributeTable } from '@/components/entities/EntityAttributeTable';
+import { EntityHome } from '@/components/entities/EntityHome';
 import { useTemporalStore } from '@/lib/store';
 import { DomainKey } from '@/lib/mock-data';
 
@@ -25,6 +25,7 @@ export default function SecuritiesPage() {
           domainCode: 'SECURITY',
           templateCode: formData.template,
           description: formData.description || '',
+          clientId: formData.clientId || null,
           attributes: formData.attributes || {},
           parentRelationships: toRelationshipInputs(formData.parentRelationships, 'parent'),
           childRelationships: toRelationshipInputs(formData.childRelationships, 'child'),
@@ -60,7 +61,7 @@ export default function SecuritiesPage() {
         </div>
       </div>
 
-      <EntityAttributeTable
+      <EntityHome
         domainCode="SECURITY"
         domainKey={domain}
         asOfDate={asOfDate}

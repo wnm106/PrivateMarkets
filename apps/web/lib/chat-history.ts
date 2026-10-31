@@ -1,4 +1,5 @@
 import { authHeaders } from '@/lib/reporting';
+import type { SkillState } from '@tapestrai/mcp-server/src/lib/chat-skills';
 
 export interface ChatConversation {
   id: string;
@@ -11,6 +12,8 @@ export interface ChatConversation {
   last_message_at: string | null;
   created_at: string;
   updated_at: string;
+  /** Guided skill ledger. Absent on threads started before skills existed. */
+  skill_state?: SkillState | null;
 }
 
 export interface StoredChatMessage {

@@ -130,7 +130,7 @@ export function TemplateForm({ mode, initialData, onSubmit, onCancel }: Template
 
         {formData.domain && (
           <div style={{ marginTop: '18px' }}>
-            <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
+            <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
               Assign Attributes ({selectedAttributes.length} selected)
             </div>
             <div style={{ background: 'var(--bg)', border: '1px solid var(--line)', padding: '14px', maxHeight: '300px', overflowY: 'auto' }}>

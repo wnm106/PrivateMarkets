@@ -1,0 +1,56 @@
+---
+description: Dashboard visual baseline. Every dashboard uses the deal-workspace pattern from the allocation surface.
+globs: apps/web/**/*.{tsx,css}
+alwaysApply: false
+---
+
+# Dashboards
+
+The allocation surface (`AllocationBoard`, classes prefixed `da-` in `apps/web/styles/globals.css`) is the baseline. A dashboard reuses those classes. It does not invent a second header, KPI strip, table, or status pill.
+
+Wrap the view in `da`.
+
+## Page
+
+1. `da-crumbs` — trail, slash separators, current name in `strong`.
+2. `da-ribbon` — one identity band:
+   - `da-title`: `da-chip` for the stage, serif `h1`, one sentence, optional `da-track` for a sequence.
+   - `da-facts`: labeled facts. One `da-fact big` holds the headline number. The label is muted; the value is weight 500.
+   - `da-holdbox`: the single decision or coverage for the page. Serif number, one sentence, `da-bar`.
+3. `da-tabs` — sections of this workspace. The active tab is `on` (3px teal underline). A section that is not built yet stays visible and `disabled`.
+4. Each block is `da-sec` with `da-sechead`: title on the left, a helper sentence or `page-actions` on the right.
+
+## Work surface
+
+- Peer objects are `da-cards` / `da-card`. Color is a 3px top edge. One serif figure per card (`da-size`).
+- A composition is `da-stack` of `da-seg`, with `da-axis` labeling the ends.
+- A working table is `da-grid` inside `da-gridwrap`. A cell is a value plus a muted `small`. Numbers are right-aligned (`num`). The selected row is `sel`.
+- The selection’s detail is `da-panel` beside the grid (`da-main`). Lead with `da-big`, then `da-mini` or a plain table, then `da-rule` rows.
+- Status is `da-st`: `ok`, `near`, `bind`, `breach`, `na`. A gauge is `da-gauge` with the same suffix.
+- Actions use `btn`. One `btn btn-primary` completes the screen.
+- The main surface shows the name a person uses: the deal, the fund, the rule, the attribute. It does not show the attribute code, the rule code, or the entity code. Those identifiers stay on the detail screen.
+
+```tsx
+<div className="da">
+  <header className="da-ribbon">
+    <div className="da-title">
+      <span className="da-chip">Diligence</span>
+      <h1>Project Brightwater</h1>
+      <p>Add-on ready unitranche with revolver.</p>
+    </div>
+    <div className="da-facts">
+      <div className="da-fact big"><span>Total facility</span><strong>$250.0M</strong></div>
+    </div>
+    <div className="da-holdbox">
+      <div className="da-holdtop"><span>Our hold</span><b>50%</b></div>
+      <div className="da-bar"><i style={{ width: '50%' }} /></div>
+    </div>
+  </header>
+</div>
+```
+
+## Leave these out
+
+- `page-header` and `page-title` are for admin lists, not dashboards.
+- `AppGrid` is for registers. A deal, fund, pipeline, or compliance workspace uses `da-grid`.
+- Do not add a new class prefix for a dashboard. Extend `da-` only when the existing classes cannot express the layout.

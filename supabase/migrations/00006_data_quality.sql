@@ -28,6 +28,7 @@ CREATE INDEX idx_dq_rules_severity ON data_quality.dq_rules(rule_severity);
 CREATE INDEX idx_dq_rules_active ON data_quality.dq_rules(is_active);
 
 COMMENT ON TABLE data_quality.dq_rules IS 'Data quality rule definitions with severity and type classifications';
+COMMENT ON COLUMN data_quality.dq_rules.rule_expression IS 'SQL boolean predicate that is true for records that fail the rule. Evaluated against current golden attributes, with attribute codes as lowercase columns.';
 
 -- DQ Exceptions: Data quality exception tracking
 CREATE TABLE data_quality.dq_exceptions (
@@ -102,8 +103,8 @@ BEGIN
         AND attribute_id = v_rule.attribute_id
     LIMIT 1;
     
-    -- Evaluate rule (placeholder - would use dynamic SQL or rule engine)
-    -- This is a simplified example
+    -- Placeholder. rule_expression is a failure predicate (true => the record
+    -- fails) and is executed by the evaluator in 00061_dq_fail_predicates.sql.
     v_passed := v_value IS NOT NULL;
     
     RETURN QUERY
@@ -115,11 +116,12 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION data_quality.evaluate_dq_rule IS 'Evaluates a DQ rule against an entity and returns pass/fail with details';
+COMMENT ON FUNCTION data_quality.evaluate_dq_rule IS 'Evaluates a DQ rule against an entity. rule_expression is true when the record fails; full evaluation is installed in 00061.';
 
--- Insert sample DQ rules
+-- Sample rules. Each expression is the failing population (true => violation),
+-- which is the complement of the previous pass predicate, including NULL.
 INSERT INTO data_quality.dq_rules (rule_code, rule_name, domain_code, rule_type, rule_severity, rule_expression, rule_description) VALUES
-    ('FUND_NAV_NOT_NULL', 'Fund NAV Required', 'FUND', 'COMPLETENESS', 'CRITICAL', 'nav IS NOT NULL', 'Fund must have a NAV value'),
-    ('SECURITY_ISIN_FORMAT', 'ISIN Format Validation', 'SECURITY', 'VALIDITY', 'HIGH', 'isin ~ ''^[A-Z]{2}[A-Z0-9]{9}[0-9]$''', 'ISIN must follow ISO 6166 format'),
-    ('DEAL_DATE_NOT_FUTURE', 'Deal Date Not Future', 'DEAL', 'VALIDITY', 'MEDIUM', 'deal_date <= CURRENT_DATE', 'Deal date cannot be in the future'),
-    ('PRICE_NOT_NEGATIVE', 'Price Not Negative', 'PRICE', 'VALIDITY', 'HIGH', 'price >= 0', 'Price values cannot be negative');
+    ('FUND_NAV_NOT_NULL', 'Fund NAV Required', 'FUND', 'COMPLETENESS', 'CRITICAL', $dq$nav IS NULL$dq$, 'Fund must have a NAV value'),
+    ('SECURITY_ISIN_FORMAT', 'ISIN Format Validation', 'SECURITY', 'VALIDITY', 'HIGH', $dq$isin IS NULL OR isin !~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$'$dq$, 'ISIN must follow ISO 6166 format'),
+    ('DEAL_DATE_NOT_FUTURE', 'Deal Date Not Future', 'DEAL', 'VALIDITY', 'MEDIUM', $dq$deal_date IS NULL OR deal_date > CURRENT_DATE$dq$, 'Deal date cannot be in the future'),
+    ('PRICE_NOT_NEGATIVE', 'Price Not Negative', 'PRICE', 'VALIDITY', 'HIGH', $dq$price IS NULL OR price < 0$dq$, 'Price values cannot be negative');

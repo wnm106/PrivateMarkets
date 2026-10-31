@@ -68,7 +68,7 @@ export const referenceListResolvers = {
     createReferenceList: async (_: any, args: { input: any }, { supabase }: { supabase: SupabaseClient }) => {
       const { input } = args;
       const { data, error } = await supabase
-        .from('reference_list_summary')
+        .from('reference_lists')
         .insert({
           list_code: input.listCode,
           list_name: input.listName,
@@ -78,41 +78,66 @@ export const referenceListResolvers = {
         .select()
         .single();
 
-      if (error) return { referenceList: null, errors: [{ field: 'general', message: error.message, code: 'DATABASE_ERROR' }] };
+      if (error) return { referenceList: null, errors: [mutationError(error)] };
       return { referenceList: { ...mapReferenceListSummary(data), values: [] }, errors: [] };
     },
 
     updateReferenceList: async (_: any, args: { input: any }, { supabase }: { supabase: SupabaseClient }) => {
       const { input } = args;
-      const updateData: any = {};
+      const updateData: any = { updated_at: new Date().toISOString() };
       if (input.listName !== undefined) updateData.list_name = input.listName;
       if (input.description !== undefined) updateData.description = input.description;
       if (input.isActive !== undefined) updateData.is_active = input.isActive;
 
       const { data, error } = await supabase
-        .from('reference_list_summary')
+        .from('reference_lists')
         .update(updateData)
         .eq('id', input.id)
         .select()
         .single();
 
-      if (error) return { referenceList: null, errors: [{ field: 'general', message: error.message, code: 'DATABASE_ERROR' }] };
+      if (error) return { referenceList: null, errors: [mutationError(error)] };
       return { referenceList: mapReferenceListSummary(data), errors: [] };
     },
 
     deleteReferenceList: async (_: any, args: { id: string }, { supabase }: { supabase: SupabaseClient }) => {
-      await supabase.from('attribute_register').update({ reference_list_code: null }).eq('reference_list_code', args.id);
-      const { error } = await supabase.from('reference_list_summary').delete().eq('id', args.id);
-      if (error) return { success: false, errors: [{ field: 'general', message: error.message, code: 'DATABASE_ERROR' }] };
+      const { data: list, error: lookupError } = await supabase
+        .from('reference_lists')
+        .select('list_code')
+        .eq('id', args.id)
+        .maybeSingle();
+      if (lookupError) return { success: false, errors: [mutationError(lookupError)] };
+      if (list?.list_code) {
+        const { error: unlinkError } = await supabase
+          .from('attribute_register')
+          .update({ reference_list_code: null })
+          .eq('reference_list_code', list.list_code);
+        if (unlinkError) return { success: false, errors: [mutationError(unlinkError)] };
+      }
+      const { error } = await supabase.from('reference_lists').delete().eq('id', args.id);
+      if (error) return { success: false, errors: [mutationError(error)] };
       return { success: true, errors: [] };
     },
 
     addReferenceListValue: async (_: any, args: { input: any }, { supabase }: { supabase: SupabaseClient }) => {
       const { input } = args;
+      let listId = input.listId as string | undefined;
+      if (!listId && input.listCode) {
+        const { data: list, error: listError } = await supabase
+          .from('reference_lists')
+          .select('id')
+          .eq('list_code', input.listCode)
+          .maybeSingle();
+        if (listError) return { value: null, errors: [mutationError(listError)] };
+        if (!list) return { value: null, errors: [{ field: 'listCode', message: 'Reference list not found', code: 'NOT_FOUND' }] };
+        listId = list.id;
+      }
+      if (!listId) return { value: null, errors: [{ field: 'listCode', message: 'Reference list is required', code: 'VALIDATION' }] };
+
       const { data, error } = await supabase
         .from('reference_list_values')
         .insert({
-          list_id: input.listId,
+          list_id: listId,
           value_code: input.valueCode,
           value_label: input.valueLabel,
           display_order: input.displayOrder || 0,
@@ -121,13 +146,14 @@ export const referenceListResolvers = {
         .select()
         .single();
 
-      if (error) return { value: null, errors: [{ field: 'general', message: error.message, code: 'DATABASE_ERROR' }] };
+      if (error) return { value: null, errors: [mutationError(error)] };
       return { value: mapReferenceListValue(data), errors: [] };
     },
 
     updateReferenceListValue: async (_: any, args: { input: any }, { supabase }: { supabase: SupabaseClient }) => {
       const { input } = args;
       const updateData: any = {};
+      if (input.valueCode !== undefined) updateData.value_code = input.valueCode;
       if (input.valueLabel !== undefined) updateData.value_label = input.valueLabel;
       if (input.displayOrder !== undefined) updateData.display_order = input.displayOrder;
       if (input.isActive !== undefined) updateData.is_active = input.isActive;
@@ -140,13 +166,13 @@ export const referenceListResolvers = {
         .select()
         .single();
 
-      if (error) return { value: null, errors: [{ field: 'general', message: error.message, code: 'DATABASE_ERROR' }] };
+      if (error) return { value: null, errors: [mutationError(error)] };
       return { value: mapReferenceListValue(data), errors: [] };
     },
 
     deleteReferenceListValue: async (_: any, args: { id: string }, { supabase }: { supabase: SupabaseClient }) => {
       const { error } = await supabase.from('reference_list_values').delete().eq('id', args.id);
-      if (error) return { success: false, errors: [{ field: 'general', message: error.message, code: 'DATABASE_ERROR' }] };
+      if (error) return { success: false, errors: [mutationError(error)] };
       return { success: true, errors: [] };
     },
 
@@ -156,7 +182,7 @@ export const referenceListResolvers = {
         .select('synonyms')
         .eq('id', args.input.valueId)
         .single();
-      if (fetchError) return { value: null, errors: [{ field: 'general', message: fetchError.message, code: 'DATABASE_ERROR' }] };
+      if (fetchError) return { value: null, errors: [mutationError(fetchError)] };
 
       const existing: string[] = current?.synonyms || [];
       const newSynonyms = [...new Set([...existing, ...args.input.synonyms])];
@@ -166,7 +192,7 @@ export const referenceListResolvers = {
         .eq('id', args.input.valueId)
         .select()
         .single();
-      if (error) return { value: null, errors: [{ field: 'general', message: error.message, code: 'DATABASE_ERROR' }] };
+      if (error) return { value: null, errors: [mutationError(error)] };
       return { value: mapReferenceListValue(data), errors: [] };
     },
 
@@ -176,7 +202,7 @@ export const referenceListResolvers = {
         .select('synonyms')
         .eq('id', args.input.valueId)
         .single();
-      if (fetchError) return { value: null, errors: [{ field: 'general', message: fetchError.message, code: 'DATABASE_ERROR' }] };
+      if (fetchError) return { value: null, errors: [mutationError(fetchError)] };
 
       const existing: string[] = current?.synonyms || [];
       const toRemove = new Set(args.input.synonyms.map(s => s.toLowerCase()));
@@ -187,7 +213,7 @@ export const referenceListResolvers = {
         .eq('id', args.input.valueId)
         .select()
         .single();
-      if (error) return { value: null, errors: [{ field: 'general', message: error.message, code: 'DATABASE_ERROR' }] };
+      if (error) return { value: null, errors: [mutationError(error)] };
       return { value: mapReferenceListValue(data), errors: [] };
     },
 
@@ -198,7 +224,7 @@ export const referenceListResolvers = {
         .eq('id', args.attributeId)
         .select()
         .single();
-      if (error) return { attribute: null, errors: [{ field: 'general', message: error.message, code: 'DATABASE_ERROR' }] };
+      if (error) return { attribute: null, errors: [mutationError(error)] };
       return { attribute: mapAttributeDefinition(data), errors: [] };
     },
   },
@@ -220,6 +246,13 @@ export const referenceListResolvers = {
 // ============================================================
 // Helper mappers
 // ============================================================
+
+function mutationError(error: { message: string; code?: string }) {
+  if (error.code === 'PGRST116' || error.code === '42501') {
+    return { field: 'general', message: 'This change was not saved. Tenant admin access is required to manage value lists.', code: 'FORBIDDEN' };
+  }
+  return { field: 'general', message: error.message, code: 'DATABASE_ERROR' };
+}
 
 function mapReferenceListSummary(row: any) {
   return {
@@ -248,6 +281,8 @@ function mapReferenceListValue(row: any) {
     isActive: row.is_active !== false,
     synonyms: row.synonyms || [],
     metadata: row.metadata || {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at || row.created_at,
   };
 }
 

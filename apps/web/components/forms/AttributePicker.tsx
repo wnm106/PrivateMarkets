@@ -65,7 +65,7 @@ export function AttributePicker({
 
       {/* Show path if selected via tree */}
       {selection && (
-        <div style={{ marginTop: '4px', fontSize: '10px', color: 'var(--ink-3)' }}>
+        <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--ink-3)' }}>
           Path: <span className="mono">{selection.pathLabel}</span>
         </div>
       )}

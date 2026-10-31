@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { graphqlQuery, graphqlMutation, DOMAIN_TYPES_QUERY } from '@/lib/graphql';
@@ -11,6 +11,7 @@ import {
   CREATE_NARRATIVE_MUTATION,
   slugCode,
 } from '@/lib/reporting';
+import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
 interface Row {
   id: string;
@@ -117,8 +118,44 @@ export function ReportList({ kind }: { kind: 'dashboard' | 'narrative' }) {
   };
 
   const shown = rows.filter((r) => filterDomain === 'all' || r.domainCode === filterDomain);
+  const columns = useMemo<ColDef<Row>[]>(() => [
+    {
+      colId: 'name',
+      headerName: 'Name',
+      minWidth: 240,
+      flex: 1.8,
+      autoHeight: true,
+      wrapText: true,
+      valueGetter: (params) => params.data ? `${params.data.name} ${params.data.code} ${params.data.description || ''}` : '',
+      cellRenderer: (params) => {
+        const row = params.data;
+        if (!row) return params.value || '';
+        return (
+          <div>
+            <div style={{ fontWeight: 500 }}>{row.name}</div>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>{row.code}</div>
+            {row.description && <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>{row.description}</div>}
+          </div>
+        );
+      },
+    },
+    { field: 'domainCode', headerName: 'Entity type', minWidth: 140 },
+    {
+      colId: 'queries',
+      headerName: 'Queries',
+      minWidth: 120,
+      valueGetter: (params) => params.data ? params.data.queries : null,
+      valueFormatter: (params) => params.value == null ? '' : `${params.value} data ${params.value === 1 ? 'query' : 'queries'}`,
+    },
+    {
+      colId: 'status',
+      headerName: 'Status',
+      minWidth: 120,
+      valueGetter: (params) => params.data ? (params.data.isActive ? 'Active' : 'Disabled') : '',
+    },
+  ], []);
   const input = { width: '100%', padding: '8px 10px', fontSize: '13px', border: '1px solid var(--line)', background: 'white' } as const;
-  const lbl = { fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--ink-3)', margin: '12px 0 4px' } as const;
+  const lbl = { fontSize: '11px', fontWeight: 600, textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', margin: '12px 0 4px' } as const;
 
   return (
     <div className="view-fade">
@@ -191,44 +228,20 @@ export function ReportList({ kind }: { kind: 'dashboard' | 'narrative' }) {
         <div className="filter-count">Showing <strong>{shown.length}</strong> of {rows.length}</div>
       </div>
 
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '40px 0' }}><div className="loader">Loading…</div></div>
-      ) : shown.length === 0 ? (
-        <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: '13px' }}>
-          Nothing here yet. Create your first {label.toLowerCase()} and let the chat assistant help you design it.
-        </div>
-      ) : (
-        <div className="data-table">
-          {shown.map((r) => (
-            <div
-              key={r.id}
-              onClick={() => router.push(`${base}/${r.code}`)}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1.8fr 140px 110px 90px',
-                gap: '14px',
-                padding: '14px 18px',
-                borderBottom: '1px solid var(--line)',
-                fontSize: '12px',
-                alignItems: 'center',
-                cursor: 'pointer',
-                opacity: r.isActive ? 1 : 0.6,
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg)')}
-              onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
-            >
-              <div>
-                <div style={{ fontWeight: 500, color: 'var(--ink)' }}>{r.name}</div>
-                <div className="mono" style={{ fontSize: '10px', color: 'var(--ink-3)' }}>{r.code}</div>
-                {r.description && <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '2px' }}>{r.description}</div>}
-              </div>
-              <div>{r.domainCode}</div>
-              <div style={{ color: 'var(--ink-3)' }}>{r.queries} data {r.queries === 1 ? 'query' : 'queries'}</div>
-              <div style={{ textAlign: 'center' }}>{r.isActive ? 'Active' : 'Disabled'}</div>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="data-table">
+        <AppGrid
+          rows={shown}
+          columns={columns}
+          getRowId={(row) => row.id}
+          autoHeight={false}
+          height="100%"
+          autoRowHeight
+          loading={loading}
+          emptyMessage={`Nothing here yet. Create your first ${label.toLowerCase()}.`}
+          onRowClicked={(row) => router.push(`${base}/${row.code}`)}
+          getRowClass={(params) => (params.data && !params.data.isActive ? 'is-inactive' : '')}
+        />
+      </div>
     </div>
   );
 }

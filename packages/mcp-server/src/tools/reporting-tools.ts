@@ -10,7 +10,7 @@ import {
 const getDataQuerySpecDoc: ToolDefinition = {
   name: 'get_data_query_spec',
   description:
-    'Returns the full documentation of the declarative data-query format used by dashboards and narratives (start, path traversal, filters bound to user inputs, group-by, metrics). Read this before authoring or fixing data queries.',
+    'The entity-grain format for dashboards and narratives: start, path, lookups, filters, groupBy, and metrics. Call this before preview_data_queries. Field codes come from get_template_metadata and relationship codes from get_relationship_types. To answer a question rather than design a screen, use query_data.',
   category: 'reporting',
   inputSchema: { type: 'object', properties: {} },
   execute: async () => ({ spec: DATA_QUERY_SPEC_DOC }),
@@ -19,7 +19,7 @@ const getDataQuerySpecDoc: ToolDefinition = {
 const previewDataQueries: ToolDefinition = {
   name: 'preview_data_queries',
   description:
-    'Validate and execute draft data queries so you can SEE the real data they return before proposing them to the user. Provide an entityId or entityCode as the context entity (required for any query with start=CONTEXT). Returns per-query columns, a sample of rows, and any errors. Always preview queries you author; fix errors and empty results before presenting the draft.',
+    'Run dashboard or narrative query drafts and return real columns, sample rows, and errors. start CONTEXT requires entityId or entityCode. Look up attribute codes with get_template_metadata and relationship codes with get_relationship_types before writing the query. Fix errors before presenting a draft. Answering a user question is query_data, not this tool.',
   category: 'reporting',
   inputSchema: {
     type: 'object',
@@ -55,7 +55,7 @@ const previewDataQueries: ToolDefinition = {
 const findSampleEntities: ToolDefinition = {
   name: 'find_sample_entities',
   description:
-    'Find example entities of a domain that have the most relationships, so draft queries can be previewed against meaningful data. Returns entity ids/codes/names and relationship counts.',
+    'A few records of one entity type, chosen because they have relationships, so a dashboard query can be previewed. domainCode comes from list_domain_types. This is not a population count. Use query_data for a count.',
   category: 'reporting',
   inputSchema: {
     type: 'object',
@@ -88,7 +88,7 @@ const findSampleEntities: ToolDefinition = {
 
 const listReportTemplates: ToolDefinition = {
   name: 'list_report_templates',
-  description: 'List existing dashboards and narratives (code, name, entity type) so you can reuse or extend them instead of duplicating.',
+  description: 'Existing dashboards and narratives: code, name, and entity type. Call this before designing a new one so you extend a match instead of duplicating it. domainCode, when used, comes from list_domain_types.',
   category: 'reporting',
   inputSchema: {
     type: 'object',

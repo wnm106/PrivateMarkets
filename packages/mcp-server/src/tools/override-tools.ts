@@ -3,7 +3,7 @@ import { ToolDefinition } from '../lib/types';
 
 const submitManualOverride: ToolDefinition = {
   name: 'submit_manual_override',
-  description: 'Submit a manual override for a specific entity attribute. This creates a new golden record with highest precedence.',
+  description: 'Store a Manual Entry value on one record. An open manual value wins over every other source. attributeCode comes from search_attributes or get_template_metadata. Required: entityId, attributeCode, value, validFrom (YYYY-MM-DD), and overrideReason.',
   category: 'override',
   inputSchema: {
     type: 'object',
@@ -26,17 +26,18 @@ const submitManualOverride: ToolDefinition = {
     if (!attrDef) throw new Error(`Attribute not found: ${args.attributeCode}`);
 
     const { data: manualSource } = await supabase
+      .schema('entity_instances')
       .from('source_registry')
       .select('id')
       .eq('source_code', 'MANUAL')
       .single();
 
-    // Close existing records
     await supabase
       .from('entity_attribute_values')
       .update({ system_to: new Date().toISOString() })
       .eq('entity_id', args.entityId)
       .eq('attribute_id', attrDef.id)
+      .eq('source_id', manualSource?.id)
       .eq('valid_to', '9999-12-31')
       .eq('system_to', '9999-12-31 23:59:59');
 
@@ -68,7 +69,7 @@ const submitManualOverride: ToolDefinition = {
 
 const splitValidTime: ToolDefinition = {
   name: 'split_valid_time',
-  description: 'Split a bi-temporal record at a specific date, creating a new version with a different value.',
+  description: 'Close one stored value at splitDate and open a new value from that date. eavId comes from get_field_lineage or get_temporal_history. This edits one source row. It does not change which source wins. To make Manual Entry the value on the record, use submit_manual_override.',
   category: 'override',
   inputSchema: {
     type: 'object',

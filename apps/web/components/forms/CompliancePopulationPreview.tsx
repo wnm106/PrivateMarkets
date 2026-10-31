@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import type { ColDef } from 'ag-grid-community';
+import { AppGrid } from '@/components/grid/AppGrid';
 import { graphqlQuery } from '@/lib/graphql';
 import { attributeValueKey, type AttributePathHop, type TreeAttributeOption } from './ComplianceAttributeSelect';
 import type { ComplianceCondition } from './ComplianceRuleForm';
@@ -86,6 +88,21 @@ export function CompliancePopulationPreview({
     return match ? `${match.groupLabel} · ${match.attributeName}` : cond.attributeCode;
   };
 
+  const columns = useMemo<ColDef[]>(() => [
+    { field: 'entityCode', headerName: 'ID', minWidth: 140, flex: 1, cellClass: 'mono' },
+    { field: 'entityName', headerName: 'Name', minWidth: 180, flex: 1.2, valueFormatter: (params) => params.value || '—' },
+    ...active.map((cond) => {
+      const key = attributeValueKey(cond.attributePath, cond.attributeCode);
+      return {
+        colId: key,
+        headerName: labelFor(cond),
+        flex: 1,
+        minWidth: 140,
+        valueGetter: (params: any) => params.data?.values?.[key] ?? '—',
+      };
+    }),
+  ], [active, options]);
+
   const load = async (nextPage: number) => {
     if (!domainCode) return;
     setLoading(true);
@@ -137,37 +154,14 @@ export function CompliancePopulationPreview({
             <strong>{result.total.toLocaleString()}</strong> matching {domainLabel || domainCode} record{result.total === 1 ? '' : 's'}
             {result.truncated ? ` (searched the first ${result.scanned.toLocaleString()} records)` : ''}
           </div>
-          <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: 'left', padding: '6px 10px' }}>ID</th>
-                <th style={{ textAlign: 'left', padding: '6px 10px' }}>Name</th>
-                {active.map((cond) => (
-                  <th key={attributeValueKey(cond.attributePath, cond.attributeCode)} style={{ textAlign: 'left', padding: '6px 10px' }}>{labelFor(cond)}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {result.rows.length === 0 && (
-                <tr>
-                  <td colSpan={2 + active.length} style={{ padding: '12px', color: 'var(--ink-3)' }}>
-                    No records match these conditions.
-                  </td>
-                </tr>
-              )}
-              {result.rows.map((row) => (
-                <tr key={row.entityId}>
-                  <td className="mono" style={{ padding: '6px 10px' }}>{row.entityCode}</td>
-                  <td style={{ padding: '6px 10px' }}>{row.entityName || '—'}</td>
-                  {active.map((cond) => (
-                    <td key={attributeValueKey(cond.attributePath, cond.attributeCode)} style={{ padding: '6px 10px' }}>
-                      {row.values?.[attributeValueKey(cond.attributePath, cond.attributeCode)] ?? '—'}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <AppGrid
+            rows={result.rows}
+            columns={columns}
+            getRowId={(row) => row.entityId}
+            autoHeight
+            enableSortFilter={false}
+            emptyMessage="No records match these conditions."
+          />
           {result.total > pageSize && (
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '8px 12px', fontSize: '12px' }}>
               <button type="button" className="add-cond" disabled={page === 0 || loading} onClick={() => load(page - 1)}>Previous</button>

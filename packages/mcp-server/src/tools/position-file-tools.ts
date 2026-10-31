@@ -42,7 +42,7 @@ const columnMappingSchema: JSONSchema7 = {
 
 const listPositionFileImportsTool: ToolDefinition = {
   name: 'list_position_file_imports',
-  description: 'List position-file import instances for the POSITION_FILE source. Each instance keeps the original file, the time it was received, its status, and every process result. Use process_position_file_import to load or reload one.',
+  description: 'Stored position-file imports: file, received time, status, and each process result. Call this before loading or reloading. Use the returned instance id with get_position_file_import or process_position_file_import.',
   category: 'import',
   inputSchema: { type: 'object', properties: {} },
   execute: async (_args, supabase) => {
@@ -53,7 +53,7 @@ const listPositionFileImportsTool: ToolDefinition = {
 
 const listPositionFileTargetsTool: ToolDefinition = {
   name: 'list_position_file_mapping_targets',
-  description: 'List every entity attribute a position-file column can map to, including entity code, entity name, parent links, as-of date, and row filter. Use the key when changing a column mapping.',
+  description: 'Every attribute a position-file column is allowed to map to, including entity code, entity name, parent links, as-of date, and row filter. Use a returned key when you change a mapping. Do not invent an attribute code.',
   category: 'import',
   inputSchema: { type: 'object', properties: {} },
   execute: async (_args, supabase) => {
@@ -64,7 +64,7 @@ const listPositionFileTargetsTool: ToolDefinition = {
 
 const createPositionFileImportTool: ToolDefinition = {
   name: 'create_position_file_import',
-  description: 'Store a CSV or Excel position file as an import instance. The original bytes are kept. Returns a suggested mapping for every source column. Does not load entities until process_position_file_import is called.',
+  description: 'Store a CSV or Excel position file. Returns a suggested mapping for each column, using only targets from list_position_file_mapping_targets. Does not load records. Call process_position_file_import after the mapping is accepted.',
   category: 'import',
   inputSchema: {
     type: 'object',
@@ -90,7 +90,7 @@ const createPositionFileImportTool: ToolDefinition = {
 
 const getPositionFileImportTool: ToolDefinition = {
   name: 'get_position_file_import',
-  description: 'Get one position-file import instance, including its column mappings, transforms, suggestions, as-of date, and process history. The original file stays stored on the instance.',
+  description: 'One stored position file: column mappings, transforms, suggestions, as-of date, and process history. instanceId comes from list_position_file_imports or create_position_file_import.',
   category: 'import',
   inputSchema: {
     type: 'object',
@@ -104,7 +104,7 @@ const getPositionFileImportTool: ToolDefinition = {
 
 const updatePositionFileImportTool: ToolDefinition = {
   name: 'update_position_file_import',
-  description: 'Save a new column mapping and as-of date on a position-file instance. Does not load entities. Change any column role, domain, attribute, or transform, then call process_position_file_import.',
+  description: 'Save a column mapping and as-of date on a stored position file. Attribute targets must be keys from list_position_file_mapping_targets. Does not load records. Call process_position_file_import to load.',
   category: 'import',
   inputSchema: {
     type: 'object',
@@ -125,7 +125,7 @@ const updatePositionFileImportTool: ToolDefinition = {
 
 const processPositionFileImportTool: ToolDefinition = {
   name: 'process_position_file_import',
-  description: 'Load or reload a stored position-file instance. Uses the stored file, so the upload is not required again. Parents load before children. Pass columnMappings and asOfDate to override the stored mapping for this run. Omit both to reprocess the stored mapping and date.',
+  description: 'Load or reload a stored position file. instanceId comes from list_position_file_imports. The original file stays on the instance, so it does not need to be uploaded again. Parents load before children. Pass columnMappings only to override the stored mapping, and those targets must come from list_position_file_mapping_targets. Omit columnMappings and asOfDate to rerun what is stored.',
   category: 'import',
   inputSchema: {
     type: 'object',
