@@ -397,6 +397,8 @@ export default function LandingPage() {
         <div className="home-section-title">
           <h2>Entity Domains</h2>
           <span>
+            <Link href="/load">Load a file</Link>
+            {' · '}
             <Link href="/merge">Resolve entities</Link>
             {' · '}
             <Link href="/admin/entities">Manage domains</Link>

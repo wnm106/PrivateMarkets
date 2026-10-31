@@ -295,6 +295,8 @@ export default function PositionFilePage() {
 
       <p className="hero-sub" style={{ maxWidth: 820, marginTop: 0 }}>
         Upload a CSV or Excel file. Tapestr suggests where each column goes, using a saved map when the columns have been seen before and an AI review when they have not. Loading saves that map.
+        Each upload is an instance on the {queue?.sourceCode || 'POSITION_FILE'} source. The original file is kept, so you can change the column mapping and reprocess without losing the source values.
+        {' '}For any other file, use the <Link href="/load">data specialist</Link>.
       </p>
 
       <div className="section-title">

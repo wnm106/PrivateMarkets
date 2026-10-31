@@ -33,6 +33,8 @@ export interface ColumnAssignment {
   domainCode: string | null;
   attributeCode: string | null;
   parentDomainCode: string | null;
+  /** Parent codes are resolved from entities already stored, not loaded from this file. */
+  parentExisting?: boolean;
   filterEquals: string | null;
   transform: ColumnTransform;
   suggestion: {
@@ -586,9 +588,21 @@ export function applyTarget(assignment: ColumnAssignment, target: MappingTarget)
   };
 }
 
+export interface FeedMapIdentity {
+  mapCode: string;
+  sourceCode: string;
+  name: string;
+  description: string;
+}
+
 export function feedMapFromAssignments(
   assignments: ColumnAssignment[],
-  identity?: { mapCode: string; sourceCode: string; name: string; description: string }
+  identity: FeedMapIdentity = {
+    mapCode: POSITION_FILE_MAP.mapCode,
+    sourceCode: POSITION_FILE_MAP.sourceCode,
+    name: POSITION_FILE_MAP.name,
+    description: POSITION_FILE_MAP.description,
+  }
 ): FeedMap {
   const domains = new Map<string, FeedMap['domains'][number]>();
   const transforms: Record<string, ColumnTransform> = {};
@@ -629,7 +643,11 @@ export function feedMapFromAssignments(
       domain.attributes.push({ column: assignment.sourceColumn, attributeCode: assignment.attributeCode });
     }
     if (assignment.role === 'parent' && assignment.parentDomainCode) {
-      domain.parents.push({ column: assignment.sourceColumn, parentDomainCode: assignment.parentDomainCode });
+      domain.parents.push({
+        column: assignment.sourceColumn,
+        parentDomainCode: assignment.parentDomainCode,
+        existing: assignment.parentExisting || undefined,
+      });
     }
   }
 
@@ -641,17 +659,11 @@ export function feedMapFromAssignments(
     child.parents.push({ column: parent.identityColumn, parentDomainCode: link.parent });
   }
 
-  const mapIdentity = identity || {
-    mapCode: POSITION_FILE_MAP.mapCode,
-    sourceCode: POSITION_FILE_MAP.sourceCode,
-    name: POSITION_FILE_MAP.name,
-    description: POSITION_FILE_MAP.description,
-  };
   return {
-    mapCode: mapIdentity.mapCode,
-    sourceCode: mapIdentity.sourceCode,
-    name: mapIdentity.name,
-    description: mapIdentity.description,
+    mapCode: identity.mapCode,
+    sourceCode: identity.sourceCode,
+    name: identity.name,
+    description: identity.description,
     asOfHintColumn,
     rowFilter,
     domains: [...domains.values()].filter((domain) => domain.identityColumn),

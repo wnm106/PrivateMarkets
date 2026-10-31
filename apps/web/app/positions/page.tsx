@@ -76,6 +76,7 @@ export default function PositionsPage() {
         </div>
         <div className="page-actions">
           <Link href="/imports" className="btn">Load position file</Link>
+          <Link href="/load" className="btn">Any file</Link>
           <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>+ New Record</button>
         </div>
       </div>

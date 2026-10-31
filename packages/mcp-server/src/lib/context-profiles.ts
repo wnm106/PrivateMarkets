@@ -50,7 +50,9 @@ export const CONTEXT_PROFILES: Record<ToolContext, ContextProfile> = {
     name: 'import',
     description: 'Analyzing and executing data imports',
     allowedCategories: ['domain-read', 'import'],
-    systemInstruction: `You are helping users import data into the MDM system. You can analyze source files, generate field mappings, validate identifiers, and execute imports. Help users understand their source data structure and map it correctly to entity attributes.`,
+    systemInstruction: `You are helping users import data into the MDM system. You can analyze source files, generate field mappings, validate identifiers, and execute imports. Help users understand their source data structure and map it correctly to entity attributes.
+
+The data specialist tools (start_load_session, answer_load_session, accept via acceptedRecommendationIds, save_source_map, run_load_session) read any CSV, Excel, JSON, or document. Ask the user only the questions the specialist returns: source, as-of date, entity id, and columns that could go more than one way. When a column has no home, offer the recommended attribute, entity, or relationship and wait for a yes before accepting it. Parents load before dependents. Reuse a saved source map when the specialist recognizes one.`,
   },
   'lineage': {
     name: 'lineage',
