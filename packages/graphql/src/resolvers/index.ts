@@ -13,6 +13,7 @@ import { complianceResolvers } from './compliance';
 import { referenceListResolvers } from './referencelist';
 import { reportingResolvers } from './reporting';
 import { statementTemplateResolvers } from './statement-template';
+import { surfaceResolvers } from './surface';
 
 export const resolvers = {
   Query: {
@@ -37,6 +38,7 @@ export const resolvers = {
     attributeRegister: metadataResolvers.Query.attributeRegister,
     domainTemplates: metadataResolvers.Query.domainTemplates,
     previewStatementTemplate: statementTemplateResolvers.Query.previewStatementTemplate,
+    ...surfaceResolvers.Query,
   },
   
   Mutation: {

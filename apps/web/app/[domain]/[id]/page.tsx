@@ -10,6 +10,7 @@ import { SourceContributionPanel } from '@/components/detail/SourceContributionP
 import { ActiveConflictsPanel } from '@/components/detail/ActiveConflictsPanel';
 import { ActivityFeedPanel } from '@/components/detail/ActivityFeedPanel';
 import { EntityReports } from '@/components/reporting/EntityReports';
+import { EntitySurfacePanel } from '@/components/surfaces/EntitySurfacePanel';
 import { sources, type SourceKey } from '@/lib/data';
 import { getDomainConfig, type DomainKey } from '@/lib/mock-data';
 import { useTemporalStore } from '@/lib/store';
@@ -322,6 +323,7 @@ export default function DynamicEntityDetailPage() {
         </div>
       </div>
 
+      <EntitySurfacePanel entityId={entity.id} entityCode={entity.entityCode} />
       <EntityReports domainCode={entity.domainCode} entityId={entity.id} asOfDate={asOfDate} />
     </div>
   );

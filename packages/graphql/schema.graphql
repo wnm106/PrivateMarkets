@@ -2015,6 +2015,12 @@ type Query {
   narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON, asOfDate: String, knowledgeDate: String): DataQueryResponse!
   gridQuery(input: GridQueryInput!): GridResult!
+
+  # Surface composition
+  surfaces: [SurfaceDefinition!]!
+  surfaceCatalog(surfaceCode: String!): SurfaceCatalog
+  resolveSurface(surfaceCode: String!, profileCode: String, entityId: ID, entityCode: String, facts: JSON): SurfaceResolution
+  entitySurface(entityId: ID, entityCode: String): SurfaceResolution
 }
 
 type Mutation {
@@ -3267,3 +3273,125 @@ type DeleteNarrativeResult {
 #   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
 #   deleteNarrative(id: ID!): DeleteNarrativeResult!
 
+
+# File: surface.graphql
+# Surface composition
+#
+# A surface is the stable shell for a domain. Experiences qualify from the
+# profile. Page slots pick one variant. The resolution carries the rule
+# trace for every component so the management view can show why it rendered,
+# lost a priority contest, or stayed hidden.
+
+type SurfaceDefinition {
+  id: ID!
+  surfaceCode: String!
+  surfaceName: String!
+  domainCode: String!
+  description: String
+  isActive: Boolean!
+}
+
+type SurfaceExperience {
+  id: ID!
+  experienceCode: String!
+  experienceName: String!
+  description: String
+  isBaseline: Boolean!
+  qualificationPriority: Int!
+  displayOrder: Int!
+  applicabilityRules: JSON!
+  ruleSummary: String!
+}
+
+type SurfacePageVariant {
+  id: ID!
+  variantCode: String!
+  variantName: String!
+  description: String
+  qualificationPriority: Int!
+  requiredExperienceCodes: [String!]!
+}
+
+type SurfacePageSlot {
+  id: ID!
+  slotCode: String!
+  slotName: String!
+  description: String
+  displayOrder: Int!
+  optionality: String!
+  variants: [SurfacePageVariant!]!
+}
+
+type SurfaceComponentDefinition {
+  id: ID!
+  componentCode: String!
+  componentName: String!
+  description: String
+  slotCode: String
+  variantCode: String
+  experienceCode: String
+  displayOrder: Int!
+}
+
+type SurfaceSampleProfile {
+  id: ID!
+  profileCode: String!
+  profileName: String!
+  description: String
+  templateCode: String
+  facts: JSON!
+}
+
+type SurfaceCatalog {
+  surface: SurfaceDefinition!
+  experiences: [SurfaceExperience!]!
+  slots: [SurfacePageSlot!]!
+  components: [SurfaceComponentDefinition!]!
+  sampleProfiles: [SurfaceSampleProfile!]!
+}
+
+type SurfaceFact {
+  key: String!
+  value: String!
+  source: String!
+}
+
+type ExperienceQualification {
+  experienceCode: String!
+  experienceName: String!
+  status: String!
+  ruleTrace: String!
+}
+
+type PageResolution {
+  slotCode: String!
+  slotName: String!
+  optionality: String!
+  status: String!
+  variantCode: String
+  variantName: String
+  decision: String!
+}
+
+type ComponentResolution {
+  componentCode: String!
+  componentName: String!
+  pageName: String!
+  experienceName: String!
+  status: String!
+  ruleTrace: String!
+}
+
+type SurfaceResolution {
+  surfaceCode: String!
+  surfaceName: String!
+  domainCode: String!
+  subjectName: String!
+  subjectKind: String!
+  templateCode: String
+  note: String
+  facts: [SurfaceFact!]!
+  experiences: [ExperienceQualification!]!
+  pages: [PageResolution!]!
+  components: [ComponentResolution!]!
+}

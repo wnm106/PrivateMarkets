@@ -119,7 +119,6 @@ type AttributeDefinition {
   isRequired: Boolean!
   isMultiValued: Boolean!
   referenceDomainCode: String
-  domainCode: String
   defaultPrecedenceRank: Int!
   
   # Derived attribute fields
@@ -1005,7 +1004,6 @@ input CreateAttributeInput {
   isRequired: Boolean
   isMultiValued: Boolean
   referenceDomainCode: String
-  domainCode: String
 }
 
 type CreateAttributeResult {
@@ -1048,30 +1046,6 @@ input AssignAttributeInput {
 
 type AssignAttributeResult {
   assignment: TemplateAttribute
-  errors: [MutationError!]!
-}
-
-input UpdateTemplateAttributeInput {
-  templateId: ID!
-  attributeId: ID!
-  isRequired: Boolean
-  precedenceRank: Int
-  displayOrder: Int
-  displayLabel: String
-}
-
-type UpdateTemplateAttributeResult {
-  assignment: TemplateAttribute
-  errors: [MutationError!]!
-}
-
-input ReorderTemplateAttributesInput {
-  templateId: ID!
-  attributeIds: [ID!]!
-}
-
-type ReorderTemplateAttributesResult {
-  success: Boolean!
   errors: [MutationError!]!
 }
 
@@ -1837,9 +1811,8 @@ type ReferenceListSummary {
   domainCode: String
   description: String
   isActive: Boolean!
-  activeValueCount: Int!
-  totalValueCount: Int!
-  totalSynonymCount: Int!
+  valueCount: Int!
+  synonymCount: Int!
   linkedAttributeCount: Int!
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -1852,9 +1825,8 @@ type ReferenceListDetail {
   domainCode: String
   description: String
   isActive: Boolean!
-  activeValueCount: Int!
-  totalValueCount: Int!
-  totalSynonymCount: Int!
+  valueCount: Int!
+  synonymCount: Int!
   linkedAttributeCount: Int!
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -2014,13 +1986,6 @@ type Query {
   precedenceRules(domainCode: String, attributeCode: String, isActive: Boolean): [PrecedenceRule!]!
   precedenceRule(id: ID!): PrecedenceRule
 
-  # Golden Source queries
-  goldenSource(entityId: ID!, attributeCode: String!): GoldenSource
-  goldenSourcesForEntity(entityId: ID!): [GoldenSource!]!
-  templatePrecedenceChain(templateId: ID!, attributeCode: String!): TemplatePrecedenceChain
-  qualifyEntityTemplate(entityId: ID!, domainCode: String!): TemplateQualificationResult!
-  evaluateGoldenSource(entityId: ID!, attributeCode: String!, domainCode: String!, templateId: ID): EvaluateGoldenSourceResult!
-
   # Tenancy queries
   me: Me!
   clients: [Client!]!
@@ -2052,6 +2017,12 @@ type Query {
   narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON, asOfDate: String, knowledgeDate: String): DataQueryResponse!
   gridQuery(input: GridQueryInput!): GridResult!
+
+  # Surface composition
+  surfaces: [SurfaceDefinition!]!
+  surfaceCatalog(surfaceCode: String!): SurfaceCatalog
+  resolveSurface(surfaceCode: String!, profileCode: String, entityId: ID, entityCode: String, facts: JSON): SurfaceResolution
+  entitySurface(entityId: ID, entityCode: String): SurfaceResolution
 }
 
 type Mutation {
@@ -2080,9 +2051,7 @@ type Mutation {
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
   updateTemplate(id: ID!, input: UpdateTemplateInput!): UpdateTemplateResult!
   assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
-  updateTemplateAttribute(input: UpdateTemplateAttributeInput!): UpdateTemplateAttributeResult!
   unassignAttributeFromTemplate(templateId: ID!, attributeId: ID!): MutationResult!
-  reorderTemplateAttributes(input: ReorderTemplateAttributesInput!): ReorderTemplateAttributesResult!
   applyStatementTemplate(input: ApplyStatementTemplateInput!): ApplyStatementTemplateResult!
   
   # DQ mutations
@@ -2140,11 +2109,6 @@ type Mutation {
   deletePrecedenceRule(id: ID!): DeletePrecedenceRuleResult!
   updateAttributeDefaultPrecedence(attributeCode: String!, chain: [String!]!): UpdateDefaultPrecedenceResult!
   reorderPrecedenceChain(ruleId: String!, chain: [PrecedenceChainInput!]!): ReorderPrecedenceChainResult!
-
-  # Golden Source mutations
-  resolveGoldenSource(entityId: ID!, attributeCode: String!, domainCode: String!, templateId: ID, validFrom: Date): ResolveGoldenSourceResult!
-  batchResolveGoldenSources(domainCode: String!, attributeCode: String!, templateCode: String): BatchResolveGoldenSourcesResult!
-  updateTemplatePrecedenceChain(templateId: ID!, attributeCode: String!, chain: [String!]!): UpdateTemplatePrecedenceChainResult!
 
   # Tenancy mutations
   createClient(input: CreateClientInput!): MutationResult!
@@ -2262,21 +2226,6 @@ type AddCompetingSourceResult {
 # Metadata Types
 input UpdateAttributeDefinitionInput {
   id: ID!
-  attributeName: String
-  description: String
-  dataType: String
-  unitOfMeasure: String
-  isRequired: Boolean
-  isMultiValued: Boolean
-  referenceDomainCode: String
-  defaultPrecedenceRank: Int
-  isDerived: Boolean
-  derivationType: String
-  derivationFormula: String
-  derivationDependencies: [String!]
-  formulaLanguage: String
-  isTimeVarying: Boolean
-  timeDimension: String
   displayFormat: String
   listValues: [String!]
   validationRules: JSON
@@ -2288,8 +2237,6 @@ input UpdateAttributeDefinitionInput {
   aggregationType: String
   weightAttributeCode: String
   numericPrecision: Int
-  referenceListCode: String
-  domainCode: String
 }
 
 type UpdateAttributeDefinitionResult {
@@ -2723,69 +2670,6 @@ type UpdateDefaultPrecedenceResult {
 
 type ReorderPrecedenceChainResult {
   success: Boolean!
-  errors: [MutationError!]!
-}
-
-# Golden Source Types
-type GoldenSource {
-  entityId: ID!
-  attributeCode: String
-  attributeName: String
-  goldenValue: String
-  goldenSourceCode: String
-  goldenSourceName: String
-  goldenSourceId: ID
-  precedenceRank: Int
-  isManualOverride: Boolean!
-  resolutionRuleApplied: String
-  resolutionVersion: Int
-  resolvedAt: DateTime
-  competingValues: JSON
-  isStale: Boolean!
-}
-
-type TemplatePrecedenceChain {
-  templateId: ID!
-  attributeCode: String!
-  chain: [String!]!
-  chainVersion: Int!
-}
-
-type TemplateQualificationResult {
-  templateId: ID
-  templateCode: String
-  matched: Boolean!
-}
-
-type EvaluateGoldenSourceResult {
-  winningSource: String!
-  winningSourceId: ID
-  tierUsed: Int!
-  isDefault: Boolean!
-  resolutionVersion: Int!
-  appliedRuleCode: String
-  appliedRuleName: String
-  allCandidates: JSON
-}
-
-type ResolveGoldenSourceResult {
-  success: Boolean!
-  winningSource: String
-  goldenValueId: ID
-  goldenValue: String
-  errors: [MutationError!]!
-}
-
-type BatchResolveGoldenSourcesResult {
-  success: Boolean!
-  entitiesResolved: Int!
-  errors: [MutationError!]!
-}
-
-type UpdateTemplatePrecedenceChainResult {
-  success: Boolean!
-  chainVersion: Int!
-  entitiesResolved: Int!
   errors: [MutationError!]!
 }
 
@@ -3391,5 +3275,127 @@ type DeleteNarrativeResult {
 #   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
 #   deleteNarrative(id: ID!): DeleteNarrativeResult!
 
+
+# File: surface.graphql
+# Surface composition
+#
+# A surface is the stable shell for a domain. Experiences qualify from the
+# profile. Page slots pick one variant. The resolution carries the rule
+# trace for every component so the management view can show why it rendered,
+# lost a priority contest, or stayed hidden.
+
+type SurfaceDefinition {
+  id: ID!
+  surfaceCode: String!
+  surfaceName: String!
+  domainCode: String!
+  description: String
+  isActive: Boolean!
+}
+
+type SurfaceExperience {
+  id: ID!
+  experienceCode: String!
+  experienceName: String!
+  description: String
+  isBaseline: Boolean!
+  qualificationPriority: Int!
+  displayOrder: Int!
+  applicabilityRules: JSON!
+  ruleSummary: String!
+}
+
+type SurfacePageVariant {
+  id: ID!
+  variantCode: String!
+  variantName: String!
+  description: String
+  qualificationPriority: Int!
+  requiredExperienceCodes: [String!]!
+}
+
+type SurfacePageSlot {
+  id: ID!
+  slotCode: String!
+  slotName: String!
+  description: String
+  displayOrder: Int!
+  optionality: String!
+  variants: [SurfacePageVariant!]!
+}
+
+type SurfaceComponentDefinition {
+  id: ID!
+  componentCode: String!
+  componentName: String!
+  description: String
+  slotCode: String
+  variantCode: String
+  experienceCode: String
+  displayOrder: Int!
+}
+
+type SurfaceSampleProfile {
+  id: ID!
+  profileCode: String!
+  profileName: String!
+  description: String
+  templateCode: String
+  facts: JSON!
+}
+
+type SurfaceCatalog {
+  surface: SurfaceDefinition!
+  experiences: [SurfaceExperience!]!
+  slots: [SurfacePageSlot!]!
+  components: [SurfaceComponentDefinition!]!
+  sampleProfiles: [SurfaceSampleProfile!]!
+}
+
+type SurfaceFact {
+  key: String!
+  value: String!
+  source: String!
+}
+
+type ExperienceQualification {
+  experienceCode: String!
+  experienceName: String!
+  status: String!
+  ruleTrace: String!
+}
+
+type PageResolution {
+  slotCode: String!
+  slotName: String!
+  optionality: String!
+  status: String!
+  variantCode: String
+  variantName: String
+  decision: String!
+}
+
+type ComponentResolution {
+  componentCode: String!
+  componentName: String!
+  pageName: String!
+  experienceName: String!
+  status: String!
+  ruleTrace: String!
+}
+
+type SurfaceResolution {
+  surfaceCode: String!
+  surfaceName: String!
+  domainCode: String!
+  subjectName: String!
+  subjectKind: String!
+  templateCode: String
+  note: String
+  facts: [SurfaceFact!]!
+  experiences: [ExperienceQualification!]!
+  pages: [PageResolution!]!
+  components: [ComponentResolution!]!
+}
 
 `;

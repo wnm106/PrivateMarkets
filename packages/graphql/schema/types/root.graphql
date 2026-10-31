@@ -82,6 +82,12 @@ type Query {
   narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON, asOfDate: String, knowledgeDate: String): DataQueryResponse!
   gridQuery(input: GridQueryInput!): GridResult!
+
+  # Surface composition -- types in surface.graphql
+  surfaces: [SurfaceDefinition!]!
+  surfaceCatalog(surfaceCode: String!): SurfaceCatalog
+  resolveSurface(surfaceCode: String!, profileCode: String, entityId: ID, entityCode: String, facts: JSON): SurfaceResolution
+  entitySurface(entityId: ID, entityCode: String): SurfaceResolution
 }
 
 type Mutation {
