@@ -323,7 +323,7 @@ export default function DynamicEntityDetailPage() {
         </div>
       </div>
 
-      <EntitySurfacePanel entityId={entity.id} entityCode={entity.entityCode} />
+      <EntitySurfacePanel entityId={entity.id} entityCode={entity.entityCode} entityName={entity.entityName} />
       <EntityReports domainCode={entity.domainCode} entityId={entity.id} asOfDate={asOfDate} />
     </div>
   );

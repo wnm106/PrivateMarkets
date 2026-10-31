@@ -1,5 +1,12 @@
 import { graphqlQuery } from './graphql';
 
+export interface FundRecord {
+  id: string;
+  entityCode: string;
+  entityName: string;
+  description?: string | null;
+}
+
 export interface SurfaceDefinition {
   id: string;
   surfaceCode: string;
@@ -168,6 +175,21 @@ export const ENTITY_SURFACE_QUERY = `
     }
   }
 `;
+
+const FUND_RECORDS_QUERY = `
+  query FundRecords($filter: EntityFilter, $pagination: PaginationInput) {
+    entities(filter: $filter, pagination: $pagination) {
+      edges { node { id entityCode entityName description } }
+    }
+  }
+`;
+
+export function loadFundRecords() {
+  return graphqlQuery<
+    { entities: { edges: Array<{ node: FundRecord }> } },
+    { filter: { domainCode: string }; pagination: { first: number } }
+  >(FUND_RECORDS_QUERY, { filter: { domainCode: 'FUND' }, pagination: { first: 200 } }, 'network-only');
+}
 
 export function loadSurfaces() {
   return graphqlQuery<{ surfaces: SurfaceDefinition[] }, Record<string, never>>(

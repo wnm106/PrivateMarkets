@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { assignedFundType, factsForPack } from '@/lib/fund-surface-funds';
 import {
   loadEntitySurface,
+  loadSurfaceResolution,
   optionalityLabel,
   type SurfaceResolution,
 } from '@/lib/surfaces';
@@ -12,9 +14,10 @@ import { QualificationTable, StatusBadge } from './QualificationTable';
 interface EntitySurfacePanelProps {
   entityId: string;
   entityCode: string;
+  entityName?: string;
 }
 
-export function EntitySurfacePanel({ entityId, entityCode }: EntitySurfacePanelProps) {
+export function EntitySurfacePanel({ entityId, entityCode, entityName }: EntitySurfacePanelProps) {
   const [resolution, setResolution] = useState<SurfaceResolution | null>(null);
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,14 +35,26 @@ export function EntitySurfacePanel({ entityId, entityCode }: EntitySurfacePanelP
         setError(result.error.message || 'Surface qualification is unavailable.');
         return;
       }
-      if (!result.data?.entitySurface) {
+      const initial = result.data?.entitySurface;
+      if (!initial) {
         setMissing(true);
         return;
       }
-      setResolution(result.data.entitySurface);
+      const hasStructure = initial.facts.some((fact) => fact.key === 'FUND_STRUCTURE');
+      if (initial.domainCode === 'FUND' && !hasStructure && entityName) {
+        const filled = await loadSurfaceResolution({
+          surfaceCode: initial.surfaceCode,
+          entityId,
+          facts: factsForPack(assignedFundType(entityName)),
+        });
+        if (cancelled) return;
+        setResolution(filled.data?.resolveSurface ?? initial);
+        return;
+      }
+      setResolution(initial);
     })();
     return () => { cancelled = true; };
-  }, [entityId]);
+  }, [entityId, entityName]);
 
   if (missing) return null;
   if (error) {

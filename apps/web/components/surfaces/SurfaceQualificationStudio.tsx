@@ -1,31 +1,30 @@
 'use client';
 
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
+  loadFundRecords,
   loadSurfaceCatalog,
   loadSurfaceResolution,
   loadSurfaces,
   optionalityLabel,
+  type FundRecord,
   type SurfaceCatalog,
   type SurfaceDefinition,
   type SurfaceResolution,
 } from '@/lib/surfaces';
+import {
+  assignedFundType,
+  factsForPack,
+  featuredFunds,
+  oppositeFundType,
+} from '@/lib/fund-surface-funds';
 import { QualificationTable, StatusBadge } from './QualificationTable';
 
 type Mode = 'profile' | 'entity';
 
 const SURFACE_ORDER = ['FUND_CONDITIONAL_PAGE', 'FUND_FLUID_SURFACE', 'FUND_SURFACE', 'DEAL_PIPELINE', 'COMPANY_SURFACE'];
-
-const FUND_TYPES = {
-  PUBLIC_BDC: { structure: 'PUBLIC_BDC', listing: 'LISTED', basis: 'GAAP', template: 'FUND_NAV_BDC', label: 'public BDC' },
-  CLOSED_END: { structure: 'CLOSED_END', listing: 'PRIVATE', basis: 'FAIR_VALUE', template: 'FUND_NAV_PE', label: 'closed-end' },
-};
-
-function oppositeFundType(structure: string) {
-  return structure === 'PUBLIC_BDC' ? FUND_TYPES.CLOSED_END : FUND_TYPES.PUBLIC_BDC;
-}
 
 export function SurfaceQualificationStudio() {
   const searchParams = useSearchParams();
@@ -39,9 +38,11 @@ export function SurfaceQualificationStudio() {
   const [resolution, setResolution] = useState<SurfaceResolution | null>(null);
   const [ledger, setLedger] = useState<'all' | 'rendered'>('all');
   const [swapped, setSwapped] = useState(false);
+  const [fundRecords, setFundRecords] = useState<FundRecord[]>([]);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [loadingResolution, setLoadingResolution] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const previousSurface = useRef(surfaceCode);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,33 +96,50 @@ export function SurfaceQualificationStudio() {
   }, [surfaceCode]);
 
   useEffect(() => {
+    if (catalog?.surface.domainCode !== 'FUND') {
+      setFundRecords([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const result = await loadFundRecords();
+      if (cancelled) return;
+      setFundRecords(result.data?.entities.edges.map((edge) => edge.node) ?? []);
+    })();
+    return () => { cancelled = true; };
+  }, [catalog?.surface.domainCode, catalog?.surface.surfaceCode]);
+
+  useEffect(() => {
+    if (!fundRecords.length || searchParams.get('entity')) return;
+    const surfaceChanged = previousSurface.current !== surfaceCode;
+    previousSurface.current = surfaceCode;
+    if (entityCode && !surfaceChanged) return;
+    const featured = featuredFunds(surfaceCode);
+    const match = fundRecords.find((fund) => featured.includes(fund.entityName)) ?? fundRecords[0];
+    if (!match || match.entityCode === entityCode) return;
+    setMode('entity');
+    setEntityCode(match.entityCode);
+    setEntityDraft(match.entityCode);
+  }, [fundRecords, surfaceCode, entityCode, searchParams]);
+
+  useEffect(() => {
     setSwapped(false);
-  }, [surfaceCode, profileCode, mode]);
+  }, [surfaceCode, profileCode, entityCode, mode]);
 
   useEffect(() => {
     if (!surfaceCode || !catalog || catalog.surface.surfaceCode !== surfaceCode) return;
     if (mode === 'profile' && !catalog.sampleProfiles.some((profile) => profile.profileCode === profileCode)) return;
     if (mode === 'entity' && !entityCode) return;
-    const profile = catalog.sampleProfiles.find((candidate) => candidate.profileCode === profileCode);
-    const nativeStructure = profile?.facts?.attributes?.FUND_STRUCTURE;
-    const target = swapped && nativeStructure ? oppositeFundType(nativeStructure) : null;
-    const facts = target
-      ? {
-          attributes: {
-            FUND_STRUCTURE: target.structure,
-            LISTING_STATUS: target.listing,
-            ACCOUNTING_BASIS: target.basis,
-            TEMPLATE_CODE: target.template,
-          },
-          relationships: [] as string[],
-        }
-      : undefined;
+    const selectedFund = fundRecords.find((fund) => fund.entityCode === entityCode);
+    const assigned = selectedFund ? assignedFundType(selectedFund.entityName) : null;
+    const pack = assigned ? (swapped ? oppositeFundType(assigned) : assigned) : null;
+    const facts = mode === 'entity' && pack ? factsForPack(pack) : undefined;
     let cancelled = false;
     setLoadingResolution(true);
     (async () => {
       const result = await loadSurfaceResolution(
         mode === 'entity'
-          ? { surfaceCode, entityCode }
+          ? { surfaceCode, entityCode, facts }
           : { surfaceCode, profileCode, facts },
       );
       if (cancelled) return;
@@ -135,7 +153,7 @@ export function SurfaceQualificationStudio() {
       setLoadingResolution(false);
     })();
     return () => { cancelled = true; };
-  }, [surfaceCode, catalog, mode, profileCode, entityCode, swapped]);
+  }, [surfaceCode, catalog, mode, profileCode, entityCode, swapped, fundRecords]);
 
   const experienceName = (code: string) =>
     catalog?.experiences.find((experience) => experience.experienceCode === code)?.experienceName || code;
@@ -145,9 +163,16 @@ export function SurfaceQualificationStudio() {
     const rightIndex = SURFACE_ORDER.indexOf(right.surfaceCode);
     return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
   });
-  const selectedProfile = catalog?.sampleProfiles.find((profile) => profile.profileCode === profileCode);
-  const nativeStructure = mode === 'profile' ? selectedProfile?.facts?.attributes?.FUND_STRUCTURE : undefined;
-  const swapTarget = nativeStructure ? oppositeFundType(nativeStructure) : null;
+  const selectedFund = fundRecords.find((fund) => fund.entityCode === entityCode);
+  const assigned = selectedFund ? assignedFundType(selectedFund.entityName) : null;
+  const activePack = assigned ? (swapped ? oppositeFundType(assigned) : assigned) : null;
+  const featured = new Set(featuredFunds(surfaceCode));
+  const orderedFunds = [...fundRecords].sort((left, right) => {
+    const leftRank = featured.has(left.entityName) ? 0 : 1;
+    const rightRank = featured.has(right.entityName) ? 0 : 1;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    return left.entityName.localeCompare(right.entityName);
+  });
   const renderedPages = resolution?.pages.filter((page) => page.status === 'RENDERED') ?? [];
   const hiddenPages = resolution?.pages.filter((page) => page.status === 'HIDDEN') ?? [];
   const qualifiedComponents = resolution?.components.filter((component) => component.status === 'QUALIFIED') ?? [];
@@ -178,9 +203,9 @@ export function SurfaceQualificationStudio() {
       </div>
 
       <p style={{ maxWidth: '760px', color: 'var(--ink-2)', fontSize: '14px', lineHeight: 1.5, marginTop: 0 }}>
-        Harbor Street BDC and Northline PE Fund III are the sample funds. Swap either fund’s type
-        to see two custom surfaces. On the conditional page, one page is added and the other is
-        removed. On the fluid surface, every page stays and the variant inside it changes.
+        The fluid surface uses Harbor Senior Income and Halyard Senior Credit Fund II from the fund register.
+        The conditional page uses Pioneer Opportunistic Credit and Meridian Credit Fund I.
+        Swap a fund’s type to move between a public BDC story and a closed-end story.
       </p>
 
       {error && (
@@ -254,7 +279,45 @@ export function SurfaceQualificationStudio() {
           </section>
 
           <section>
-            <h2 style={sectionTitle}>Qualification for a profile</h2>
+            <h2 style={sectionTitle}>{orderedFunds.length > 0 ? 'Qualification for a fund' : 'Qualification for a profile'}</h2>
+            {orderedFunds.length > 0 ? (
+              <div style={{ border: '1px solid var(--line)', background: 'var(--surface)', maxHeight: '280px', overflow: 'auto', marginBottom: '12px' }}>
+                {orderedFunds.map((fund) => {
+                  const selected = mode === 'entity' && fund.entityCode === entityCode;
+                  const type = assignedFundType(fund.entityName);
+                  return (
+                    <button
+                      key={fund.id}
+                      type="button"
+                      onClick={() => {
+                        setMode('entity');
+                        setSwapped(false);
+                        setEntityCode(fund.entityCode);
+                        setEntityDraft(fund.entityCode);
+                      }}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: '10px 12px',
+                        border: 'none',
+                        borderBottom: '1px solid var(--line)',
+                        background: selected ? 'var(--bg-alt)' : 'transparent',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--ink)' }}>
+                        {fund.entityName}
+                        {featured.has(fund.entityName) ? ` · ${type.label}` : ''}
+                      </div>
+                      {fund.description && (
+                        <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginTop: '2px' }}>{fund.description}</div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
             <div className="filter-bar" style={{ marginBottom: '12px' }}>
               <div className="filter-label">Profile</div>
               {catalog.sampleProfiles.map((profile) => (
@@ -274,6 +337,7 @@ export function SurfaceQualificationStudio() {
                 </button>
               ))}
             </div>
+            )}
 
             <form
               onSubmit={(event) => {
@@ -302,14 +366,13 @@ export function SurfaceQualificationStudio() {
               <button className="btn btn-primary" type="submit">Resolve entity</button>
             </form>
 
-            {swapTarget && (
+            {assigned && activePack && (
               <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '12px', color: 'var(--ink-2)' }}>
-                  Fund type {swapped ? swapTarget.structure : nativeStructure}
-                  {swapped ? ` · template ${swapTarget.template}` : selectedProfile?.templateCode ? ` · template ${selectedProfile.templateCode}` : ''}
+                  {selectedFund?.entityName} · {activePack.label} · template {activePack.template}
                 </span>
                 <button type="button" className="btn" onClick={() => setSwapped((current) => !current)}>
-                  {swapped ? `Restore ${nativeStructure === 'PUBLIC_BDC' ? FUND_TYPES.PUBLIC_BDC.label : FUND_TYPES.CLOSED_END.label}` : `Swap type to ${swapTarget.label}`}
+                  {swapped ? `Restore ${assigned.label}` : `Swap type to ${oppositeFundType(assigned).label}`}
                 </button>
               </div>
             )}
