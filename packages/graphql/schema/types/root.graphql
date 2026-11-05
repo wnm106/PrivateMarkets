@@ -10,6 +10,9 @@ type Query {
   ): EntityConnection!
   
   entity(id: ID, entityCode: String, asOfDate: Date, knowledgeDate: DateTime): Entity
+
+  """Match entity names, related entity names, and parent entity names. Parent domains rank before child domains."""
+  searchEntities(query: String!, limit: Int): [EntitySearchHit!]!
   
   # Domain-specific queries (for convenience, but use generic entity under the hood)
   funds(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
@@ -21,6 +24,7 @@ type Query {
   
   # Metadata queries
   domainTypes: [DomainTypeRecord!]!
+  domainGroups: [DomainGroup!]!
   domainRecordCounts: [DomainRecordCount!]!
   attributeRegister(domainCode: String): [AttributeDefinition!]!
   attributeSections(domainCode: String!): [AttributeSection!]!
@@ -105,6 +109,8 @@ type Query {
 }
 
 type Mutation {
+  saveSurfaceCatalog(surfaceCode: String!, tabs: JSON!): SurfaceCatalog!
+
   # Generic entity mutations
   createEntity(input: CreateEntityInput!): CreateEntityResult!
   updateEntity(input: UpdateEntityInput!): UpdateEntityResult!
@@ -122,6 +128,7 @@ type Mutation {
   
   # Metadata mutations
   createDomainType(input: CreateDomainTypeInput!): CreateDomainTypeResult!
+  createDomainGroup(input: CreateDomainGroupInput!): CreateDomainGroupResult!
   updateDomainType(input: UpdateDomainTypeInput!): UpdateDomainTypeResult!
   deleteDomainType(id: ID!): DeleteDomainTypeResult!
   createAttribute(input: CreateAttributeInput!): CreateAttributeResult!

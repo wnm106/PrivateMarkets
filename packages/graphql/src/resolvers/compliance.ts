@@ -8,6 +8,7 @@ import {
   textOfAttribute,
   type PopulationCondition,
   type RelationshipHopRef,
+  conditionExpressionReads,
 } from '../lib/compliance-population';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
@@ -247,6 +248,9 @@ export const complianceResolvers = {
             operator: cond.operator,
             value: cond.value,
             logic_operator: cond.logicOperator ?? 'AND',
+            // These columns arrive with migration 20261103090000; only send them when used.
+            ...(cond.leftExpression ? { left_expression: cond.leftExpression } : {}),
+            ...(cond.rightExpression ? { right_expression: cond.rightExpression } : {}),
           }));
 
           const { error: condError } = await cx(context).from('rule_conditions').insert(conditionsToInsert);
@@ -646,6 +650,8 @@ function mapCondition(row: any) {
     value: row.value,
     compareAttributeCode: row.compare_attribute_code,
     compareDimension: toCamelDim(row.compare_dimension),
+    leftExpression: row.left_expression ?? null,
+    rightExpression: row.right_expression ?? null,
     logicOperator: row.logic_operator,
     createdAt: row.created_at,
   };
@@ -873,6 +879,8 @@ async function previewPopulation(context: Context, input: any) {
       compareAttributeCode: c.compareAttributeCode || null,
       attributePath: hopsFromDimension(c.attributeDimension),
       comparePath: hopsFromDimension(c.compareDimension),
+      leftExpression: c.leftExpression ?? null,
+      rightExpression: c.rightExpression ?? null,
       logicOperator: c.logicOperator || 'AND',
     }));
 
@@ -885,14 +893,23 @@ async function previewPopulation(context: Context, input: any) {
     for (const cond of conditions) {
       const attributeHops = cond.attributePath || [];
       const compareHops = cond.comparePath || [];
-      const attributeIds = attributeHops.length ? targetsAlongPath(row.entity_id, attributeHops, hopMaps) : [row.entity_id];
+      const attributeIds = cond.leftExpression
+        ? []
+        : attributeHops.length ? targetsAlongPath(row.entity_id, attributeHops, hopMaps) : [row.entity_id];
       const compareIds = cond.compareAttributeCode
         ? (compareHops.length ? targetsAlongPath(row.entity_id, compareHops, hopMaps) : [row.entity_id])
         : [];
-      for (const id of [...attributeIds, ...compareIds]) needed.add(id);
+      const exprIds = conditionExpressionReads(cond).flatMap((read) =>
+        read.path.length ? targetsAlongPath(row.entity_id, read.path, hopMaps) : [row.entity_id],
+      );
+      for (const id of [...attributeIds, ...compareIds, ...exprIds, row.entity_id]) needed.add(id);
     }
   }
-  const attributeCodes = [...new Set(conditions.flatMap((cond) => [cond.attributeCode, cond.compareAttributeCode].filter((code): code is string => !!code)))];
+  const attributeCodes = [...new Set(conditions.flatMap((cond) => [
+    cond.leftExpression ? '' : cond.attributeCode,
+    cond.compareAttributeCode,
+    ...conditionExpressionReads(cond).map((read) => read.code),
+  ].filter((code): code is string => !!code)))];
   await fetchAttributeValues(context.supabase, [...needed], attributeCodes, attributes, asOf, now);
 
   const matches: Array<{ entityId: string; entityCode: string; entityName: string | null; values: Record<string, string | null> }> = [];
@@ -948,7 +965,7 @@ async function loadRelationshipMaps(
 ) {
   const hops = new Map<string, RelationshipHopRef>();
   for (const cond of conditions) {
-    for (const hop of [...(cond.attributePath || []), ...(cond.comparePath || [])]) {
+    for (const hop of [...(cond.attributePath || []), ...(cond.comparePath || []), ...conditionExpressionReads(cond).flatMap((read) => read.path)]) {
       hops.set(`${hop.direction}:${hop.relationshipCode}`, hop);
     }
   }

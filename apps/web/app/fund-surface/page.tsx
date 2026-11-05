@@ -39,11 +39,6 @@ export default function FundSurfaceIndexPage() {
 
   return (
     <div className="view-fade da">
-      <div className="da-crumbs">
-        <Link href="/">Home</Link>
-        <span>/</span>
-        <strong>Fund surface</strong>
-      </div>
       <header className="da-ribbon">
         <div className="da-title">
           <span className="da-chip">Funds</span>

@@ -11,6 +11,7 @@ enum ComplianceRuleCategory {
   ELIGIBILITY
   LEVERAGE
   LIQUIDITY
+  FORTY_ACT
   OTHER
 }
 
@@ -198,6 +199,8 @@ type ComplianceRuleCondition {
   value: String
   compareAttributeCode: String
   compareDimension: ComplianceAttributeDimension
+  leftExpression: JSON
+  rightExpression: JSON
   logicOperator: String!
   createdAt: DateTime!
 }
@@ -434,6 +437,8 @@ input ComplianceRuleConditionInput {
   value: String
   compareAttributeCode: String
   compareDimension: ComplianceAttributeDimensionInput
+  leftExpression: JSON
+  rightExpression: JSON
   logicOperator: String
 }
 

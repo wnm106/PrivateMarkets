@@ -17,6 +17,7 @@ import {
   COMPLIANCE_EVALUATION_RUNS_QUERY,
   ENTITIES_QUERY,
 } from '@/lib/graphql';
+import { printExpression, type OperandContext } from '@/lib/condition-expression';
 import { ComplianceRuleForm, ComplianceRuleFormData, buildComplianceVersionInput, dimensionFromDto, describeDimension, emptyDimension } from '@/components/forms/ComplianceRuleForm';
 import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
@@ -55,6 +56,7 @@ interface VersionDto {
   hardLimitAttributeCode?: string;
   softLimitFactor?: number;
   defaultSourceScope: string;
+  metadata?: Record<string, any> | null;
   conditions: Array<{
     appliesTo: string;
     conditionOrder: number;
@@ -64,6 +66,8 @@ interface VersionDto {
     value?: string;
     compareAttributeCode?: string;
     compareDimension?: any;
+    leftExpression?: any;
+    rightExpression?: any;
     logicOperator: string;
   }>;
 }
@@ -264,13 +268,21 @@ export default function ComplianceRuleDetailPage() {
             ruleCategory: data.ruleCategory,
             appliesToAll: data.appliesToAll,
             description: data.description || undefined,
-            isActive: true,
           },
         }
       );
       const errors = result.data?.updateComplianceRule?.errors || [];
       if (errors.length > 0) {
         alert(`Failed to update rule: ${errors.map((e: any) => e.message).join(', ')}`);
+        return;
+      }
+      const versionResult = await graphqlMutation<{ createComplianceRuleVersion: { version: any; errors: any[] } }, any>(
+        CREATE_COMPLIANCE_RULE_VERSION_MUTATION,
+        { input: buildComplianceVersionInput(rule.id, { ...data, changeReason: data.changeReason || 'Updated definition' }) }
+      );
+      const versionErrors = versionResult.data?.createComplianceRuleVersion?.errors || [];
+      if (versionErrors.length > 0) {
+        alert(`The name was saved, but the measure was not: ${versionErrors.map((e: any) => e.message).join(', ')}`);
         return;
       }
       setEditMode(false);
@@ -451,78 +463,14 @@ export default function ComplianceRuleDetailPage() {
         />
       ) : (
         <>
-          {/* Current Version Detail */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', padding: '18px 22px', marginBottom: '18px' }}>
-            <div className="section-kicker">Current Version Logic</div>
-            {!v ? (
-              <div style={{ color: 'var(--ink-3)', fontSize: '13px' }}>No version defined yet. Click "+ New Version" to define the rule's logic.</div>
-            ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '10px' }}>
-                <div>
-                  <DetailRow label="Base entity domain" value={v.baseDomainCode} />
-                  <DetailRow label="Hierarchy rollup path" value={formatHops(v.baseRollupPath)} />
-                  <DetailRow label="Group-by path" value={formatHops(v.groupByPath)} />
-                  <DetailRow label="Group-by attribute" value={v.groupByAttributeCode || '—'} />
-                  <DetailRow label="Default source scope" value={v.defaultSourceScope} />
-                  <DetailRow label="Effective" value={`${v.validFrom} → ${v.validTo === '9999-12-31' ? 'present' : v.validTo}`} />
-                </div>
-                <div>
-                  <DetailRow label="Numerator" value={`${v.numeratorAggregation}(${v.numeratorAttributeCode})`} />
-                  <DetailRow label="Numerator reads" value={describeDimension(v.numeratorDimension)} />
-                  <DetailRow
-                    label="Denominator"
-                    value={
-                      v.denominatorScope === 'CONSTANT'
-                        ? `Constant: ${v.denominatorConstantValue}`
-                        : v.denominatorSource === 'ANCHOR' && v.denominatorAttributeCode
-                        ? `${v.denominatorAttributeCode} on the fund`
-                        : v.denominatorAttributeCode
-                        ? `${v.denominatorAggregation}(${v.denominatorAttributeCode}) — ${v.denominatorScope}`
-                        : '—'
-                    }
-                  />
-                  <DetailRow label="Denominator reads" value={v.denominatorAttributeCode ? describeDimension(v.denominatorDimension) : '—'} />
-                  <DetailRow label="Denominator source" value={v.denominatorSource === 'ANCHOR' ? 'On the fund' : 'From the positions'} />
-                  <DetailRow label="Result calculation" value={v.resultTransform || 'NONE'} />
-                  <DetailRow label="Result unit" value={v.resultUnit} />
-                  <DetailRow label="Limit direction" value={v.limitDirection} />
-                  <DetailRow
-                    label="Limits"
-                    value={
-                      <>
-                        {v.softLimitValue != null && <span style={{ color: 'var(--amber)', marginRight: '12px' }}>Soft: {v.softLimitValue}</span>}
-                        {v.hardLimitValue != null && <span style={{ color: 'var(--red)', marginRight: '12px' }}>Hard: {v.hardLimitValue}</span>}
-                        {v.hardLimitAttributeCode && <span>From {v.hardLimitAttributeCode}{v.softLimitFactor != null ? ` × ${v.softLimitFactor}` : ''}</span>}
-                        {v.softLimitValue == null && v.hardLimitValue == null && !v.hardLimitAttributeCode && '—'}
-                      </>
-                    }
-                  />
-                </div>
-                {v.conditions.length > 0 && (
-                  <div style={{ gridColumn: '1 / -1', borderTop: '1px solid var(--line)', paddingTop: '12px' }}>
-                    <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '8px' }}>
-                      Conditions
-                    </div>
-                    {['BASE', 'ANCHOR'].map((scope) => {
-                      const scopeConds = v.conditions.filter((c) => c.appliesTo === scope).sort((a, b) => a.conditionOrder - b.conditionOrder);
-                      if (scopeConds.length === 0) return null;
-                      return (
-                        <div key={scope} style={{ marginBottom: '8px', fontSize: '12px' }}>
-                          <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}>{scope}: </span>
-                          {scopeConds.map((c, i) => (
-                            <span key={i} className="mono">
-                              {i > 0 && <span style={{ color: 'var(--accent)' }}> {c.logicOperator} </span>}
-                              {pathPrefix(c.attributeDimension)}{c.attributeCode}{c.attributeDimension ? ` [${describeDimension(c.attributeDimension)}]` : ""} {c.operator} {c.compareAttributeCode ? `${pathPrefix(c.compareDimension)}${c.compareAttributeCode}${c.compareDimension ? ` [${describeDimension(c.compareDimension)}]` : ""}` : (c.value || "")}
-                            </span>
-                          ))}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          {!v ? (
+            <section className="rb-block">
+              <h2 className="rb-block-title">Measure</h2>
+              <div className="rb-pad" style={{ color: 'var(--ink-3)', fontSize: 13 }}>No version defined yet. Edit the rule to set the measure.</div>
+            </section>
+          ) : (
+            <RuleReadout version={v} />
+          )}
 
           {/* Scope Assignments */}
           {!rule.appliesToAll && (
@@ -608,6 +556,120 @@ export default function ComplianceRuleDetailPage() {
       )}
     </div>
   );
+}
+
+function RuleReadout({ version }: { version: VersionDto }) {
+  const baseFilters = version.conditions.filter((c) => c.appliesTo === 'BASE');
+  const grouped = !!version.groupByAttributeCode;
+  const limitMode = version.metadata?.limitMode === 'RANK' || version.metadata?.limitMode === 'NAMED' ? version.metadata.limitMode : 'UNIFORM';
+  const dividedBy = denominatorText(version);
+  const sharesRecords = dividedBy.startsWith('Total of');
+  return (
+    <div className="rb">
+      <section className="rb-block">
+        <h2 className="rb-block-title">Measure</h2>
+        <div className="rb-line">
+          <div className="rb-line-label">Numerator</div>
+          <div className="rb-read">{aggWord(version.numeratorAggregation)} of {words(version.baseDomainCode)} · {words(version.numeratorAttributeCode)}</div>
+        </div>
+        <div className="rb-line">
+          <div className="rb-line-label">Where</div>
+          <div className="rb-read">{baseFilters.length === 0 ? 'All records qualify' : baseFilters.map((c, i) => `${i > 0 ? `${c.logicOperator} ` : ''}${conditionText(c)}`).join(' ')}</div>
+        </div>
+        <div className="rb-line">
+          <div className="rb-line-label">Divided by</div>
+          <div className="rb-read">{dividedBy}</div>
+        </div>
+        {sharesRecords && (
+          <div className="rb-line">
+            <div className="rb-line-label">Where</div>
+            <div className="rb-read">{baseFilters.length === 0 ? 'All records qualify' : 'Same records as the numerator'}</div>
+          </div>
+        )}
+      </section>
+      <section className="rb-block">
+        <h2 className="rb-block-title">Test &amp; limits</h2>
+        <div className="rb-line">
+          <div className="rb-line-label">Group by</div>
+          <div className="rb-read">{grouped ? `Each ${words(version.groupByAttributeCode)}` : 'One figure for the whole set'}</div>
+        </div>
+        <div className="rb-line">
+          <div className="rb-line-label">Breach when</div>
+          <div className="rb-read">{version.limitDirection === 'MIN' ? 'Below limit' : 'Above limit'} · {unitWord(version.resultUnit)}</div>
+        </div>
+        <div className="rb-line">
+          <div className="rb-line-label">Limit type</div>
+          <div className="rb-read">{limitMode === 'RANK' ? 'Limit by rank' : limitMode === 'NAMED' ? 'Limit by named group' : 'Same limit for every group'}</div>
+        </div>
+        <p className="rb-help">Limit values are set when the rule is assigned to a fund.</p>
+        <details className="rb-def">
+          <summary>View saved definition</summary>
+          <div className="rb-def-body">
+            <DetailRow label="Base entity" value={version.baseDomainCode} />
+            <DetailRow label="Rollup path" value={formatHops(version.baseRollupPath)} />
+            <DetailRow label="Group-by path" value={formatHops(version.groupByPath)} />
+            <DetailRow label="Group-by attribute" value={version.groupByAttributeCode || '—'} />
+            <DetailRow label="Numerator reads" value={describeDimension(version.numeratorDimension)} />
+            <DetailRow label="Denominator reads" value={version.denominatorAttributeCode ? describeDimension(version.denominatorDimension) : '—'} />
+            <DetailRow label="Result calculation" value={version.resultTransform || 'NONE'} />
+            <DetailRow label="Source" value={version.defaultSourceScope} />
+            <DetailRow label="Effective" value={`${version.validFrom} → ${version.validTo === '9999-12-31' ? 'present' : version.validTo}`} />
+            {version.conditions.length > 0 && (
+              <div>
+                {['BASE', 'ANCHOR'].map((scope) => {
+                  const scopeConds = version.conditions.filter((c) => c.appliesTo === scope).sort((a, b) => a.conditionOrder - b.conditionOrder);
+                  if (scopeConds.length === 0) return null;
+                  return (
+                    <div key={scope} style={{ marginBottom: 8, fontSize: 12 }}>
+                      <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}>{scope === 'BASE' ? 'Records' : 'Entities'}: </span>
+                      {scopeConds.map((c, i) => (
+                        <span key={i} className="mono">
+                          {i > 0 && <span style={{ color: 'var(--accent)' }}> {c.logicOperator} </span>}
+                          {conditionText(c)}
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </details>
+      </section>
+    </div>
+  );
+}
+
+function words(code?: string | null) {
+  if (!code) return '—';
+  const text = code.replace(/_/g, ' ').toLowerCase();
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function aggWord(code?: string | null) {
+  return ({ SUM: 'Sum', AVG: 'Average', COUNT: 'Count', MIN: 'Lowest', MAX: 'Highest', VALUE: 'Value' } as Record<string, string>)[code || ''] || words(code);
+}
+
+function unitWord(code?: string | null) {
+  return ({ PERCENTAGE: 'Percent of denominator', RATIO: 'Ratio', CURRENCY: 'Currency amount', COUNT: 'Count' } as Record<string, string>)[code || ''] || words(code);
+}
+
+function denominatorText(version: VersionDto) {
+  if (version.denominatorScope === 'CONSTANT') return `Fixed number ${version.denominatorConstantValue ?? ''}`.trim();
+  if (version.denominatorSource === 'ANCHOR' && version.denominatorAttributeCode) return `A value on the fund · ${words(version.denominatorAttributeCode)}`;
+  if (!version.denominatorAttributeCode) return 'No denominator';
+  const scope = version.denominatorScope === 'ANCHOR_TOTAL' ? 'Total of all records' : 'Total of its group';
+  return `${scope} · ${words(version.baseDomainCode)} · ${words(version.denominatorAttributeCode)}`;
+}
+
+function conditionText(c: VersionDto['conditions'][number]) {
+  const left = c.leftExpression ? printExpression(c.leftExpression, NO_CONTEXT) : `${pathPrefix(c.attributeDimension)}${c.attributeCode}`;
+  const right = c.rightExpression
+    ? printExpression(c.rightExpression, NO_CONTEXT)
+    : c.compareAttributeCode
+    ? `${pathPrefix(c.compareDimension)}${c.compareAttributeCode}`
+    : (c.value || '');
+  return `${left} ${c.operator} ${right}`.trim();
 }
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -719,6 +781,8 @@ function formatHops(hops: RollupHopDto[]) {
   return hops.map((h) => `${h.direction}${h.recursive ? '*' : ''}:${h.relationshipCode}`).join(' → ');
 }
 
+const NO_CONTEXT: OperandContext = { fields: [], relationshipTypes: [] };
+
 function versionToFormData(rule: RuleDto, v: VersionDto): Partial<ComplianceRuleFormData> {
   return {
     ruleCode: rule.ruleCode,
@@ -751,6 +815,8 @@ function versionToFormData(rule: RuleDto, v: VersionDto): Partial<ComplianceRule
     hardLimitAttributeCode: v.hardLimitAttributeCode || '',
     softLimitFactor: v.softLimitFactor != null ? String(v.softLimitFactor) : '',
     defaultSourceScope: v.defaultSourceScope,
+    limitMode: v.metadata?.limitMode === 'RANK' || v.metadata?.limitMode === 'NAMED' ? v.metadata.limitMode : 'UNIFORM',
+    versionMetadata: v.metadata && typeof v.metadata === 'object' ? v.metadata : undefined,
     conditions: v.conditions.map((c) => ({
       appliesTo: c.appliesTo as 'BASE' | 'ANCHOR',
       conditionGroup: 1,
@@ -763,6 +829,8 @@ function versionToFormData(rule: RuleDto, v: VersionDto): Partial<ComplianceRule
       compareAttributeCode: c.compareAttributeCode || '',
       compareAttributePath: (c.compareDimension?.relationshipPath || []).map((h: any) => ({ relationshipCode: h.relationshipCode, direction: h.direction })),
       compareDimension: dimensionFromDto(c.compareDimension),
+      leftExpression: c.leftExpression || null,
+      rightExpression: c.rightExpression || null,
       logicOperator: c.logicOperator as 'AND' | 'OR',
     })),
   };

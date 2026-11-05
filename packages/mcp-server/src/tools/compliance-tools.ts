@@ -14,7 +14,7 @@ const listComplianceRules: ToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
-      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'OTHER'], description: 'Filter by rule category' },
+      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'FORTY_ACT', 'OTHER'], description: 'Filter by rule category' },
       anchorDomainCode: { type: 'string', description: 'Filter by the entity level the rule is assigned to (e.g. FUND, ISSUER)' },
       isActive: { type: 'boolean', description: 'Filter by active status' },
     },
@@ -259,7 +259,7 @@ const createComplianceRule: ToolDefinition = {
     properties: {
       ruleCode: { type: 'string', description: 'Unique code for the rule (e.g. "FUND_CONC_5PCT")' },
       ruleName: { type: 'string', description: 'Human-readable name (e.g. "Fund Concentration 5% Limit")' },
-      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'OTHER'], description: 'Category of the rule' },
+      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'FORTY_ACT', 'OTHER'], description: 'Category of the rule' },
       anchorDomainCode: { type: 'string', description: 'The domain code this rule anchors to (e.g. "FUND", "ISSUER"). Must be a valid domain_type.' },
       appliesToAll: { type: 'boolean', description: 'If true, applies to all entities of anchor domain by default. If false, only explicitly assigned entities. Default: true.' },
       isActive: { type: 'boolean', description: 'Whether the rule is active. Default: true.' },
@@ -306,7 +306,7 @@ const updateComplianceRule: ToolDefinition = {
       id: { type: 'string', description: 'The rule UUID to update' },
       ruleCode: { type: 'string', description: 'The rule_code to look up (alternative to id)' },
       ruleName: { type: 'string', description: 'New rule name' },
-      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'OTHER'] },
+      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'FORTY_ACT', 'OTHER'] },
       appliesToAll: { type: 'boolean' },
       isActive: { type: 'boolean' },
       description: { type: 'string' },

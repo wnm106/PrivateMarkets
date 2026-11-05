@@ -89,7 +89,6 @@ export function EntityAttributeGrid({
     }
     const rows = (result.data?.attributeSections || []) as SectionRow[];
     setSections(rows);
-    setDrafts(Object.fromEntries(rows.map((section) => [section.id, section.sectionName])));
   }, [domainCode]);
 
   useEffect(() => {

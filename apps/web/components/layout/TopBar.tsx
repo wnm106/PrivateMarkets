@@ -1,11 +1,13 @@
 'use client';
 
 import { useTemporalStore } from '@/lib/store';
+import { useSurfaceNavStore } from '@/lib/surface-nav';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { AsOfDatePicker } from './AsOfDatePicker';
+import { GlobalSearch } from './GlobalSearch';
 
 const CRUMB_LABELS: Record<string, string> = {
   funds: 'Funds',
@@ -50,6 +52,7 @@ function crumbLabel(segment: string) {
 
 export function TopBar() {
   const pathname = usePathname() || '/';
+  const surfaceCrumbs = useSurfaceNavStore((state) => state.crumbs);
   const { chatOpen, toggleChat, asOfDate } = useTemporalStore();
   const [live, setLive] = useState(true);
 
@@ -57,7 +60,7 @@ export function TopBar() {
     setLive(asOfDate === new Date().toISOString().split('T')[0]);
   }, [asOfDate]);
 
-  const crumbs = pathname === '/'
+  const entityCrumbs = pathname === '/'
     ? [{ href: '/', label: 'Master Data' }, { href: '/', label: 'Overview' }]
     : [
         { href: '/', label: 'Master Data' },
@@ -67,6 +70,7 @@ export function TopBar() {
           return items;
         }, []),
       ];
+  const crumbs = surfaceCrumbs?.length ? surfaceCrumbs : entityCrumbs;
 
   return (
     <div className="topbar">
@@ -76,8 +80,8 @@ export function TopBar() {
           return (
             <span key={`${crumb.href}-${crumb.label}`} className="topbar-crumb">
               {index > 0 && <span className="topbar-crumb-sep">/</span>}
-              {last ? (
-                <span className="topbar-crumb-current">{crumb.label}</span>
+              {last || !crumb.href ? (
+                <span className={last ? 'topbar-crumb-current' : undefined}>{crumb.label}</span>
               ) : (
                 <Link href={crumb.href}>{crumb.label}</Link>
               )}
@@ -85,6 +89,7 @@ export function TopBar() {
           );
         })}
       </nav>
+      <GlobalSearch />
       <div className="topbar-right">
         <AsOfDatePicker />
         <div className={`status-pill ${live ? '' : 'is-historical'}`}>

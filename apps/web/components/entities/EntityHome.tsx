@@ -1,9 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard';
 import { EntityReports } from '@/components/reporting/EntityReports';
+import { DOMAIN_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, graphqlQuery } from '@/lib/graphql';
+import { mergeParentColumns, parentEntityColumns, type ParentEntityColumn, type ParentLinkCount } from '@/lib/parent-entities';
+import { supabaseBrowserClient } from '@/lib/supabase-browser';
 import { EntityAttributeTable, type RelatedAttributeColumn } from './EntityAttributeTable';
 
 type HomeTab = 'records' | 'dashboards' | 'quality';
@@ -33,11 +36,48 @@ export function EntityHome({
 }) {
   const [tab, setTab] = useState<HomeTab>('records');
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
+  const [discovered, setDiscovered] = useState<ParentEntityColumn[]>([]);
 
   useEffect(() => {
     setSelected(null);
     setTab('records');
   }, [domainCode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDiscovered([]);
+    Promise.all([
+      graphqlQuery<
+        { relationshipTypes: Array<{ relationshipCode: string; parentDomainCode?: string | null; childDomainCode?: string | null; cardinality?: string | null }> },
+        Record<string, never>
+      >(RELATIONSHIP_TYPES_QUERY, {}, 'network-only'),
+      graphqlQuery<
+        { domainTypes: Array<{ domainCode: string; domainName: string }> },
+        Record<string, never>
+      >(DOMAIN_TYPES_QUERY, {}, 'network-only'),
+      supabaseBrowserClient().rpc('relationship_link_counts'),
+    ]).then(([relationships, domains, counts]) => {
+      if (cancelled) return;
+      const names: Record<string, string> = {};
+      for (const domain of domains.data?.domainTypes || []) names[domain.domainCode] = domain.domainName;
+      const linkCounts: ParentLinkCount[] = ((counts.data || []) as Array<Record<string, unknown>>).map((row) => ({
+        relationshipCode: String(row.relationship_code || ''),
+        parentDomainCode: String(row.parent_domain_code || ''),
+        childDomainCode: String(row.child_domain_code || ''),
+        linkCount: Number(row.link_count) || 0,
+      }));
+      const types = relationships.data?.relationshipTypes || [];
+      setDiscovered(parentEntityColumns(domainCode, types, names, linkCounts));
+    }).catch(() => {
+      if (!cancelled) setDiscovered([]);
+    });
+    return () => { cancelled = true; };
+  }, [domainCode]);
+
+  const parentColumns = useMemo(
+    () => mergeParentColumns(related, discovered),
+    [related, discovered],
+  );
 
   return (
     <div className="entity-home">
@@ -74,7 +114,7 @@ export function EntityHome({
           asOfDate={asOfDate}
           refreshKey={refreshKey}
           emptyMessage={emptyMessage}
-          related={related}
+          related={parentColumns}
           onTotalChange={onTotalChange}
           selectedId={selected?.id}
           onSelect={setSelected}

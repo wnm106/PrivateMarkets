@@ -1,4 +1,4 @@
-import { graphqlQuery } from './graphql';
+import { graphqlMutation, graphqlQuery } from './graphql';
 
 export interface FundRecord {
   id: string;
@@ -14,6 +14,7 @@ export interface SurfaceDefinition {
   domainCode: string;
   description?: string | null;
   isPrimary?: boolean;
+  clientId?: string | null;
 }
 
 export interface SurfaceExperience {
@@ -25,6 +26,10 @@ export interface SurfaceExperience {
   qualificationPriority: number;
   displayOrder: number;
   ruleSummary: string;
+  applicabilityRules?: {
+    logic?: string;
+    conditions?: Array<{ attributeCode?: string; operator?: string; value?: unknown }>;
+  };
 }
 
 export interface SurfacePageVariant {
@@ -55,6 +60,8 @@ export interface SurfaceComponentDefinition {
   variantCode?: string | null;
   experienceCode?: string | null;
   displayOrder: number;
+  clientId?: string | null;
+  panelKey?: string | null;
 }
 
 export interface SurfaceSampleProfile {
@@ -98,6 +105,7 @@ export interface PageResolution {
   variantCode?: string | null;
   variantName?: string | null;
   decision: string;
+  panelKey?: string | null;
 }
 
 export interface ComponentResolution {
@@ -107,6 +115,8 @@ export interface ComponentResolution {
   experienceName: string;
   status: string;
   ruleTrace: string;
+  clientId?: string | null;
+  panelKey?: string | null;
 }
 
 export interface SurfaceResolution {
@@ -124,7 +134,7 @@ export interface SurfaceResolution {
 }
 
 const SURFACE_FIELDS = `
-  id surfaceCode surfaceName domainCode description isPrimary
+  id surfaceCode surfaceName domainCode description isPrimary clientId
 `;
 
 export const SURFACES_QUERY = `
@@ -138,14 +148,14 @@ export const SURFACE_CATALOG_QUERY = `
     surfaceCatalog(surfaceCode: $surfaceCode) {
       surface { ${SURFACE_FIELDS} isActive }
       experiences {
-        id experienceCode experienceName description isBaseline qualificationPriority displayOrder ruleSummary
+        id experienceCode experienceName description isBaseline qualificationPriority displayOrder ruleSummary applicabilityRules
       }
       slots {
         id slotCode slotName description displayOrder optionality
         variants { id variantCode variantName description qualificationPriority requiredExperienceCodes }
       }
       components {
-        id componentCode componentName description slotCode variantCode experienceCode displayOrder
+        id componentCode componentName description slotCode variantCode experienceCode displayOrder clientId panelKey
       }
       sampleProfiles { id profileCode profileName description templateCode facts }
     }
@@ -156,8 +166,8 @@ const RESOLUTION_FIELDS = `
   surfaceCode surfaceName domainCode subjectName subjectKind templateCode note
   facts { key value source }
   experiences { experienceCode experienceName status ruleTrace }
-  pages { slotCode slotName optionality status variantCode variantName decision }
-  components { componentCode componentName pageName experienceName status ruleTrace }
+  pages { slotCode slotName optionality status variantCode variantName decision panelKey }
+  components { componentCode componentName pageName experienceName status ruleTrace clientId panelKey }
 `;
 
 export const RESOLVE_SURFACE_QUERY = `
@@ -184,11 +194,11 @@ const FUND_RECORDS_QUERY = `
   }
 `;
 
-export function loadFundRecords() {
+export function loadDomainRecords(domainCode: string) {
   return graphqlQuery<
     { entities: { edges: Array<{ node: FundRecord }> } },
     { filter: { domainCode: string }; pagination: { first: number } }
-  >(FUND_RECORDS_QUERY, { filter: { domainCode: 'FUND' }, pagination: { first: 200 } }, 'network-only');
+  >(FUND_RECORDS_QUERY, { filter: { domainCode }, pagination: { first: 200 } }, 'network-only');
 }
 
 export function loadSurfaces() {
@@ -224,6 +234,47 @@ export function loadSurfaceResolution(variables: {
     RESOLVE_SURFACE_QUERY,
     variables,
     'network-only',
+  );
+}
+
+export interface SurfaceTabWrite {
+  slotCode: string | null;
+  name: string;
+  appearance: 'always' | 'when';
+  logic: 'AND' | 'OR';
+  conditions: Array<{ attribute: string; operator: 'is' | 'is_not'; value: string }>;
+  layouts: Array<{
+    name: string;
+    mode: 'everyone' | 'rule' | 'records';
+    logic: 'AND' | 'OR';
+    conditions: Array<{ attribute: string; operator: 'is' | 'is_not'; value: string }>;
+    recordNames: string[];
+  }>;
+}
+
+const SAVE_SURFACE_CATALOG = `
+  mutation SaveSurfaceCatalog($surfaceCode: String!, $tabs: JSON!) {
+    saveSurfaceCatalog(surfaceCode: $surfaceCode, tabs: $tabs) {
+      surface { ${SURFACE_FIELDS} isActive }
+      experiences {
+        id experienceCode experienceName description isBaseline qualificationPriority displayOrder ruleSummary applicabilityRules
+      }
+      slots {
+        id slotCode slotName description displayOrder optionality
+        variants { id variantCode variantName description qualificationPriority requiredExperienceCodes }
+      }
+      components {
+        id componentCode componentName description slotCode variantCode experienceCode displayOrder clientId panelKey
+      }
+      sampleProfiles { id profileCode profileName description templateCode facts }
+    }
+  }
+`;
+
+export function saveSurfaceCatalog(surfaceCode: string, tabs: SurfaceTabWrite[]) {
+  return graphqlMutation<{ saveSurfaceCatalog: SurfaceCatalog | null }, { surfaceCode: string; tabs: SurfaceTabWrite[] }>(
+    SAVE_SURFACE_CATALOG,
+    { surfaceCode, tabs },
   );
 }
 

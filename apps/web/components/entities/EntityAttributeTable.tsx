@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ColDef, FilterChangedEvent, SortChangedEvent } from 'ag-grid-community';
 import { attributeDisplayKind, formatAttributeDisplay, type TableCellAlign, tableCellAlign } from '@/lib/attribute-display';
+import { withParentNames } from '@/lib/parent-entities';
 import { AppGrid, type GridApi } from '@/components/grid/AppGrid';
 import { ATTRIBUTE_REGISTER_QUERY, graphqlQuery } from '@/lib/graphql';
 import { GRID_QUERY, type GridResultPayload } from '@/lib/reporting';
@@ -327,7 +328,7 @@ export function EntityAttributeTable({
 
   const lookups = useMemo(() => {
     const seen = new Set<string>();
-    return stableRelated.filter((r) => {
+    const primary = stableRelated.filter((r) => {
       if (seen.has(r.alias)) return false;
       seen.add(r.alias);
       return true;
@@ -338,6 +339,12 @@ export function EntityAttributeTable({
       relationshipCode: r.relationshipCode,
       domainCode: r.domainCode,
     }));
+    const opposite = primary.map((lookup) => ({
+      ...lookup,
+      alias: `${lookup.alias}Alt`,
+      direction: lookup.direction === 'UP' ? 'DOWN' as const : 'UP' as const,
+    }));
+    return [...primary, ...opposite];
   }, [stableRelated]);
 
   const attributeColumns = useMemo(
@@ -408,7 +415,10 @@ export function EntityAttributeTable({
       start: 'DOMAIN',
       domainCode,
       asOfDate: asOfDate || null,
-      columns: attributeColumns.map((c) => c.code),
+      columns: [
+        ...attributeColumns.map((c) => c.code),
+        ...stableRelated.map((column) => `${column.alias}Alt.${column.field}`),
+      ],
       lookups,
       sort: sort ? [sort] : [{ field: 'entity_name', dir: 'asc' }],
     };
@@ -443,7 +453,8 @@ export function EntityAttributeTable({
         return;
       }
       const all = scan.data?.gridQuery.rows || [];
-      const filtered = all.filter((row) => rowMatchesGlobal(row, columns, globalSearch)).slice(0, CLIENT_LIMIT);
+      const named = withParentNames(all, stableRelated);
+      const filtered = named.filter((row) => rowMatchesGlobal(row, columns, globalSearch)).slice(0, CLIENT_LIMIT);
       setRows(filtered);
       setMatched(filtered.length);
       setScanNote(
@@ -465,7 +476,7 @@ export function EntityAttributeTable({
       return;
     }
     const grid = res.data?.gridQuery;
-    const loaded = grid?.rows || [];
+    const loaded = withParentNames(grid?.rows || [], stableRelated);
     const total = grid?.total || 0;
     setRows(loaded);
     setMatched(total);
@@ -475,7 +486,7 @@ export function EntityAttributeTable({
       : null);
     setError(null);
     setLoading(false);
-  }, [catalogReady, domainCode, asOfDate, attributeColumns, lookups, sort, filters, columns, globalSearch, onTotalChange]);
+  }, [catalogReady, domainCode, asOfDate, attributeColumns, lookups, stableRelated, sort, filters, columns, globalSearch, onTotalChange]);
 
   useEffect(() => { loadPage(); }, [loadPage, refreshKey]);
 

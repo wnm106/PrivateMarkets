@@ -2,10 +2,11 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { graphqlQuery } from '@/lib/graphql';
 import { attributeText, RECORD_EXPERIENCES_QUERY, type RecordExperience } from '@/lib/experience';
 import { useTemporalStore } from '@/lib/store';
+import { useSurfaceNav } from '@/lib/surface-nav';
 
 interface DealCard {
   id: string;
@@ -87,13 +88,14 @@ function knownBy(knowledgeDate: string, createdAt: string | null | undefined): b
 
 export default function DealPipelinePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const asOfDate = useTemporalStore((state) => state.asOfDate);
   const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const [experience, setExperience] = useState<RecordExperience | null>(null);
   const [deals, setDeals] = useState<DealCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [strategy, setStrategy] = useState('all');
+  const [strategy, setStrategy] = useState(() => searchParams.get('strategy') || 'all');
   const [stage, setStage] = useState('all');
   const [query, setQuery] = useState('');
   const [attentionOnly, setAttentionOnly] = useState(false);
@@ -133,6 +135,26 @@ export default function DealPipelinePage() {
   }, [asOfDate, knowledgeDate]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    setStrategy(searchParams.get('strategy') || 'all');
+  }, [searchParams]);
+
+  const selectStrategy = (code: string) => {
+    setStrategy(code);
+    const params = new URLSearchParams(searchParams.toString());
+    if (!code || code === 'all') params.delete('strategy');
+    else params.set('strategy', code);
+    const query = params.toString();
+    router.replace(query ? `/pipeline?${query}` : '/pipeline', { scroll: false });
+  };
+
+  useSurfaceNav(strategy === 'all'
+    ? []
+    : [
+        { label: 'Pipeline', href: '/pipeline' },
+        { label: labelOf(strategy) },
+      ]);
 
   const stages = experience?.pipeline?.stages?.length ? experience.pipeline.stages : FALLBACK_STAGES;
   const stageAttribute = experience?.pipeline?.stageAttribute || 'DEAL_STAGE';
@@ -225,12 +247,6 @@ export default function DealPipelinePage() {
 
   return (
     <div className="view-fade da pipe">
-      <div className="da-crumbs">
-        <Link href="/">Home</Link>
-        <span>/</span>
-        <strong>Deal pipeline</strong>
-      </div>
-
       <header className="da-ribbon">
         <div className="da-title">
           <span className="da-chip">Pipeline</span>
@@ -260,7 +276,7 @@ export default function DealPipelinePage() {
               <thead>
                 <tr>
                   <th>
-                    <button type="button" className="hb" aria-pressed={strategy === 'all' && stage === 'all'} onClick={() => { setStrategy('all'); setStage('all'); }}>
+                    <button type="button" className="hb" aria-pressed={strategy === 'all' && stage === 'all'} onClick={() => { selectStrategy('all'); setStage('all'); }}>
                       Strategy<span className="sx">All stages</span>
                     </button>
                   </th>
@@ -269,7 +285,7 @@ export default function DealPipelinePage() {
                     const dollars = searched.filter((row) => row.stageCode === item.code).reduce((total, row) => total + row.facility, 0);
                     return (
                       <th key={item.code}>
-                        <button type="button" className="hb" aria-pressed={strategy === 'all' && stage === item.code} onClick={() => { setStrategy('all'); setStage(stage === item.code ? 'all' : item.code); }}>
+                        <button type="button" className="hb" aria-pressed={strategy === 'all' && stage === item.code} onClick={() => { selectStrategy('all'); setStage(stage === item.code ? 'all' : item.code); }}>
                           {item.label}
                           <span className="sx">{count} deal{count === 1 ? '' : 's'}, {money(dollars)}</span>
                         </button>
@@ -285,7 +301,7 @@ export default function DealPipelinePage() {
                   return (
                     <tr key={code || 'none'}>
                       <th>
-                        <button type="button" className="hb" aria-pressed={strategy === code && stage === 'all'} onClick={() => { setStrategy(strategy === code ? 'all' : code); setStage('all'); }}>
+                        <button type="button" className="hb" aria-pressed={strategy === code && stage === 'all'} onClick={() => { selectStrategy(strategy === code ? 'all' : code); setStage('all'); }}>
                           {labelOf(code)}
                           <span className="sx">{inStrategy.length} deal{inStrategy.length === 1 ? '' : 's'}, {money(inStrategy.reduce((total, row) => total + row.facility, 0))}</span>
                         </button>
@@ -302,8 +318,8 @@ export default function DealPipelinePage() {
                               style={{ ['--t' as string]: cell.length / maxCount }}
                               aria-pressed={pressed}
                               onClick={() => {
-                                if (pressed) { setStrategy('all'); setStage('all'); }
-                                else { setStrategy(code); setStage(item.code); }
+                                if (pressed) { selectStrategy('all'); setStage('all'); }
+                                else { selectStrategy(code); setStage(item.code); }
                               }}
                             >
                               <span className="n">{cell.length}</span>
@@ -314,7 +330,7 @@ export default function DealPipelinePage() {
                         );
                       })}
                       <td className="tc">
-                        <button type="button" className="cb" aria-pressed={strategy === code && stage === 'all'} onClick={() => { setStrategy(strategy === code && stage === 'all' ? 'all' : code); setStage('all'); }}>
+                        <button type="button" className="cb" aria-pressed={strategy === code && stage === 'all'} onClick={() => { selectStrategy(strategy === code && stage === 'all' ? 'all' : code); setStage('all'); }}>
                           <span className="n">{inStrategy.length}</span>
                           <span className="d">{money(inStrategy.reduce((total, row) => total + row.facility, 0))}</span>
                         </button>
@@ -330,7 +346,7 @@ export default function DealPipelinePage() {
             <div className="l">
               <input className="pipe-search" type="search" placeholder="Search deal, sponsor or sector" aria-label="Search deals" value={query} onChange={(event) => setQuery(event.target.value)} />
               <button type="button" className="pipe-chip" aria-pressed={attentionOnly} onClick={() => setAttentionOnly((value) => !value)}>Needs attention</button>
-              {strategy !== 'all' && <button type="button" className="pipe-chip on" onClick={() => setStrategy('all')}>{labelOf(strategy)} ×</button>}
+              {strategy !== 'all' && <button type="button" className="pipe-chip on" onClick={() => selectStrategy('all')}>{labelOf(strategy)} ×</button>}
               {stage !== 'all' && <button type="button" className="pipe-chip on" onClick={() => setStage('all')}>{stages.find((item) => item.code === stage)?.label} ×</button>}
             </div>
             <div className="r">

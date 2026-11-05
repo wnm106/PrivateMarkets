@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   graphqlQuery,
   DOMAIN_TYPES_QUERY,
@@ -8,10 +8,17 @@ import {
   ATTRIBUTE_REGISTER_QUERY,
 } from '@/lib/graphql';
 import { AttributePicker } from './AttributePicker';
-import { EntityAttributeTree } from './EntityAttributeTree';
-import { ComplianceAttributeSelect, useRelationshipAttributes } from './ComplianceAttributeSelect';
+import { RelatedAttributePicker, useRelationshipAttributes, attributePathKey, type TreeAttributeOption } from './ComplianceAttributeSelect';
+import { ExpressionBox } from './ExpressionBox';
+import {
+  applyLeftText,
+  applyRightText,
+  leftTextOf,
+  rightTextOf,
+  type Expr,
+  type OperandContext,
+} from '@/lib/condition-expression';
 import { CompliancePopulationPreview } from './CompliancePopulationPreview';
-import { AS_OF_PERIODS, comparisonFields, comparisonText, describeComparisonExpression, DQ_DATE_FNS } from '@/lib/expression-library';
 
 export interface RollupHop {
   relationshipCode: string;
@@ -93,7 +100,17 @@ export interface ComplianceCondition {
   compareAttributeCode: string; // when set, compare to this attribute instead of the literal value
   compareAttributePath: Array<{ relationshipCode: string; direction: 'UP' | 'DOWN' }>;
   compareDimension: DimensionState;
+  /** Expression trees used when a side is more than a single field or a literal. */
+  leftExpression?: Expr | null;
+  rightExpression?: Expr | null;
+  /** What is typed in each operand box. Derived from the fields above until first edited. */
+  leftText?: string;
+  rightText?: string;
+  leftError?: string;
+  rightError?: string;
   logicOperator: 'AND' | 'OR';
+  /** Client-only identity so a line can be reordered without remounting. */
+  key?: string;
 }
 
 export interface ComplianceRuleFormData {
@@ -122,6 +139,10 @@ export interface ComplianceRuleFormData {
   denominatorConstantValue: string;
   resultUnit: string;
   limitDirection: string;
+  /** How limits will be set when the rule is assigned to a fund. UNIFORM | RANK | NAMED. */
+  limitMode: string;
+  /** Other version metadata, preserved when a new version is saved. */
+  versionMetadata?: Record<string, unknown> | null;
   softLimitValue: string;
   hardLimitValue: string;
   hardLimitAttributeCode: string;
@@ -188,6 +209,7 @@ function defaultFormData(): ComplianceRuleFormData {
     denominatorConstantValue: '',
     resultUnit: 'PERCENTAGE',
     limitDirection: 'MAX',
+    limitMode: 'UNIFORM',
     softLimitValue: '',
     hardLimitValue: '',
     hardLimitAttributeCode: '',
@@ -213,7 +235,6 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
   const [relationshipTypes, setRelationshipTypes] = useState<RelationshipTypeOpt[]>([]);
   const [baseAttributes, setBaseAttributes] = useState<AttributeOpt[]>([]);
   const [anchorAttributes, setAnchorAttributes] = useState<AttributeOpt[]>([]);
-  const [groupByAttributes, setGroupByAttributes] = useState<AttributeOpt[]>([]);
 
   useEffect(() => {
     graphqlQuery<{ domainTypes: Domain[] }, {}>(DOMAIN_TYPES_QUERY, {}).then((r) => {
@@ -250,88 +271,50 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
     });
   }, [formData.anchorDomainCode]);
 
-  // Attribute list for the group-by attribute: the domain at the far end of
-  // groupByPath (or the base domain itself if there's no group-by path).
-  useEffect(() => {
-    const lastHop = formData.groupByPath[formData.groupByPath.length - 1];
-    const relType = relationshipTypes.find((r) => r.relationshipCode === lastHop?.relationshipCode);
-    const targetDomain = lastHop
-      ? (lastHop.direction === 'UP' ? relType?.parentDomainCode : relType?.childDomainCode)
-      : formData.baseDomainCode;
-
-    if (!targetDomain) {
-      setGroupByAttributes([]);
-      return;
-    }
-    graphqlQuery<{ attributeRegister: AttributeOpt[] }, { domainCode: string }>(
-      ATTRIBUTE_REGISTER_QUERY,
-      { domainCode: targetDomain }
-    ).then((r) => {
-      if (r.data?.attributeRegister) setGroupByAttributes(r.data.attributeRegister);
-    });
-  }, [formData.groupByPath, formData.baseDomainCode, relationshipTypes]);
-
   const handleChange = (field: keyof ComplianceRuleFormData, value: any) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
     if (errors[field]) setErrors((prev) => ({ ...prev, [field]: '' }));
   };
 
-  // ---- Rollup path (hierarchy) helpers ----
-  const addHop = (pathField: 'baseRollupPath' | 'groupByPath') => {
-    setFormData((prev) => ({
-      ...prev,
-      [pathField]: [...prev[pathField], { relationshipCode: '', direction: 'UP', recursive: false }],
-    }));
-  };
-  const updateHop = (pathField: 'baseRollupPath' | 'groupByPath', idx: number, patch: Partial<RollupHop>) => {
+  // Picking a measure also decides which entity the values are read from and
+  // how that entity connects back to the one the rule applies to.
+  const pickMeasure = (o: TreeAttributeOption | null) => {
     setFormData((prev) => {
-      const path = [...prev[pathField]];
-      path[idx] = { ...path[idx], ...patch };
-      return { ...prev, [pathField]: path };
+      const base = o?.domainCode || prev.anchorDomainCode;
+      const changed = base !== prev.baseDomainCode;
+      return {
+        ...prev,
+        numeratorAttributeCode: o?.attributeCode || '',
+        baseDomainCode: base,
+        baseRollupPath: o ? reversePath(o.path) : [],
+        ...(changed
+          ? { groupByAttributeCode: '', groupByPath: [], conditions: prev.conditions.filter((c) => c.appliesTo !== 'BASE') }
+          : {}),
+      };
     });
-  };
-  const removeHop = (pathField: 'baseRollupPath' | 'groupByPath', idx: number) => {
-    setFormData((prev) => ({ ...prev, [pathField]: prev[pathField].filter((_, i) => i !== idx) }));
+    if (errors.numeratorAttributeCode) setErrors((prev) => ({ ...prev, numeratorAttributeCode: '' }));
   };
 
   // ---- Conditions helpers ----
-  const addCondition = (appliesTo: 'BASE' | 'ANCHOR') => {
-    setFormData((prev) => ({
-      ...prev,
-      conditions: [
-        ...prev.conditions,
-        {
-          appliesTo,
-          conditionGroup: 1,
-          conditionOrder: prev.conditions.filter((c) => c.appliesTo === appliesTo).length + 1,
-          attributeCode: '',
-          attributePath: [],
-          attributeDimension: emptyDimension(),
-          operator: 'equals',
-          value: '',
-          compareAttributeCode: '',
-          compareAttributePath: [],
-          compareDimension: emptyDimension(),
-          logicOperator: 'AND',
-        },
-      ],
-    }));
-  };
-  const updateCondition = (idx: number, patch: Partial<ComplianceCondition>) => {
+  const addCondition = (appliesTo: 'BASE' | 'ANCHOR', group?: number) => {
     setFormData((prev) => {
-      const conditions = [...prev.conditions];
-      conditions[idx] = { ...conditions[idx], ...patch };
-      return { ...prev, conditions };
+      const scope = prev.conditions.filter((c) => c.appliesTo === appliesTo);
+      const groups = scope.map((c) => c.conditionGroup || 1);
+      const conditionGroup = group ?? (groups.length ? Math.max(...groups) : 1);
+      const conditionOrder = scope.filter((c) => (c.conditionGroup || 1) === conditionGroup).length + 1;
+      return { ...prev, conditions: [...prev.conditions, blankCondition(appliesTo, conditionGroup, conditionOrder)] };
     });
   };
-  const removeCondition = (idx: number) => {
-    setFormData((prev) => ({ ...prev, conditions: prev.conditions.filter((_, i) => i !== idx) }));
+  const replaceScope = (appliesTo: 'BASE' | 'ANCHOR', next: ComplianceCondition[]) => {
+    setFormData((prev) => ({
+      ...prev,
+      conditions: [...prev.conditions.filter((c) => c.appliesTo !== appliesTo), ...next],
+    }));
   };
 
-  // ---- Wizard state ----
-  const STEPS = ['Define', 'Measure & limit', 'Refine (optional)'];
-  const [step, setStep] = useState(0);
+  // ---- Layout state ----
   const [codeTouched, setCodeTouched] = useState(!!initial?.ruleCode);
+  const [groupOn, setGroupOn] = useState(!!(initial?.groupByAttributeCode || initial?.groupByPath?.length));
 
   const toCode = (name: string) =>
     name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -355,42 +338,47 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
     if (errors.anchorDomainCode) setErrors((prev) => ({ ...prev, anchorDomainCode: '' }));
   };
 
-  const validateStep = (s: number) => {
-    const e: Record<string, string> = {};
-    if (s === 0) {
-      if (!formData.ruleName) e.ruleName = 'Give the rule a name';
-      if (!formData.ruleCode) e.ruleCode = 'Rule code is required';
-      if (!formData.anchorDomainCode) e.anchorDomainCode = 'Choose what the rule applies to';
-    }
-    if (s === 1) {
-      if (!formData.baseDomainCode) e.baseDomainCode = 'Choose where values are read from';
-      if (!formData.numeratorAttributeCode) e.numeratorAttributeCode = 'Choose the value to measure';
-      if (formData.denominatorScope !== 'CONSTANT' && formData.denominatorScope !== 'NONE' && !formData.denominatorAttributeCode) {
-        e.denominatorAttributeCode = 'Choose the value to compare against';
-      }
-      if (formData.denominatorScope === 'CONSTANT' && !formData.denominatorConstantValue) {
-        e.denominatorConstantValue = 'Enter a number';
-      }
-      if (!formData.softLimitValue && !formData.hardLimitValue && !formData.hardLimitAttributeCode) {
-        e.hardLimitValue = 'Set a limit, or read it from the fund';
-      }
-    }
-    setErrors(e);
-    return Object.keys(e).length === 0;
+  const toggleGroup = (on: boolean) => {
+    setGroupOn(on);
+    if (!on) setFormData((prev) => ({ ...prev, groupByPath: [], groupByAttributeCode: '', limitMode: 'UNIFORM' }));
   };
 
-  const goNext = () => {
-    if (validateStep(step)) setStep((s) => Math.min(s + 1, STEPS.length - 1));
+  const ERROR_SECTION: Record<string, string> = {
+    ruleName: 'rb-rule',
+    ruleCode: 'rb-rule',
+    anchorDomainCode: 'rb-rule',
+    baseDomainCode: 'rb-measure',
+    numeratorAttributeCode: 'rb-measure',
+    denominatorAttributeCode: 'rb-measure',
+    denominatorConstantValue: 'rb-measure',
+  };
+
+  const validate = () => {
+    const e: Record<string, string> = {};
+    if (!formData.ruleName) e.ruleName = 'Give the rule a name';
+    if (!formData.ruleCode) e.ruleCode = 'Rule code is required';
+    if (!formData.anchorDomainCode) e.anchorDomainCode = 'Choose what the rule applies to';
+    if (!formData.baseDomainCode) e.baseDomainCode = 'Choose where values are read from';
+    if (!formData.numeratorAttributeCode) e.numeratorAttributeCode = 'Choose the value to measure';
+    if (formData.denominatorScope !== 'CONSTANT' && formData.denominatorScope !== 'NONE' && !formData.denominatorAttributeCode) {
+      e.denominatorAttributeCode = 'Choose the value to compare against';
+    }
+    if (formData.denominatorScope === 'CONSTANT' && !formData.denominatorConstantValue) {
+      e.denominatorConstantValue = 'Enter a number';
+    }
+    const badCondition = formData.conditions.some((c) => c.leftError || c.rightError);
+    if (badCondition) e.conditions = 'Fix the highlighted condition';
+    setErrors(e);
+    const first = Object.keys(e)[0];
+    if (first) {
+      const target = first === 'conditions' ? document.querySelector('[data-cond-error]') : document.getElementById(ERROR_SECTION[first]);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    return !first;
   };
 
   const handleSubmit = () => {
-    for (const s of [0, 1]) {
-      if (!validateStep(s)) {
-        setStep(s);
-        return;
-      }
-    }
-    onSubmit(formData);
+    if (validate()) onSubmit(formData);
   };
 
   const baseConditions = formData.conditions.filter((c) => c.appliesTo === 'BASE');
@@ -398,729 +386,786 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
 
   const domainName = (code: string) => domains.find((d) => d.domainCode === code)?.domainName || code;
   const attrName = (list: AttributeOpt[], code: string) => list.find((a) => a.attributeCode === code)?.attributeName || code;
+  const anchorLabel = domainName(formData.anchorDomainCode) || 'entity';
+  const baseLabel = domainName(formData.baseDomainCode) || 'record';
 
   const summary = (() => {
     if (!formData.numeratorAttributeCode || !formData.anchorDomainCode) return '';
-    const agg = formData.numeratorAggregation.toLowerCase();
-    const num = `${agg} of ${attrName(baseAttributes, formData.numeratorAttributeCode)}`;
+    const num = `${AGG_LABELS[formData.numeratorAggregation] || formData.numeratorAggregation} of ${attrName(baseAttributes, formData.numeratorAttributeCode)}`;
+    const filters = baseConditions.filter((c) => c.attributeCode).length;
     let rel = '';
     if (formData.denominatorScope === 'CONSTANT') {
-      rel = formData.denominatorConstantValue ? ` ÷ ${formData.denominatorConstantValue}` : '';
-    } else if (formData.denominatorScope === 'NONE') {
-      rel = '';
-    } else if (formData.denominatorAttributeCode) {
+      rel = formData.denominatorConstantValue ? ` divided by ${formData.denominatorConstantValue}` : '';
+    } else if (formData.denominatorScope !== 'NONE' && formData.denominatorAttributeCode) {
       const denList = formData.denominatorScope === 'ANCHOR' ? anchorAttributes : baseAttributes;
       const den = attrName(denList, formData.denominatorAttributeCode);
       rel = formData.denominatorScope === 'ANCHOR'
-        ? ` as a percent of the fund's ${den}`
-        : ` as a share of ${formData.denominatorScope === 'SAME_GROUP' ? 'group' : 'total'} ${den}`;
+        ? ` as a share of the ${anchorLabel.toLowerCase()}'s ${den}`
+        : ` as a share of ${formData.denominatorScope === 'SAME_GROUP' ? 'its group\'s' : 'total'} ${den}`;
     }
-    const limit = formData.hardLimitAttributeCode
-      ? `the fund's ${formData.hardLimitAttributeCode}`
-      : (formData.hardLimitValue || formData.softLimitValue);
+    const group = groupOn && formData.groupByAttributeCode ? `, for each ${formData.groupByAttributeCode.replace(/_/g, ' ').toLowerCase()}` : '';
     const dir = formData.limitDirection === 'MAX' ? 'above' : 'below';
-    return `For each ${domainName(formData.anchorDomainCode)}: ${num}${rel}. Breach when ${dir} ${limit || '…'}.`;
+    const parts = [`For each ${anchorLabel}: ${num}${filters ? ` (${filters} record filter${filters > 1 ? 's' : ''})` : ''}${rel}${group}.`];
+    const limitNote = !groupOn || (formData.limitMode !== 'RANK' && formData.limitMode !== 'NAMED')
+      ? `the limit set on each ${anchorLabel.toLowerCase()}`
+      : formData.limitMode === 'RANK'
+      ? `the limit for that rank, set on each ${anchorLabel.toLowerCase()}`
+      : `the limit for that named group, set on each ${anchorLabel.toLowerCase()}`;
+    parts.push(`Breach when ${dir} ${limitNote}.`);
+    return parts.join(' ');
   })();
 
-  const advancedCount = {
-    scope: formData.conditions.filter((c) => c.attributeCode).length,
-    structure:
-      formData.baseRollupPath.filter((h) => h.relationshipCode).length +
-      formData.groupByPath.filter((h) => h.relationshipCode).length +
-      (formData.groupByAttributeCode ? 1 : 0),
-    period:
-      [formData.numeratorDimension, formData.denominatorDimension].filter(
-        (d) => dimensionToInput(d) !== undefined
-      ).length + (formData.defaultSourceScope !== 'GOLDEN' ? 1 : 0),
-  };
+  const filterCount = baseConditions.filter((c) => c.attributeCode).length;
 
-  const panel = { background: 'var(--bg)', border: '1px solid var(--line)', padding: '16px', marginTop: '10px' } as const;
-  const badge = (n: number) => (n > 0 ? ` · ${n} configured` : '');
+  const denominatorOptions = [
+    { value: 'SAME_GROUP', label: 'Total of its group' },
+    { value: 'ANCHOR_TOTAL', label: 'Total of all records' },
+    { value: 'ANCHOR', label: `A value on the ${anchorLabel.toLowerCase()}` },
+    { value: 'CONSTANT', label: 'Fixed number' },
+    { value: 'NONE', label: 'No denominator' },
+  ];
+  const sharesRecords = formData.denominatorScope === 'SAME_GROUP' || formData.denominatorScope === 'ANCHOR_TOTAL';
+  const needsDenominatorAttribute = formData.denominatorScope !== 'CONSTANT' && formData.denominatorScope !== 'NONE';
+  const denEntity = formData.denominatorScope === 'ANCHOR' ? anchorLabel : baseLabel;
+  const limitHelp = !groupOn
+    ? 'One limit applies to the whole result. Limit values are set when the rule is assigned to a fund.'
+    : formData.limitMode === 'RANK'
+    ? 'A different limit applies by rank, for example the largest group at 15% and the rest at 10%. Ranks are set when the rule is assigned to a fund.'
+    : formData.limitMode === 'NAMED'
+    ? 'Each named group can have its own limit, for example Energy at 15%. Those limits are set when the rule is assigned to a fund.'
+    : 'One limit applies to each group, for example no industry above 10%. Limit values are set when the rule is assigned to a fund.';
 
   return (
-    <div>
-      {/* Stepper */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
-        {STEPS.map((label, i) => (
-          <button
-            key={label}
-            type="button"
-            onClick={() => {
-              // Allow going back freely; going forward requires the current step to be valid.
-              if (i <= step || validateStep(step)) setStep(i);
-            }}
-            style={{
-              flex: 1,
-              textAlign: 'left',
-              padding: '10px 12px',
-              border: '1px solid var(--line)',
-              borderBottom: i === step ? '2px solid var(--accent)' : '1px solid var(--line)',
-              background: i === step ? 'var(--bg)' : 'transparent',
-              color: i === step ? 'var(--ink)' : 'var(--ink-3)',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: i === step ? 700 : 500,
-            }}
-          >
-            <span style={{ marginRight: '8px', color: 'var(--accent)' }}>{i < step ? '✓' : i + 1}</span>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Step 1: Define */}
-      {step === 0 && (
-        <div className="builder-card">
-          <div className="builder-body">
-            <div className="form-grid">
-              <div className="field" style={{ gridColumn: '1 / -1' }}>
-                <label>Rule name *</label>
-                <input
-                  className={`text-input ${errors.ruleName ? 'error' : ''}`}
-                  value={formData.ruleName}
-                  onChange={(e) => handleNameChange(e.target.value)}
-                  placeholder="e.g. Single industry concentration"
-                  autoFocus
-                />
-                {errors.ruleName && <span className="field-error">{errors.ruleName}</span>}
-                {formData.ruleCode && (
-                  <span className="field-hint">
-                    Code: <span className="mono">{formData.ruleCode}</span>
-                    {!lockIdentity && (
-                      <>
-                        {' · '}
-                        <a
-                          href="#"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            const next = window.prompt('Rule code', formData.ruleCode);
-                            if (next) {
-                              setCodeTouched(true);
-                              handleChange('ruleCode', next.toUpperCase().replace(/\s+/g, '_'));
-                            }
-                          }}
-                        >
-                          edit
-                        </a>
-                      </>
-                    )}
-                  </span>
-                )}
-                {errors.ruleCode && <span className="field-error">{errors.ruleCode}</span>}
-              </div>
-              <div className="field">
-                <label>Applies to *</label>
-                <select
-                  className={`select ${errors.anchorDomainCode ? 'error' : ''}`}
-                  value={formData.anchorDomainCode}
-                  disabled={lockIdentity}
-                  onChange={(e) => handleAnchorChange(e.target.value)}
-                >
-                  <option value="">Select entity type...</option>
-                  {domains.map((d) => (
-                    <option key={d.domainCode} value={d.domainCode}>{d.domainName}</option>
-                  ))}
-                </select>
-                <span className="field-hint">The rule is evaluated once per entity of this type (e.g. each Fund)</span>
-                {errors.anchorDomainCode && <span className="field-error">{errors.anchorDomainCode}</span>}
-              </div>
-              <div className="field">
-                <label>Category</label>
-                <select
-                  className="select"
-                  value={formData.ruleCategory}
-                  onChange={(e) => handleChange('ruleCategory', e.target.value)}
-                >
-                  <option value="CONCENTRATION">Concentration</option>
-                  <option value="EXPOSURE">Exposure</option>
-                  <option value="DIVERSIFICATION">Diversification</option>
-                  <option value="ELIGIBILITY">Eligibility</option>
-                  <option value="LEVERAGE">Leverage</option>
-                  <option value="LIQUIDITY">Liquidity</option>
-                  <option value="OTHER">Other</option>
-                </select>
-              </div>
+    <div className="rb">
+      <section className="rb-block" id="rb-rule">
+        <h2 className="rb-block-title">Rule</h2>
+        <div className="rb-pad">
+          <div className="rb-namegrid">
+            <div className="field">
+              <label htmlFor="rb-name">Name *</label>
+              <input
+                id="rb-name"
+                className={`text-input ${errors.ruleName ? 'error' : ''}`}
+                value={formData.ruleName}
+                onChange={(e) => handleNameChange(e.target.value)}
+                placeholder="Industry concentration"
+                autoFocus={!lockIdentity}
+              />
+              {errors.ruleName && <span className="field-error">{errors.ruleName}</span>}
+              {formData.ruleCode && (
+                <span className="field-hint rb-code">
+                  Code: <span className="mono">{formData.ruleCode}</span>
+                  {!lockIdentity && (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => {
+                        const next = window.prompt('Rule code', formData.ruleCode);
+                        if (next) {
+                          setCodeTouched(true);
+                          handleChange('ruleCode', next.toUpperCase().replace(/\s+/g, '_'));
+                        }
+                      }}
+                    >
+                      Edit code
+                    </button>
+                  )}
+                </span>
+              )}
+              {errors.ruleCode && <span className="field-error">{errors.ruleCode}</span>}
+            </div>
+            <div className="field">
+              <label htmlFor="rb-category">Category</label>
+              <select id="rb-category" className="select" value={formData.ruleCategory} onChange={(e) => handleChange('ruleCategory', e.target.value)}>
+                <option value="CONCENTRATION">Concentration</option>
+                <option value="EXPOSURE">Exposure</option>
+                <option value="DIVERSIFICATION">Diversification</option>
+                <option value="ELIGIBILITY">Eligibility</option>
+                <option value="LEVERAGE">Leverage</option>
+                <option value="LIQUIDITY">Liquidity</option>
+                <option value="FORTY_ACT">40 Act</option>
+                <option value="OTHER">Other</option>
+              </select>
             </div>
           </div>
+          <div className="field rb-anchor">
+            <label htmlFor="rb-anchor">Applies to *</label>
+            <select
+              id="rb-anchor"
+              className={`select ${errors.anchorDomainCode ? 'error' : ''}`}
+              value={formData.anchorDomainCode}
+              disabled={lockIdentity}
+              onChange={(e) => handleAnchorChange(e.target.value)}
+            >
+              <option value="">Select what this rule is checked on...</option>
+              {domains.map((d) => (
+                <option key={d.domainCode} value={d.domainCode}>{d.domainName}</option>
+              ))}
+            </select>
+            {errors.anchorDomainCode && <span className="field-error">{errors.anchorDomainCode}</span>}
+          </div>
+          <div className="field">
+            <label htmlFor="rb-description">Description</label>
+            <textarea
+              id="rb-description"
+              className="text-input"
+              value={formData.description}
+              onChange={(e) => handleChange('description', e.target.value)}
+              rows={3}
+              style={{ resize: 'vertical' }}
+              placeholder="Guideline language this rule enforces"
+            />
+          </div>
         </div>
-      )}
+      </section>
 
-      {/* Step 2: Measure & limit */}
-      {step === 1 && (
-        <div className="builder-card">
-          <div className="builder-body">
-            <div className="form-grid">
-              <AttributePicker
-                label="Measure *"
+      <section className="rb-block" id="rb-measure">
+        <h2 className="rb-block-title">Measure</h2>
+        <div className={`rb-line ${filterCount ? 'top' : ''}`}>
+          <div className="rb-line-label">Numerator</div>
+          <div className="rb-sentence">
+            <select
+              className="select rb-agg"
+              aria-label="Combine by"
+              value={formData.numeratorAggregation}
+              onChange={(e) => handleChange('numeratorAggregation', e.target.value)}
+            >
+              {AGGREGATIONS.filter((a) => a !== 'CONSTANT').map((a) => (
+                <option key={a} value={a}>{AGG_LABELS[a] || a}</option>
+              ))}
+            </select>
+            <span className="rb-of">of</span>
+            <RelatedAttributePicker
+              bare
+              ownerLabel
+              label="Numerator"
+              rootDomainCode={formData.anchorDomainCode}
+              relationshipTypes={relationshipTypes}
+              domains={domains}
+              isSelected={(o) => o.attributeCode === formData.numeratorAttributeCode && o.domainCode === (formData.baseDomainCode || formData.anchorDomainCode)}
+              onSelect={pickMeasure}
+              placeholder="Position · Market value"
+              error={!!errors.numeratorAttributeCode}
+            />
+          </div>
+        </div>
+        <div className={`rb-line ${baseConditions.length ? 'top' : ''}`}>
+          <div className="rb-line-label">Where</div>
+          <div>
+            {baseConditions.length === 0 ? (
+              <div className="rb-sentence">
+                <span className="rb-qualify">All records qualify</span>
+                <button type="button" className="btn btn-sm" onClick={() => addCondition('BASE', 1)}>+ Add condition</button>
+              </div>
+            ) : (
+              <ConditionGroup
+                appliesTo="BASE"
+                conditions={baseConditions}
                 rootDomainCode={formData.baseDomainCode}
-                value={formData.numeratorAttributeCode}
-                onChange={(code) => handleChange('numeratorAttributeCode', code)}
-                attributes={baseAttributes}
-                placeholder="Select value..."
-                error={!!errors.numeratorAttributeCode}
+                domainLabel={baseLabel}
+                relationshipTypes={relationshipTypes}
+                domains={domains}
+                onCommit={(next) => replaceScope('BASE', next)}
               />
-              {errors.numeratorAttributeCode && <span className="field-error">{errors.numeratorAttributeCode}</span>}
-              <div className="field">
-                <label>How to combine</label>
-                <select
-                  className="select"
-                  value={formData.numeratorAggregation}
-                  onChange={(e) => handleChange('numeratorAggregation', e.target.value)}
-                >
-                  {AGGREGATIONS.filter((a) => a !== 'CONSTANT').map((a) => <option key={a} value={a}>{a}</option>)}
-                </select>
-              </div>
-
-              <div className="field">
-                <label>Compare against</label>
-                <select
-                  className="select"
-                  value={formData.denominatorScope}
-                  onChange={(e) => handleChange('denominatorScope', e.target.value)}
-                >
-                  <option value="NONE">The measure itself (count or total exposure)</option>
-                  <option value="ANCHOR">A value on the fund (for example NAV)</option>
-                  <option value="ANCHOR_TOTAL">Total of the positions in the fund</option>
-                  <option value="SAME_GROUP">Total within the same group</option>
-                  <option value="CONSTANT">A fixed number</option>
-                </select>
-              </div>
-              {formData.denominatorScope === 'NONE' ? null : formData.denominatorScope === 'CONSTANT' ? (
-                <div className="field">
-                  <label>Number *</label>
-                  <input
-                    className={`text-input mono ${errors.denominatorConstantValue ? 'error' : ''}`}
-                    type="number"
-                    value={formData.denominatorConstantValue}
-                    onChange={(e) => handleChange('denominatorConstantValue', e.target.value)}
-                  />
-                  {errors.denominatorConstantValue && <span className="field-error">{errors.denominatorConstantValue}</span>}
-                </div>
-              ) : (
-                <AttributePicker
-                  label={formData.denominatorScope === 'ANCHOR' ? 'Fund value *' : 'Total of *'}
-                  rootDomainCode={formData.denominatorScope === 'ANCHOR' ? formData.anchorDomainCode : formData.baseDomainCode}
-                  value={formData.denominatorAttributeCode}
-                  onChange={(code) => handleChange('denominatorAttributeCode', code)}
-                  attributes={formData.denominatorScope === 'ANCHOR' ? anchorAttributes : baseAttributes}
-                  placeholder="Select value..."
-                  error={!!errors.denominatorAttributeCode}
-                />
-              )}
-
-              <div className="field">
-                <label>Limit type</label>
-                <select
-                  className="select"
-                  value={formData.limitDirection}
-                  onChange={(e) => handleChange('limitDirection', e.target.value)}
-                >
-                  <option value="MAX">Maximum (breach if above)</option>
-                  <option value="MIN">Minimum (breach if below)</option>
-                </select>
-              </div>
-              <div className="field">
-                <label>Hard limit (breach)</label>
-                <input
-                  className={`text-input mono ${errors.hardLimitValue ? 'error' : ''}`}
-                  type="number"
-                  value={formData.hardLimitValue}
-                  onChange={(e) => handleChange('hardLimitValue', e.target.value)}
-                />
-                {errors.hardLimitValue && <span className="field-error">{errors.hardLimitValue}</span>}
-              </div>
-              <div className="field">
-                <label>Soft limit (warning)</label>
-                <input
-                  className="text-input mono"
-                  type="number"
-                  value={formData.softLimitValue}
-                  onChange={(e) => handleChange('softLimitValue', e.target.value)}
-                  placeholder="Optional"
-                />
-              </div>
-              <AttributePicker
-                label="Or read the hard limit from the fund"
-                rootDomainCode={formData.anchorDomainCode}
-                value={formData.hardLimitAttributeCode}
-                onChange={(code) => handleChange('hardLimitAttributeCode', code)}
-                attributes={anchorAttributes}
-                placeholder="Optional"
-              />
-              <div className="field">
-                <label>Warning as a fraction of that limit</label>
-                <input
-                  className="text-input mono"
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={formData.softLimitFactor}
-                  onChange={(e) => handleChange('softLimitFactor', e.target.value)}
-                  placeholder="0.80 = warn at 80%"
-                />
-              </div>
-            </div>
-
-            {summary && (
-              <div style={{ ...panel, fontSize: '13px', color: 'var(--ink-2, var(--ink))' }}>
-                <div className="section-kicker">In plain English</div>
-                {summary}
-              </div>
             )}
           </div>
         </div>
-      )}
-
-      {/* Step 3: Refine — everything optional, collapsed by default */}
-      {step === 2 && (
-        <div className="builder-card">
-          <div className="builder-body">
-            <div className="field-hint" style={{ marginBottom: '10px' }}>
-              Everything here is optional. The rule is ready to create as it is.
-            </div>
-
-            <details style={panel}>
-              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-                Only include certain records{badge(advancedCount.scope)}
-              </summary>
-              <div style={{ marginTop: '12px' }}>
-                <ConditionGroup
-                  title="Filter the records being measured"
-                  conditions={baseConditions}
-                  allConditions={formData.conditions}
-                  rootDomainCode={formData.baseDomainCode}
-                  domainLabel={domainName(formData.baseDomainCode)}
-                  relationshipTypes={relationshipTypes}
-                  domains={domains}
-                  onAdd={() => addCondition('BASE')}
-                  onUpdate={updateCondition}
-                  onRemove={removeCondition}
+        <div className="rb-line">
+          <div className="rb-line-label">Divided by</div>
+          <div className="rb-sentence">
+            <select
+              className="select rb-scope"
+              aria-label="Divided by"
+              value={formData.denominatorScope}
+              onChange={(e) => handleChange('denominatorScope', e.target.value)}
+            >
+              {denominatorOptions.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            {formData.denominatorScope === 'CONSTANT' && (
+              <span className="field" style={{ flex: '0 0 132px' }}>
+                <input
+                  className={`text-input mono ${errors.denominatorConstantValue ? 'error' : ''}`}
+                  type="number"
+                  aria-label="Fixed number"
+                  value={formData.denominatorConstantValue}
+                  onChange={(e) => handleChange('denominatorConstantValue', e.target.value)}
+                  placeholder="Number"
                 />
-                <div style={{ height: '14px' }} />
-                <ConditionGroup
-                  title="Only run for certain entities"
-                  conditions={anchorConditions}
-                  allConditions={formData.conditions}
-                  rootDomainCode={formData.anchorDomainCode}
-                  domainLabel={domainName(formData.anchorDomainCode)}
-                  relationshipTypes={relationshipTypes}
-                  domains={domains}
-                  onAdd={() => addCondition('ANCHOR')}
-                  onUpdate={updateCondition}
-                  onRemove={removeCondition}
+                {errors.denominatorConstantValue && <span className="field-error">{errors.denominatorConstantValue}</span>}
+              </span>
+            )}
+            {needsDenominatorAttribute && (
+              <>
+                <span className="rb-of">{denEntity} ·</span>
+                <AttributePicker
+                  bare
+                  label="Denominator"
+                  value={formData.denominatorAttributeCode}
+                  onChange={(code) => handleChange('denominatorAttributeCode', code)}
+                  attributes={formData.denominatorScope === 'ANCHOR' ? anchorAttributes : baseAttributes}
+                  placeholder="Market value"
+                  error={!!errors.denominatorAttributeCode}
                 />
-              </div>
-            </details>
-
-            <details style={panel}>
-              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-                Where values come from &amp; grouping{badge(advancedCount.structure)}
-              </summary>
-              <div style={{ marginTop: '12px' }}>
-                <div className="form-grid">
-                  <div className="field">
-                    <label>Read values from</label>
-                    <select
-                      className={`select ${errors.baseDomainCode ? 'error' : ''}`}
-                      value={formData.baseDomainCode}
-                      onChange={(e) => handleChange('baseDomainCode', e.target.value)}
-                    >
-                      <option value="">Select entity type...</option>
-                      {domains.map((d) => (
-                        <option key={d.domainCode} value={d.domainCode}>{d.domainName}</option>
-                      ))}
-                    </select>
-                    <span className="field-hint">Defaults to the entity the rule applies to (e.g. read Position values for a Fund)</span>
-                  </div>
-                </div>
-
-                <div style={panel}>
-                  <div className="section-kicker">Hierarchy path (from the entity to where values are read)</div>
-                  <div className="field-hint" style={{ marginBottom: '10px' }}>
-                    Leave empty if the entity itself holds the values.
-                  </div>
-                  <HopList
-                    hops={formData.baseRollupPath}
-                    relationshipTypes={relationshipTypes}
-                    onAdd={() => addHop('baseRollupPath')}
-                    onUpdate={(idx, patch) => updateHop('baseRollupPath', idx, patch)}
-                    onRemove={(idx) => removeHop('baseRollupPath', idx)}
-                  />
-                </div>
-
-                <div style={panel}>
-                  <div className="section-kicker">Group results by</div>
-                  <div className="field-hint" style={{ marginBottom: '10px' }}>
-                    Check the limit per group (e.g. per Industry) instead of one overall figure.
-                  </div>
-                  <HopList
-                    hops={formData.groupByPath}
-                    relationshipTypes={relationshipTypes}
-                    onAdd={() => addHop('groupByPath')}
-                    onUpdate={(idx, patch) => updateHop('groupByPath', idx, patch)}
-                    onRemove={(idx) => removeHop('groupByPath', idx)}
-                  />
-                  <div style={{ marginTop: '12px' }}>
-                    <AttributePicker
-                      label="Group-by attribute"
-                      rootDomainCode={formData.baseDomainCode}
-                      value={formData.groupByAttributeCode}
-                      onChange={(code) => handleChange('groupByAttributeCode', code)}
-                      attributes={groupByAttributes}
-                      placeholder="No grouping"
-                    />
-                  </div>
-                </div>
-              </div>
-            </details>
-
-            <details style={panel}>
-              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-                Data source &amp; time period{badge(advancedCount.period)}
-              </summary>
-              <div style={{ marginTop: '12px' }}>
-                <div className="form-grid">
-                  <div className="field">
-                    <label>Default source</label>
-                    <select
-                      className="select"
-                      value={formData.defaultSourceScope}
-                      onChange={(e) => handleChange('defaultSourceScope', e.target.value)}
-                    >
-                      <option value="GOLDEN">Golden master (resolved)</option>
-                      <option value="WSO">WSO (single source)</option>
-                      <option value="BLOOMBERG">Bloomberg (single source)</option>
-                      <option value="MANUAL">Manual overrides only</option>
-                    </select>
-                    <span className="field-hint">Can be overridden at run time</span>
-                  </div>
-                  <div className="field">
-                    <label>Result calculation</label>
-                    <select
-                      className="select"
-                      value={formData.resultTransform}
-                      onChange={(e) => handleChange('resultTransform', e.target.value)}
-                    >
-                      <option value="NONE">Ratio (measure ÷ compare)</option>
-                      <option value="DIFFERENCE">Difference</option>
-                      <option value="ABS_DIFFERENCE">Absolute difference</option>
-                      <option value="PCT_CHANGE">% change</option>
-                      <option value="ABS_PCT_CHANGE">Absolute % change</option>
-                    </select>
-                    <span className="field-hint">Use a different period or source on each side to compare them</span>
-                  </div>
-                  <div className="field">
-                    <label>Result unit</label>
-                    <select
-                      className="select"
-                      value={formData.resultUnit}
-                      onChange={(e) => handleChange('resultUnit', e.target.value)}
-                    >
-                      <option value="RATIO">Ratio</option>
-                      <option value="PERCENTAGE">Percentage</option>
-                      <option value="CURRENCY">Currency</option>
-                      <option value="COUNT">Count</option>
-                    </select>
-                  </div>
-                </div>
-                <DimensionPicker
-                  label="Measure: source / period"
-                  value={formData.numeratorDimension}
-                  onChange={(d) => handleChange('numeratorDimension', d)}
-                />
-                {formData.denominatorScope !== 'CONSTANT' && formData.denominatorScope !== 'NONE' && (
-                  <DimensionPicker
-                    label="Compare against: source / period"
-                    value={formData.denominatorDimension}
-                    onChange={(d) => handleChange('denominatorDimension', d)}
-                  />
-                )}
-              </div>
-            </details>
-
-            <details style={panel}>
-              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Description &amp; versioning</summary>
-              <div className="form-grid" style={{ marginTop: '12px' }}>
-                <div className="field" style={{ gridColumn: '1 / -1' }}>
-                  <label>Description</label>
-                  <textarea
-                    className="text-input"
-                    value={formData.description}
-                    onChange={(e) => handleChange('description', e.target.value)}
-                    rows={2}
-                    style={{ resize: 'vertical' }}
-                    placeholder="What this rule tests and why"
-                  />
-                </div>
-                <div className="field">
-                  <label>Effective from</label>
-                  <input
-                    className="text-input mono"
-                    type="date"
-                    value={formData.validFrom}
-                    onChange={(e) => handleChange('validFrom', e.target.value)}
-                  />
-                </div>
-                <div className="field">
-                  <label>Change reason</label>
-                  <input
-                    className="text-input"
-                    value={formData.changeReason}
-                    onChange={(e) => handleChange('changeReason', e.target.value)}
-                    placeholder="Why this version was created"
-                  />
-                </div>
-                <div className="field">
-                  <label>Applies to</label>
-                  <select
-                    className="select"
-                    value={formData.appliesToAll ? 'all' : 'specific'}
-                    onChange={(e) => handleChange('appliesToAll', e.target.value === 'all')}
-                  >
-                    <option value="all">All entities of this type</option>
-                    <option value="specific">Specific entities (assign after creating)</option>
-                  </select>
-                </div>
-              </div>
-            </details>
+              </>
+            )}
           </div>
         </div>
-      )}
+        {sharesRecords && (
+          <div className="rb-line">
+            <div className="rb-line-label">Where</div>
+            <div className="rb-sentence">
+              <span className="rb-qualify">{filterCount === 0 ? 'All records qualify' : 'Same records as the numerator'}</span>
+              <button type="button" className="btn btn-sm" onClick={() => addCondition('BASE')}>+ Add condition</button>
+            </div>
+          </div>
+        )}
+      </section>
 
-      <div className="builder-footer">
-        <div className="left">
-          {step > 0 && (
-            <button className="btn" onClick={() => setStep((s) => s - 1)} disabled={submitting}>← Back</button>
-          )}
+      <section className="rb-block" id="rb-test">
+        <h2 className="rb-block-title">Test &amp; limits</h2>
+        <div className={`rb-line ${groupOn ? 'top' : ''}`}>
+          <div className="rb-line-label">Group by</div>
+          <div className="rb-sentence">
+            <label className="rb-check">
+              <input type="checkbox" checked={groupOn} onChange={(e) => toggleGroup(e.target.checked)} />
+              Test each group separately
+            </label>
+            {groupOn && (
+              <RelatedAttributePicker
+                bare
+                ownerLabel
+                clearable
+                label="Group by"
+                rootDomainCode={formData.baseDomainCode}
+                relationshipTypes={relationshipTypes}
+                domains={domains}
+                isSelected={(o) => o.attributeCode === formData.groupByAttributeCode && attributePathKey(o.path) === attributePathKey(formData.groupByPath)}
+                onSelect={(o) =>
+                  setFormData((prev) => ({
+                    ...prev,
+                    groupByAttributeCode: o?.attributeCode || '',
+                    groupByPath: (o?.path || []).map((h) => ({ relationshipCode: h.relationshipCode, direction: h.direction, recursive: false })),
+                  }))
+                }
+                placeholder="Issuer · Industry"
+              />
+            )}
+          </div>
         </div>
+        <div className="rb-line">
+          <div className="rb-line-label">Breach when</div>
+          <div className="rb-sentence">
+            <Segmented
+              value={formData.limitDirection}
+              onChange={(v) => handleChange('limitDirection', v)}
+              options={[
+                { value: 'MAX', label: 'Above limit' },
+                { value: 'MIN', label: 'Below limit' },
+              ]}
+            />
+            <span className="rb-of">Show as</span>
+            <select
+              className="select rb-show"
+              aria-label="Show as"
+              value={formData.resultUnit}
+              onChange={(e) => handleChange('resultUnit', e.target.value)}
+            >
+              <option value="PERCENTAGE">Percent of denominator</option>
+              <option value="RATIO">Ratio</option>
+              <option value="CURRENCY">Currency amount</option>
+              <option value="COUNT">Count</option>
+            </select>
+          </div>
+        </div>
+        <div className="rb-line">
+          <div className="rb-line-label">Limit type</div>
+          <Segmented
+            value={groupOn ? formData.limitMode : 'UNIFORM'}
+            onChange={(v) => handleChange('limitMode', v)}
+            disabled={groupOn ? undefined : ['RANK', 'NAMED']}
+            options={[
+              { value: 'UNIFORM', label: 'Same limit for every group' },
+              { value: 'RANK', label: 'Limit by rank' },
+              { value: 'NAMED', label: 'Limit by named group' },
+            ]}
+          />
+        </div>
+        <p className="rb-help">{limitHelp}</p>
+        <details className="rb-def">
+          <summary>View saved definition</summary>
+          <div className="rb-def-body">
+            <div className={summary ? 'rb-summary-text' : 'rb-summary-text empty'}>
+              {summary || 'Choose what the rule applies to and what to measure. The definition reads here in plain language.'}
+            </div>
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="rb-source">Default source</label>
+                <select
+                  id="rb-source"
+                  className="select"
+                  value={formData.defaultSourceScope}
+                  onChange={(e) => handleChange('defaultSourceScope', e.target.value)}
+                >
+                  <option value="GOLDEN">Golden master (resolved)</option>
+                  <option value="WSO">WSO (single source)</option>
+                  <option value="BLOOMBERG">Bloomberg (single source)</option>
+                  <option value="MANUAL">Manual overrides only</option>
+                </select>
+                <span className="field-hint">Can be overridden at run time</span>
+              </div>
+              <div className="field">
+                <label htmlFor="rb-transform">Result calculation</label>
+                <select
+                  id="rb-transform"
+                  className="select"
+                  value={formData.resultTransform}
+                  onChange={(e) => handleChange('resultTransform', e.target.value)}
+                >
+                  <option value="NONE">Ratio (measure ÷ compare)</option>
+                  <option value="DIFFERENCE">Difference</option>
+                  <option value="ABS_DIFFERENCE">Absolute difference</option>
+                  <option value="PCT_CHANGE">% change</option>
+                  <option value="ABS_PCT_CHANGE">Absolute % change</option>
+                </select>
+              </div>
+            </div>
+            <DimensionPicker
+              label="Measured value: source / period"
+              value={formData.numeratorDimension}
+              onChange={(d) => handleChange('numeratorDimension', d)}
+            />
+            {needsDenominatorAttribute && (
+              <DimensionPicker
+                label="Compared value: source / period"
+                value={formData.denominatorDimension}
+                onChange={(d) => handleChange('denominatorDimension', d)}
+              />
+            )}
+            <div className="rb-sub-title">Only these {anchorLabel.toLowerCase()}s</div>
+            <ConditionGroup
+              appliesTo="ANCHOR"
+              conditions={anchorConditions}
+              rootDomainCode={formData.anchorDomainCode}
+              domainLabel={anchorLabel}
+              relationshipTypes={relationshipTypes}
+              domains={domains}
+              onCommit={(next) => replaceScope('ANCHOR', next)}
+            />
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="rb-from">Effective from</label>
+                <input
+                  id="rb-from"
+                  className="text-input mono"
+                  type="date"
+                  value={formData.validFrom}
+                  onChange={(e) => handleChange('validFrom', e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="rb-reason">Change reason</label>
+                <input
+                  id="rb-reason"
+                  className="text-input"
+                  value={formData.changeReason}
+                  onChange={(e) => handleChange('changeReason', e.target.value)}
+                  placeholder="Why this version was created"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="rb-coverage">Coverage</label>
+                <select
+                  id="rb-coverage"
+                  className="select"
+                  value={formData.appliesToAll ? 'all' : 'specific'}
+                  onChange={(e) => handleChange('appliesToAll', e.target.value === 'all')}
+                >
+                  <option value="all">All entities of this type</option>
+                  <option value="specific">Specific entities, assigned after saving</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <div className="builder-footer rb-footer">
+        <div className="left" />
         <div className="right">
-          <button className="btn" onClick={onCancel} disabled={submitting}>Cancel</button>
-          {step === 1 && (
-            <button className="btn" onClick={goNext} disabled={submitting}>Refine…</button>
-          )}
-          {step === 0 ? (
-            <button className="btn btn-primary" onClick={goNext}>Next →</button>
-          ) : (
-            <button className="btn btn-primary" onClick={handleSubmit} disabled={submitting}>
-              {submitting ? 'Saving...' : lockIdentity ? 'Create New Version' : 'Create Rule'}
-            </button>
-          )}
+          <button type="button" className="btn" onClick={onCancel} disabled={submitting}>Cancel</button>
+          <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={submitting}>
+            {submitting ? 'Saving...' : lockIdentity ? 'Save as new version' : initial?.ruleCode ? 'Save rule' : 'Create rule'}
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-function HopList({
-  hops,
-  relationshipTypes,
-  onAdd,
-  onUpdate,
-  onRemove,
+const AGG_LABELS: Record<string, string> = {
+  SUM: 'Sum',
+  AVG: 'Average',
+  COUNT: 'Count',
+  MIN: 'Lowest',
+  MAX: 'Highest',
+  VALUE: 'Single value',
+};
+
+// The rule stores the path from the measured entity back up to the one the rule applies to.
+function reversePath(path: Array<{ relationshipCode: string; direction: 'UP' | 'DOWN' }>): RollupHop[] {
+  return [...path].reverse().map((h) => ({
+    relationshipCode: h.relationshipCode,
+    direction: h.direction === 'UP' ? 'DOWN' : 'UP',
+    recursive: false,
+  }));
+}
+
+function Segmented({
+  value,
+  onChange,
+  options,
+  small,
+  disabled,
 }: {
-  hops: RollupHop[];
-  relationshipTypes: RelationshipTypeOpt[];
-  onAdd: () => void;
-  onUpdate: (idx: number, patch: Partial<RollupHop>) => void;
-  onRemove: (idx: number) => void;
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+  small?: boolean;
+  disabled?: string[];
 }) {
   return (
-    <div>
-      {hops.map((hop, idx) => (
-        <div
-          key={idx}
-          style={{ display: 'grid', gridTemplateColumns: '1.6fr 110px 110px 30px', gap: '10px', alignItems: 'center', marginBottom: '8px' }}
-        >
-          <select
-            className="select"
-            value={hop.relationshipCode}
-            onChange={(e) => onUpdate(idx, { relationshipCode: e.target.value })}
+    <div className={`rb-seg ${small ? 'small' : ''}`} role="radiogroup">
+      {options.map((o) => {
+        const off = disabled?.includes(o.value);
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={value === o.value}
+            className={value === o.value ? 'on' : ''}
+            disabled={off}
+            onClick={() => { if (!off) onChange(o.value); }}
           >
-            <option value="">Select relationship...</option>
-            {relationshipTypes.map((rt) => (
-              <option key={rt.relationshipCode} value={rt.relationshipCode}>
-                {rt.relationshipName} ({rt.parentDomainCode} → {rt.childDomainCode})
-              </option>
-            ))}
-          </select>
-          <select
-            className="select"
-            value={hop.direction}
-            onChange={(e) => onUpdate(idx, { direction: e.target.value as 'UP' | 'DOWN' })}
-          >
-            <option value="UP">UP (to parent)</option>
-            <option value="DOWN">DOWN (to children)</option>
-          </select>
-          <select
-            className="select"
-            value={hop.recursive ? 'true' : 'false'}
-            onChange={(e) => onUpdate(idx, { recursive: e.target.value === 'true' })}
-          >
-            <option value="false">Single hop</option>
-            <option value="true">Recursive</option>
-          </select>
-          <button className="cond-remove" onClick={() => onRemove(idx)} style={{ width: '30px', height: '30px' }}>✕</button>
-        </div>
-      ))}
-      <button className="add-cond" onClick={onAdd}>+ Add hop</button>
+            {o.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
+interface ConditionCluster {
+  id: string;
+  rows: ComplianceCondition[];
+}
+
+const conditionKeys = new WeakMap<object, string>();
+
+function conditionKey(condition: ComplianceCondition) {
+  if (condition.key) return condition.key;
+  let key = conditionKeys.get(condition);
+  if (!key) {
+    key = Math.random().toString(36).slice(2, 10);
+    conditionKeys.set(condition, key);
+  }
+  return key;
+}
+
+function blankCondition(appliesTo: 'BASE' | 'ANCHOR', conditionGroup: number, conditionOrder: number): ComplianceCondition {
+  return {
+    key: Math.random().toString(36).slice(2, 10),
+    appliesTo,
+    conditionGroup,
+    conditionOrder,
+    attributeCode: '',
+    attributePath: [],
+    attributeDimension: emptyDimension(),
+    operator: 'equals',
+    value: '',
+    compareAttributeCode: '',
+    compareAttributePath: [],
+    compareDimension: emptyDimension(),
+    leftExpression: null,
+    rightExpression: null,
+    logicOperator: 'AND',
+  };
+}
+
+function clusterConditions(conditions: ComplianceCondition[]): ConditionCluster[] {
+  const ordered = [...conditions].sort((a, b) => (a.conditionGroup || 1) - (b.conditionGroup || 1) || a.conditionOrder - b.conditionOrder);
+  const groups: ConditionCluster[] = [];
+  for (const condition of ordered) {
+    const id = `g${condition.conditionGroup || 1}`;
+    let group = groups.find((item) => item.id === id);
+    if (!group) {
+      group = { id, rows: [] };
+      groups.push(group);
+    }
+    group.rows.push({ ...condition, key: conditionKey(condition) });
+  }
+  return groups;
+}
+
+function packConditions(groups: ConditionCluster[], appliesTo: 'BASE' | 'ANCHOR'): ComplianceCondition[] {
+  return groups.filter((group) => group.rows.length).flatMap((group, gi) => group.rows.map((row, index) => ({
+    ...row,
+    key: row.key || conditionKey(row),
+    appliesTo,
+    conditionGroup: gi + 1,
+    conditionOrder: index + 1,
+    logicOperator: index === 0 ? 'AND' : (row.logicOperator === 'OR' ? 'OR' : 'AND'),
+  })));
+}
+
+function moveRow(rows: ComplianceCondition[], index: number, dir: number) {
+  const next = index + dir;
+  if (next < 0 || next >= rows.length) return;
+  const joins = rows.map((row) => row.logicOperator);
+  const [row] = rows.splice(index, 1);
+  rows.splice(next, 0, row);
+  rows.forEach((item, i) => { item.logicOperator = i === 0 ? 'AND' : joins[i]; });
+}
+
+function groupStory(rows: ComplianceCondition[]) {
+  if (rows.length < 2) return { title: 'Match this', hint: 'This line must be true.' };
+  const joins = rows.slice(1).map((row) => row.logicOperator);
+  if (joins.every((join) => join !== 'OR')) return { title: 'Match all', hint: 'Every line in this group must be true.' };
+  if (joins.every((join) => join === 'OR')) return { title: 'Match any', hint: 'Any line in this group can be true.' };
+  return { title: 'Match in order', hint: 'Each line joins the ones above it, from the top.' };
+}
+
 function ConditionGroup({
-  title,
+  appliesTo,
   conditions,
-  allConditions,
   rootDomainCode,
   domainLabel,
   relationshipTypes,
   domains,
-  onAdd,
-  onUpdate,
-  onRemove,
+  onCommit,
 }: {
-  title: string;
+  appliesTo: 'BASE' | 'ANCHOR';
   conditions: ComplianceCondition[];
-  allConditions: ComplianceCondition[];
   rootDomainCode: string;
   domainLabel: string;
   relationshipTypes: RelationshipTypeOpt[];
   domains: Domain[];
-  onAdd: () => void;
-  onUpdate: (idx: number, patch: Partial<ComplianceCondition>) => void;
-  onRemove: (idx: number) => void;
+  onCommit: (next: ComplianceCondition[]) => void;
 }) {
-  const { options } = useRelationshipAttributes(rootDomainCode, relationshipTypes, domains);
+  const { options, loading } = useRelationshipAttributes(rootDomainCode, relationshipTypes, domains);
+  const ctx = useMemo<OperandContext>(() => ({ fields: options, relationshipTypes }), [options, relationshipTypes]);
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [overKey, setOverKey] = useState<string | null>(null);
+  const groups = useMemo(() => clusterConditions(conditions), [conditions]);
+  const leftPatch = (text: string) => {
+    const r = applyLeftText(text, ctx);
+    return { leftError: r.error, attributeCode: r.attributeCode, attributePath: r.attributePath, leftExpression: r.leftExpression };
+  };
+  const rightPatch = (text: string, operator: string) => {
+    const r = applyRightText(text, operator, ctx);
+    return {
+      rightError: r.error,
+      value: r.value,
+      compareAttributeCode: r.compareAttributeCode,
+      compareAttributePath: r.compareAttributePath,
+      rightExpression: r.rightExpression,
+    };
+  };
+  const commit = (next: ConditionCluster[]) => onCommit(packConditions(next, appliesTo));
+  const edit = (mutate: (draft: ConditionCluster[]) => void) => {
+    const draft = groups.map((group) => ({ id: group.id, rows: group.rows.map((row) => ({ ...row })) }));
+    mutate(draft);
+    commit(draft.filter((group) => group.rows.length > 0));
+  };
+  const dropOn = (targetGroupId: string, beforeKey: string | null) => {
+    if (!dragKey || dragKey === beforeKey) return;
+    edit((draft) => {
+      let from: ConditionCluster | null = null;
+      let fromIndex = -1;
+      for (const group of draft) {
+        const at = group.rows.findIndex((row) => row.key === dragKey);
+        if (at >= 0) { from = group; fromIndex = at; }
+      }
+      if (!from || fromIndex < 0) return;
+      const dest = draft.find((group) => group.id === targetGroupId);
+      if (!dest) return;
+      const sameGroup = from === dest;
+      const joins = sameGroup ? from.rows.map((row) => row.logicOperator) : null;
+      const [moving] = from.rows.splice(fromIndex, 1);
+      const index = beforeKey ? dest.rows.findIndex((row) => row.key === beforeKey) : dest.rows.length;
+      dest.rows.splice(index < 0 ? dest.rows.length : index, 0, { ...moving, logicOperator: 'AND' });
+      if (joins) dest.rows.forEach((row, i) => { row.logicOperator = i === 0 ? 'AND' : joins[i]; });
+    });
+    setDragKey(null);
+    setOverKey(null);
+  };
+
+  if (!groups.length) {
+    return (
+      <div className="cg">
+        <div className="rb-sentence">
+          <span className="rb-qualify">All records qualify</span>
+          <button type="button" className="btn btn-sm" onClick={() => onCommit([blankCondition(appliesTo, 1, 1)])}>+ Add condition</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ background: 'var(--bg)', border: '1px solid var(--line)', padding: '16px' }}>
-      <div className="section-kicker">{title}</div>
-      {conditions.length === 0 && (
-        <div className="field-hint" style={{ marginBottom: '10px' }}>No conditions — applies unconditionally (ALWAYS).</div>
+    <div className="cg">
+      {groups.length > 1 && (
+        <p className="cg-note">A record qualifies when any one of these groups matches.</p>
       )}
-      {conditions.map((cond) => {
-        const idx = allConditions.indexOf(cond);
+      {groups.map((group, gi) => {
+        const story = groupStory(group.rows);
         return (
-          <div key={idx}>
-          <div style={{ marginBottom: '8px', border: '1px solid var(--line)', borderRadius: '6px', padding: '10px', background: 'var(--surface)' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 130px 1fr 30px', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
-            {idx === allConditions.findIndex((c) => c.appliesTo === cond.appliesTo) ? (
-              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent)' }}>IF</span>
-            ) : (
-              <select
-                className="select"
-                value={cond.logicOperator}
-                onChange={(e) => onUpdate(idx, { logicOperator: e.target.value as 'AND' | 'OR' })}
-              >
-                <option value="AND">AND</option>
-                <option value="OR">OR</option>
-              </select>
-            )}
-            <ComplianceAttributeSelect
-              rootDomainCode={rootDomainCode}
-              relationshipTypes={relationshipTypes}
-              domains={domains}
-              attributeCode={cond.attributeCode}
-              path={cond.attributePath}
-              onChange={(attributeCode, attributePath) => onUpdate(idx, { attributeCode, attributePath })}
-            />
-            <select
-              className="select"
-              value={cond.operator}
-              onChange={(e) => onUpdate(idx, { operator: e.target.value })}
+          <div key={group.id}>
+            {gi > 0 && <div className="cg-or">or</div>}
+            <section
+              className={`cg-card ${overKey === group.id ? 'over' : ''}`}
+              onDragOver={(event) => { event.preventDefault(); setOverKey(group.id); }}
+              onDragLeave={() => setOverKey((current) => current === group.id ? null : current)}
+              onDrop={(event) => { event.preventDefault(); dropOn(group.id, null); }}
             >
-              {OPERATORS.map((op) => <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>)}
-            </select>
-            {cond.operator === 'is_null' || cond.operator === 'is_not_null' ? <span /> : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 }}>
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <input
-                    className="text-input"
-                    aria-label="Comparison expression"
-                    value={cond.operator === 'in' || cond.operator === 'not_in' ? cond.value : comparisonText(cond.value, cond.compareAttributeCode)}
-                    onChange={(e) => onUpdate(idx, cond.operator === 'in' || cond.operator === 'not_in'
-                      ? { value: e.target.value, compareAttributeCode: '' }
-                      : comparisonFields(e.target.value))}
-                    placeholder={cond.operator === 'in' || cond.operator === 'not_in' ? 'US, GB' : "1.5, 'US', OTHER_FIELD, END_OF_MONTH(CURRENT_DATE)"}
-                  />
-                  {cond.operator !== 'in' && cond.operator !== 'not_in' && (
-                    <select
-                      className="select"
-                      aria-label="Insert date function"
-                      value=""
-                      style={{ flex: '0 0 132px' }}
-                      onChange={(e) => {
-                        const token = e.target.value;
-                        if (!token) return;
-                        const current = comparisonText(cond.value, cond.compareAttributeCode).trim();
-                        if (AS_OF_PERIODS.some((period) => period.code === token)) {
-                          const field = current.match(/^([A-Za-z_][A-Za-z0-9_]*)/)?.[1] || '';
-                          if (field && field !== 'AS') onUpdate(idx, comparisonFields(`${token}(${field})`));
-                          return;
-                        }
-                        const argument = /^[A-Za-z_][A-Za-z0-9_]*$/.test(current) ? current : 'CURRENT_DATE';
-                        onUpdate(idx, comparisonFields(token === 'CURRENT_DATE' ? 'CURRENT_DATE' : `${token}(${argument})`));
-                      }}
+              <header className="cg-head">
+                <strong>{story.title}</strong>
+                <span>{story.hint}</span>
+              </header>
+              <div className="cg-body">
+                {group.rows.map((cond, ri) => (
+                  <div key={cond.key}>
+                    {ri > 0 && (
+                      <div className="cg-join">
+                        <button
+                          type="button"
+                          className={`cg-op ${cond.logicOperator === 'OR' ? 'or' : ''}`}
+                          onClick={() => edit((draft) => {
+                            const row = draft[gi].rows[ri];
+                            draft[gi].rows[ri] = { ...row, logicOperator: row.logicOperator === 'OR' ? 'AND' : 'OR' };
+                          })}
+                        >
+                          {cond.logicOperator === 'OR' ? 'or' : 'and'}
+                        </button>
+                      </div>
+                    )}
+                    <div
+                      className={`cg-row ${dragKey === cond.key ? 'drag' : ''} ${overKey === cond.key ? 'over' : ''}`}
+                      onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); setOverKey(cond.key || null); }}
+                      onDrop={(event) => { event.preventDefault(); event.stopPropagation(); dropOn(group.id, cond.key || null); }}
                     >
-                      <option value="">Function</option>
-                      {DQ_DATE_FNS.map((fn) => <option key={fn.token} value={fn.token}>{fn.label}</option>)}
-                      {AS_OF_PERIODS.map((period) => <option key={period.code} value={period.code}>{period.name}</option>)}
-                    </select>
-                  )}
-                </div>
-                {cond.operator !== 'in' && cond.operator !== 'not_in' && (
-                  <span className="field-hint">{describeComparisonExpression(comparisonText(cond.value, cond.compareAttributeCode))}</span>
-                )}
+                      <button
+                        type="button"
+                        className="cg-grip"
+                        draggable
+                        aria-label="Drag to another place in the group"
+                        title="Drag to reorder or move into another group"
+                        onDragStart={(event) => {
+                          event.dataTransfer.setData('text/plain', cond.key || '');
+                          event.dataTransfer.effectAllowed = 'move';
+                          setDragKey(cond.key || null);
+                        }}
+                        onDragEnd={() => { setDragKey(null); setOverKey(null); }}
+                      >
+                        ⋮⋮
+                      </button>
+                      <div className="cg-fields">
+                        <ExpressionBox
+                          value={cond.leftText ?? leftTextOf(cond, ctx)}
+                          onChange={(text) => edit((draft) => { draft[gi].rows[ri] = { ...draft[gi].rows[ri], leftText: text, ...leftPatch(text) }; })}
+                          context={ctx}
+                          loading={loading}
+                          disabled={!rootDomainCode}
+                          placeholder={rootDomainCode ? 'Pick a field, or type an expression' : 'Choose an entity type first'}
+                          error={cond.leftError}
+                        />
+                        <select
+                          className="select"
+                          aria-label="Operator"
+                          value={cond.operator}
+                          onChange={(event) => edit((draft) => {
+                            const row = draft[gi].rows[ri];
+                            draft[gi].rows[ri] = { ...row, operator: event.target.value, ...rightPatch(row.rightText ?? rightTextOf(row, ctx), event.target.value) };
+                          })}
+                        >
+                          {OPERATORS.map((op) => <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>)}
+                        </select>
+                        {cond.operator !== 'is_null' && cond.operator !== 'is_not_null' && (
+                          <ExpressionBox
+                            value={cond.rightText ?? rightTextOf(cond, ctx)}
+                            onChange={(text) => edit((draft) => {
+                              const row = draft[gi].rows[ri];
+                              draft[gi].rows[ri] = { ...row, rightText: text, ...rightPatch(text, row.operator) };
+                            })}
+                            context={ctx}
+                            loading={loading}
+                            plain={cond.operator === 'in' || cond.operator === 'not_in'}
+                            placeholder={cond.operator === 'in' || cond.operator === 'not_in' ? 'US, GB' : "A value like 1.5 or 'US', a field, or an expression"}
+                            error={cond.rightError}
+                          />
+                        )}
+                        <button type="button" className="cond-remove" aria-label="Remove condition" onClick={() => edit((draft) => { draft[gi].rows.splice(ri, 1); })}>✕</button>
+                      </div>
+                      <div className="cg-tools">
+                        {group.rows.length > 1 && (
+                          <>
+                            <button type="button" className="btn btn-sm" disabled={ri === 0} onClick={() => edit((draft) => moveRow(draft[gi].rows, ri, -1))}>Move up</button>
+                            <button type="button" className="btn btn-sm" disabled={ri === group.rows.length - 1} onClick={() => edit((draft) => moveRow(draft[gi].rows, ri, 1))}>Move down</button>
+                            <button type="button" className="btn btn-sm" onClick={() => edit((draft) => {
+                              const [row] = draft[gi].rows.splice(ri, 1);
+                              draft.push({ id: `new-${row.key}`, rows: [{ ...row, logicOperator: 'AND' }] });
+                            })}>Own group</button>
+                          </>
+                        )}
+                        {groups.length > 1 && (
+                          <select
+                            className="select"
+                            aria-label="Move to group"
+                            value={group.id}
+                            onChange={(event) => edit((draft) => {
+                              const dest = draft.find((item) => item.id === event.target.value);
+                              if (!dest || dest.id === group.id) return;
+                              const [row] = draft[gi].rows.splice(ri, 1);
+                              dest.rows.push({ ...row, logicOperator: 'AND' });
+                            })}
+                          >
+                            <option value={group.id}>This group</option>
+                            {groups.map((item, index) => item.id === group.id ? null : (
+                              <option key={item.id} value={item.id}>Move to group {index + 1}</option>
+                          ))}
+                        </select>
+                        )}
+                      </div>
+                      <details className="cg-dim">
+                        <summary>Where these values are read</summary>
+                        <DimensionPicker
+                          compact
+                          label="This attribute read from"
+                          value={cond.attributeDimension}
+                          onChange={(dimension) => edit((draft) => { draft[gi].rows[ri] = { ...draft[gi].rows[ri], attributeDimension: dimension }; })}
+                        />
+                        {cond.compareAttributeCode && cond.compareAttributeCode !== '__PICK__' && (
+                          <DimensionPicker
+                            compact
+                            label={`${cond.compareAttributeCode} read from`}
+                            value={cond.compareDimension}
+                            onChange={(dimension) => edit((draft) => { draft[gi].rows[ri] = { ...draft[gi].rows[ri], compareDimension: dimension }; })}
+                          />
+                        )}
+                      </details>
+                    </div>
+                  </div>
+                ))}
               </div>
-            )}
-            <button className="cond-remove" onClick={() => onRemove(idx)} style={{ width: '30px', height: '30px' }}>✕</button>
-          </div>
-          {rootDomainCode && (
-            <div style={{ marginBottom: '6px' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  const el = document.getElementById(`tree-${idx}`);
-                  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
-                }}
-                style={{ fontSize: '11px', padding: '2px 8px', background: 'var(--accent-light)', border: '1px solid var(--accent)', borderRadius: '3px', cursor: 'pointer', color: 'var(--accent)' }}
-              >
-                🌳 Browse entity tree
-              </button>
-              <div id={`tree-${idx}`} style={{ display: 'none', marginTop: '6px' }}>
-                <EntityAttributeTree
-                  rootDomainCode={rootDomainCode}
-                  onSelect={(sel) => onUpdate(idx, { attributeCode: sel.attribute.attributeCode, attributePath: sel.path })}
-                  selectedCode={cond.attributeCode}
-                  maxHeight="300px"
-                />
+              <div className="cg-actions">
+                <button type="button" className="btn btn-sm" onClick={() => edit((draft) => { draft[gi].rows.push(blankCondition(appliesTo, gi + 1, draft[gi].rows.length + 1)); })}>+ Add to this group</button>
               </div>
-            </div>
-          )}
-          <details style={{ margin: '0 0 12px 0', fontSize: '11px', color: 'var(--ink-3)' }}>
-            <summary style={{ cursor: 'pointer' }}>Where these values are read</summary>
-            <div style={{ padding: '10px 0 0 12px' }}>
-              <DimensionPicker
-                compact
-                label="This attribute read from"
-                value={cond.attributeDimension}
-                onChange={(d) => onUpdate(idx, { attributeDimension: d })}
-              />
-              {cond.compareAttributeCode && cond.compareAttributeCode !== '__PICK__' && (
-                <DimensionPicker
-                  compact
-                  label={`${cond.compareAttributeCode} read from`}
-                  value={cond.compareDimension}
-                  onChange={(d) => onUpdate(idx, { compareDimension: d })}
-                />
-              )}
-            </div>
-          </details>
-          </div>
+            </section>
           </div>
         );
       })}
-      <button className="add-cond" onClick={onAdd}>+ Add condition</button>
+      <button type="button" className="btn btn-sm" onClick={() => edit((draft) => { draft.push({ id: `new-${draft.length}`, rows: [blankCondition(appliesTo, draft.length + 1, 1)] }); })}>+ Add another group</button>
       <CompliancePopulationPreview
         domainCode={rootDomainCode}
         domainLabel={domainLabel}
@@ -1200,6 +1245,7 @@ export function DimensionPicker({
 }
 
 function normalizeConditionValue(c: ComplianceCondition): string | undefined {
+  if (c.rightExpression) return undefined;
   if (c.compareAttributeCode && c.compareAttributeCode !== '__PICK__') return undefined;
   if (c.operator === 'is_null' || c.operator === 'is_not_null') return undefined;
   const value = (c.value || '').trim();
@@ -1242,11 +1288,11 @@ export function buildComplianceVersionInput(ruleId: string, data: ComplianceRule
     denominatorConstantValue: data.denominatorConstantValue ? parseFloat(data.denominatorConstantValue) : undefined,
     resultUnit: data.resultUnit,
     limitDirection: data.limitDirection,
-    softLimitValue: data.softLimitValue ? parseFloat(data.softLimitValue) : undefined,
-    hardLimitValue: data.hardLimitValue ? parseFloat(data.hardLimitValue) : undefined,
-    hardLimitAttributeCode: data.hardLimitAttributeCode || undefined,
-    softLimitFactor: data.softLimitFactor ? parseFloat(data.softLimitFactor) : undefined,
     defaultSourceScope: data.defaultSourceScope,
+    metadata: {
+      ...(data.versionMetadata || {}),
+      limitMode: data.groupByAttributeCode ? data.limitMode || 'UNIFORM' : 'UNIFORM',
+    },
     conditions: data.conditions
       .filter((c) => c.attributeCode)
       .map((c, idx) => ({
@@ -1257,6 +1303,8 @@ export function buildComplianceVersionInput(ruleId: string, data: ComplianceRule
         attributeDimension: dimensionToInput(c.attributeDimension, c.attributePath),
         operator: c.operator,
         value: normalizeConditionValue(c),
+        leftExpression: c.leftExpression || undefined,
+        rightExpression: c.rightExpression || undefined,
         compareAttributeCode: c.compareAttributeCode && c.compareAttributeCode !== '__PICK__' ? c.compareAttributeCode : undefined,
         compareDimension: c.compareAttributeCode && c.compareAttributeCode !== '__PICK__' ? dimensionToInput(c.compareDimension, c.compareAttributePath) : undefined,
         logicOperator: c.logicOperator,

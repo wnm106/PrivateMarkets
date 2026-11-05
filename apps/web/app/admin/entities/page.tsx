@@ -1,47 +1,58 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import Link from 'next/link';
 import {
   graphqlClient,
-  DOMAIN_TYPES_QUERY,
-  ATTRIBUTE_REGISTER_QUERY,
-  DOMAIN_TEMPLATES_QUERY,
+  DOMAIN_CATALOG_QUERY,
   CREATE_DOMAIN_TYPE_MUTATION,
 } from '@/lib/graphql';
 import { SchemaScopeBadge, SchemaScopeField } from '@/components/admin/SchemaScopeField';
-import { domainColor } from '@/lib/domain-routes';
+import { GroupField } from '@/components/admin/GroupField';
+
+interface DomainGroup {
+  id: string;
+  groupCode: string;
+  groupName: string;
+  description?: string | null;
+  color: string;
+  displayOrder: number;
+}
 
 interface DomainType {
   id: string;
   domainCode: string;
   domainName: string;
-  description?: string;
+  description?: string | null;
   isActive: boolean;
   clientId?: string | null;
   clientName?: string | null;
+  isCore: boolean;
+  displayOrder: number;
+  parentDomainCode?: string | null;
+  ownedAttributeCount: number;
+  sharedAttributeCount: number;
+  templateCount: number;
+  group?: DomainGroup | null;
 }
 
-interface Attribute {
-  id: string;
-  referenceDomainCode?: string;
-}
+const UNGROUPED: DomainGroup = {
+  id: 'ungrouped',
+  groupCode: 'UNGROUPED',
+  groupName: 'Other',
+  description: 'Entity types that are not in a catalog group yet',
+  color: '#6b7280',
+  displayOrder: 9999,
+};
 
-interface Template {
-  id: string;
-  domainCode: string;
-}
-
-// Top-level entity type directory. Entities are the top level of navigation --
-// drilling into one (via /admin/entities/[domainCode]) is where relationship
-// types, identifiers, attributes, and templates for that specific entity type
-// are actually managed. Nothing entity-type-specific lives here anymore.
 export default function EntityManagementPage() {
   const [domainTypes, setDomainTypes] = useState<DomainType[]>([]);
-  const [attributes, setAttributes] = useState<Attribute[]>([]);
-  const [templates, setTemplates] = useState<Template[]>([]);
+  const [groups, setGroups] = useState<DomainGroup[]>([]);
   const [showCreateDomainModal, setShowCreateDomainModal] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState('');
+  const [coreOnly, setCoreOnly] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadData();
@@ -50,14 +61,9 @@ export default function EntityManagementPage() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const domainsResult = await graphqlClient.query(DOMAIN_TYPES_QUERY, {}).toPromise();
-      setDomainTypes(domainsResult.data?.domainTypes || []);
-
-      const attrsResult = await graphqlClient.query(ATTRIBUTE_REGISTER_QUERY, {}).toPromise();
-      setAttributes(attrsResult.data?.attributeRegister || []);
-
-      const templatesResult = await graphqlClient.query(DOMAIN_TEMPLATES_QUERY, {}).toPromise();
-      setTemplates(templatesResult.data?.domainTemplates || []);
+      const result = await graphqlClient.query(DOMAIN_CATALOG_QUERY, {}, { requestPolicy: 'network-only' }).toPromise();
+      setDomainTypes(result.data?.domainTypes || []);
+      setGroups(result.data?.domainGroups || []);
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
@@ -82,6 +88,65 @@ export default function EntityManagementPage() {
     } catch (error) {
       console.error('Error creating domain:', error);
     }
+  };
+
+  const needle = query.trim().toLowerCase();
+  const byCode = useMemo(() => new Map(domainTypes.map((domain) => [domain.domainCode, domain])), [domainTypes]);
+
+  const visibleCodes = useMemo(() => {
+    const matches = (domain: DomainType) => {
+      if (coreOnly && !domain.isCore) return false;
+      if (!needle) return true;
+      return `${domain.domainName} ${domain.domainCode} ${domain.description || ''}`.toLowerCase().includes(needle);
+    };
+    const shown = new Set(domainTypes.filter(matches).map((domain) => domain.domainCode));
+    if (needle) {
+      for (const code of [...shown]) {
+        let parent = byCode.get(code)?.parentDomainCode;
+        const guard = new Set<string>();
+        while (parent && !guard.has(parent)) {
+          const row = byCode.get(parent);
+          if (!row || (coreOnly && !row.isCore)) break;
+          guard.add(parent);
+          shown.add(parent);
+          parent = row.parentDomainCode;
+        }
+      }
+    }
+    return shown;
+  }, [byCode, coreOnly, domainTypes, needle]);
+
+  const bands = useMemo(() => {
+    const ordered = [...groups].sort((a, b) => a.displayOrder - b.displayOrder);
+    const known = new Set(ordered.map((group) => group.groupCode));
+    const extras = domainTypes.some((domain) => !domain.group || !known.has(domain.group.groupCode));
+    const list = extras ? [...ordered, UNGROUPED] : ordered;
+    return list
+      .map((group) => {
+        const members = domainTypes.filter((domain) => {
+          if (!visibleCodes.has(domain.domainCode)) return false;
+          const code = domain.group?.groupCode;
+          return group.groupCode === 'UNGROUPED' ? !code || !known.has(code) : code === group.groupCode;
+        });
+        return { group, members };
+      })
+      .filter((band) => band.members.length > 0);
+  }, [domainTypes, groups, visibleCodes]);
+
+  const visibleCount = domainTypes.filter((domain) => visibleCodes.has(domain.domainCode)).length;
+  const allCollapsed = bands.length > 0 && bands.every((band) => collapsed.has(band.group.groupCode));
+
+  const toggleAll = () => {
+    setCollapsed(allCollapsed ? new Set() : new Set(bands.map((band) => band.group.groupCode)));
+  };
+
+  const toggleGroup = (code: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
   };
 
   if (loading) {
@@ -124,101 +189,192 @@ export default function EntityManagementPage() {
         </div>
       </div>
 
-      {/* Entity Types Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
-        {domainTypes.map(domain => {
-          const domainAttrs = attributes.filter(a =>
-            !a.referenceDomainCode || a.referenceDomainCode === domain.domainCode
-          );
-          const domainTemplates = templates.filter(t => t.domainCode === domain.domainCode);
-
-          return (
-            <Link
-              key={domain.id}
-              href={`/admin/entities/${domain.domainCode}`}
-              className="entity-card"
-              style={{
-                cursor: 'pointer',
-                display: 'block',
-                textDecoration: 'none',
-                color: 'inherit',
-                '--card-accent': domainColor(domain.domainCode)
-              } as React.CSSProperties}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '12px' }}>
-                <div>
-                  <div style={{ fontSize: '16px', fontWeight: 600, marginBottom: '4px' }}>
-                    {domain.domainName}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <div className="mono" style={{ fontSize: '11px', color: 'var(--ink-3)' }}>
-                      {domain.domainCode}
-                    </div>
-                    <SchemaScopeBadge clientId={domain.clientId} clientName={domain.clientName} />
-                  </div>
-                </div>
-                <div
-                  style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '6px',
-                    background: domainColor(domain.domainCode),
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'white',
-                    fontWeight: 600,
-                    fontSize: '14px'
-                  }}
-                >
-                  {domain.domainCode[0]}
-                </div>
-              </div>
-
-              {domain.description && (
-                <div style={{ fontSize: '13px', color: 'var(--ink-2)', marginBottom: '12px' }}>
-                  {domain.description}
-                </div>
-              )}
-
-              <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--ink-3)' }}>
-                <span>{domainAttrs.length} attributes</span>
-                <span>{domainTemplates.length} templates</span>
-              </div>
-            </Link>
-          );
-        })}
+      <div className="et-tools">
+        <input
+          className="text-input et-search"
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search by name, code or description"
+          aria-label="Search entity types"
+        />
+        <button
+          type="button"
+          className="btn et-toggle"
+          aria-pressed={coreOnly}
+          onClick={() => setCoreOnly((current) => !current)}
+        >
+          Core entities only
+        </button>
+        <button type="button" className="btn" onClick={toggleAll} disabled={bands.length === 0}>
+          {allCollapsed ? 'Expand all' : 'Collapse all'}
+        </button>
+        <span className="et-shown">
+          {visibleCount} of {domainTypes.length} entity types
+        </span>
       </div>
+
+      {bands.map(({ group, members }) => {
+        const open = !collapsed.has(group.groupCode);
+        const roots = members
+          .filter((domain) => {
+            const parent = domain.parentDomainCode ? byCode.get(domain.parentDomainCode) : undefined;
+            return !parent || !visibleCodes.has(parent.domainCode) || parent.group?.groupCode !== domain.group?.groupCode;
+          })
+          .sort((a, b) => a.displayOrder - b.displayOrder || a.domainName.localeCompare(b.domainName));
+        return (
+          <section className="et-group" key={group.groupCode}>
+            <button
+              type="button"
+              className="et-group-head"
+              aria-expanded={open}
+              onClick={() => toggleGroup(group.groupCode)}
+            >
+              <Chevron open={open} />
+              <span className="et-dot" style={{ background: group.color }} />
+              <span className="et-group-name">{group.groupName}</span>
+              <span className="et-group-count">{members.length} entity {members.length === 1 ? 'type' : 'types'}</span>
+              {group.description && <span className="et-group-desc">{group.description}</span>}
+            </button>
+            {open && roots.map((domain) => (
+              <DomainBranch
+                key={domain.domainCode}
+                domain={domain}
+                members={members}
+                depth={0}
+              />
+            ))}
+          </section>
+        );
+      })}
 
       {domainTypes.length === 0 && (
         <div className="alert alert-info">
-          No entity types defined yet. Click "+ Entity Type" to create your first entity type (e.g., Fund, Security, Borrower).
+          No entity types defined yet. Click &quot;+ Entity Type&quot; to create your first entity type (e.g., Fund, Security, Borrower).
         </div>
       )}
 
-      {/* Create Domain Modal */}
+      {domainTypes.length > 0 && bands.length === 0 && (
+        <div className="alert alert-info">No entity types match this search.</div>
+      )}
+
       {showCreateDomainModal && (
         <CreateDomainModal
+          groups={groups}
+          domains={domainTypes}
           onClose={() => setShowCreateDomainModal(false)}
           onSubmit={handleCreateDomain}
+          onGroupCreated={(group) => setGroups((current) =>
+            [...current.filter((item) => item.groupCode !== group.groupCode), group]
+              .sort((a, b) => a.displayOrder - b.displayOrder)
+          )}
         />
       )}
     </div>
   );
 }
 
-// Create Domain Modal
-function CreateDomainModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: any) => void }) {
+function DomainBranch({
+  domain,
+  members,
+  depth,
+}: {
+  domain: DomainType;
+  members: DomainType[];
+  depth: number;
+}) {
+  const children = members
+    .filter((item) => item.parentDomainCode === domain.domainCode)
+    .sort((a, b) => a.displayOrder - b.displayOrder || a.domainName.localeCompare(b.domainName));
+  return (
+    <>
+      <DomainRow domain={domain} depth={depth} />
+      {children.map((child) => (
+        <DomainBranch key={child.domainCode} domain={child} members={members} depth={depth + 1} />
+      ))}
+    </>
+  );
+}
+
+function DomainRow({ domain, depth }: { domain: DomainType; depth: number }) {
+  const color = domain.group?.color || '#6b7280';
+  const letter = (domain.domainName.trim()[0] || domain.domainCode[0] || '?').toUpperCase();
+  const templates = domain.templateCount;
+  return (
+    <Link
+      href={`/admin/entities/${domain.domainCode}`}
+      className="et-row"
+      style={{ paddingLeft: 16 + depth * 28 }}
+    >
+      <span className="et-id">
+        <span className="et-mark" style={{ background: color }}>{letter}</span>
+        <span>
+          <span className="et-name">{domain.domainName}</span>
+          <span className="et-code">
+            <span className="mono">{domain.domainCode}</span>
+            {domain.clientId && (
+              <SchemaScopeBadge clientId={domain.clientId} clientName={domain.clientName} />
+            )}
+          </span>
+        </span>
+      </span>
+      <span className="et-desc">{domain.description}</span>
+      <span className="et-attrs">
+        {domain.ownedAttributeCount} own + {domain.sharedAttributeCount} global
+      </span>
+      {templates > 0 ? (
+        <span className="et-templates">{templates} {templates === 1 ? 'template' : 'templates'}</span>
+      ) : (
+        <span className="et-templates"><span className="et-none">No templates</span></span>
+      )}
+    </Link>
+  );
+}
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg className={`et-chevron ${open ? 'open' : ''}`} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <path d="m9 6 6 6-6 6" />
+    </svg>
+  );
+}
+
+function CreateDomainModal({
+  groups,
+  domains,
+  onClose,
+  onSubmit,
+  onGroupCreated,
+}: {
+  groups: DomainGroup[];
+  domains: DomainType[];
+  onClose: () => void;
+  onSubmit: (data: any) => void;
+  onGroupCreated: (group: DomainGroup) => void;
+}) {
   const [formData, setFormData] = useState({
     domainCode: '',
     domainName: '',
     description: '',
     clientId: null as string | null,
+    groupCode: groups[0]?.groupCode || '',
+    parentDomainCode: '',
+    isCore: false,
   });
+
+  const parents = domains.filter((domain) => domain.group?.groupCode === formData.groupCode);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(formData);
+    onSubmit({
+      domainCode: formData.domainCode,
+      domainName: formData.domainName,
+      description: formData.description,
+      clientId: formData.clientId,
+      groupCode: formData.groupCode || null,
+      parentDomainCode: formData.parentDomainCode || null,
+      isCore: formData.isCore,
+    });
   };
 
   return (
@@ -296,6 +452,38 @@ function CreateDomainModal({ onClose, onSubmit }: { onClose: () => void; onSubmi
                   rows={3}
                 />
               </div>
+              <GroupField
+                groups={groups}
+                value={formData.groupCode}
+                required
+                onChange={(groupCode) => setFormData((prev) => ({
+                  ...prev,
+                  groupCode,
+                  parentDomainCode: '',
+                }))}
+                onCreated={onGroupCreated}
+              />
+              <div className="field">
+                <label>Show under</label>
+                <select
+                  className="text-input"
+                  value={formData.parentDomainCode}
+                  onChange={(event) => setFormData((prev) => ({ ...prev, parentDomainCode: event.target.value }))}
+                >
+                  <option value="">Top of the group</option>
+                  {parents.map((domain) => (
+                    <option key={domain.domainCode} value={domain.domainCode}>{domain.domainName}</option>
+                  ))}
+                </select>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="checkbox"
+                  checked={formData.isCore}
+                  onChange={(event) => setFormData((prev) => ({ ...prev, isCore: event.target.checked }))}
+                />
+                Core entity
+              </label>
               <SchemaScopeField
                 value={formData.clientId}
                 onChange={(clientId) => setFormData(prev => ({ ...prev, clientId }))}

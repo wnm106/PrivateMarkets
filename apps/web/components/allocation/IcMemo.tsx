@@ -499,7 +499,7 @@ export function IcMemo({
                         bind={trancheBind('TRANCHE_SENIORITY', 'Seniority')}
                         value={seniority}
                         editValue={seniority || seniorityLabel(tranche)}
-                        display={seniority || seniorityLabel(tranche)}
+                        display={seniority || '—'}
                         onCommit={(value) => save(tranche.id, { TRANCHE_SENIORITY: value })}
                         onChanged={changed}
                       />

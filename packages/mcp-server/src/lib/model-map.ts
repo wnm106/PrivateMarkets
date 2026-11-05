@@ -70,6 +70,10 @@ const DOMAIN_ALIAS: Record<string, string> = {
   DEAL_FUNDING_PLAN: 'funding',
   CASH_FLOW: 'cf',
   SPONSOR: 'sponsor',
+  INTEREST_CONTRACT: 'contract',
+  AMORTIZATION: 'amort',
+  FACTOR_SCHEDULE: 'factor',
+  CALL_SCHEDULE: 'call',
 };
 
 function code(value: string | null | undefined): string {

@@ -21,6 +21,7 @@ import { reconciliationResolvers } from './reconciliation';
 import { entityResolutionResolvers } from './entity-resolution';
 import { allocationResolvers } from './allocation';
 import { fundSurfaceResolvers } from './fund-surface';
+import { fundRecResolvers } from './fund-rec';
 import { icMemoResolvers } from './ic-memo';
 
 export const resolvers = {
@@ -59,6 +60,7 @@ export const resolvers = {
     previewAllocation: allocationResolvers.Query.previewAllocation,
     icMemo: icMemoResolvers.Query.icMemo,
     fundSurface: fundSurfaceResolvers.Query.fundSurface,
+    ...fundRecResolvers.Query,
   },
   
   Mutation: {
@@ -91,6 +93,7 @@ export const resolvers = {
     updateMatchRule: entityResolutionResolvers.Mutation.updateMatchRule,
     createMatchRule: entityResolutionResolvers.Mutation.createMatchRule,
     commitAllocation: allocationResolvers.Mutation.commitAllocation,
+    ...surfaceResolvers.Mutation,
   },
   
   Subscription: {},
@@ -104,4 +107,5 @@ export const resolvers = {
   ComplianceRule: complianceResolvers.ComplianceRule,
   ComplianceEvaluationRun: complianceResolvers.ComplianceEvaluationRun,
   AttributeDefinition: referenceListResolvers.AttributeDefinition,
+  DomainTypeRecord: entityResolvers.DomainTypeRecord,
 };

@@ -137,6 +137,11 @@ Entities connect via **typed relationships**:
 | SECURITY_ISSUER | ISSUER → SECURITY | An issuer has many securities |
 | FUND_PARENT | FUND → FUND | Fund-of-funds hierarchy |
 | POSITION_CASHFLOW | POSITION → CASH_FLOW | A position has many cash flows |
+| SECURITY_CONTRACT | SECURITY → INTEREST_CONTRACT | A security has many interest contracts |
+| SECURITY_AMORTIZATION | SECURITY → AMORTIZATION | A security has many draws and repayments |
+| SECURITY_FACTOR | SECURITY → FACTOR_SCHEDULE | A security has many expected ABS factors |
+| SECURITY_CALL | SECURITY → CALL_SCHEDULE | A security has many call dates and prices |
+| SECURITY_PRICE | SECURITY → PRICE | A security has many price observations |
 
 Use \`tapestrai://model/relationships\` resource or \`get_relationship_types\` tool.
 

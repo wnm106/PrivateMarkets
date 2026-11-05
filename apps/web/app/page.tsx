@@ -13,6 +13,8 @@ interface DomainTypeRecord {
   domainName: string;
   description?: string;
   isActive: boolean;
+  displayOrder?: number;
+  group?: { color: string; displayOrder: number } | null;
 }
 
 interface EntityDomainCard {
@@ -150,7 +152,10 @@ export default function LandingPage() {
             Record<string, never>
           >(
             `query {
-              domainTypes { id domainCode domainName description isActive }
+              domainTypes {
+                id domainCode domainName description isActive displayOrder
+                group { color displayOrder }
+              }
               domainRecordCounts { domainCode totalCount }
               dataSources { id sourceName isActive updatedAt createdAt }
             }`,
@@ -205,10 +210,17 @@ export default function LandingPage() {
             key: domainHref(domain.domainCode),
             domainCode: domain.domainCode,
             name: domain.domainName || domain.domainCode,
-            color: domainColor(domain.domainCode),
+            color: domain.group?.color || domainColor(domain.domainCode),
             desc: domain.description || '',
             count: counts[domain.domainCode] || 0,
           };
+        });
+        entities.sort((a, b) => {
+          const aGroup = activeDomains.find((domain) => domain.domainCode === a.domainCode);
+          const bGroup = activeDomains.find((domain) => domain.domainCode === b.domainCode);
+          const groupOrder = (aGroup?.group?.displayOrder ?? 9999) - (bGroup?.group?.displayOrder ?? 9999);
+          if (groupOrder !== 0) return groupOrder;
+          return (aGroup?.displayOrder ?? 0) - (bGroup?.displayOrder ?? 0);
         });
 
         const sources = domainsResult.data?.dataSources || [];

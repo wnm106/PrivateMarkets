@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION } from '@/lib/graphql';
 import { domainHref } from '@/lib/domain-routes';
 import { useTemporalStore } from '@/lib/store';
+import { FUND_PANEL_KEYS, mountedPanel, tabReason, useLiveSurface } from '@/components/surfaces/useLiveSurface';
+import { useSurfaceNav } from '@/lib/surface-nav';
 
 const TABS = [
   ['nav', 'NAV'],
@@ -318,6 +320,16 @@ export function FundSurface({ fundId }: { fundId: string }) {
   const [surface, setSurface] = useState<Surface | null>(null);
   const [tab, setTab] = useState<TabKey>('nav');
   const [structureOverride, setStructureOverride] = useState<FundStructure | null>(null);
+  const baselineRules = useLiveSurface('FUND_SURFACE', fundId);
+  const storedStructure = baselineRules.resolution?.facts.find((fact) => fact.key === 'FUND_STRUCTURE')?.value || '';
+  const effectiveStructure = structureOverride || storedStructure || (surface?.fundName ? defaultStructure(surface.fundName) : '');
+  const structureOverlay = Boolean(effectiveStructure && effectiveStructure !== storedStructure);
+  const ruled = useLiveSurface(
+    'FUND_SURFACE',
+    fundId,
+    structureOverlay ? { FUND_STRUCTURE: effectiveStructure } : null,
+  );
+  const livePages = structureOverlay ? ruled.pages : baselineRules.pages;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -342,22 +354,33 @@ export function FundSurface({ fundId }: { fundId: string }) {
 
   useEffect(() => { void load(); }, [load]);
 
-  useEffect(() => {
-    const hash = window.location.hash.replace('#', '') as TabKey;
-    if (TABS.some((item) => item[0] === hash)) setTab(hash);
-  }, []);
-
   const choose = (next: TabKey) => {
     setTab(next);
     window.history.replaceState(null, '', `#${next}`);
   };
 
-  const write = async (updates: Array<{ id: string; code: string; value: string }>) => {
+  useEffect(() => {
+    const hash = window.location.hash.replace('#', '') as TabKey;
+    if (TABS.some((item) => item[0] === hash) || hash === 'accounts' || hash === 'filings') setTab(hash);
+  }, []);
+
+  useEffect(() => {
+    if (livePages.length === 0) return;
+    const open = livePages.filter((page) => mountedPanel(page, FUND_PANEL_KEYS));
+    if (!open.some((page) => mountedPanel(page, FUND_PANEL_KEYS) === tab)) {
+      const next = open[0];
+      const key = next && mountedPanel(next, FUND_PANEL_KEYS);
+      if (key) choose(key as TabKey);
+    }
+  }, [livePages, tab]);
+
+  const write = async (updates: Array<{ id: string; code: string; value: string; sourceCode?: string }>) => {
     setNotice(null);
     setError(null);
     for (const update of updates) {
+      const stored = update.sourceCode ? { value: update.value, sourceCode: update.sourceCode } : update.value;
       const result = await graphqlMutation<{ updateEntity: { errors: Array<{ message: string }> } }>(UPDATE_ENTITY_MUTATION, {
-        input: { id: update.id, attributes: { [update.code]: update.value }, asOfDate },
+        input: { id: update.id, attributes: { [update.code]: stored }, asOfDate },
       });
       const message = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
       if (message) {
@@ -371,6 +394,13 @@ export function FundSurface({ fundId }: { fundId: string }) {
 
   const save = (id: string, code: string, value: string) => write([{ id, code, value }]);
   const saveMoney = (id: string, code: string) => (value: string) => save(id, code, value);
+
+  useSurfaceNav(surface?.fundName
+    ? [
+        { label: 'Fund surface', href: '/fund-surface' },
+        { label: surface.fundName },
+      ]
+    : [{ label: 'Fund surface' }]);
 
   if (loading && !surface) return <div className="xp-empty">Loading fund…</div>;
   if (!surface) return <div className="xp-error">{error || 'Fund not found'}</div>;
@@ -406,13 +436,9 @@ export function FundSurface({ fundId }: { fundId: string }) {
             {'. '}
             <select
               aria-label="Fund structure"
-              value={structureOverride ?? defaultStructure(fund.fundName)}
-              onChange={(event) => {
-                const next = event.target.value as FundStructure;
-                setStructureOverride(next);
-                if (next === 'PUBLIC_BDC' && tab === 'accounts') choose('filings');
-                if (next === 'CLOSED_END' && tab === 'filings') choose('accounts');
-              }}
+              title="This value is a fact. The saved surface rules decide which tabs it opens."
+              value={structureOverride || storedStructure || defaultStructure(fund.fundName)}
+              onChange={(event) => setStructureOverride(event.target.value as FundStructure)}
             >
               <option value="CLOSED_END">Closed-end</option>
               <option value="PUBLIC_BDC">Public BDC</option>
@@ -458,16 +484,31 @@ export function FundSurface({ fundId }: { fundId: string }) {
       </header>
 
       <div className="da-tabs" role="tablist">
-        {[
-          ...TABS,
-          ...((structureOverride ?? defaultStructure(fund.fundName)) === 'CLOSED_END' ? [['accounts', 'Capital accounts'] as const] : []),
-          ...((structureOverride ?? defaultStructure(fund.fundName)) === 'PUBLIC_BDC' ? [['filings', 'Shareholder filings'] as const] : []),
-        ].map(([key, label]) => (
-          <button key={key} type="button" role="tab" className={tab === key ? 'on' : ''} aria-selected={tab === key} onClick={() => choose(key)}>
-            {label}
-            {key === 'review' && fund.reviewOpen > 0 && !fund.certified && <span className="fs-tbadge">{fund.reviewOpen}</span>}
-          </button>
-        ))}
+        {(livePages.length > 0 ? livePages : TABS.map(([key, label]) => ({
+          slotCode: key.toUpperCase(),
+          slotName: label,
+          status: 'RENDERED',
+          decision: '',
+          panelKey: key,
+        }))).map((page) => {
+          const key = mountedPanel(page, FUND_PANEL_KEYS);
+          const open = Boolean(key);
+          return (
+            <button
+              key={page.slotCode}
+              type="button"
+              role="tab"
+              className={tab === key ? 'on' : ''}
+              aria-selected={tab === key}
+              disabled={!open}
+              title={open ? undefined : tabReason(page, FUND_PANEL_KEYS)}
+              onClick={() => { if (key) choose(key as TabKey); }}
+            >
+              {page.slotName}
+              {key === 'review' && fund.reviewOpen > 0 && !fund.certified && <span className="fs-tbadge">{fund.reviewOpen}</span>}
+            </button>
+          );
+        })}
       </div>
 
       {tab === 'nav' && (
@@ -503,7 +544,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
             </section>
           </div>
           <section className="fs-block">
-            <div className="da-sechead"><h2>NAV composition</h2><p>Assets and liabilities per the administrator’s statement. The review tab compares each line with our shadow calculation.</p></div>
+            <div className="da-sechead"><h2>NAV composition</h2><p>Assets and liabilities per the administrator’s statement. The review tab compares the fund administrator source with the internal source.</p></div>
             <div className="da-gridwrap">
               <table className="da-grid">
                 <thead><tr><th>Line</th><th className="num">Administrator ($M)</th><th className="num">% of NAV</th></tr></thead>
@@ -625,7 +666,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
           <div className="da-sechead">
             <div>
               <h2>NAV statements</h2>
-              <p>Administrator statements for {fund.periodLabel || 'the period'}. Where we run a shadow calculation, the variance is shown and lines outside tolerance need review before the NAV is certified.</p>
+              <p>Administrator statements for {fund.periodLabel || 'the period'}. The fund administrator and the internal calculation are two sources of each line. Lines outside tolerance need review before the NAV is certified.</p>
             </div>
             <label className="fs-tol">
               Tolerance
@@ -646,15 +687,20 @@ export function FundSurface({ fundId }: { fundId: string }) {
             </label>
           </div>
           {fund.statements.filter((item) => item.kind === 'BS' || item.kind === 'OPS').map((statement) => (
-            <Statement key={statement.kind} statement={statement} onResolve={(id, resolved) => {
-              const updates = [{ id, code: 'NAV_LINE_RESOLVED', value: resolved ? 'false' : 'true' }];
-              if (fund.statementId) updates.push({ id: fund.statementId, code: 'STATEMENT_CERTIFIED', value: 'false' });
-              return write(updates);
-            }} onAmount={(id, code, value) => save(id, code, value)} />
+            <Statement key={statement.kind} statement={statement} onResolve={(code, resolved) => {
+              if (!fund.statementId) return Promise.resolve();
+              const accepted = new Set(fund.statements.flatMap((item) => item.rows).filter((row) => row.status === 'RESOLVED').map((row) => row.id));
+              if (resolved) accepted.delete(code);
+              else accepted.add(code);
+              return write([
+                { id: fund.statementId, code: 'STATEMENT_ACCEPTED_LINES', value: JSON.stringify([...accepted]) },
+                { id: fund.statementId, code: 'STATEMENT_CERTIFIED', value: 'false' },
+              ]);
+            }} onAmount={(code, sourceCode, value) => (fund.statementId ? write([{ id: fund.statementId, code, value, sourceCode }]) : Promise.resolve())} />
           ))}
           <div className="fs-two">
             {fund.statements.filter((item) => item.kind === 'CHANGES' || item.kind === 'CASH').map((statement) => (
-              <Statement key={statement.kind} statement={statement} onResolve={() => Promise.resolve()} onAmount={(id, code, value) => save(id, code, value)} />
+              <Statement key={statement.kind} statement={statement} onResolve={() => Promise.resolve()} onAmount={(code, sourceCode, value) => (fund.statementId ? write([{ id: fund.statementId, code, value, sourceCode }]) : Promise.resolve())} />
             ))}
           </div>
           <section className="fs-block">
@@ -1017,8 +1063,8 @@ function Statement({
   statement, onResolve, onAmount,
 }: {
   statement: Surface['statements'][number];
-  onResolve: (id: string, resolved: boolean) => Promise<void>;
-  onAmount: (id: string, code: string, value: string) => Promise<void>;
+  onResolve: (code: string, resolved: boolean) => Promise<void>;
+  onAmount: (code: string, sourceCode: string, value: string) => Promise<void>;
 }) {
   return (
     <article className="fs-stmt">
@@ -1032,8 +1078,8 @@ function Statement({
           <thead>
             <tr>
               <th />
-              <th className="num">{statement.comparable ? 'Administrator' : '$M'}</th>
-              {statement.comparable && <><th className="num">Shadow</th><th className="num">Variance</th><th className="num">Var %</th><th>Status</th></>}
+              <th className="num">{statement.comparable ? 'Fund admin' : '$M'}</th>
+              {statement.comparable && <><th className="num">Internal</th><th className="num">Variance</th><th className="num">Var %</th><th>Status</th></>}
             </tr>
           </thead>
           <tbody>
@@ -1044,13 +1090,13 @@ function Statement({
                   <td style={{ paddingLeft: 12 + row.indent * 16 }}>{row.label}</td>
                   {quiet ? <td /> : (
                     <td className={`num ${row.administrator != null && row.administrator < 0 ? 'fs-neg' : ''}`}>
-                      <MoneyEdit amount={row.administrator} digits={2} label={`${row.label} administrator`} onSave={(value) => onAmount(row.id, 'NAV_LINE_ADMINISTRATOR', value)} />
+                      <MoneyEdit amount={row.administrator} digits={2} label={`${row.label} fund admin`} onSave={(value) => onAmount(row.id, 'FUND_ADMIN', value)} />
                     </td>
                   )}
                   {statement.comparable && !quiet && (
                     <>
                       <td className="num">
-                        {row.shadow == null ? '—' : <MoneyEdit amount={row.shadow} digits={2} label={`${row.label} shadow`} onSave={(value) => onAmount(row.id, 'NAV_LINE_SHADOW', value)} />}
+                        {row.shadow == null ? '—' : <MoneyEdit amount={row.shadow} digits={2} label={`${row.label} internal`} onSave={(value) => onAmount(row.id, 'INTERNAL', value)} />}
                       </td>
                       <td className={`num ${row.variance != null && row.variance < 0 ? 'fs-neg' : ''}`}>{row.variance == null || Math.abs(row.variance) <= 1 ? '—' : paren(row.variance, 2)}</td>
                       <td className="num">{row.variancePct == null || Math.abs(row.variance || 0) <= 1 ? '—' : pct(row.variancePct, 2)}</td>

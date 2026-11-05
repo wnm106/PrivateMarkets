@@ -13,6 +13,7 @@ type SurfaceDefinition {
   description: String
   isActive: Boolean!
   isPrimary: Boolean!
+  clientId: ID
 }
 
 type SurfaceExperience {
@@ -55,6 +56,8 @@ type SurfaceComponentDefinition {
   variantCode: String
   experienceCode: String
   displayOrder: Int!
+  clientId: ID
+  panelKey: String
 }
 
 type SurfaceSampleProfile {
@@ -95,6 +98,7 @@ type PageResolution {
   variantCode: String
   variantName: String
   decision: String!
+  panelKey: String
 }
 
 type ComponentResolution {
@@ -104,6 +108,8 @@ type ComponentResolution {
   experienceName: String!
   status: String!
   ruleTrace: String!
+  clientId: ID
+  panelKey: String
 }
 
 type SurfaceResolution {

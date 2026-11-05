@@ -42,7 +42,7 @@ function conditionInput(cond: ComplianceCondition, order: number) {
     path && path.length
       ? { relationshipPath: path.map((hop) => ({ relationshipCode: hop.relationshipCode, direction: hop.direction, recursive: false })) }
       : undefined;
-  let value: string | undefined = cond.value;
+  let value: string | undefined = cond.rightExpression ? undefined : cond.value;
   const compareCode = cond.compareAttributeCode === '__PICK__' ? '' : cond.compareAttributeCode;
   if (compareCode || cond.operator === 'is_null' || cond.operator === 'is_not_null') value = undefined;
   else if ((cond.operator === 'in' || cond.operator === 'not_in') && value && !value.trim().startsWith('[')) {
@@ -58,6 +58,8 @@ function conditionInput(cond: ComplianceCondition, order: number) {
     compareAttributeCode: compareCode || undefined,
     attributeDimension: dimension(cond.attributePath),
     compareDimension: compareCode ? dimension(cond.compareAttributePath) : undefined,
+    leftExpression: cond.leftExpression || undefined,
+    rightExpression: cond.rightExpression || undefined,
     logicOperator: cond.logicOperator,
   };
 }

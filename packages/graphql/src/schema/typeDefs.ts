@@ -680,6 +680,7 @@ enum ComplianceRuleCategory {
   ELIGIBILITY
   LEVERAGE
   LIQUIDITY
+  FORTY_ACT
   OTHER
 }
 
@@ -867,6 +868,8 @@ type ComplianceRuleCondition {
   value: String
   compareAttributeCode: String
   compareDimension: ComplianceAttributeDimension
+  leftExpression: JSON
+  rightExpression: JSON
   logicOperator: String!
   createdAt: DateTime!
 }
@@ -1100,6 +1103,8 @@ input ComplianceRuleConditionInput {
   value: String
   compareAttributeCode: String
   compareDimension: ComplianceAttributeDimensionInput
+  leftExpression: JSON
+  rightExpression: JSON
   logicOperator: String
 }
 
@@ -1348,6 +1353,25 @@ type EntityEdge {
   cursor: String!
 }
 
+enum EntitySearchMatch {
+  NAME
+  PARENT
+  RELATED
+}
+
+"""One entity hit from global search. Parent domains have depth 0."""
+type EntitySearchHit {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  domainName: String!
+  depth: Int!
+  match: EntitySearchMatch!
+  matchedName: String
+  matchedDomainName: String
+}
+
 input EntityFilter {
   domainCode: String
   templateCode: String
@@ -1454,6 +1478,9 @@ input CreateDomainTypeInput {
   domainName: String!
   description: String
   clientId: ID
+  groupCode: String
+  parentDomainCode: String
+  isCore: Boolean
 }
 
 type CreateDomainTypeResult {
@@ -1559,6 +1586,25 @@ type ReorderTemplateAttributesResult {
 scalar JSONObject
 
 # Domain Type Record (distinct from DomainType enum, used for managing domain types)
+type DomainGroup {
+  id: ID!
+  groupCode: String!
+  groupName: String!
+  description: String
+  color: String!
+  displayOrder: Int!
+}
+
+input CreateDomainGroupInput {
+  groupName: String!
+  description: String
+}
+
+type CreateDomainGroupResult {
+  group: DomainGroup
+  errors: [MutationError!]!
+}
+
 type DomainTypeRecord {
   id: ID!
   domainCode: String!
@@ -1569,6 +1615,13 @@ type DomainTypeRecord {
   updatedAt: DateTime!
   clientId: ID
   clientName: String
+  isCore: Boolean!
+  displayOrder: Int!
+  parentDomainCode: String
+  group: DomainGroup
+  ownedAttributeCount: Int!
+  sharedAttributeCount: Int!
+  templateCount: Int!
 }
 
 # Active-record count for one entity type. Counted from master entities,
@@ -1584,6 +1637,10 @@ input UpdateDomainTypeInput {
   domainName: String
   description: String
   isActive: Boolean
+  groupCode: String
+  parentDomainCode: String
+  isCore: Boolean
+  displayOrder: Int
 }
 
 type UpdateDomainTypeResult {
@@ -3036,6 +3093,9 @@ type Query {
   ): EntityConnection!
   
   entity(id: ID, entityCode: String, asOfDate: Date, knowledgeDate: DateTime): Entity
+
+  """Match entity names, related entity names, and parent entity names. Parent domains rank before child domains."""
+  searchEntities(query: String!, limit: Int): [EntitySearchHit!]!
   
   # Domain-specific queries (for convenience, but use generic entity under the hood)
   funds(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
@@ -3047,6 +3107,7 @@ type Query {
   
   # Metadata queries
   domainTypes: [DomainTypeRecord!]!
+  domainGroups: [DomainGroup!]!
   domainRecordCounts: [DomainRecordCount!]!
   attributeRegister(domainCode: String): [AttributeDefinition!]!
   attributeSections(domainCode: String!): [AttributeSection!]!
@@ -3063,6 +3124,10 @@ type Query {
   previewAllocation(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): AllocationPreview!
   icMemo(dealId: ID!, asOfDate: Date): IcMemo!
   fundSurface(fundId: ID!, asOfDate: Date, knowledgeDate: DateTime): FundSurface!
+  """Close board: every fund with a close calendar, its current close, status, breaks, and what is still open."""
+  fundRecBoard(asOfDate: Date, knowledgeDate: DateTime): JSON!
+  """One fund close: statement integrity, roll-forward, fees, marks, drift, review items, and close steps."""
+  fundRec(fundId: ID!, periodEnd: Date, asOfDate: Date, knowledgeDate: DateTime, driftThresholdPct: Float): JSON!
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
@@ -3162,6 +3227,8 @@ type Query {
 }
 
 type Mutation {
+  saveSurfaceCatalog(surfaceCode: String!, tabs: JSON!): SurfaceCatalog!
+
   # Generic entity mutations
   createEntity(input: CreateEntityInput!): CreateEntityResult!
   updateEntity(input: UpdateEntityInput!): UpdateEntityResult!
@@ -3181,6 +3248,7 @@ type Mutation {
   
   # Metadata mutations
   createDomainType(input: CreateDomainTypeInput!): CreateDomainTypeResult!
+  createDomainGroup(input: CreateDomainGroupInput!): CreateDomainGroupResult!
   updateDomainType(input: UpdateDomainTypeInput!): UpdateDomainTypeResult!
   deleteDomainType(id: ID!): DeleteDomainTypeResult!
   createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
@@ -4755,6 +4823,7 @@ type SurfaceDefinition {
   description: String
   isActive: Boolean!
   isPrimary: Boolean!
+  clientId: ID
 }
 
 type SurfaceExperience {
@@ -4797,6 +4866,8 @@ type SurfaceComponentDefinition {
   variantCode: String
   experienceCode: String
   displayOrder: Int!
+  clientId: ID
+  panelKey: String
 }
 
 type SurfaceSampleProfile {
@@ -4837,6 +4908,7 @@ type PageResolution {
   variantCode: String
   variantName: String
   decision: String!
+  panelKey: String
 }
 
 type ComponentResolution {
@@ -4846,6 +4918,8 @@ type ComponentResolution {
   experienceName: String!
   status: String!
   ruleTrace: String!
+  clientId: ID
+  panelKey: String
 }
 
 type SurfaceResolution {

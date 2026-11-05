@@ -52,6 +52,7 @@ const CATEGORY: Record<string, string> = {
   ELIGIBILITY: 'Eligibility',
   LEVERAGE: 'Credit and leverage',
   LIQUIDITY: 'Liquidity',
+  FORTY_ACT: '40 Act',
   OTHER: 'Other',
 };
 

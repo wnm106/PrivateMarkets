@@ -1,4 +1,10 @@
 import { Context } from '../context';
+import { activeSurfaceClientId } from './schema-scope';
+import {
+  mergeClientComponents,
+  panelKeyForSlot,
+  preferClientScope,
+} from '../lib/surface-composition/client-scope';
 import {
   ApplicabilityRules,
   CatalogComponent,
@@ -20,6 +26,7 @@ interface SurfaceRow {
   description: string | null;
   is_active: boolean;
   is_primary?: boolean;
+  client_id?: string | null;
 }
 
 interface ExperienceRow {
@@ -65,6 +72,9 @@ interface ComponentRow {
   component_name: string;
   description: string | null;
   display_order: number;
+  client_id?: string | null;
+  panel_key?: string | null;
+  is_active?: boolean;
 }
 
 interface ProfileRow {
@@ -96,17 +106,26 @@ function mapSurface(row: SurfaceRow) {
     description: row.description,
     isActive: row.is_active,
     isPrimary: row.is_primary === true,
+    clientId: row.client_id ?? null,
   };
 }
 
+function scopedSurface<T extends SurfaceRow>(rows: T[], clientId: string | null): T | null {
+  return preferClientScope(
+    rows.map((row) => ({ ...row, code: row.surface_code, clientId: row.client_id ?? null })),
+    clientId,
+  )[0] ?? null;
+}
+
 async function loadCatalog(context: Context, surfaceCode: string): Promise<LoadedCatalog | null> {
-  const { data: surface, error: surfaceError } = await context.supabase
+  const clientId = await activeSurfaceClientId(context);
+  const { data: surfaces, error: surfaceError } = await context.supabase
     .from('surface_definitions')
     .select('*')
     .eq('surface_code', surfaceCode)
-    .eq('is_active', true)
-    .maybeSingle();
+    .eq('is_active', true);
   if (surfaceError) throw new Error(`Failed to load surface: ${surfaceError.message}`);
+  const surface = scopedSurface((surfaces || []) as SurfaceRow[], clientId);
   if (!surface) return null;
 
   const [experiences, slots, components, profiles] = await Promise.all([
@@ -160,13 +179,22 @@ async function loadCatalog(context: Context, surfaceCode: string): Promise<Loade
     }
   }
 
+  const componentRows = mergeClientComponents(
+    ((components.data || []) as ComponentRow[]).map((row) => ({
+      ...row,
+      code: row.component_code,
+      clientId: row.client_id ?? null,
+    })),
+    clientId,
+  );
+
   return {
     surface,
     experiences: experiences.data || [],
     slots: slots.data || [],
     variants,
     requirements,
-    components: components.data || [],
+    components: componentRows,
     profiles: profiles.data || [],
   };
 }
@@ -269,11 +297,18 @@ async function loadEntityFacts(
     if (code) relationships.add(code);
   }
 
+  const facts = normalizeFacts({ attributes, relationships: [...relationships] }, templateCode);
+  const name = data.entity_name || data.entity_code;
+  if (name && facts.map.ENTITY_NAME == null) {
+    facts.map.ENTITY_NAME = name;
+    facts.labeled.push({ key: 'ENTITY_NAME', value: String(name), source: 'ATTRIBUTE' });
+  }
+
   return {
-    name: data.entity_name || data.entity_code,
+    name,
     domainCode: data.domain_code,
     templateCode,
-    facts: normalizeFacts({ attributes, relationships: [...relationships] }, templateCode),
+    facts,
   };
 }
 
@@ -287,6 +322,23 @@ function presentResolution(
   note: string | null,
 ) {
   const resolved = resolveSurfaceComposition(toEngineCatalog(catalog), map);
+  const componentById = new Map(catalog.components.map((row) => [row.id, row]));
+  const slotCodeById = new Map(catalog.slots.map((slot) => [slot.id, slot.slot_code]));
+  const components = resolved.components.map((component) => {
+    const row = componentById.get(component.componentId);
+    return {
+      componentCode: component.code,
+      componentName: component.name,
+      pageName: component.pageName,
+      experienceName: component.experienceName,
+      status: component.status,
+      ruleTrace: component.ruleTrace,
+      clientId: row?.client_id ?? null,
+      panelKey: row?.panel_key ?? null,
+      slotCode: row ? slotCodeById.get(row.slot_id) ?? '' : '',
+    };
+  });
+  const panelBySlot = panelKeyForSlot(components);
   return {
     surfaceCode: catalog.surface.surface_code,
     surfaceName: catalog.surface.surface_name,
@@ -310,14 +362,17 @@ function presentResolution(
       variantCode: page.variantCode,
       variantName: page.variantName,
       decision: page.decision,
+      panelKey: panelBySlot.get(page.slotCode) ?? null,
     })),
-    components: resolved.components.map((component) => ({
-      componentCode: component.code,
-      componentName: component.name,
+    components: components.map((component) => ({
+      componentCode: component.componentCode,
+      componentName: component.componentName,
       pageName: component.pageName,
       experienceName: component.experienceName,
       status: component.status,
       ruleTrace: component.ruleTrace,
+      clientId: component.clientId,
+      panelKey: component.panelKey,
     })),
   };
 }
@@ -386,16 +441,343 @@ function typeSwapNote(
   return `Fund type swapped from ${from} to ${to}. The same sample fund is resolved again under the new type.`;
 }
 
+interface ConditionInput {
+  attribute?: string;
+  operator?: string;
+  value?: string;
+}
+
+interface LayoutInput {
+  name?: string;
+  mode?: string;
+  logic?: string;
+  conditions?: ConditionInput[];
+  recordNames?: string[];
+}
+
+interface TabInput {
+  slotCode?: string | null;
+  name?: string;
+  appearance?: string;
+  logic?: string;
+  conditions?: ConditionInput[];
+  layouts?: LayoutInput[];
+}
+
+function asTabs(raw: unknown): TabInput[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error('A surface needs at least one tab.');
+  }
+  return raw.map((entry) => {
+    if (!entry || typeof entry !== 'object') throw new Error('A tab is missing its definition.');
+    return entry as TabInput;
+  });
+}
+
+function ruleLogic(value: string | undefined): 'AND' | 'OR' {
+  return value === 'OR' ? 'OR' : 'AND';
+}
+
+function ruleConditions(conditions: ConditionInput[] | undefined) {
+  return (conditions || [])
+    .filter((condition) => condition.attribute && condition.value)
+    .map((condition) => ({
+      attributeCode: String(condition.attribute),
+      operator: condition.operator === 'is_not' ? 'not_equals' as const : 'equals' as const,
+      value: String(condition.value),
+    }));
+}
+
+function slotCodeFor(preferred: string | null | undefined, name: string, used: Set<string>): string {
+  const raw = (preferred || name || 'TAB').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80);
+  let code = raw || 'TAB';
+  let suffix = 2;
+  while (used.has(code)) {
+    code = `${raw || 'TAB'}_${suffix++}`.slice(0, 100);
+  }
+  used.add(code);
+  return code;
+}
+
+interface ComponentOverlay {
+  clientId: string;
+  componentCode: string;
+  componentName: string;
+  description: string | null;
+  displayOrder: number;
+  panelKey: string | null;
+  isActive: boolean;
+  slotCode: string;
+  variantCode: string | null;
+  experienceCode: string | null;
+}
+
+async function readComponentMemory(context: Context, surfaceId: string, surfaceClientId: string | null) {
+  const { data: components, error } = await context.supabase
+    .from('surface_components')
+    .select('component_code, component_name, description, display_order, client_id, panel_key, is_active, slot_id, variant_id, experience_id')
+    .eq('surface_id', surfaceId);
+  if (error) throw new Error(`Failed to read components: ${error.message}`);
+  const rows = (components || []) as ComponentRow[];
+  const slotIds = [...new Set(rows.map((row) => row.slot_id))];
+  const variantIds = [...new Set(rows.map((row) => row.variant_id).filter((id): id is string => Boolean(id)))];
+  const experienceIds = [...new Set(rows.map((row) => row.experience_id).filter((id): id is string => Boolean(id)))];
+  const [slots, variants, experiences] = await Promise.all([
+    slotIds.length
+      ? context.supabase.from('surface_page_slots').select('id, slot_code').in('id', slotIds)
+      : Promise.resolve({ data: [], error: null }),
+    variantIds.length
+      ? context.supabase.from('surface_page_variants').select('id, variant_code').in('id', variantIds)
+      : Promise.resolve({ data: [], error: null }),
+    experienceIds.length
+      ? context.supabase.from('surface_experiences').select('id, experience_code').in('id', experienceIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  for (const result of [slots, variants, experiences]) {
+    if (result.error) throw new Error(`Failed to read components: ${result.error.message}`);
+  }
+  const slotCode = new Map((slots.data || []).map((row: { id: string; slot_code: string }) => [row.id, row.slot_code]));
+  const variantCode = new Map((variants.data || []).map((row: { id: string; variant_code: string }) => [row.id, row.variant_code]));
+  const experienceCode = new Map((experiences.data || []).map((row: { id: string; experience_code: string }) => [row.id, row.experience_code]));
+  const panelByCode = new Map<string, string | null>();
+  const overlays: ComponentOverlay[] = [];
+  for (const row of rows) {
+    const code = slotCode.get(row.slot_id);
+    if (!code) continue;
+    const ownsRow = !row.client_id || row.client_id === surfaceClientId;
+    if (ownsRow) {
+      panelByCode.set(row.component_code, row.panel_key ?? null);
+      if (!panelByCode.has(code)) panelByCode.set(code, row.panel_key ?? null);
+      continue;
+    }
+    overlays.push({
+      clientId: row.client_id as string,
+      componentCode: row.component_code,
+      componentName: row.component_name,
+      description: row.description,
+      displayOrder: row.display_order,
+      panelKey: row.panel_key ?? null,
+      isActive: row.is_active !== false,
+      slotCode: code,
+      variantCode: row.variant_id ? variantCode.get(row.variant_id) ?? null : null,
+      experienceCode: row.experience_id ? experienceCode.get(row.experience_id) ?? null : null,
+    });
+  }
+  return { panelByCode, overlays };
+}
+
+async function restoreOverlays(context: Context, surfaceId: string, overlays: ComponentOverlay[]) {
+  if (overlays.length === 0) return;
+  const { data: slots, error: slotError } = await context.supabase
+    .from('surface_page_slots')
+    .select('id, slot_code')
+    .eq('surface_id', surfaceId);
+  if (slotError) throw new Error(`Failed to restore client components: ${slotError.message}`);
+  const slotByCode = new Map((slots || []).map((slot: { id: string; slot_code: string }) => [slot.slot_code, slot.id]));
+  const slotIds = [...slotByCode.values()];
+  const [{ data: variants, error: variantError }, { data: experiences, error: experienceError }] = await Promise.all([
+    slotIds.length
+      ? context.supabase.from('surface_page_variants').select('id, slot_id, variant_code').in('slot_id', slotIds)
+      : Promise.resolve({ data: [], error: null }),
+    context.supabase.from('surface_experiences').select('id, experience_code').eq('surface_id', surfaceId),
+  ]);
+  if (variantError) throw new Error(`Failed to restore client components: ${variantError.message}`);
+  if (experienceError) throw new Error(`Failed to restore client components: ${experienceError.message}`);
+  const experienceByCode = new Map((experiences || []).map((row: { id: string; experience_code: string }) => [row.experience_code, row.id]));
+  for (const overlay of overlays) {
+    const slotId = slotByCode.get(overlay.slotCode);
+    if (!slotId) continue;
+    const variant = (variants || []).find((row: { id: string; slot_id: string; variant_code: string }) =>
+      row.slot_id === slotId && row.variant_code === overlay.variantCode);
+    const inserted = await context.supabase.from('surface_components').insert({
+      surface_id: surfaceId,
+      slot_id: slotId,
+      variant_id: variant?.id ?? null,
+      experience_id: overlay.experienceCode ? experienceByCode.get(overlay.experienceCode) ?? null : null,
+      component_code: overlay.componentCode,
+      component_name: overlay.componentName,
+      description: overlay.description,
+      display_order: overlay.displayOrder,
+      client_id: overlay.clientId,
+      panel_key: overlay.panelKey,
+      is_active: overlay.isActive,
+    });
+    if (inserted.error) throw new Error(`Failed to restore client components: ${inserted.error.message}`);
+  }
+}
+
+async function saveSurfaceTabs(context: Context, surfaceCode: string, rawTabs: unknown) {
+  const tabs = asTabs(rawTabs);
+  const clientId = await activeSurfaceClientId(context);
+  const { data: surfaces, error: surfaceError } = await context.supabase
+    .from('surface_definitions')
+    .select('*')
+    .eq('surface_code', surfaceCode)
+    .eq('is_active', true);
+  if (surfaceError) throw new Error(`Failed to load surface: ${surfaceError.message}`);
+  const surface = scopedSurface((surfaces || []) as SurfaceRow[], clientId);
+  if (!surface) throw new Error(`No surface named ${surfaceCode}.`);
+  const memory = await readComponentMemory(context, surface.id, surface.client_id ?? null);
+
+  const componentDelete = await context.supabase.from('surface_components').delete().eq('surface_id', surface.id);
+  if (componentDelete.error) throw new Error(`Failed to replace tabs: ${componentDelete.error.message}`);
+  const slotDelete = await context.supabase.from('surface_page_slots').delete().eq('surface_id', surface.id);
+  if (slotDelete.error) throw new Error(`Failed to replace tabs: ${slotDelete.error.message}`);
+  const experienceDelete = await context.supabase.from('surface_experiences').delete().eq('surface_id', surface.id);
+  if (experienceDelete.error) throw new Error(`Failed to replace rules: ${experienceDelete.error.message}`);
+
+  const baseline = await context.supabase
+    .from('surface_experiences')
+    .insert({
+      surface_id: surface.id,
+      experience_code: 'BASELINE',
+      experience_name: 'Baseline',
+      description: 'On every record.',
+      is_baseline: true,
+      qualification_priority: 100,
+      display_order: 1,
+      applicability_rules: { logic: 'AND', conditions: [] },
+    })
+    .select('id')
+    .single();
+  if (baseline.error || !baseline.data) throw new Error(`Failed to save the baseline: ${baseline.error?.message}`);
+
+  const usedSlots = new Set<string>();
+  const usedExperiences = new Set<string>(['BASELINE']);
+
+  for (const [index, tab] of tabs.entries()) {
+    const name = (tab.name || '').trim() || `Tab ${index + 1}`;
+    const slotCode = slotCodeFor(tab.slotCode, name, usedSlots);
+    const appearance = tab.appearance === 'when' ? 'when_qualified' : 'always';
+    const layouts = Array.isArray(tab.layouts) && tab.layouts.length > 0
+      ? tab.layouts
+      : [{ name, mode: 'everyone', logic: 'AND', conditions: [], recordNames: [] }];
+
+    let gateId: string | null = null;
+    if (appearance === 'when_qualified') {
+      const gateCode = slotCodeFor(`GATE_${slotCode}`, name, usedExperiences);
+      const gate = await context.supabase
+        .from('surface_experiences')
+        .insert({
+          surface_id: surface.id,
+          experience_code: gateCode,
+          experience_name: name,
+          description: 'Decides whether this tab is open.',
+          is_baseline: false,
+          qualification_priority: 10,
+          display_order: index + 2,
+          applicability_rules: { logic: ruleLogic(tab.logic), conditions: ruleConditions(tab.conditions) },
+        })
+        .select('id')
+        .single();
+      if (gate.error || !gate.data) throw new Error(`Failed to save the rule for ${name}: ${gate.error?.message}`);
+      gateId = gate.data.id;
+    }
+
+    const slot = await context.supabase
+      .from('surface_page_slots')
+      .insert({
+        surface_id: surface.id,
+        slot_code: slotCode,
+        slot_name: name,
+        description: appearance === 'when_qualified' ? 'Only when the rule qualifies.' : 'On every record.',
+        display_order: index + 1,
+        optionality: appearance,
+      })
+      .select('id')
+      .single();
+    if (slot.error || !slot.data) throw new Error(`Failed to save ${name}: ${slot.error?.message}`);
+
+    for (const [layoutIndex, layout] of layouts.entries()) {
+      const layoutName = (layout.name || '').trim() || name;
+      const mode = layout.mode === 'records' || layout.mode === 'rule' ? layout.mode : 'everyone';
+      const recordNames = (layout.recordNames || []).map((record) => String(record)).filter(Boolean);
+      const conditions = mode === 'records'
+        ? recordNames.map((record) => ({ attributeCode: 'ENTITY_NAME', operator: 'equals' as const, value: record }))
+        : mode === 'rule' ? ruleConditions(layout.conditions) : [];
+      let experienceId: string | null = gateId;
+      if (conditions.length > 0) {
+        const experienceCode = slotCodeFor(`LAYOUT_${slotCode}_${layoutIndex + 1}`, layoutName, usedExperiences);
+        const experience = await context.supabase
+          .from('surface_experiences')
+          .insert({
+            surface_id: surface.id,
+            experience_code: experienceCode,
+            experience_name: layoutName,
+            description: 'Decides which layout fills this tab.',
+            is_baseline: false,
+            qualification_priority: 10,
+            display_order: 100 + index * 10 + layoutIndex,
+            applicability_rules: { logic: mode === 'records' ? 'OR' : ruleLogic(layout.logic), conditions },
+          })
+          .select('id')
+          .single();
+        if (experience.error || !experience.data) throw new Error(`Failed to save the layout for ${name}: ${experience.error?.message}`);
+        experienceId = experience.data.id;
+      }
+
+      const variantCode = layouts.length === 1 ? slotCode : `${slotCode}_${layoutIndex + 1}`;
+      const variant = await context.supabase
+        .from('surface_page_variants')
+        .insert({
+          slot_id: slot.data.id,
+          variant_code: variantCode,
+          variant_name: layoutName,
+          description: layoutName,
+          qualification_priority: mode === 'everyone' ? 100 : 10 + layoutIndex,
+        })
+        .select('id')
+        .single();
+      if (variant.error || !variant.data) throw new Error(`Failed to save the layout for ${name}: ${variant.error?.message}`);
+
+      const required = [gateId, conditions.length > 0 ? experienceId : null].filter((id): id is string => Boolean(id));
+      if (appearance === 'when_qualified' && gateId && !required.includes(gateId)) required.unshift(gateId);
+      const uniqueRequired = [...new Set(required)];
+      if (uniqueRequired.length > 0) {
+        const requirement = await context.supabase.from('surface_variant_requirements').insert(
+          uniqueRequired.map((experience) => ({ variant_id: variant.data.id, experience_id: experience })),
+        );
+        if (requirement.error) throw new Error(`Failed to save the rule for ${name}: ${requirement.error.message}`);
+      }
+
+      const componentCode = layouts.length === 1 ? slotCode : `${slotCode}_${layoutIndex + 1}`;
+      const component = await context.supabase.from('surface_components').insert({
+        surface_id: surface.id,
+        slot_id: slot.data.id,
+        variant_id: variant.data.id,
+        experience_id: experienceId || baseline.data.id,
+        component_code: componentCode,
+        component_name: layoutName,
+        description: layoutName,
+        display_order: layoutIndex + 1,
+        client_id: surface.client_id ?? null,
+        panel_key: memory.panelByCode.get(componentCode) ?? memory.panelByCode.get(slotCode) ?? null,
+      });
+      if (component.error) throw new Error(`Failed to save the contents of ${name}: ${component.error.message}`);
+    }
+  }
+
+  await restoreOverlays(context, surface.id, memory.overlays);
+}
+
 export const surfaceResolvers = {
   Query: {
     surfaces: async (_: unknown, __: unknown, context: Context) => {
+      const clientId = await activeSurfaceClientId(context);
       const { data, error } = await context.supabase
         .from('surface_definitions')
         .select('*')
         .eq('is_active', true)
         .order('surface_name');
       if (error) throw new Error(`Failed to list surfaces: ${error.message}`);
-      return (data || []).map(mapSurface);
+      return preferClientScope(
+        ((data || []) as SurfaceRow[]).map((row) => ({
+          ...row,
+          code: row.surface_code,
+          clientId: row.client_id ?? null,
+        })),
+        clientId,
+      ).map(mapSurface);
     },
 
     surfaceCatalog: async (_: unknown, args: { surfaceCode: string }, context: Context) => {
@@ -454,6 +836,8 @@ export const surfaceResolvers = {
           variantCode: component.variant_id ? variantCodeById.get(component.variant_id) ?? null : null,
           experienceCode: component.experience_id ? experienceCodeById.get(component.experience_id) ?? null : null,
           displayOrder: component.display_order,
+          clientId: component.client_id ?? null,
+          panelKey: component.panel_key ?? null,
         })),
         sampleProfiles: catalog.profiles.map((profile) => ({
           id: profile.id,
@@ -479,22 +863,39 @@ export const surfaceResolvers = {
     ) => {
       const entity = await loadEntityFacts(context, args.entityId, args.entityCode);
       if (!entity) return null;
-      const { data: surface, error } = await context.supabase
+      const clientId = await activeSurfaceClientId(context);
+      const { data: surfaces, error } = await context.supabase
         .from('surface_definitions')
-        .select('surface_code')
+        .select('surface_code, client_id')
         .eq('domain_code', entity.domainCode)
         .eq('is_active', true)
         .eq('is_primary', true)
-        .order('surface_code')
-        .limit(1)
-        .maybeSingle();
+        .order('surface_code');
       if (error) throw new Error(`Failed to find surface: ${error.message}`);
+      const surface = preferClientScope(
+        (surfaces || []).map((row: { surface_code: string; client_id: string | null }) => ({
+          code: row.surface_code,
+          clientId: row.client_id ?? null,
+        })),
+        clientId,
+      )[0];
       if (!surface) return null;
       return resolveForSurface(context, {
-        surfaceCode: surface.surface_code,
+        surfaceCode: surface.code,
         entityId: args.entityId,
         entityCode: args.entityId ? null : args.entityCode,
       });
+    },
+  },
+
+  Mutation: {
+    saveSurfaceCatalog: async (
+      _: unknown,
+      args: { surfaceCode: string; tabs: unknown },
+      context: Context,
+    ) => {
+      await saveSurfaceTabs(context, args.surfaceCode, args.tabs);
+      return surfaceResolvers.Query.surfaceCatalog(_, { surfaceCode: args.surfaceCode }, context);
     },
   },
 };

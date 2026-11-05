@@ -16,6 +16,15 @@ export const graphqlClient = new Client({
   },
 });
 
+function unwrapGraphqlError(error: any) {
+  if (!error) return error;
+  const original = error?.graphQLErrors?.[0]?.extensions?.originalError?.message;
+  if (typeof original === 'string' && original.length > 0) {
+    return Object.assign(error, { message: original });
+  }
+  return error;
+}
+
 export async function graphqlQuery<TData, TVariables extends Record<string, any>>(
   query: string,
   variables?: TVariables,
@@ -34,7 +43,7 @@ export async function graphqlQuery<TData, TVariables extends Record<string, any>
       },
     }).toPromise();
     if (signal?.aborted) return { aborted: true };
-    return { data: result.data as TData, error: result.error };
+    return { data: result.data as TData, error: unwrapGraphqlError(result.error) };
   } catch (error) {
     if (signal?.aborted) return { aborted: true };
     const message = error instanceof Error ? error.message : 'The request failed.';
@@ -47,7 +56,7 @@ export async function graphqlMutation<TData, TVariables extends Record<string, a
   variables?: TVariables
 ): Promise<{ data?: TData; error?: any }> {
   const result = await graphqlClient.mutation(mutation, variables).toPromise();
-  return { data: result.data as TData, error: result.error };
+  return { data: result.data as TData, error: unwrapGraphqlError(result.error) };
 }
 
 // Strips the display-only fields (entityCode/entityName/domainCode/relationshipName)
@@ -691,6 +700,42 @@ export const DOMAIN_TYPES_QUERY = `
   }
 `;
 
+export const DOMAIN_CATALOG_QUERY = `
+  query DomainCatalog {
+    domainGroups {
+      id
+      groupCode
+      groupName
+      description
+      color
+      displayOrder
+    }
+    domainTypes {
+      id
+      domainCode
+      domainName
+      description
+      isActive
+      clientId
+      clientName
+      isCore
+      displayOrder
+      parentDomainCode
+      ownedAttributeCount
+      sharedAttributeCount
+      templateCount
+      group {
+        id
+        groupCode
+        groupName
+        description
+        color
+        displayOrder
+      }
+    }
+  }
+`;
+
 export const CREATE_ENTITY_IDENTIFIER_MUTATION = `
   mutation CreateEntityIdentifier($input: CreateEntityIdentifierInput!) {
     createEntityIdentifier(input: $input) {
@@ -815,6 +860,26 @@ export const DELETE_ATTRIBUTE_MUTATION = `
   mutation DeleteAttribute($id: ID!) {
     deleteAttribute(id: $id) {
       success
+      errors {
+        field
+        message
+        code
+      }
+    }
+  }
+`;
+
+export const CREATE_DOMAIN_GROUP_MUTATION = `
+  mutation CreateDomainGroup($input: CreateDomainGroupInput!) {
+    createDomainGroup(input: $input) {
+      group {
+        id
+        groupCode
+        groupName
+        description
+        color
+        displayOrder
+      }
       errors {
         field
         message
@@ -1952,6 +2017,8 @@ const COMPLIANCE_CONDITION_FIELDS = `
   value
   compareAttributeCode
   compareDimension { ${COMPLIANCE_DIMENSION_FIELDS} }
+  leftExpression
+  rightExpression
   logicOperator
 `;
 

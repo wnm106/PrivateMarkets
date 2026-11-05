@@ -11,6 +11,7 @@ import { DisplayLayoutView, type ResolvedLayoutView } from './DisplayLayoutView'
 import { EntityReports } from '@/components/reporting/EntityReports';
 import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard';
 import { domainHref } from '@/lib/domain-routes';
+import { ParentEntities } from './ParentEntities';
 import { groupForDisplay, type AttributeSectionOrder } from '@/lib/attribute-layout';
 
 export interface TemplateAttribute {
@@ -72,7 +73,7 @@ function formulaLabel(formula: string | null | undefined): string {
 function formatFormula(expr: any): string {
   if (expr == null) return '';
   if (typeof expr === 'string' || typeof expr === 'number') return String(expr);
-  if (typeof expr.ref === 'string') return expr.ref.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
+  if (typeof expr.ref === 'string') return expr.ref.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (letter: string) => letter.toUpperCase());
   if (typeof expr.attributeCode === 'string') return expr.attributeCode;
   if (typeof expr.op === 'string' && Array.isArray(expr.args)) {
     const op = FORMULA_OPS[expr.op] || expr.op;
@@ -251,6 +252,7 @@ export function GoldenRecordSections({
 
   return (
     <div>
+      <ParentEntities domainCode={entity.domainCode} parents={parentRelationships} children={childRelationships} />
       <div style={{ display: 'flex', gap: '4px', borderBottom: '2px solid var(--line)', marginBottom: '16px' }}>
         <SectionTab
           label={`Attributes (${displayEntries.length})`}

@@ -12,7 +12,7 @@ Wrap the view in `da`.
 
 ## Page
 
-1. `da-crumbs` — trail, slash separators, current name in `strong`.
+1. One trail, in the application top bar. A deal, fund, or pipeline surface calls `useSurfaceNav` with the path inside that surface (Pipeline / Direct Lending / Project Brightwater). The top bar shows that path instead of the entity URL. Do not also render `da-crumbs` on those surfaces.
 2. `da-ribbon` — one identity band:
    - `da-title`: `da-chip` for the stage, serif `h1`, one sentence, optional `da-track` for a sequence.
    - `da-facts`: labeled facts. One `da-fact big` holds the headline number. The label is muted; the value is weight 500.
@@ -25,6 +25,7 @@ Wrap the view in `da`.
 - Peer objects are `da-cards` / `da-card`. Color is a 3px top edge. One serif figure per card (`da-size`).
 - A composition is `da-stack` of `da-seg`, with `da-axis` labeling the ends.
 - A working table is `da-grid` inside `da-gridwrap`. A cell is a value plus a muted `small`. Numbers are right-aligned (`num`). The selected row is `sel`.
+- Statement rows stay white (`#ffffff`) with hairline borders and slate type (`#1e293b`) in Inter or the system sans. The header is about 48px: `$ millions`, LTM, and the quarter labels are 14px and bold; the caption under each period is 12px and regular. Data rows are about 36–40px at 13px. The LTM column is `sum` (14px, bold). Detail lines under a group are `indent` (about 20px). A group label is `band`. A subtotal is `sub` (`#f6f7f9`, bold, flush). An intermediate total is `total` (the same shade, bold, outlined). A closing total is `net` (`#deecf7`, bold). Ratio rows are `ratio` and italic. On a wide statement, add `da-roll` so the first column sticks and every statement shares the same column widths.
 - The selection’s detail is `da-panel` beside the grid (`da-main`). Lead with `da-big`, then `da-mini` or a plain table, then `da-rule` rows.
 - Status is `da-st`: `ok`, `near`, `bind`, `breach`, `na`. A gauge is `da-gauge` with the same suffix.
 - Actions use `btn`. One `btn btn-primary` completes the screen.

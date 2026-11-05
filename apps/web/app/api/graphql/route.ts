@@ -12,6 +12,7 @@ const yoga = createYoga({
   schema,
   graphqlEndpoint: '/api/graphql',
   landingPage: false,
+  maskedErrors: false,
   cors: {
     origin: '*',
     credentials: true,

@@ -102,3 +102,51 @@ describe('matchPopulationEntity', () => {
     expect(matchPopulationEntity('pos1', [], resolve, read).match).toBe(true);
   });
 });
+
+describe('expression operands', () => {
+  const noPath = () => [] as string[];
+  const read = (values: Record<string, string>) => (_id: string, code: string) => values[code] ?? null;
+
+  it('compares an arithmetic left side with a field on the right', () => {
+    const cond: PopulationCondition = {
+      attributeCode: '__EXPR__',
+      operator: 'gt',
+      leftExpression: { op: 'mul', args: [{ ref: 'COST' }, { const: 2 }] },
+      compareAttributeCode: 'MARKET_VALUE',
+    };
+    expect(matchPopulationEntity('e1', [cond], noPath, read({ COST: '60', MARKET_VALUE: '100' })).match).toBe(true);
+    expect(matchPopulationEntity('e1', [cond], noPath, read({ COST: '40', MARKET_VALUE: '100' })).match).toBe(false);
+  });
+
+  it('evaluates an expression on the right against a plain field', () => {
+    const cond: PopulationCondition = {
+      attributeCode: 'EXPOSURE',
+      operator: 'lte',
+      rightExpression: { op: 'mul', args: [{ ref: 'NAV' }, { const: 0.1 }] },
+    };
+    expect(matchPopulationEntity('e1', [cond], noPath, read({ EXPOSURE: '9', NAV: '100' })).match).toBe(true);
+    expect(matchPopulationEntity('e1', [cond], noPath, read({ EXPOSURE: '11', NAV: '100' })).match).toBe(false);
+  });
+
+  it('reads related-entity refs through the path', () => {
+    const cond: PopulationCondition = {
+      attributeCode: '__EXPR__',
+      operator: 'equals',
+      leftExpression: { fn: 'UPPER', args: [{ ref: 'UP:POSITION_SECURITY\u001fCOUNTRY' }] },
+      value: 'US',
+    };
+    const targets = () => ['sec1'];
+    const values: Record<string, Record<string, string>> = { sec1: { COUNTRY: 'us' } };
+    expect(matchPopulationEntity('pos1', [cond], targets, (id, code) => values[id]?.[code] ?? null).match).toBe(true);
+  });
+
+  it('treats a divide by zero as no match', () => {
+    const cond: PopulationCondition = {
+      attributeCode: '__EXPR__',
+      operator: 'gt',
+      leftExpression: { op: 'div', args: [{ ref: 'A' }, { ref: 'B' }] },
+      value: '1',
+    };
+    expect(matchPopulationEntity('e1', [cond], noPath, read({ A: '5', B: '0' })).match).toBe(false);
+  });
+});

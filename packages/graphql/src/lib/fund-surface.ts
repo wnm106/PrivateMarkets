@@ -2,9 +2,14 @@
  * Assemble the fund surface from registered entities.
  * Stored facts are the editable inputs. Called capital, TVPI, variances,
  * coverage, and exposure are arithmetic on those facts.
+ * A NAV line is an attribute of the NAV statement. Fund administrator and
+ * internal are two sources of that amount.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import {
+  acceptedLineCodes, FUND_ADMIN_SOURCE, INTERNAL_SOURCE, loadNavLineAttributes, readSourceAmounts, sourceAmount,
+} from './nav-statement-lines';
 
 const CODES = [
   'NAV', 'FUND_CASH_BALANCE', 'FUND_STRATEGY', 'FUND_VINTAGE', 'FUND_REPORTING_DATE',
@@ -15,8 +20,7 @@ const CODES = [
   'INVESTOR_TYPE', 'COMMITMENT_AMOUNT', 'COMMITMENT_STATUS', 'COMMITMENT_PAST_DUE',
   'ACTIVITY_DATE', 'ACTIVITY_KIND', 'ACTIVITY_AMOUNT', 'ACTIVITY_STATUS', 'ACTIVITY_OUTSTANDING', 'ACTIVITY_NOTICE',
   'STATEMENT_PERIOD_END', 'STATEMENT_PERIOD_LABEL', 'STATEMENT_TOLERANCE_PCT', 'STATEMENT_CERTIFIED',
-  'NAV_LINE_STATEMENT', 'NAV_LINE_ROLE', 'NAV_LINE_INDENT', 'NAV_LINE_ORDER',
-  'NAV_LINE_ADMINISTRATOR', 'NAV_LINE_SHADOW', 'NAV_LINE_RESOLVED', 'NAV_LINE_REVIEWABLE', 'NAV_LINE_IN_COMPOSITION',
+  'STATEMENT_ACCEPTED_LINES',
   'PLAN_QUARTER_END', 'PLAN_CALLED_PCT', 'PLAN_NAV', 'PLAN_CALL_AMOUNT', 'PLAN_ORDER',
   'FACILITY_COMMITMENT', 'FACILITY_DRAWN', 'FACILITY_BORROWING_BASE', 'FACILITY_MATURITY',
   'LIMIT_DIMENSION', 'LIMIT_KEY', 'LIMIT_PCT',
@@ -77,10 +81,17 @@ const STATEMENT_TITLES: Record<string, { title: string; period: (label: string) 
   },
 };
 
-type ValueRow = { entity_id: string; attribute_id: string; golden_value: string | null; golden_value_numeric: number | null };
-type Def = { id: string; code: string };
-type EntityRow = { id: string; entity_code: string; entity_name: string };
-type Rel = {
+export type ValueRow = {
+  entity_id: string;
+  attribute_id: string;
+  golden_value: string | null;
+  golden_value_numeric: number | null;
+  valid_from?: string | null;
+  valid_to?: string | null;
+};
+export type Def = { id: string; code: string };
+export type EntityRow = { id: string; entity_code: string; entity_name: string };
+export type Rel = {
   parent_entity_id: string;
   child_entity_id: string;
   valid_from: string | null;
@@ -273,13 +284,13 @@ interface ExposureBar {
   limitId: string | null;
 }
 
-function asOfDate(value: unknown): string {
+export function asOfDate(value: unknown): string {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
   const match = String(value ?? '').match(/\d{4}-\d{2}-\d{2}/);
   return match ? match[0] : new Date().toISOString().slice(0, 10);
 }
 
-function knowledgeInstant(value: unknown): string {
+export function knowledgeInstant(value: unknown): string {
   const text = String(value ?? '').trim();
   const today = new Date().toISOString().slice(0, 10);
   if (!text) return new Date().toISOString();
@@ -290,7 +301,7 @@ function knowledgeInstant(value: unknown): string {
   return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
 }
 
-function inForce(row: Rel, asOf: string, knowledge: string): boolean {
+export function inForce(row: Rel, asOf: string, knowledge: string): boolean {
   const validFrom = String(row.valid_from || '').slice(0, 10);
   const validTo = String(row.valid_to || '9999-12-31').slice(0, 10);
   if (validFrom && validFrom > asOf) return false;
@@ -301,7 +312,7 @@ function inForce(row: Rel, asOf: string, knowledge: string): boolean {
   return systemFrom <= known && systemTo >= known;
 }
 
-function numeric(row: ValueRow | undefined): number | null {
+export function numeric(row: ValueRow | undefined): number | null {
   if (!row) return null;
   if (row.golden_value_numeric != null) return Number(row.golden_value_numeric);
   if (row.golden_value == null || row.golden_value === '') return null;
@@ -309,11 +320,11 @@ function numeric(row: ValueRow | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function text(row: ValueRow | undefined): string {
+export function text(row: ValueRow | undefined): string {
   return row?.golden_value?.trim() || '';
 }
 
-function flag(row: ValueRow | undefined): boolean {
+export function flag(row: ValueRow | undefined): boolean {
   const value = text(row).toLowerCase();
   return value === 'true' || value === 't' || value === '1';
 }
@@ -371,7 +382,7 @@ async function attributeDefs(supabase: SupabaseClient): Promise<Map<string, Def>
   return defs;
 }
 
-async function valuesFor(supabase: SupabaseClient, entityIds: string[], defs: Map<string, Def>, asOf: string, knowledge: string) {
+export async function valuesFor(supabase: SupabaseClient, entityIds: string[], defs: Map<string, Def>, asOf: string, knowledge: string) {
   const out = new Map<string, ValueRow>();
   const attributeIds = [...defs.values()].map((def) => def.id);
   if (!entityIds.length || !attributeIds.length) return out;
@@ -392,12 +403,12 @@ async function valuesFor(supabase: SupabaseClient, entityIds: string[], defs: Ma
   return out;
 }
 
-function read(values: Map<string, ValueRow>, entityId: string, def: Def | undefined): ValueRow | undefined {
+export function read(values: Map<string, ValueRow>, entityId: string, def: Def | undefined): ValueRow | undefined {
   if (!def) return undefined;
   return values.get(`${entityId}|${def.id}`);
 }
 
-async function links(
+export async function links(
   supabase: SupabaseClient,
   code: string,
   column: 'parent_entity_id' | 'child_entity_id',
@@ -415,7 +426,7 @@ async function links(
   return ((data || []) as Rel[]).filter((row) => inForce(row, asOf, knowledge));
 }
 
-async function loadEntities(supabase: SupabaseClient, ids: string[]): Promise<EntityRow[]> {
+export async function loadEntities(supabase: SupabaseClient, ids: string[]): Promise<EntityRow[]> {
   if (!ids.length) return [];
   const { data, error } = await supabase.from('master_entities').select('id, entity_code, entity_name').in('id', ids);
   if (error) throw new Error(error.message);
@@ -458,10 +469,6 @@ export async function loadFundSurface(
   const limitIds = limitRels.map((row) => row.parent_entity_id);
   const positionIds = positionRels.map((row) => row.parent_entity_id);
 
-  const lineRels = await links(supabase, 'LINE_STATEMENT', 'child_entity_id', statementIds, asOf, knowledge);
-  const lineIds = lineRels.map((row) => row.parent_entity_id);
-  const statementOfLine = new Map(lineRels.map((row) => [row.parent_entity_id, row.child_entity_id]));
-
   const investorRels = await links(supabase, 'COMMITMENT_INVESTOR', 'parent_entity_id', commitmentIds, asOf, knowledge);
   const investorOf = new Map(investorRels.map((row) => [row.parent_entity_id, row.child_entity_id]));
   const investorIds = [...new Set(investorRels.map((row) => row.child_entity_id))];
@@ -475,14 +482,14 @@ export async function loadFundSurface(
 
   const rows = await loadEntities(supabase, [
     ...commitmentIds, ...activityIds, ...statementIds, ...planIds, ...facilityIds,
-    ...forecastIds, ...limitIds, ...positionIds, ...lineIds, ...investorIds, ...issuerIds,
+    ...forecastIds, ...limitIds, ...positionIds, ...investorIds, ...issuerIds,
   ]);
   const named = new Map(rows.map((row) => [row.id, row]));
 
   const defs = await attributeDefs(supabase);
   const values = await valuesFor(supabase, [
     fund.id, ...commitmentIds, ...activityIds, ...statementIds, ...planIds, ...facilityIds,
-    ...forecastIds, ...limitIds, ...positionIds, ...lineIds, ...investorIds, ...issuerIds,
+    ...forecastIds, ...limitIds, ...positionIds, ...investorIds, ...issuerIds,
   ], defs, asOf, knowledge);
   const def = (code: string) => defs.get(code);
   const n = (id: string, code: string) => numeric(read(values, id, def(code)));
@@ -722,33 +729,40 @@ export async function loadFundSurface(
   const tolerancePct = statement?.tolerance ?? 0.5;
   const periodLabel = statement?.label || reportingDate;
 
-  const lines = lineIds
-    .filter((id) => statement != null && statementOfLine.get(id) === statement.id)
-    .map((id) => {
-      const administrator = n(id, 'NAV_LINE_ADMINISTRATOR');
-      const shadow = n(id, 'NAV_LINE_SHADOW');
-      const statementCode = t(id, 'NAV_LINE_STATEMENT');
-      const reviewable = b(id, 'NAV_LINE_REVIEWABLE');
-      const variance = administrator != null && shadow != null ? administrator - shadow : null;
-      const variancePct = variance != null && shadow != null && Math.abs(shadow) > 1 ? Math.abs(variance / shadow) * 100 : null;
-      return {
-        id,
-        label: named.get(id)?.entity_name || '',
-        role: t(id, 'NAV_LINE_ROLE') || 'LINE',
-        indent: num(n(id, 'NAV_LINE_INDENT')),
-        administrator,
-        shadow,
-        variance,
-        variancePct,
-        status: lineStatus(administrator, shadow, b(id, 'NAV_LINE_RESOLVED'), reviewable, tolerancePct),
-        reviewable,
-        statement: statementCode,
-        signed: administrator == null ? null : administrator * (statementCode === 'BS_LIABILITY' ? -1 : 1),
-        order: num(n(id, 'NAV_LINE_ORDER')),
-        composition: b(id, 'NAV_LINE_IN_COMPOSITION'),
-      };
-    })
-    .sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+  const lineAttributes = statement ? await loadNavLineAttributes(supabase) : [];
+  const lineAmounts = statement
+    ? await readSourceAmounts(
+      supabase,
+      [statement.id],
+      lineAttributes.map((line) => line.attributeId),
+      [FUND_ADMIN_SOURCE, INTERNAL_SOURCE],
+      asOf,
+      knowledge,
+    )
+    : new Map();
+  const accepted = acceptedLineCodes(statement ? t(statement.id, 'STATEMENT_ACCEPTED_LINES') : '');
+  const lines = lineAttributes.map((line) => {
+    const administrator = statement ? sourceAmount(lineAmounts, statement.id, line.attributeId, FUND_ADMIN_SOURCE) : null;
+    const shadow = statement ? sourceAmount(lineAmounts, statement.id, line.attributeId, INTERNAL_SOURCE) : null;
+    const variance = administrator != null && shadow != null ? administrator - shadow : null;
+    const variancePct = variance != null && shadow != null && Math.abs(shadow) > 1 ? Math.abs(variance / shadow) * 100 : null;
+    return {
+      id: line.code,
+      label: line.name,
+      role: line.role,
+      indent: line.indent,
+      administrator,
+      shadow,
+      variance,
+      variancePct,
+      status: lineStatus(administrator, shadow, accepted.has(line.code), line.reviewable, tolerancePct),
+      reviewable: line.reviewable,
+      statement: line.section,
+      signed: administrator == null ? null : administrator * (line.section === 'BS_LIABILITY' ? -1 : 1),
+      order: line.order,
+      composition: line.composition,
+    };
+  });
 
   const marks = live.map((position) => ({
     id: position.id,

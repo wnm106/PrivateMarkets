@@ -4,19 +4,14 @@ function tenancy(context: Context) {
   return (context.supabaseAdmin ?? context.supabase).schema('tenancy');
 }
 
-/**
- * Decide which client owns a new schema row or entity.
- * A tenant admin who is not simulating a client may leave schema rows global.
- * Entity records always belong to a client.
- */
-export async function resolveSchemaClientId(
-  context: Context,
-  requested: string | null | undefined,
-  options: { required: boolean }
-): Promise<string | null> {
-  if (!context.user?.id) {
-    throw new Error('Not authenticated');
-  }
+interface CallerClients {
+  isTenantAdmin: boolean;
+  impersonatingId: string | null;
+  memberIds: string[];
+}
+
+async function readCallerClients(context: Context): Promise<CallerClients | null> {
+  if (!context.user?.id) return null;
 
   const userId = context.user.id;
   const db = tenancy(context);
@@ -40,9 +35,36 @@ export async function resolveSchemaClientId(
   if (impersonationError) throw impersonationError;
   if (membershipError) throw membershipError;
 
-  const isTenantAdmin = profile?.is_tenant_admin === true;
-  const impersonatingId: string | null = impersonation?.client_id ?? null;
-  const memberIds = (memberships || []).map((row: { client_id: string }) => row.client_id);
+  return {
+    isTenantAdmin: profile?.is_tenant_admin === true,
+    impersonatingId: impersonation?.client_id ?? null,
+    memberIds: (memberships || []).map((row: { client_id: string }) => row.client_id),
+  };
+}
+
+/** The client whose surface overlays the global catalog. Null means use the global rows. */
+export async function activeSurfaceClientId(context: Context): Promise<string | null> {
+  const caller = await readCallerClients(context);
+  if (!caller) return null;
+  if (caller.impersonatingId) return caller.impersonatingId;
+  if (caller.memberIds.length === 1) return caller.memberIds[0];
+  return null;
+}
+
+/**
+ * Decide which client owns a new schema row or entity.
+ * A tenant admin who is not simulating a client may leave schema rows global.
+ * Entity records always belong to a client.
+ */
+export async function resolveSchemaClientId(
+  context: Context,
+  requested: string | null | undefined,
+  options: { required: boolean }
+): Promise<string | null> {
+  const caller = await readCallerClients(context);
+  if (!caller) throw new Error('Not authenticated');
+
+  const { isTenantAdmin, impersonatingId, memberIds } = caller;
   const requestedId = requested || null;
 
   if (impersonatingId) {

@@ -45,6 +45,7 @@ This directory contains AI rules and documentation for the Cursor AI assistant t
 | `15-auto-evolution.md` | Auto-evolving rules and test cases |
 | `16-buttons.mdc` | Button and in-place field pattern |
 | `17-dashboards.mdc` | Dashboard visual baseline (allocation `da-` pattern) |
+| `autonomous-engineering.mdc` | Autonomous engineering, testing, and regression prevention (always apply) |
 | `99-cursor-integration.md` | How to use these rules with Cursor AI |
 
 ## How Rules Work

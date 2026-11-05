@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { ATTRIBUTE_REGISTER_QUERY, graphqlQuery } from '@/lib/graphql';
+import { TypeaheadSelect } from './TypeaheadSelect';
 
 export interface AttributePathHop {
   relationshipCode: string;
@@ -31,6 +32,7 @@ export interface TreeAttributeOption {
   attributeName: string;
   dataType: string;
   path: AttributePathHop[];
+  domainCode: string;
   groupLabel: string;
   valueKey: string;
 }
@@ -137,6 +139,7 @@ export function useRelationshipAttributes(
           attributeName: attribute.attributeName,
           dataType: attribute.dataType,
           path: group.path,
+          domainCode: group.domainCode,
           groupLabel: group.label,
           valueKey: attributeValueKey(group.path, attribute.attributeCode),
         }));
@@ -176,65 +179,97 @@ export function ComplianceAttributeSelect({
   placeholder?: string;
 }) {
   const { options, loading } = useRelationshipAttributes(rootDomainCode, relationshipTypes, domains);
-  const [query, setQuery] = useState('');
   const selectedKey = attributeCode ? attributeValueKey(path, attributeCode) : '';
-
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return options.filter((option) => {
-      if (option.valueKey === selectedKey) return true;
-      if (!q) return true;
-      return (
-        option.attributeName.toLowerCase().includes(q) ||
-        option.attributeCode.toLowerCase().includes(q) ||
-        option.groupLabel.toLowerCase().includes(q)
-      );
-    });
-  }, [options, query, selectedKey]);
-
-  const groups = useMemo(() => {
-    const order: string[] = [];
-    const byLabel = new Map<string, TreeAttributeOption[]>();
-    for (const option of visible) {
-      if (!byLabel.has(option.groupLabel)) {
-        order.push(option.groupLabel);
-        byLabel.set(option.groupLabel, []);
-      }
-      byLabel.get(option.groupLabel)!.push(option);
-    }
-    return order.map((label) => ({ label, options: byLabel.get(label)! }));
-  }, [visible]);
+  const items = useMemo(
+    () =>
+      options.map((o) => ({
+        value: o.valueKey,
+        label: o.attributeName,
+        selectedLabel: o.path.length ? `${o.groupLabel} · ${o.attributeName}` : o.attributeName,
+        group: o.groupLabel,
+        hint: o.dataType?.toLowerCase(),
+        search: o.attributeCode,
+      })),
+    [options],
+  );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 }}>
-      <input
-        className="text-input"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder={loading ? 'Loading related attributes…' : 'Search position, security, issuer, cash flow…'}
-        style={{ height: '28px', fontSize: '11px' }}
-      />
-      <select
-        className="select"
-        value={selectedKey}
-        onChange={(e) => {
-          const option = options.find((item) => item.valueKey === e.target.value);
-          if (!option) onChange('', []);
-          else onChange(option.attributeCode, option.path);
-        }}
+    <TypeaheadSelect
+      options={items}
+      value={selectedKey}
+      loading={loading}
+      disabled={!rootDomainCode}
+      placeholder={rootDomainCode ? placeholder : 'Choose an entity type first'}
+      onChange={(key) => {
+        const option = options.find((item) => item.valueKey === key);
+        if (!option) onChange('', []);
+        else onChange(option.attributeCode, option.path);
+      }}
+    />
+  );
+}
+
+// Type-ahead over an entity's own attributes and those of every related entity,
+// grouped by entity. Reports the full option (attribute, owning entity, path).
+export function RelatedAttributePicker({
+  label,
+  rootDomainCode,
+  relationshipTypes,
+  domains,
+  isSelected,
+  onSelect,
+  placeholder = 'Select value...',
+  error,
+  clearable,
+  bare,
+  ownerLabel,
+}: {
+  label: string;
+  rootDomainCode: string;
+  relationshipTypes: RelationshipTypeOpt[];
+  domains: DomainOpt[];
+  isSelected: (option: TreeAttributeOption) => boolean;
+  onSelect: (option: TreeAttributeOption | null) => void;
+  placeholder?: string;
+  error?: boolean;
+  clearable?: boolean;
+  /** Sit in a sentence row. The surrounding label names the control. */
+  bare?: boolean;
+  /** Closed box reads "Issuer · Industry" rather than the full path. */
+  ownerLabel?: boolean;
+}) {
+  const { options, loading } = useRelationshipAttributes(rootDomainCode, relationshipTypes, domains);
+  const items = useMemo(
+    () =>
+      options.map((o) => ({
+        value: o.valueKey,
+        label: o.attributeName,
+        selectedLabel: ownerLabel
+          ? `${o.groupLabel.split(' › ').pop() || o.groupLabel} · ${o.attributeName}`
+          : o.path.length
+          ? `${o.groupLabel} · ${o.attributeName}`
+          : o.attributeName,
+        group: o.groupLabel,
+        hint: o.dataType?.toLowerCase(),
+        search: o.attributeCode,
+      })),
+    [options, ownerLabel],
+  );
+  const selected = options.find(isSelected);
+  return (
+    <div className="field">
+      {!bare && <label>{label}</label>}
+      <TypeaheadSelect
+        options={items}
+        value={selected?.valueKey || ''}
+        loading={loading}
         disabled={!rootDomainCode}
-      >
-        <option value="">{rootDomainCode ? placeholder : 'Choose an entity type first'}</option>
-        {groups.map((group) => (
-          <optgroup key={group.label} label={group.label}>
-            {group.options.map((option) => (
-              <option key={option.valueKey} value={option.valueKey}>
-                {option.path.length ? `${option.groupLabel} · ${option.attributeName}` : option.attributeName}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+        placeholder={rootDomainCode ? placeholder : 'Choose an entity type first'}
+        error={error}
+        clearable={clearable}
+        onChange={(key) => onSelect(options.find((o) => o.valueKey === key) || null)}
+      />
+      {error && <span className="field-error">Required</span>}
     </div>
   );
 }

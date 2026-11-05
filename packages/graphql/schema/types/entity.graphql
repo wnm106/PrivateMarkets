@@ -63,6 +63,25 @@ type EntityEdge {
   cursor: String!
 }
 
+enum EntitySearchMatch {
+  NAME
+  PARENT
+  RELATED
+}
+
+"""One entity hit from global search. Parent domains have depth 0."""
+type EntitySearchHit {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  domainName: String!
+  depth: Int!
+  match: EntitySearchMatch!
+  matchedName: String
+  matchedDomainName: String
+}
+
 input EntityFilter {
   domainCode: String
   templateCode: String
@@ -169,6 +188,9 @@ input CreateDomainTypeInput {
   domainName: String!
   description: String
   clientId: ID
+  groupCode: String
+  parentDomainCode: String
+  isCore: Boolean
 }
 
 type CreateDomainTypeResult {
@@ -237,6 +259,25 @@ type UpdateTemplateSourcePreferenceResult {
 scalar JSONObject
 
 # Domain Type Record (distinct from DomainType enum, used for managing domain types)
+type DomainGroup {
+  id: ID!
+  groupCode: String!
+  groupName: String!
+  description: String
+  color: String!
+  displayOrder: Int!
+}
+
+input CreateDomainGroupInput {
+  groupName: String!
+  description: String
+}
+
+type CreateDomainGroupResult {
+  group: DomainGroup
+  errors: [MutationError!]!
+}
+
 type DomainTypeRecord {
   id: ID!
   domainCode: String!
@@ -247,6 +288,13 @@ type DomainTypeRecord {
   updatedAt: DateTime!
   clientId: ID
   clientName: String
+  isCore: Boolean!
+  displayOrder: Int!
+  parentDomainCode: String
+  group: DomainGroup
+  ownedAttributeCount: Int!
+  sharedAttributeCount: Int!
+  templateCount: Int!
 }
 
 # Active-record count for one entity type. Counted from master entities,
@@ -262,6 +310,10 @@ input UpdateDomainTypeInput {
   domainName: String
   description: String
   isActive: Boolean
+  groupCode: String
+  parentDomainCode: String
+  isCore: Boolean
+  displayOrder: Int
 }
 
 type UpdateDomainTypeResult {

@@ -8,7 +8,7 @@ import {
   graphqlClient,
   graphqlQuery,
   graphqlMutation,
-  DOMAIN_TYPES_QUERY,
+  DOMAIN_CATALOG_QUERY,
   ATTRIBUTE_REGISTER_QUERY,
   DOMAIN_TEMPLATES_QUERY,
   TEMPLATE_PRECEDENCE_CHAIN_QUERY,
@@ -35,17 +35,29 @@ import {
   UPDATE_INTERSECTION_TYPE_MUTATION,
   DELETE_INTERSECTION_TYPE_MUTATION,
   REFERENCE_LISTS_QUERY,
+  ATTRIBUTE_SECTIONS_QUERY,
   UPDATE_TEMPLATE_ATTRIBUTE_MUTATION,
   REORDER_TEMPLATE_ATTRIBUTES_MUTATION,
 } from '@/lib/graphql';
 import { RelationshipTypeForm } from '@/components/forms/RelationshipTypeForm';
 import { SchemaScopeBadge, SchemaScopeField } from '@/components/admin/SchemaScopeField';
+import { GroupField } from '@/components/admin/GroupField';
 import { EntityIdentifierDefinitionForm } from '@/components/forms/EntityIdentifierDefinitionForm';
+import { parentEntityColumns } from '@/lib/parent-entities';
 import { TemplateAttributePicker, type PickerAttribute } from '@/components/forms/TemplateAttributePicker';
 import { EntityAttributeGrid } from '@/components/admin/EntityAttributeGrid';
 import { AttributeSectionsPanel } from '@/components/admin/AttributeSectionsPanel';
 
 type TabType = 'attributes' | 'sections' | 'templates' | 'relationships' | 'identifiers' | 'intersections';
+
+interface DomainGroup {
+  id: string;
+  groupCode: string;
+  groupName: string;
+  description?: string | null;
+  color: string;
+  displayOrder: number;
+}
 
 interface DomainType {
   id: string;
@@ -55,6 +67,10 @@ interface DomainType {
   isActive: boolean;
   clientId?: string | null;
   clientName?: string | null;
+  isCore?: boolean;
+  displayOrder?: number;
+  parentDomainCode?: string | null;
+  group?: DomainGroup | null;
 }
 
 interface Attribute {
@@ -135,6 +151,7 @@ interface RelationshipType {
   relationshipName: string;
   parentDomainCode?: string;
   childDomainCode?: string;
+  cardinality?: string | null;
   description?: string;
   isActive: boolean;
   isRequired?: boolean;
@@ -184,6 +201,7 @@ export default function EntityTypeDetailPage() {
 
   const [domain, setDomain] = useState<DomainType | null>(null);
   const [allDomainTypes, setAllDomainTypes] = useState<DomainType[]>([]);
+  const [catalogGroups, setCatalogGroups] = useState<DomainGroup[]>([]);
   const [attributes, setAttributes] = useState<Attribute[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [relationshipTypes, setRelationshipTypes] = useState<RelationshipType[]>([]);
@@ -315,9 +333,10 @@ export default function EntityTypeDetailPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const domainsResult = await graphqlClient.query(DOMAIN_TYPES_QUERY, {}, { requestPolicy: 'network-only' }).toPromise();
+      const domainsResult = await graphqlClient.query(DOMAIN_CATALOG_QUERY, {}, { requestPolicy: 'network-only' }).toPromise();
       const domains: DomainType[] = domainsResult.data?.domainTypes || [];
       setAllDomainTypes(domains);
+      setCatalogGroups(domainsResult.data?.domainGroups || []);
       const found = domains.find(d => d.domainCode === domainCode) || null;
       setDomain(found);
       setNotFound(!found);
@@ -330,6 +349,12 @@ export default function EntityTypeDetailPage() {
         attributeCount: attrsResult.data?.attributeRegister?.length
       });
       setAttributes(attrsResult.data?.attributeRegister || []);
+
+      const sectionsResult = await graphqlClient.query(ATTRIBUTE_SECTIONS_QUERY, { domainCode }, { requestPolicy: 'network-only' }).toPromise();
+      if (sectionsResult.error) {
+        console.error('[EntityDetailPage] Sections query failed:', sectionsResult.error.message);
+      }
+      setSectionCount(sectionsResult.data?.attributeSections?.length || 0);
 
       const templatesResult = await graphqlClient
         .query(DOMAIN_TEMPLATES_QUERY, { domainCode }, { requestPolicy: 'network-only' })
@@ -782,6 +807,8 @@ export default function EntityTypeDetailPage() {
   const scopedRelationshipTypes = relationshipTypes.filter(
     rel => rel.parentDomainCode === domain.domainCode || rel.childDomainCode === domain.domainCode
   );
+  const parentNames = Object.fromEntries(allDomainTypes.map((item) => [item.domainCode, item.domainName]));
+  const parentTypes = parentEntityColumns(domain.domainCode, relationshipTypes, parentNames);
 
   // Attributes are now pre-filtered by domain_code from the GraphQL query.
   // Sort: attributes assigned to templates first, then the rest.
@@ -836,6 +863,18 @@ export default function EntityTypeDetailPage() {
             <div className="page-meta">
               {domain.description || 'Manage attributes, templates, relationship types, and identifiers for this entity type'}
             </div>
+            {parentTypes.length > 0 && (
+              <div className="parent-entities">
+                <div className="parent-entities-label">Parents</div>
+                <div className="parent-entities-list">
+                  {parentTypes.map((parent) => (
+                    <Link key={parent.domainCode} href={`/admin/entities/${parent.domainCode}`} className="parent-entity">
+                      <strong>{parent.header}</strong>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
         <div className="page-actions">
@@ -1156,6 +1195,12 @@ export default function EntityTypeDetailPage() {
       {showEditModal && (
         <EditDomainModal
           domain={domain}
+          domains={allDomainTypes}
+          groups={catalogGroups}
+          onGroupCreated={(group) => setCatalogGroups((current) =>
+            [...current.filter((item) => item.groupCode !== group.groupCode), group]
+              .sort((a, b) => a.displayOrder - b.displayOrder)
+          )}
           error={actionError}
           onClose={() => {
             setShowEditModal(false);
@@ -1411,26 +1456,77 @@ function ModalOverlay({ children, onClose }: { children: React.ReactNode; onClos
 }
 
 // Edit Domain Modal
+function descendantCodes(code: string, types: DomainType[]) {
+  const children = new Map<string, string[]>();
+  for (const type of types) {
+    if (!type.parentDomainCode) continue;
+    const list = children.get(type.parentDomainCode) || [];
+    list.push(type.domainCode);
+    children.set(type.parentDomainCode, list);
+  }
+  const out = new Set<string>();
+  const stack = [...(children.get(code) || [])];
+  while (stack.length) {
+    const next = stack.pop() as string;
+    if (out.has(next)) continue;
+    out.add(next);
+    stack.push(...(children.get(next) || []));
+  }
+  return out;
+}
+
 function EditDomainModal({
   domain,
+  domains,
+  groups,
+  onGroupCreated,
   error,
   onClose,
   onSubmit,
 }: {
   domain: DomainType;
+  domains: DomainType[];
+  groups: DomainGroup[];
+  onGroupCreated: (group: DomainGroup) => void;
   error?: string | null;
   onClose: () => void;
-  onSubmit: (data: { domainName: string; description: string; isActive: boolean }) => void;
+  onSubmit: (data: {
+    domainName: string;
+    description: string;
+    isActive: boolean;
+    groupCode: string | null;
+    parentDomainCode: string | null;
+    isCore: boolean;
+  }) => void;
 }) {
+  const listed = domain.group && !groups.some((group) => group.groupCode === domain.group?.groupCode)
+    ? [...groups, domain.group]
+    : groups;
+  const blocked = descendantCodes(domain.domainCode, domains);
   const [formData, setFormData] = useState({
     domainName: domain.domainName,
     description: domain.description || '',
     isActive: domain.isActive,
+    groupCode: domain.group?.groupCode || '',
+    parentDomainCode: domain.parentDomainCode || '',
+    isCore: Boolean(domain.isCore),
   });
+  const parents = domains.filter((item) =>
+    item.domainCode !== domain.domainCode
+    && !blocked.has(item.domainCode)
+    && item.group?.groupCode === formData.groupCode
+  );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(formData);
+    onSubmit({
+      domainName: formData.domainName,
+      description: formData.description,
+      isActive: formData.isActive,
+      groupCode: formData.groupCode || null,
+      parentDomainCode: formData.parentDomainCode || null,
+      isCore: formData.isCore,
+    });
   };
 
   return (
@@ -1520,6 +1616,40 @@ function EditDomainModal({
                   rows={3}
                 />
               </div>
+              <GroupField
+                groups={listed}
+                value={formData.groupCode}
+                allowEmpty
+                onChange={(groupCode) => setFormData((prev) => ({
+                  ...prev,
+                  groupCode,
+                  parentDomainCode: '',
+                }))}
+                onCreated={(group) => {
+                  onGroupCreated(group);
+                }}
+              />
+              <div className="field">
+                <label>Show under</label>
+                <select
+                  className="text-input"
+                  value={formData.parentDomainCode}
+                  onChange={(event) => setFormData((prev) => ({ ...prev, parentDomainCode: event.target.value }))}
+                >
+                  <option value="">Top of the group</option>
+                  {parents.map((item) => (
+                    <option key={item.domainCode} value={item.domainCode}>{item.domainName}</option>
+                  ))}
+                </select>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="checkbox"
+                  checked={formData.isCore}
+                  onChange={(event) => setFormData((prev) => ({ ...prev, isCore: event.target.checked }))}
+                />
+                Core entity
+              </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <input
                   type="checkbox"

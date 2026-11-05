@@ -22,7 +22,49 @@ export interface PopulationCondition {
   compareAttributeCode?: string | null;
   attributePath?: RelationshipHopRef[] | null;
   comparePath?: RelationshipHopRef[] | null;
+  /** When set, replaces attributeCode as the left operand. */
+  leftExpression?: Expression | null;
+  /** When set, replaces value / compareAttributeCode as the right operand. */
+  rightExpression?: Expression | null;
   logicOperator?: string | null;
+}
+
+const REF_SEPARATOR = '\u001f';
+
+/**
+ * An expression ref is an attribute code on the tested entity, or
+ * "UP:REL|DOWN:REL2<US>CODE" for an attribute on a related entity.
+ */
+export function parseRefKey(ref: string): { path: RelationshipHopRef[]; code: string } {
+  const at = ref.indexOf(REF_SEPARATOR);
+  if (at < 0) return { path: [], code: ref };
+  const path = ref
+    .slice(0, at)
+    .split('|')
+    .filter(Boolean)
+    .map((hop) => {
+      const [direction, ...rest] = hop.split(':');
+      return { relationshipCode: rest.join(':'), direction: (direction || 'UP').toUpperCase(), recursive: false };
+    })
+    .filter((hop) => hop.relationshipCode);
+  return { path, code: ref.slice(at + 1) };
+}
+
+export function expressionRefs(expr: Expression | null | undefined): string[] {
+  const out = new Set<string>();
+  const walk = (node: any) => {
+    if (!node || typeof node !== 'object') return;
+    if (typeof node.ref === 'string') out.add(node.ref);
+    if (Array.isArray(node.args)) node.args.forEach(walk);
+  };
+  walk(expr);
+  out.delete('CURRENT_DATE');
+  return [...out];
+}
+
+/** Every attribute a condition's expressions read, with the path to reach it. */
+export function conditionExpressionReads(cond: PopulationCondition): Array<{ path: RelationshipHopRef[]; code: string }> {
+  return [...expressionRefs(cond.leftExpression), ...expressionRefs(cond.rightExpression)].map(parseRefKey);
 }
 
 export function hopKey(hop: RelationshipHopRef): string {
@@ -62,7 +104,7 @@ function listValues(raw: string | null): string[] {
   return trimmed.split(',').map((v) => v.trim()).filter((v) => v.length > 0);
 }
 
-import { parseComparisonExpression, resolveComparisonExpression } from './expression-library';
+import { evalExpression, parseComparisonExpression, resolveComparisonExpression, type ExprValue, type Expression } from './expression-library';
 
 function compareOrdered(actual: string, expected: string, operator: 'gt' | 'gte' | 'lt' | 'lte') {
   const date = /^\d{4}-\d{2}-\d{2}/;
@@ -163,6 +205,66 @@ function subjects(
   return ids.length ? ids : [null];
 }
 
+function evalOperand(
+  entityId: string,
+  expr: Expression,
+  resolveTargets: (startId: string, path: RelationshipHopRef[]) => string[],
+  readValue: (entityId: string, attributeCode: string) => string | null,
+  asOf: string,
+): string | null {
+  const vars: Record<string, ExprValue> = { CURRENT_DATE: asOf };
+  for (const ref of expressionRefs(expr)) {
+    const { path, code } = parseRefKey(ref);
+    const ids = path.length ? resolveTargets(entityId, path) : [entityId];
+    const text = ids.length ? readValue(ids[0], code) : null;
+    vars[ref] = text == null || text.trim() === '' ? null : /^-?\d+(\.\d+)?$/.test(text.trim()) ? Number(text) : text;
+  }
+  try {
+    const result = evalExpression(expr, vars);
+    return result == null ? null : String(result);
+  } catch {
+    return null;
+  }
+}
+
+function expressionConditionMatches(
+  entityId: string,
+  cond: PopulationCondition,
+  resolveTargets: (startId: string, path: RelationshipHopRef[]) => string[],
+  readValue: (entityId: string, attributeCode: string) => string | null,
+  asOf: string,
+  values: Record<string, string | null>,
+): boolean {
+  let expected: string | null;
+  if (cond.rightExpression) {
+    expected = evalOperand(entityId, cond.rightExpression, resolveTargets, readValue, asOf);
+  } else if (cond.compareAttributeCode) {
+    const ids = subjects(entityId, cond.comparePath, resolveTargets);
+    const other = ids[0] ?? null;
+    const raw = other ? readValue(other, cond.compareAttributeCode) : null;
+    expected = cond.value?.trim() ? resolveComparisonExpression(cond.value, () => raw, asOf) ?? raw : raw;
+  } else {
+    expected = resolveComparisonExpression((cond.value || '').trim(), () => null, asOf) ?? cond.value ?? null;
+  }
+
+  if (cond.leftExpression) {
+    return evaluateOperator(evalOperand(entityId, cond.leftExpression, resolveTargets, readValue, asOf), cond.operator, expected);
+  }
+  const attributeSubjects = subjects(entityId, cond.attributePath, resolveTargets);
+  const key = conditionValueKey(cond.attributePath, cond.attributeCode);
+  const matched: string[] = [];
+  let ok = false;
+  for (const subject of attributeSubjects) {
+    const actual = subject ? readValue(subject, cond.attributeCode) : null;
+    if (evaluateOperator(actual, cond.operator, expected)) {
+      ok = true;
+      if (actual != null) matched.push(actual);
+    }
+  }
+  values[key] = matched.length ? [...new Set(matched)].join(', ') : attributeSubjects[0] ? readValue(attributeSubjects[0], cond.attributeCode) : null;
+  return ok;
+}
+
 function conditionMatches(
   entityId: string,
   cond: PopulationCondition,
@@ -171,6 +273,9 @@ function conditionMatches(
   values: Record<string, string | null>,
   asOf?: string,
 ): boolean {
+  if (cond.leftExpression || cond.rightExpression) {
+    return expressionConditionMatches(entityId, cond, resolveTargets, readValue, asOf || new Date().toISOString().slice(0, 10), values);
+  }
   const read = (id: string | null, code: string) => (id ? readValue(id, code) : null);
   const attributeSubjects = subjects(entityId, cond.attributePath, resolveTargets);
   const sameCompareTarget = !cond.comparePath?.length || pathKey(cond.comparePath) === pathKey(cond.attributePath);

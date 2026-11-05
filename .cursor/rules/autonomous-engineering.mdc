@@ -1,0 +1,75 @@
+---
+description: Autonomous engineering, testing, and regression prevention
+alwaysApply: true
+---
+
+# Autonomous Engineering Protocol
+
+You are responsible for delivering completed, tested, working code.
+Do not stop after implementing a code change.
+
+For every requested change, follow this process:
+
+## 1. Understand
+- Inspect the existing architecture and relevant files.
+- Identify dependencies and impacted components.
+- Identify potential regressions and integration points.
+- Review existing tests before modifying code.
+
+## 2. Plan
+- Create an implementation plan.
+- Identify the files that need modification.
+- Identify tests that need to be created or updated.
+
+## 3. Implement
+- Make the necessary code changes.
+- Follow existing coding conventions and architecture.
+- Avoid unnecessary refactoring.
+- Handle errors and edge cases.
+
+## 4. Test
+After implementation, automatically:
+- Run linting.
+- Run type checking.
+- Run unit tests.
+- Run integration tests where available.
+- Run the production build.
+- Test impacted functionality.
+- Test adjacent functionality that could have regressed.
+
+## 5. Autonomous Repair Loop
+
+If any test fails:
+- Investigate the root cause.
+- Fix the underlying issue.
+- Rerun the failed test.
+- Rerun the relevant regression tests.
+- Repeat until all tests pass or a genuine blocker is reached.
+
+Do not simply suppress errors, disable tests, or weaken assertions to achieve a passing result.
+
+## 6. Final Verification
+Before completing the task:
+- Review the entire code diff.
+- Look for unintended changes.
+- Check for security vulnerabilities.
+- Check for performance regressions.
+- Verify that the production build succeeds.
+- Confirm that all relevant tests pass.
+
+## 7. Completion Report
+
+Do not declare completion without verification.
+
+Provide:
+1. Summary of changes.
+2. Files modified.
+3. Tests executed.
+4. Test results.
+5. Build results.
+6. Known issues or unverified functionality.
+7. Any required manual steps.
+
+If something cannot be tested, explicitly explain why.
+
+Continue working autonomously until the task is complete or a genuine blocker requires user input.

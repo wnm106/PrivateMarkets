@@ -7,6 +7,13 @@ import { domainHref } from '@/lib/domain-routes';
 import { useTemporalStore } from '@/lib/store';
 import { IcMemo } from './IcMemo';
 import { DealCompliance } from './DealCompliance';
+import { DealSyndicate } from './DealSyndicate';
+import { DealClosing } from './DealClosing';
+import { DealServicing } from './DealServicing';
+import { DealFinancials } from './DealFinancials';
+import { DealPerformance } from './DealPerformance';
+import { DEAL_PANEL_KEYS, mountedPanel, tabReason, useLiveSurface } from '@/components/surfaces/useLiveSurface';
+import { useSurfaceNav } from '@/lib/surface-nav';
 
 const REASONS = [
   ['LIQ', 'Liquidity or reserve constraint'],
@@ -245,7 +252,17 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [edit, setEdit] = useState<{ fundId: string; trancheId: string; amount: string; reason: string; note: string; type: 'override' | 'exclude' } | null>(null);
-  const [tab, setTab] = useState<'capital' | 'memo' | 'compliance'>('capital');
+  const [tab, setTab] = useState<'capital' | 'memo' | 'compliance' | 'syndicate' | 'closing' | 'servicing' | 'financials' | 'performance'>('capital');
+  const live = useLiveSurface('DEAL_PIPELINE', dealId);
+  useEffect(() => {
+    if (live.pages.length === 0) return;
+    const open = live.pages.filter((page) => mountedPanel(page, DEAL_PANEL_KEYS));
+    if (!open.some((page) => mountedPanel(page, DEAL_PANEL_KEYS) === tab)) {
+      const next = open[0];
+      const key = next && mountedPanel(next, DEAL_PANEL_KEYS);
+      if (key) setTab(key as typeof tab);
+    }
+  }, [live.pages, tab]);
 
   const load = useCallback(async (local: { holds: Record<string, number>; adjustments: Adjustment[] } | null) => {
     setLoading(true);
@@ -317,6 +334,17 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   };
 
   const title = preview?.dealName || dealName || 'Allocation';
+  const strategyCode = preview?.strategy || '';
+  const strategyName = STRATEGY_LABEL[strategyCode]
+    || (strategyCode ? strategyCode.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase()) : '');
+  useSurfaceNav([
+    { label: 'Pipeline', href: '/pipeline' },
+    ...(strategyName ? [{
+      label: strategyName,
+      href: strategyCode ? `/pipeline?strategy=${encodeURIComponent(strategyCode)}` : '/pipeline',
+    }] : []),
+    { label: title },
+  ]);
   const tranches = preview?.tranches || [];
   const facility = preview?.facilitySize || 0;
   const blended = facility ? tranches.reduce((total, tranche) => total + tranche.size * (holds[tranche.id] ?? tranche.holdPct), 0) / facility : 0;
@@ -345,15 +373,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
 
   return (
     <div className="da">
-      <div className="da-crumbs">
-        <Link href="/pipeline">Pipeline</Link>
-        <span>/</span>
-        <span>{STRATEGY_LABEL[preview?.strategy || ''] || 'Deal'}</span>
-        <span>/</span>
-        <strong>{title}</strong>
-      </div>
-
-      {(tab === 'capital' || tab === 'compliance') && <header className="da-ribbon">
+      <header className="da-ribbon">
         <div className="da-title">
           <span className="da-chip">{STAGE_LABEL[preview?.stage || ''] || preview?.stage || 'Deal'}</span>
           <h1><Link href={`${domainHref('DEAL')}/${dealId}`}>{title}</Link></h1>
@@ -404,15 +424,35 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
           <div className="da-bar"><i style={{ width: `${facility && preview ? Math.min(100, preview.allocated / preview.targetHold * 100) : 0}%` }} /></div>
           <p>{preview ? `Allocated ${millions(preview.allocated)} of ${millions(preview.targetHold)}` : ''}</p>
         </div>
-      </header>}
+      </header>
 
       <div className="da-tabs" role="tablist">
-        <button type="button" className={tab === 'capital' ? 'on' : ''} onClick={() => setTab('capital')}>Capital structure</button>
-        <button type="button" className={tab === 'memo' ? 'on' : ''} onClick={() => setTab('memo')}>IC memo</button>
-        <button type="button" className={tab === 'compliance' ? 'on' : ''} onClick={() => setTab('compliance')}>Compliance</button>
-        {['Syndicate', 'Funding', 'Closing', 'Servicing'].map((name) => (
-          <button key={name} type="button" disabled title="Not on the ledger yet">{name}</button>
-        ))}
+        {(live.pages.length > 0 ? live.pages : [
+          { slotCode: 'CAPITAL', slotName: 'Capital structure', status: 'RENDERED', decision: '', panelKey: 'capital' },
+          { slotCode: 'MEMO', slotName: 'IC memo', status: 'RENDERED', decision: '', panelKey: 'memo' },
+          { slotCode: 'COMPLIANCE', slotName: 'Compliance', status: 'RENDERED', decision: '', panelKey: 'compliance' },
+          { slotCode: 'SYNDICATE', slotName: 'Syndicate', status: 'RENDERED', decision: '', panelKey: 'syndicate' },
+          { slotCode: 'FUNDING', slotName: 'Funding', status: 'RENDERED', decision: '', panelKey: null },
+          { slotCode: 'CLOSING', slotName: 'Closing', status: 'RENDERED', decision: '', panelKey: 'closing' },
+          { slotCode: 'SERVICING', slotName: 'Servicing', status: 'RENDERED', decision: '', panelKey: 'servicing' },
+          { slotCode: 'FINANCIALS', slotName: 'Financials', status: 'RENDERED', decision: '', panelKey: 'financials' },
+          { slotCode: 'PERFORMANCE', slotName: 'Performance', status: 'RENDERED', decision: '', panelKey: 'performance' },
+        ]).map((page) => {
+          const key = mountedPanel(page, DEAL_PANEL_KEYS);
+          const open = Boolean(key);
+          return (
+            <button
+              key={page.slotCode}
+              type="button"
+              className={tab === key ? 'on' : ''}
+              disabled={!open}
+              title={open ? undefined : tabReason(page, DEAL_PANEL_KEYS)}
+              onClick={() => { if (key) setTab(key as typeof tab); }}
+            >
+              {page.slotName}
+            </button>
+          );
+        })}
       </div>
 
       {error && <div className="xp-error">{error}</div>}
@@ -426,6 +466,49 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
           preview={preview}
           onOpenCapital={() => setTab('capital')}
           onChanged={() => { void load({ holds, adjustments }); }}
+        />
+      )}
+
+      {tab === 'syndicate' && preview && (
+        <DealSyndicate
+          dealId={dealId}
+          stage={preview.stage}
+          tranches={preview.tranches}
+          rows={preview.rows}
+        />
+      )}
+
+      {tab === 'closing' && preview && (
+        <DealClosing
+          dealId={dealId}
+          closeDate={preview.closeDate}
+          onOpenTab={setTab}
+        />
+      )}
+
+      {tab === 'servicing' && preview && (
+        <DealServicing
+          dealId={dealId}
+          stage={preview.stage}
+          closeDate={preview.closeDate}
+          tranches={preview.tranches}
+          rows={preview.rows}
+        />
+      )}
+
+      {tab === 'financials' && preview && (
+        <DealFinancials borrowerId={preview.borrowerId} borrowerName={preview.borrower} />
+      )}
+
+      {tab === 'performance' && preview && (
+        <DealPerformance
+          dealId={dealId}
+          borrowerName={preview.borrower}
+          stage={preview.stage}
+          closeDate={preview.closeDate}
+          oid={preview.oid}
+          tranches={preview.tranches}
+          rows={preview.rows}
         />
       )}
 

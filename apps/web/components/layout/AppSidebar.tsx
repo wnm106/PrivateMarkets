@@ -14,11 +14,17 @@ interface DomainLink {
   name: string;
   href: string;
   count: number;
+  groupName: string;
+  groupOrder: number;
+  displayOrder: number;
+  parentCode: string | null;
+  color: string;
 }
 
 const TOOLS = [
   { href: '/pipeline', label: 'Deal Pipeline', icon: 'layers' },
   { href: '/fund-surface', label: 'Fund surface', icon: 'chart' },
+  { href: '/fund-rec', label: 'Fund reconciliation', icon: 'chart' },
   { href: '/quality', label: 'Data Quality', icon: 'chart' },
   { href: '/merge', label: 'Entity Resolution', icon: 'nodes' },
   { href: '/reconcile', label: 'Reconcile', icon: 'chart' },
@@ -39,6 +45,7 @@ const ADMIN = [
   { href: '/admin/compliance', label: 'Compliance Rules', icon: 'list' },
   { href: '/admin/compliance/funds', label: 'Fund Thresholds', icon: 'chart' },
   { href: '/admin/dashboards', label: 'Dashboards', icon: 'chart' },
+  { href: '/admin/surfaces', label: 'Surface qualification', icon: 'layers' },
   { href: '/admin/experiences', label: 'Record Experiences', icon: 'domains' },
   { href: '/admin/narratives', label: 'Narratives', icon: 'list' },
   { href: '/admin/skills', label: 'Skills', icon: 'list' },
@@ -218,13 +225,27 @@ export function AppSidebar() {
     const [domainsResult, exceptionsResult] = await Promise.all([
       graphqlQuery<
         {
-          domainTypes: Array<{ domainCode: string; domainName: string; isActive: boolean }>;
+          domainTypes: Array<{
+            domainCode: string;
+            domainName: string;
+            isActive: boolean;
+            displayOrder: number;
+            parentDomainCode?: string | null;
+            group?: { groupName: string; color: string; displayOrder: number } | null;
+          }>;
           domainRecordCounts: Array<{ domainCode: string; totalCount: number }>;
         },
         Record<string, never>
       >(
         `query SidebarDomains {
-          domainTypes { domainCode domainName isActive }
+          domainTypes {
+            domainCode
+            domainName
+            isActive
+            displayOrder
+            parentDomainCode
+            group { groupName color displayOrder }
+          }
           domainRecordCounts { domainCode totalCount }
         }`,
         {},
@@ -251,7 +272,13 @@ export function AppSidebar() {
             name: domain.domainName,
             href: domainHref(domain.domainCode),
             count: counts[domain.domainCode] || 0,
+            groupName: domain.group?.groupName || 'Other',
+            groupOrder: domain.group?.displayOrder ?? 9999,
+            displayOrder: domain.displayOrder || 0,
+            parentCode: domain.parentDomainCode || null,
+            color: domain.group?.color || '#6b7280',
           }))
+          .sort((a, b) => a.groupOrder - b.groupOrder || a.displayOrder - b.displayOrder || a.name.localeCompare(b.name))
       );
     }
     if (!exceptionsResult.error && exceptionsResult.data) {
@@ -351,18 +378,24 @@ export function AppSidebar() {
         {!collapsed && openSection === 'domains' && (
           <div className="sidebar-sub">
             {domains.length === 0 && <div className="sidebar-empty">No domains yet</div>}
-            {domains.map((domain) => (
-              <Link
-                key={domain.code}
-                href={domain.href}
-                className={`sidebar-sublink ${navActive(pathname, domain.href) ? 'active' : ''}`}
-                title={domain.name}
-                aria-current={navActive(pathname, domain.href) ? 'page' : undefined}
-              >
-                <span className="sidebar-label">{domain.name}</span>
-                <span className="sidebar-count">{domain.count.toLocaleString()}</span>
-              </Link>
-            ))}
+            {domains.map((domain, index) => {
+              const showGroup = index === 0 || domains[index - 1].groupName !== domain.groupName;
+              return (
+                <div key={domain.code}>
+                  {showGroup && <div className="sidebar-group">{domain.groupName}</div>}
+                  <Link
+                    href={domain.href}
+                    className={`sidebar-sublink ${domain.parentCode ? 'nested' : ''} ${navActive(pathname, domain.href) ? 'active' : ''}`}
+                    title={domain.name}
+                    aria-current={navActive(pathname, domain.href) ? 'page' : undefined}
+                  >
+                    <span className="sidebar-mark" style={{ background: domain.color }} />
+                    <span className="sidebar-label">{domain.name}</span>
+                    <span className="sidebar-count">{domain.count.toLocaleString()}</span>
+                  </Link>
+                </div>
+              );
+            })}
           </div>
         )}
 

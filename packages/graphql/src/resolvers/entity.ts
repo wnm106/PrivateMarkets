@@ -1,5 +1,6 @@
 import { Context } from '../context';
 import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePosition, storedRuleLabel } from '../lib/attribute-sequence';
+import { fetchEntitySearchHits } from '../lib/entity-search';
 import { needsTemporalRead, overlayTemporalAttributes } from '../lib/temporal-attributes';
 import { dirtyAttributeCodes } from './calculation';
 import { resolveSchemaClientId, withClientNames } from './schema-scope';
@@ -12,6 +13,138 @@ function normalizePrecedenceChain(value: unknown): string[] {
 function normalizeChainVersion(value: unknown): number {
   const version = Number(value);
   return Number.isFinite(version) && version > 0 ? Math.trunc(version) : 1;
+}
+
+const DOMAIN_TYPE_COLUMNS =
+  'id, domain_code, domain_name, description, is_active, created_at, updated_at, client_id, group_id, parent_domain_code, is_core, display_order';
+
+type CatalogCounts = {
+  shared: number;
+  owned: Record<string, number>;
+  templates: Record<string, number>;
+};
+
+const catalogCountCache = new WeakMap<object, Promise<CatalogCounts>>();
+
+const GROUP_COLORS = ['#2563eb', '#7c3aed', '#059669', '#c2410c', '#be185d', '#0369a1', '#b45309', '#0f766e'];
+
+function groupCodeFromName(name: string) {
+  const base = name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  return base || 'GROUP';
+}
+
+function mapGroup(row: any) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    groupCode: row.group_code,
+    groupName: row.group_name,
+    description: row.description ?? null,
+    color: row.color,
+    displayOrder: row.display_order ?? 0,
+  };
+}
+
+function mapDomainRow(row: any, group: ReturnType<typeof mapGroup>) {
+  return {
+    id: row.id,
+    domainCode: row.domain_code,
+    domainName: row.domain_name,
+    description: row.description,
+    isActive: row.is_active,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    clientId: row.client_id ?? null,
+    isCore: Boolean(row.is_core),
+    displayOrder: row.display_order ?? 0,
+    parentDomainCode: row.parent_domain_code ?? null,
+    group,
+  };
+}
+
+async function loadCatalogCounts(supabase: Context['supabase']): Promise<CatalogCounts> {
+  const { data, error } = await supabase.rpc('domain_type_catalog_counts');
+  if (error) throw error;
+  const payload = typeof data === 'string' ? JSON.parse(data) : (data || {});
+  return {
+    shared: Number(payload.shared || 0),
+    owned: payload.owned && typeof payload.owned === 'object' ? payload.owned : {},
+    templates: payload.templates && typeof payload.templates === 'object' ? payload.templates : {},
+  };
+}
+
+function catalogCounts(context: Context): Promise<CatalogCounts> {
+  const cached = catalogCountCache.get(context);
+  if (cached) return cached;
+  const pending = loadCatalogCounts(context.supabase);
+  catalogCountCache.set(context, pending);
+  return pending;
+}
+
+async function loadGroups(supabase: Context['supabase']) {
+  const { data, error } = await supabase
+    .from('domain_groups')
+    .select('id, group_code, group_name, description, color, display_order')
+    .order('display_order');
+  if (error) throw error;
+  return data || [];
+}
+
+async function groupIdForCode(supabase: Context['supabase'], groupCode: string | null) {
+  if (!groupCode) return null;
+  const { data, error } = await supabase.from('domain_groups').select('id').eq('group_code', groupCode).maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error(`Unknown entity group ${groupCode}.`);
+  return data.id as string;
+}
+
+async function assertParentPlacement(
+  supabase: Context['supabase'],
+  domainCode: string,
+  parentCode: string | null,
+  groupId: string | null,
+) {
+  if (!parentCode) return;
+  if (parentCode === domainCode) throw new Error('An entity type cannot sit under itself.');
+  const { data: parent, error } = await supabase
+    .from('domain_types')
+    .select('group_id')
+    .eq('domain_code', parentCode)
+    .maybeSingle();
+  if (error) throw error;
+  if (!parent) throw new Error(`Unknown parent entity type ${parentCode}.`);
+  if (!groupId || parent.group_id !== groupId) {
+    throw new Error('Nest an entity type under another type in the same group.');
+  }
+
+  const seen = new Set<string>([domainCode]);
+  let cursor: string | null = parentCode;
+  while (cursor) {
+    if (seen.has(cursor)) throw new Error('That parent would create a loop.');
+    seen.add(cursor);
+    const { data: row, error: walkError } = await supabase
+      .from('domain_types')
+      .select('parent_domain_code')
+      .eq('domain_code', cursor)
+      .maybeSingle();
+    if (walkError) throw walkError;
+    cursor = row?.parent_domain_code ?? null;
+  }
+}
+
+async function nextDisplayOrder(supabase: Context['supabase'], groupId: string | null) {
+  let query = supabase.from('domain_types').select('display_order').order('display_order', { ascending: false }).limit(1);
+  query = groupId ? query.eq('group_id', groupId) : query.is('group_id', null);
+  const { data, error } = await query;
+  if (error) throw error;
+  return Number(data?.[0]?.display_order || 0) + 10;
+}
+
+async function presentDomain(context: Context, row: any) {
+  const groups = await loadGroups(context.supabase);
+  const group = mapGroup(groups.find((item: any) => item.id === row.group_id));
+  const [presented] = await withClientNames(context, [mapDomainRow(row, group)]);
+  return presented;
 }
 
 export const entityResolvers = {
@@ -142,6 +275,12 @@ export const entityResolvers = {
       );
       return entity;
     },
+
+    searchEntities: async (
+      _: any,
+      args: { query: string; limit?: number },
+      context: Context,
+    ) => fetchEntitySearchHits(context.supabase, args.query, args.limit),
     
     // Queries for entity management
     entityIdentifierDefinitions: async (_: any, args: { domainCode?: string }, context: Context) => {
@@ -214,32 +353,28 @@ export const entityResolvers = {
       }));
     },
 
+    domainGroups: async (_: any, __: any, context: Context) => {
+      const groups = await loadGroups(context.supabase);
+      return groups.map(mapGroup);
+    },
+
     domainTypes: async (_: any, __: any, context: Context) => {
-      const { data, error } = await context.supabase
-        .from('domain_types')
-        .select(`
-          id,
-          domain_code,
-          domain_name,
-          description,
-          is_active,
-          created_at,
-          updated_at,
-          client_id
-        `);
+      const [domainsResult, groups] = await Promise.all([
+        context.supabase.from('domain_types').select(DOMAIN_TYPE_COLUMNS),
+        loadGroups(context.supabase),
+      ]);
+      if (domainsResult.error) throw domainsResult.error;
 
-      if (error) throw error;
-
-      const rows = data?.map((item: any) => ({
-        id: item.id,
-        domainCode: item.domain_code,
-        domainName: item.domain_name,
-        description: item.description,
-        isActive: item.is_active,
-        createdAt: item.created_at,
-        updatedAt: item.updated_at,
-        clientId: item.client_id ?? null,
-      })) || [];
+      const byId = new Map(groups.map((group: any) => [group.id, mapGroup(group)]));
+      const rows = (domainsResult.data || []).map((item: any) =>
+        mapDomainRow(item, item.group_id ? byId.get(item.group_id) ?? null : null),
+      );
+      rows.sort((a, b) => {
+        const groupOrder = (a.group?.displayOrder ?? 9999) - (b.group?.displayOrder ?? 9999);
+        if (groupOrder !== 0) return groupOrder;
+        if (a.displayOrder !== b.displayOrder) return a.displayOrder - b.displayOrder;
+        return String(a.domainName).localeCompare(String(b.domainName));
+      });
       return withClientNames(context, rows);
     },
     
@@ -557,19 +692,23 @@ export const entityResolvers = {
               .single();
             
             if (attr) {
-              const raw = value && typeof value === 'object' && 'value' in value
-                ? (value as { value: unknown }).value
-                : value;
+              const boxed = value && typeof value === 'object' && !Array.isArray(value) && 'value' in (value as Record<string, unknown>)
+                ? value as { value: unknown; sourceCode?: unknown }
+                : null;
+              const raw = boxed ? boxed.value : value;
+              const requested = boxed && typeof boxed.sourceCode === 'string' ? boxed.sourceCode.trim().toUpperCase() : '';
+              const sourceCode = /^[A-Z][A-Z0-9_]{0,48}$/.test(requested) ? requested : 'MANUAL';
               const text = typeof raw === 'string' ? raw : typeof raw === 'number' ? String(raw) : null;
               if (!text) continue;
 
               const { data: source, error: sourceError } = await context.supabase
                 .schema('entity_instances')
                 .from('source_registry')
-                .select('id')
-                .eq('source_code', 'MANUAL')
+                .select('id, precedence_rank')
+                .eq('source_code', sourceCode)
                 .single();
-              if (sourceError || !source?.id) throw sourceError || new Error('Manual source is not registered');
+              if (sourceError || !source?.id) throw sourceError || new Error(`Source ${sourceCode} is not registered`);
+              const manual = sourceCode === 'MANUAL';
 
               const numeric = typeof raw === 'number'
                 ? raw
@@ -581,7 +720,7 @@ export const entityResolvers = {
                 ? String(input.asOfDate)
                 : new Date().toISOString().split('T')[0];
 
-              // Replace only the manual source. Other sources stay, and the preference trigger stamps the winner.
+              // Replace only this source. The fund administrator and the internal amount stay beside each other.
               const { error: closeError } = await context.supabase
                 .from('entity_attribute_values')
                 .update({
@@ -604,8 +743,8 @@ export const entityResolvers = {
                 valid_from: asOf,
                 valid_to: '9999-12-31',
                 system_to: '9999-12-31 23:59:59',
-                precedence_rank: 1,
-                is_manual_override: true,
+                precedence_rank: manual ? 1 : (source.precedence_rank ?? 100),
+                is_manual_override: manual,
                 created_by: userId,
               });
               if (insertError) throw insertError;
@@ -1249,11 +1388,53 @@ export const entityResolvers = {
 
 
     // Domain Type mutations
+    createDomainGroup: async (_: any, args: { input: any }, context: Context) => {
+      const { input } = args;
+      try {
+        const name = String(input.groupName || '').trim();
+        if (!name) throw new Error('Enter a group name.');
+        const description = String(input.description || '').trim() || null;
+        const groups = await loadGroups(context.supabase);
+        const taken = new Set(groups.map((group: any) => group.group_code));
+        let code = groupCodeFromName(name);
+        let suffix = 2;
+        while (taken.has(code)) {
+          const tail = `_${suffix++}`;
+          code = `${groupCodeFromName(name).slice(0, 50 - tail.length)}${tail}`;
+        }
+        const used = new Set(groups.map((group: any) => String(group.color || '').toLowerCase()));
+        const color = GROUP_COLORS.find((entry) => !used.has(entry)) || GROUP_COLORS[groups.length % GROUP_COLORS.length];
+        const displayOrder = groups.reduce((max: number, group: any) => Math.max(max, Number(group.display_order) || 0), 0) + 10;
+        const { data, error } = await context.supabase
+          .from('domain_groups')
+          .insert({
+            group_code: code,
+            group_name: name,
+            description,
+            color,
+            display_order: displayOrder,
+          })
+          .select('id, group_code, group_name, description, color, display_order')
+          .single();
+        if (error) throw error;
+        return { group: mapGroup(data), errors: [] };
+      } catch (error: any) {
+        return {
+          group: null,
+          errors: [{ field: 'groupName', message: error.message, code: 'CREATE_FAILED' }],
+        };
+      }
+    },
+
     createDomainType: async (_: any, args: { input: any }, context: Context) => {
       const { input } = args;
 
       try {
         const clientId = await resolveSchemaClientId(context, input.clientId, { required: false });
+        const groupId = input.groupCode ? await groupIdForCode(context.supabase, input.groupCode) : null;
+        const parentCode = input.parentDomainCode || null;
+        await assertParentPlacement(context.supabase, input.domainCode, parentCode, groupId);
+        const displayOrder = await nextDisplayOrder(context.supabase, groupId);
         const { data, error } = await context.supabase
           .from('domain_types')
           .insert({
@@ -1261,23 +1442,18 @@ export const entityResolvers = {
             domain_name: input.domainName,
             description: input.description,
             client_id: clientId,
+            group_id: groupId,
+            parent_domain_code: parentCode,
+            is_core: Boolean(input.isCore),
+            display_order: displayOrder,
           })
-          .select()
+          .select(DOMAIN_TYPE_COLUMNS)
           .single();
 
         if (error) throw error;
 
         return {
-          domainType: {
-            id: data.id,
-            domainCode: data.domain_code,
-            domainName: data.domain_name,
-            description: data.description,
-            isActive: data.is_active,
-            createdAt: data.created_at,
-            updatedAt: data.updated_at,
-            clientId: data.client_id ?? null,
-          },
+          domainType: await presentDomain(context, data),
           errors: [],
         };
       } catch (error: any) {
@@ -1292,33 +1468,47 @@ export const entityResolvers = {
       const { input } = args;
 
       try {
+        const { data: current, error: currentError } = await context.supabase
+          .from('domain_types')
+          .select('domain_code, group_id, parent_domain_code')
+          .eq('id', input.id)
+          .single();
+        if (currentError) throw currentError;
+
         const updateData: Record<string, any> = {
           updated_at: new Date().toISOString(),
         };
         if (input.domainName !== undefined) updateData.domain_name = input.domainName;
         if (input.description !== undefined) updateData.description = input.description;
         if (input.isActive !== undefined) updateData.is_active = input.isActive;
+        if (input.isCore !== undefined) updateData.is_core = input.isCore;
+        if (input.displayOrder !== undefined) updateData.display_order = input.displayOrder;
+
+        let groupId = current.group_id as string | null;
+        if (input.groupCode !== undefined) {
+          groupId = await groupIdForCode(context.supabase, input.groupCode || null);
+          updateData.group_id = groupId;
+        }
+        let parentCode = (current.parent_domain_code as string | null) ?? null;
+        if (input.parentDomainCode !== undefined) {
+          parentCode = input.parentDomainCode || null;
+          updateData.parent_domain_code = parentCode;
+        }
+        if (input.groupCode !== undefined || input.parentDomainCode !== undefined) {
+          await assertParentPlacement(context.supabase, current.domain_code, parentCode, groupId);
+        }
 
         const { data, error } = await context.supabase
           .from('domain_types')
           .update(updateData)
           .eq('id', input.id)
-          .select()
+          .select(DOMAIN_TYPE_COLUMNS)
           .single();
 
         if (error) throw error;
 
         return {
-          domainType: {
-            id: data.id,
-            domainCode: data.domain_code,
-            domainName: data.domain_name,
-            description: data.description,
-            isActive: data.is_active,
-            createdAt: data.created_at,
-            updatedAt: data.updated_at,
-            clientId: data.client_id ?? null,
-          },
+          domainType: await presentDomain(context, data),
           errors: [],
         };
       } catch (error: any) {
@@ -1606,6 +1796,21 @@ export const entityResolvers = {
       }
     },
 
+  },
+
+  DomainTypeRecord: {
+    ownedAttributeCount: async (parent: { domainCode: string }, _: unknown, context: Context) => {
+      const counts = await catalogCounts(context);
+      return Number(counts.owned[parent.domainCode] || 0);
+    },
+    sharedAttributeCount: async (_parent: unknown, _: unknown, context: Context) => {
+      const counts = await catalogCounts(context);
+      return counts.shared;
+    },
+    templateCount: async (parent: { domainCode: string }, _: unknown, context: Context) => {
+      const counts = await catalogCounts(context);
+      return Number(counts.templates[parent.domainCode] || 0);
+    },
   },
 };
 

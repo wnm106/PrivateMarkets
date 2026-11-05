@@ -22,6 +22,10 @@ export interface AttributeInspectTarget {
   /** Value from the grid that opened this drawer. The drawer shows the as-of lineage instead. */
   value?: string;
   domainCode?: string;
+  /** Valid date to open, when the figure was read at a date other than the page as-of. */
+  asOfDate?: string;
+  /** Knowledge cutoff to open, when the figure was read at a cutoff other than the page's. */
+  knowledgeDate?: string;
   onChanged?: () => void;
 }
 
@@ -100,7 +104,7 @@ export function DetailDrawer() {
         </div>
         <div className="detail-drawer-body">
           {view?.kind === 'attribute' && (
-            <AttributeInspectBody key={`${view.target.entityId}:${view.target.attributeCode}`} target={view.target} />
+            <AttributeInspectBody key={`${view.target.entityId}:${view.target.attributeCode}:${view.target.asOfDate || ''}:${view.target.knowledgeDate || ''}`} target={view.target} />
           )}
         </div>
       </div>
@@ -137,8 +141,10 @@ const INSPECT_QUERY = `
 `;
 
 function AttributeInspectBody({ target }: { target: AttributeInspectTarget }) {
-  const asOfDate = useTemporalStore((state) => state.asOfDate);
-  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+  const pageAsOf = useTemporalStore((state) => state.asOfDate);
+  const pageKnowledge = useTemporalStore((state) => state.knowledgeDate);
+  const asOfDate = target.asOfDate || pageAsOf;
+  const knowledgeDate = target.knowledgeDate || pageKnowledge;
   const [field, setField] = useState<FieldData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
