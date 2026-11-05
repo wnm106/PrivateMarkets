@@ -1,6 +1,11 @@
 -- Migration: Seed default sources with colors
 -- Description: Seeds the 7 default sources with their display colors
 
+-- is_protected is also added in 00034. It has to exist here because this seed
+-- and the public view in 00022 both reference it.
+ALTER TABLE entity_instances.source_registry
+    ADD COLUMN IF NOT EXISTS is_protected BOOLEAN DEFAULT FALSE;
+
 -- Insert default sources (only if they don't exist)
 INSERT INTO entity_instances.source_registry (
     source_code, 

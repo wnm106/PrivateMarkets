@@ -1928,6 +1928,8 @@ export const ME_QUERY = `
       email
       displayName
       isTenantAdmin
+      canAccessAdmin
+      canManageEntityAccess
       clients {
         id
         clientCode
@@ -2062,6 +2064,59 @@ export const GRANT_ENTITY_ACCESS_MUTATION = `
 export const REVOKE_ENTITY_ACCESS_MUTATION = `
   mutation RevokeEntityAccess($id: ID!) {
     revokeEntityAccess(id: $id) { success errors { field message code } }
+  }
+`;
+
+export const ENTITY_ACCESS_QUERY = `
+  query EntityAccess($entityId: ID!) {
+    entityAccess(entityId: $entityId) {
+      entityId
+      clientId
+      entityCode
+      entityName
+      domainCode
+      restricted
+      grants {
+        id
+        granteeType
+        roleId
+        userId
+        granteeLabel
+        accessLevel
+        includeChildren
+      }
+    }
+  }
+`;
+
+export const ENTITY_ACCESS_ROSTER_QUERY = `
+  query EntityAccessRoster($clientId: ID!, $search: String) {
+    entityAccessRoster(clientId: $clientId, search: $search) {
+      entityId
+      clientId
+      entityCode
+      entityName
+      domainCode
+      restricted
+      grants {
+        id
+        granteeType
+        roleId
+        userId
+        granteeLabel
+        accessLevel
+        includeChildren
+      }
+    }
+  }
+`;
+
+export const SET_ENTITY_ROLE_ACCESS_MUTATION = `
+  mutation SetEntityRoleAccess($clientId: ID!, $entityId: ID!, $roles: [EntityRoleGrantInput!]!) {
+    setEntityRoleAccess(clientId: $clientId, entityId: $entityId, roles: $roles) {
+      success
+      errors { field message code }
+    }
   }
 `;
 

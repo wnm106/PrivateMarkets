@@ -8,6 +8,7 @@ import { GoldenRecordHeader } from '@/components/detail/GoldenRecordHeader';
 import { GoldenRecordSections, type TemplateAttribute, type LineageData } from '@/components/detail/GoldenRecordSections';
 import { SourceContributionPanel } from '@/components/detail/SourceContributionPanel';
 import { ActiveConflictsPanel } from '@/components/detail/ActiveConflictsPanel';
+import { EntityAccessPanel } from '@/components/security/EntityAccessPanel';
 import { ActivityFeedPanel } from '@/components/detail/ActivityFeedPanel';
 import { sources, type SourceKey } from '@/lib/data';
 import { getDomainConfig } from '@/lib/mock-data';
@@ -193,7 +194,7 @@ export default function PositionDetailPage() {
       <GoldenRecordHeader id={entity.entityCode} name={entity.entityName} type={entity.templateName || entity.domainName || 'Position'} status={entity.isActive ? 'Active' : 'Inactive'} lastReviewed={lastReviewedText} quality={qualityScore} conflicts={conflicts.length} entityPath={`/positions/${id}`} listPath="/positions" listLabel="Positions" accentColor={domainConfig.color} />
       <div className="detail-layout">
         <div><GoldenRecordSections entity={entity} templateAttributes={templateAttributes} lineageData={lineageData} onAddAttribute={handleAddAttribute} onSourceChange={handleSourceChange} onValueChange={handleValueChange} onAddSourceValue={handleAddSourceValue} /></div>
-        <div><SourceContributionPanel sources={sourceContributions} /><ActiveConflictsPanel conflicts={conflicts} entityId={id} /><ActivityFeedPanel activities={activities} /></div>
+        <div><EntityAccessPanel entityId={entity.id} /><SourceContributionPanel sources={sourceContributions} /><ActiveConflictsPanel conflicts={conflicts} entityId={id} /><ActivityFeedPanel activities={activities} /></div>
       </div>
     </div>
   );

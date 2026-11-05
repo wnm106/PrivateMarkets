@@ -229,11 +229,7 @@ export default function LandingPage() {
       <div className="entity-grid">
         {!loading && stats.entities.length === 0 && (
           <div style={{ color: 'var(--ink-3)', fontSize: '13px', padding: '8px 0' }}>
-            No entity domains defined yet.{' '}
-            <Link href="/admin/entities" style={{ color: 'var(--accent)' }}>
-              Create one in Entity Type Management
-            </Link>
-            .
+            No entity domains defined yet. An administrator can add entity types from Admin.
           </div>
         )}
         {stats.entities.map((entity) => {

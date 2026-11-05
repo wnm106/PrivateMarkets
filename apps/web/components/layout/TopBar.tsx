@@ -4,6 +4,7 @@ import { useTemporalStore } from '@/lib/store';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { graphqlClient, ME_QUERY } from '@/lib/graphql';
 import { AsOfDatePicker } from './AsOfDatePicker';
 import { UserMenu } from './UserMenu';
 import { BrandLogo } from './BrandLogo';
@@ -11,7 +12,20 @@ import { BrandLogo } from './BrandLogo';
 export function TopBar() {
   const { persona, setPersona, chatOpen, toggleChat } = useTemporalStore();
   const [showAdminMenu, setShowAdminMenu] = useState(false);
+  const [adminAccess, setAdminAccess] = useState<{ isTenantAdmin: boolean; canAccessAdmin: boolean } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    graphqlClient.query(ME_QUERY, {}, { requestPolicy: 'network-only' }).toPromise().then((result) => {
+      if (cancelled) return;
+      const me = result.data?.me;
+      setAdminAccess(me?.canAccessAdmin ? { isTenantAdmin: !!me.isTenantAdmin, canAccessAdmin: true } : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Close the admin dropdown when clicking outside of it
   const handleClickOutside = useCallback((event: MouseEvent) => {
@@ -78,7 +92,7 @@ export function TopBar() {
           <span className="chat-launcher-label">Chat</span>
         </button>
         <AsOfDatePicker />
-        <div ref={menuRef} style={{ position: 'relative' }}>
+        {adminAccess && <div ref={menuRef} style={{ position: 'relative' }}>
           <button
             className="admin-menu-btn"
             onClick={() => setShowAdminMenu(!showAdminMenu)}
@@ -115,6 +129,7 @@ export function TopBar() {
                 overflow: 'hidden'
               }}
             >
+                {adminAccess.isTenantAdmin && <>
                 <Link href="/admin/entities" onClick={() => setShowAdminMenu(false)}>
                   <div style={{
                     padding: '12px 16px',
@@ -241,6 +256,7 @@ export function TopBar() {
                     Narratives
                   </div>
                 </Link>
+                </>}
                 <Link href="/admin/tenancy" onClick={() => setShowAdminMenu(false)}>
                   <div style={{
                     padding: '12px 16px',
@@ -251,12 +267,12 @@ export function TopBar() {
                   onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-alt)'}
                   onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
-                    Clients, Users &amp; Roles
+                    Security
                   </div>
                 </Link>
               </div>
           )}
-        </div>
+        </div>}
         <div className="status-pill">
           <span className="status-dot"></span>All systems healthy
         </div>
