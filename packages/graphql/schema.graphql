@@ -1744,8 +1744,27 @@ type Me {
   email: String
   displayName: String
   isTenantAdmin: Boolean!
+  # True for tenant admins and for client members who manage users, roles, or entity access.
+  canAccessAdmin: Boolean!
+  # True when the caller may assign which roles can open an entity.
+  canManageEntityAccess: Boolean!
   clients: [Client!]!
   impersonating: ImpersonationSession
+}
+
+type EntityAccessRecord {
+  entityId: ID!
+  clientId: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  restricted: Boolean!
+  grants: [EntityGrant!]!
+}
+
+input EntityRoleGrantInput {
+  roleId: ID!
+  accessLevel: String!
 }
 
 type UpdateProfileResult {
@@ -1992,6 +2011,8 @@ type Query {
   roles(clientId: ID): [Role!]!
   permissionsCatalog: [String!]!
   entityGrants(entityId: ID!): [EntityGrant!]!
+  entityAccess(entityId: ID!): EntityAccessRecord
+  entityAccessRoster(clientId: ID!, search: String): [EntityAccessRecord!]!
   myPermissions(clientId: ID!): [String!]!
 
   # Compliance Rules queries
@@ -2111,6 +2132,7 @@ type Mutation {
   deactivateClientUser(clientId: ID!, userId: ID!): MutationResult!
   grantEntityAccess(input: GrantEntityAccessInput!): MutationResult!
   revokeEntityAccess(id: ID!): MutationResult!
+  setEntityRoleAccess(clientId: ID!, entityId: ID!, roles: [EntityRoleGrantInput!]!): MutationResult!
   startImpersonation(clientId: ID!, reason: String): MutationResult!
   stopImpersonation: MutationResult!
   updateProfile(input: UpdateProfileInput!): UpdateProfileResult!

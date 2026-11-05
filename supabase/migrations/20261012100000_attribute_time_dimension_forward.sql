@@ -22,6 +22,29 @@ COMMENT ON COLUMN metadata_register.attribute_register.is_time_varying IS
 COMMENT ON COLUMN metadata_register.attribute_register.time_dimension IS
   'Time dimension this attribute is tracked against; NONE when not time varying.';
 
+-- A fresh database rebuilds this view in 20260926 with is_derived before metadata.
+-- CREATE OR REPLACE cannot reorder columns, so that shape is dropped first.
+-- Databases whose view already lists metadata first keep it and only gain columns.
+DO $$
+DECLARE
+    v_derived integer;
+    v_metadata integer;
+BEGIN
+    SELECT attnum INTO v_derived
+    FROM pg_attribute
+    WHERE attrelid = 'public.attribute_register'::regclass
+      AND attname = 'is_derived'
+      AND NOT attisdropped;
+    SELECT attnum INTO v_metadata
+    FROM pg_attribute
+    WHERE attrelid = 'public.attribute_register'::regclass
+      AND attname = 'metadata'
+      AND NOT attisdropped;
+    IF v_derived IS NOT NULL AND v_metadata IS NOT NULL AND v_derived < v_metadata THEN
+        EXECUTE 'DROP VIEW public.attribute_register';
+    END IF;
+END $$;
+
 CREATE OR REPLACE VIEW public.attribute_register AS
 SELECT
     id,

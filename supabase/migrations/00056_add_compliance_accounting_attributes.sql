@@ -147,6 +147,7 @@ SELECT
     ROW_NUMBER() OVER (ORDER BY ar.display_group, ar.attribute_code)
 FROM metadata_register.attribute_register ar
 WHERE ar.domain_code = 'ISSUER'
+  AND (SELECT id FROM metadata_register.domain_templates WHERE template_code = 'ISSUER_STANDARD') IS NOT NULL
   AND ar.attribute_code NOT IN ('LEI', 'COUNTRY', 'SECTOR', 'INDUSTRY', 'MARKET_CAP', 'CREDIT_RATING', 'ISSUER_RATING')
   AND NOT EXISTS (
       SELECT 1 FROM metadata_register.template_attribute_assignments taa
@@ -163,6 +164,7 @@ SELECT
     ROW_NUMBER() OVER (ORDER BY ar.display_group, ar.attribute_code)
 FROM metadata_register.attribute_register ar
 WHERE ar.domain_code = 'SECURITY'
+  AND (SELECT id FROM metadata_register.domain_templates WHERE template_code = 'SECURITY_STANDARD') IS NOT NULL
   AND ar.attribute_code NOT IN ('ISIN', 'CUSIP', 'TICKER', 'SECURITY_TYPE', 'CURRENCY', 'EXCHANGE', 'PRICE', 'PRICE_DATE', 'CURRENT_PRICE', 'EFFECTIVE_DURATION', 'CURRENT_YIELD', 'UNREALIZED_PNL')
   AND NOT EXISTS (
       SELECT 1 FROM metadata_register.template_attribute_assignments taa
