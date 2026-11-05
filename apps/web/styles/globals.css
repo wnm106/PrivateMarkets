@@ -8947,6 +8947,8 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .da-fact { padding: 12px 16px; border-right: 1px solid var(--da-line); border-bottom: 1px solid var(--da-line); display: flex; flex-direction: column; gap: 2px; }
 .da-fact span { font-size: 12px; color: var(--da-muted); }
 .da-fact strong { font-size: 14px; font-weight: 500; }
+.da-fact strong.up { color: #1b6f46; }
+.da-fact strong.dn { color: #b3261e; }
 .da-fact small { font-size: 12px; color: var(--da-muted); }
 .da-fact.big strong { font-family: var(--da-serif); font-size: 28px; font-weight: 500; }
 .da-holdbox { padding: 14px 18px; min-width: 280px; background: var(--bg-alt); display: flex; flex-direction: column; gap: 6px; }
@@ -9020,9 +9022,11 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .da-card input[type="number"], .da-colhold input, .da-editor input, .da-editor select, .da-editor textarea { font: inherit; padding: 3px 6px; border: 1px solid var(--da-line); border-radius: 6px; background: var(--surface); color: inherit; width: 88px; text-align: right; }
 .da-cardmeta { display: flex; justify-content: space-between; font-size: 12.5px; }
 .da-main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; align-items: start; margin-top: 10px; }
+.da-main.solo { grid-template-columns: minmax(0, 1fr); }
 .da-panel { position: sticky; top: 8px; max-height: calc(100vh - 88px); overflow: auto; background: var(--surface); border: 1px solid var(--da-line); border-radius: 8px; }
 .da-gridwrap { overflow-x: auto; max-width: 100%; background: var(--surface); border: 1px solid var(--da-line); border-radius: 8px; }
 .da-grid { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 860px; font-size: 13px; }
+.da-grid.fit { min-width: 640px; }
 .da-grid th, .da-grid td { padding: 8px 10px; border-bottom: 1px solid var(--da-line); text-align: left; vertical-align: middle; background: inherit; }
 .da-grid th.num, .da-grid td.num { text-align: right; }
 .da-grid thead th { background: var(--bg-alt); }
@@ -9072,7 +9076,7 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .da-seg2 { display: flex; border: 1px solid var(--da-line); border-radius: 6px; overflow: hidden; }
 .da-seg2 button { flex: 1; border: 0; background: var(--surface); padding: 6px; cursor: pointer; }
 .da-seg2 button[aria-pressed="true"] { background: #0b5d73; color: #fff; }
-@media (max-width: 860px) { .da-main { grid-template-columns: 1fr; } .da-facts, .da-facts.five, .da-facts.six { grid-template-columns: repeat(2, 1fr); } .da-panel { position: static; max-height: none; } }
+@media (max-width: 860px) { .da-main { grid-template-columns: 1fr; } .da-columns { grid-template-columns: 1fr; } .da-facts, .da-facts.five, .da-facts.six { grid-template-columns: repeat(2, 1fr); } .da-panel { position: static; max-height: none; } }
 
 .dc-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .dc-top h2 { margin: 0; font-size: 17px; }

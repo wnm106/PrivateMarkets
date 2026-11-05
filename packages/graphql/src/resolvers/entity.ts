@@ -602,7 +602,7 @@ export const entityResolvers = {
         // Insert relationships
         if (input.parentRelationships) {
           for (const rel of input.parentRelationships) {
-            await context.supabase.from('entity_relationships').insert({
+            const { error: relError } = await context.supabase.from('entity_relationships').insert({
               parent_entity_id: rel.parentEntityId,
               child_entity_id: entity.id,
               relationship_type: rel.relationshipType,
@@ -610,12 +610,13 @@ export const entityResolvers = {
               is_primary: rel.isPrimary ?? false,
               valid_from: rel.validFrom,
             });
+            if (relError) throw relError;
           }
         }
         
         if (input.childRelationships) {
           for (const rel of input.childRelationships) {
-            await context.supabase.from('entity_relationships').insert({
+            const { error: relError } = await context.supabase.from('entity_relationships').insert({
               parent_entity_id: entity.id,
               child_entity_id: rel.childEntityId,
               relationship_type: rel.relationshipType,
@@ -623,6 +624,7 @@ export const entityResolvers = {
               is_primary: rel.isPrimary ?? false,
               valid_from: rel.validFrom,
             });
+            if (relError) throw relError;
           }
         }
         

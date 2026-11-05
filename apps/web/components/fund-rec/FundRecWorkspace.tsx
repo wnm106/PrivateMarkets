@@ -11,14 +11,20 @@ import {
   setSignoff, shortDate, signedMillions, stepTone,
   type FundRec, type RecBind,
 } from '@/lib/fund-rec';
+import {
+  saveCashAdjustment, saveCashMatch, saveCashRules, unmatchCash,
+  type CashRec, type CashRule,
+} from '@/lib/cash-rec';
+import { CashRecTab } from './CashRecTab';
 import { RecBit, RecCell, RecFact, RecInspectProvider, RecLabel, RecPress, joinSources } from './RecInspect';
 
-type TabKey = 'close' | 'stmt' | 'roll' | 'integrity' | 'fees' | 'val' | 'drift' | 'inputs';
+type TabKey = 'close' | 'stmt' | 'roll' | 'cash' | 'integrity' | 'fees' | 'val' | 'drift' | 'inputs';
 
 const TABS: Array<[TabKey, string]> = [
   ['close', 'Close status'],
   ['stmt', 'NAV statement'],
   ['roll', 'Position roll-forward'],
+  ['cash', 'Cash reconciliation'],
   ['integrity', 'Statement integrity'],
   ['fees', 'Fees'],
   ['val', 'Marks and accruals'],
@@ -39,6 +45,7 @@ const SIGNOFF_BY_LABEL: Record<string, string> = { 'Not started': 'NOT_STARTED',
 export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initialTab?: string | null }) {
   const asOfDate = useTemporalStore((state) => state.asOfDate);
   const [rec, setRec] = useState<FundRec | null>(null);
+  const [cash, setCash] = useState<CashRec | null>(null);
   const [period, setPeriod] = useState<string | null>(null);
   const [threshold, setThreshold] = useState(10);
   const [tab, setTab] = useState<TabKey>(TABS.some(([key]) => key === initialTab) ? (initialTab as TabKey) : 'close');
@@ -50,13 +57,14 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   const [insightTry, setInsightTry] = useState(0);
 
   const load = useCallback(async () => {
-    const result = await graphqlQuery<{ fundRec: FundRec }, Record<string, unknown>>(
+    const result = await graphqlQuery<{ fundRec: FundRec; cashRec: CashRec }, Record<string, unknown>>(
       FUND_REC_QUERY,
       { fundId, periodEnd: period, asOfDate, driftThresholdPct: threshold },
       'network-only',
     );
     if (result.error) { setError(result.error.message || 'Could not load the close'); return; }
     setRec(result.data?.fundRec ?? null);
+    setCash(result.data?.cashRec ?? null);
     setError(null);
   }, [fundId, period, asOfDate, threshold]);
 
@@ -97,7 +105,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   const decided = rec.items.length - open.length;
   const tabCount = (key: TabKey) => (key === 'val' || key === 'fees' || key === 'drift'
     ? rec.items.filter((item) => item.tab === key && item.decision == null).length
-    : key === 'integrity' ? rec.breaks : key === 'roll' && rec.roll.present && !rec.roll.tied ? 1 : key === 'inputs' ? rec.readiness.filter((item) => item.required && !item.ok).length : 0);
+    : key === 'integrity' ? rec.breaks : key === 'roll' && rec.roll.present && !rec.roll.tied ? 1 : key === 'inputs' ? rec.readiness.filter((item) => item.required && !item.ok).length : key === 'cash' && cash ? cash.summary.openFlowCount + cash.summary.openTxnCount : 0);
 
   const proposed = millions(rec.navProposed);
   const reported = millions(rec.navReported);
@@ -149,11 +157,31 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
         })}
       </div>
 
-      <div className="da-main">
+      <div className={tab === 'cash' ? 'da-main solo' : 'da-main'}>
         <div>
           {tab === 'close' && <CloseTab rec={rec} onOpen={setTab} onSignoff={(label) => run(() => setSignoff(ctx, SIGNOFF_BY_LABEL[label]))} />}
           {tab === 'stmt' && <StatementTab rec={rec} />}
           {tab === 'roll' && <RollTab rec={rec} />}
+          {tab === 'cash' && (cash
+            ? <CashRecTab
+                cash={cash}
+                busy={busy}
+                onApprove={(bankTxnId) => run(async () => {
+                  const txn = cash.transactions.find((row) => row.id === bankTxnId);
+                  if (!txn) return;
+                  await saveCashMatch(cash, bankTxnId, txn.flowIds, txn.ruleKind || 'MANUAL', 100, txn.variance ?? 0, asOfDate);
+                })}
+                onPair={(bankTxnId, flowIds) => run(async () => {
+                  const flows = cash.flows.filter((row) => flowIds.includes(row.id));
+                  const txn = cash.transactions.find((row) => row.id === bankTxnId);
+                  const variance = (txn?.amount ?? 0) - flows.reduce((total, row) => total + row.amount, 0);
+                  await saveCashMatch(cash, bankTxnId, flowIds, 'MANUAL', 100, variance, asOfDate);
+                })}
+                onUnmatch={(matchId) => run(() => unmatchCash(matchId, asOfDate))}
+                onAdjust={(amount, side, reason) => run(() => saveCashAdjustment(cash, amount, side, reason, asOfDate))}
+                onRules={(rules: CashRule[]) => run(() => saveCashRules(cash, rules, asOfDate))}
+              />
+            : <div className="xp-empty">Cash reconciliation is not available for this close.</div>)}
           {tab === 'integrity' && <IntegrityTab rec={rec} />}
           {tab === 'fees' && <FeesTab rec={rec} />}
           {tab === 'val' && <MarksTab rec={rec} />}
@@ -161,7 +189,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
           {tab === 'inputs' && <InputsTab rec={rec} />}
         </div>
 
-        <aside className="da-panel" aria-label="Review queue">
+        {tab !== 'cash' && <aside className="da-panel" aria-label="Review queue">
           <section>
             <h2 className="da-qtitle">Review queue</h2>
             <p className="da-note">{decided} of {rec.items.length} items decided. Accept, propose an adjustment, or query the admin.</p>
@@ -235,7 +263,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
               {insights?.length === 0 && !insightError && <p className="da-note">Nothing further beyond the rules.</p>}
             </div>
           </section>
-        </aside>
+        </aside>}
       </div>
     </div>
     </RecInspectProvider>

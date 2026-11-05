@@ -3128,6 +3128,8 @@ type Query {
   fundRecBoard(asOfDate: Date, knowledgeDate: DateTime): JSON!
   """One fund close: statement integrity, roll-forward, fees, marks, drift, review items, and close steps."""
   fundRec(fundId: ID!, periodEnd: Date, asOfDate: Date, knowledgeDate: DateTime, driftThresholdPct: Float): JSON!
+  """Positional cash flows matched to the fund's bank transactions, with the tie-out."""
+  cashRec(fundId: ID!, periodEnd: Date, asOfDate: Date, knowledgeDate: DateTime): JSON!
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!

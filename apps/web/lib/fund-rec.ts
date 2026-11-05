@@ -14,6 +14,7 @@ export const FUND_REC_BOARD_QUERY = `
 export const FUND_REC_QUERY = `
   query FundRec($fundId: ID!, $periodEnd: Date, $asOfDate: Date, $driftThresholdPct: Float) {
     fundRec(fundId: $fundId, periodEnd: $periodEnd, asOfDate: $asOfDate, driftThresholdPct: $driftThresholdPct)
+    cashRec(fundId: $fundId, periodEnd: $periodEnd, asOfDate: $asOfDate)
   }
 `;
 

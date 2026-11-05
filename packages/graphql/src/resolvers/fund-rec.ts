@@ -1,4 +1,5 @@
 import type { Context } from '../context';
+import { loadCashRec } from '../lib/cash-rec-store';
 import { loadFundRec, loadFundRecBoard } from '../lib/fund-rec-store';
 
 export const fundRecResolvers = {
@@ -10,5 +11,10 @@ export const fundRecResolvers = {
       args: { fundId: string; periodEnd?: string | null; asOfDate?: string | null; knowledgeDate?: string | null; driftThresholdPct?: number | null },
       context: Context,
     ) => loadFundRec(context.supabase, args.fundId, args.periodEnd, args.asOfDate, args.knowledgeDate, args.driftThresholdPct ?? 10),
+    cashRec: async (
+      _: unknown,
+      args: { fundId: string; periodEnd?: string | null; asOfDate?: string | null; knowledgeDate?: string | null },
+      context: Context,
+    ) => loadCashRec(context.supabase, args.fundId, args.periodEnd, args.asOfDate, args.knowledgeDate),
   },
 };
