@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const user = await requireFeedUser();
-  if (!user) return NextResponse.json({ error: 'Sign in to load a position file' }, { status: 401 });
+  if (!user) return NextResponse.json({ error: 'Sign in to import a file' }, { status: 401 });
   try {
     const [catalog, instances] = await Promise.all([listMappingCatalog(), listImportInstances()]);
     return NextResponse.json({
@@ -25,10 +25,10 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const user = await requireFeedUser();
-  if (!user) return NextResponse.json({ error: 'Sign in to load a position file' }, { status: 401 });
+  if (!user) return NextResponse.json({ error: 'Sign in to import a file' }, { status: 401 });
   const form = await request.formData();
   const file = form.get('file');
-  if (!(file instanceof File)) return NextResponse.json({ error: 'Choose a CSV or Excel file' }, { status: 400 });
+  if (!(file instanceof File)) return NextResponse.json({ error: 'Choose a CSV, Excel, or PDF file' }, { status: 400 });
   try {
     const bytes = Buffer.from(await file.arrayBuffer());
     const instance = await createImportInstance(file.name, file.type || 'application/octet-stream', bytes);

@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { chooseRelationship, dependencyLoadOrder, dependencyLoadWaves, relationshipEndpoints, type RelationshipTypeRow } from './load-order';
-import { parseTabularFile } from './parse-table';
+import { readImportFile } from './intake';
 import { POSITION_FILE_MAP } from './position-file-map';
 import type { DomainLoadStats, FeedLoadResult, FeedMap, FeedPreview, NormalizationHit, ParsedTable } from './types';
 import { applyTransform, coerceAttributeValue, dayBefore, indexReferenceLists, normalizeToList, parseUsDate, type ListValueRow } from './values';
@@ -220,7 +220,7 @@ function distinctNormalizations(hits: NormalizationHit[]): NormalizationHit[] {
 }
 
 export async function previewFeed(map: FeedMap, fileName: string, bytes: Buffer): Promise<FeedPreview> {
-  const table = parseTabularFile(fileName, bytes);
+  const table = (await readImportFile(fileName, bytes)).table;
   const rows = filterRows(map, table);
   const drafts = collectDrafts(map, rows);
   const db = localSupabase();
@@ -289,7 +289,7 @@ function sameValue(existing: any, next: { golden_value: string; golden_value_num
 }
 
 export async function executeFeed(map: FeedMap, fileName: string, bytes: Buffer, asOfDate: string, client?: SupabaseClient): Promise<FeedLoadResult> {
-  return executeParsedFeed(map, fileName, parseTabularFile(fileName, bytes), asOfDate, client);
+  return executeParsedFeed(map, fileName, (await readImportFile(fileName, bytes)).table, asOfDate, client);
 }
 
 export async function executeParsedFeed(map: FeedMap, fileName: string, table: ParsedTable, asOfDate: string, client?: SupabaseClient): Promise<FeedLoadResult> {

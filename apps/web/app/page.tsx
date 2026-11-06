@@ -340,8 +340,8 @@ export default function LandingPage() {
               </svg>
             </div>
             <div>
-              <div className="nav-title">Position File Load</div>
-              <div className="nav-desc">Map a flat file onto Issuer, Fund, Security, and Position, then load parents first.</div>
+              <div className="nav-title">Data import</div>
+              <div className="nav-desc">Bring in a position file, a NAV statement, or company financials from CSV, Excel, or PDF.</div>
             </div>
           </div>
         </Link>

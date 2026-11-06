@@ -1,7 +1,7 @@
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { assertLocalSupabase, executeParsedFeed, localSupabase } from './feed-loader';
 import { dependencyLoadWaves } from './load-order';
-import { parseTabularFile } from './parse-table';
+import { readImportFile } from './intake';
 import { POSITION_FILE_MAP } from './position-file-map';
 import {
   feedMapFromAssignments,
@@ -24,6 +24,7 @@ export interface ImportInstanceSummary {
   asOfDate: string | null;
   errorMessage: string | null;
   runs: InstanceRun[];
+  mapCode: string;
   resultSummary: {
     created: number;
     matched: number;
@@ -113,6 +114,7 @@ function toSummary(row: any): ImportInstanceSummary {
     asOfDate: row.as_of_date,
     errorMessage: row.error_message,
     runs: Array.isArray(row.runs) ? row.runs : [],
+    mapCode: row.map_code,
     resultSummary: summarize(row.result),
   };
 }
@@ -124,7 +126,7 @@ export async function listImportInstances(client: SupabaseClient = useClient()):
   const rows = await client
     .schema('entity_instances')
     .from('import_instances')
-    .select('id, file_name, row_count, status, received_at, started_at, completed_at, as_of_date, error_message, runs, result')
+    .select('id, file_name, row_count, status, received_at, started_at, completed_at, as_of_date, error_message, runs, result, map_code')
     .eq('source_id', source.data.id)
     .order('received_at', { ascending: false });
   if (rows.error) throw new Error(rows.error.message);
@@ -144,14 +146,15 @@ function suggestedAsOf(assignments: ColumnAssignment[], rows: Record<string, str
 
 export async function createImportInstance(fileName: string, mediaType: string, bytes: Buffer, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
   assertLocalSupabase(client);
-  const table = parseTabularFile(fileName, bytes);
+  const read = await readImportFile(fileName, bytes);
+  const table = read.table;
   const catalog = await attributeCatalog(client);
-  const columnMappings = await reviewWithModel(suggestAssignments(table.headers, table.rows, catalog.attributes), catalog.attributes);
+  const columnMappings = await reviewWithModel(suggestAssignments(table.headers, table.rows, catalog.attributes, read.hints), catalog.attributes);
   const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', POSITION_FILE_MAP.sourceCode).single();
   if (source.error || !source.data) throw new Error(source.error?.message || 'Position File source is missing');
   const inserted = await client.schema('entity_instances').from('import_instances').insert({
     source_id: source.data.id,
-    map_code: POSITION_FILE_MAP.mapCode,
+    map_code: read.mapCode || POSITION_FILE_MAP.mapCode,
     file_name: fileName,
     media_type: mediaType,
     source_base64: bytes.toString('base64'),
@@ -211,6 +214,7 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
   try {
     const map = feedMapFromAssignments(mappings);
     if (map.domains.length === 0) throw new Error('Map at least one column to an entity code before processing');
+    await ensureImportAttributes(client, mappings);
     const result = await executeParsedFeed(map, existing.data.file_name, {
       headers: existing.data.headers || [],
       rows: existing.data.parsed_rows || [],
@@ -248,6 +252,75 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
       error_message: error?.message || 'Process failed',
     }).eq('id', id);
     throw error;
+  }
+}
+
+const TEMPLATE_FOR_DOMAIN: Record<string, string> = {
+  FUND: 'FUND_STANDARD',
+  ISSUER: 'ISSUER_STANDARD',
+  SECURITY: 'SECURITY_STANDARD',
+  POSITION: 'POSITION_STANDARD',
+  DEAL: 'DEAL_STANDARD',
+  CASH_FLOW: 'STANDARD_CASHFLOW',
+};
+
+async function ensureImportAttributes(client: SupabaseClient, assignments: ColumnAssignment[]): Promise<void> {
+  const specs = new Map<string, { name: string; dataType: string; domainCode: string }>();
+  for (const assignment of assignments) {
+    if (assignment.role !== 'attribute' || !assignment.attributeCode || !assignment.domainCode) continue;
+    if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(assignment.attributeCode) || specs.has(assignment.attributeCode)) continue;
+    const dataType = assignment.transform.kind === 'date'
+      ? 'DATE'
+      : assignment.transform.kind === 'percent'
+        ? 'PERCENTAGE'
+        : assignment.transform.kind === 'number'
+          ? 'NUMBER'
+          : 'STRING';
+    specs.set(assignment.attributeCode, {
+      name: assignment.sourceColumn.slice(0, 200),
+      dataType,
+      domainCode: assignment.domainCode,
+    });
+  }
+  if (specs.size === 0) return;
+  const existing = await client.schema('metadata_register').from('attribute_register').select('id, attribute_code').in('attribute_code', [...specs.keys()]);
+  if (existing.error) throw new Error(existing.error.message);
+  const have = new Set((existing.data || []).map((row: { attribute_code: string }) => row.attribute_code));
+  const missing = [...specs.entries()].filter(([code]) => !have.has(code));
+  let created: Array<{ id: string; attribute_code: string }> = [];
+  if (missing.length > 0) {
+    const inserted = await client.schema('metadata_register').from('attribute_register').insert(missing.map(([code, spec]) => ({
+      attribute_code: code,
+      attribute_name: spec.name,
+      data_type: spec.dataType,
+      description: `Imported from “${spec.name}”.`,
+      domain_code: spec.domainCode,
+      is_required: false,
+      display_section: 'Imported',
+    }))).select('id, attribute_code');
+    if (inserted.error) throw new Error(inserted.error.message);
+    created = inserted.data || [];
+  }
+  if (created.length === 0) return;
+  const templates = await client.schema('metadata_register').from('domain_templates').select('id, template_code');
+  if (templates.error || !templates.data) return;
+  const templateId = new Map(templates.data.map((row: { id: string; template_code: string }) => [row.template_code, row.id]));
+  const rows = created.flatMap((row) => {
+    const spec = specs.get(row.attribute_code);
+    const template = spec ? templateId.get(TEMPLATE_FOR_DOMAIN[spec.domainCode] || '') : undefined;
+    if (!template) return [];
+    return [{
+      template_id: template,
+      attribute_id: row.id,
+      is_required: false,
+      display_order: 500,
+      display_label: spec?.name.slice(0, 200),
+    }];
+  });
+  if (rows.length === 0) return;
+  const assigned = await client.schema('metadata_register').from('template_attribute_assignments').insert(rows);
+  if (assigned.error && !/duplicate|unique/i.test(assigned.error.message)) {
+    throw new Error(assigned.error.message);
   }
 }
 

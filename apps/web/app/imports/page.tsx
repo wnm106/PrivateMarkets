@@ -16,6 +16,7 @@ import {
 interface InstanceSummary {
   id: string;
   fileName: string;
+  mapCode: string;
   rowCount: number;
   status: string;
   receivedAt: string;
@@ -55,6 +56,13 @@ function todayIso() {
 function formatWhen(value: string | null) {
   if (!value) return '—';
   return new Date(value).toLocaleString();
+}
+
+function kindLabel(mapCode: string) {
+  if (mapCode === 'NAV_STATEMENT') return 'NAV statement';
+  if (mapCode === 'FINANCIAL_STATEMENT') return 'Financial statement';
+  if (mapCode === 'POSITION_FILE') return 'Positions';
+  return 'Table';
 }
 
 function resultText(instance: InstanceSummary) {
@@ -178,14 +186,14 @@ export default function PositionFilePage() {
       <div className="crumbs">
         <Link href="/" className="crumb-link">Home</Link>
         <span className="sep">›</span>
-        <span className="crumb-current">Position File</span>
+        <span className="crumb-current">Data import</span>
       </div>
 
       <div className="page-header">
         <div className="page-title-block">
           <div style={{ width: '4px', height: '48px', background: '#1b3a4b' }} />
           <div>
-            <div className="page-title">Position file load</div>
+            <div className="page-title">Data import</div>
             <div className="page-meta">{queue ? `${queue.name} · source ${queue.sourceCode}` : 'Import source'}</div>
           </div>
         </div>
@@ -193,7 +201,7 @@ export default function PositionFilePage() {
           {busy === 'upload' ? 'Storing file…' : 'Upload file'}
           <input
             type="file"
-            accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            accept=".csv,.xlsx,.xls,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             style={{ display: 'none' }}
             onChange={async (event) => {
               const file = event.target.files?.[0];
@@ -220,7 +228,7 @@ export default function PositionFilePage() {
       </div>
 
       <p className="hero-sub" style={{ maxWidth: 820, marginTop: 0 }}>
-        Each upload is an instance on the {queue?.sourceCode || 'POSITION_FILE'} source. The original file is kept, so you can change the column mapping and reprocess without losing the source values.
+        Drop a CSV of positions, an Excel NAV statement, or a PDF of financials. The file is read, the shape is recognized, and each column is mapped before anything is written. The original file is kept, so you can change the mapping and reprocess.
       </p>
       {error && <div className="filter-bar" style={{ color: '#b42318' }}>{error}</div>}
 
@@ -238,12 +246,12 @@ export default function PositionFilePage() {
           <div></div>
         </div>
         {(queue?.instances || []).length === 0 ? (
-          <div className="tbl-row" style={{ gridTemplateColumns: '1fr' }}><div>No files stored yet. Upload a CSV or Excel file to add an instance.</div></div>
+          <div className="tbl-row" style={{ gridTemplateColumns: '1fr' }}><div>No files stored yet. Upload a CSV, Excel, or PDF file to add an instance.</div></div>
         ) : (
           queue?.instances.map((instance) => (
             <div key={instance.id} className="tbl-row" style={{ gridTemplateColumns: '190px 1.3fr 70px 110px 1.2fr 120px' }}>
               <div>{formatWhen(instance.receivedAt)}</div>
-              <button onClick={() => selectInstance(instance.id)} style={{ textAlign: 'left', background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit' }}>{instance.fileName}</button>
+              <button onClick={() => selectInstance(instance.id)} style={{ textAlign: 'left', background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit' }}>{instance.fileName}<div style={{ color: 'var(--ink-3)', fontSize: 12 }}>{kindLabel(instance.mapCode)}</div></button>
               <div>{instance.rowCount}</div>
               <div>{instance.status}</div>
               <div>{resultText(instance)}</div>
@@ -263,7 +271,7 @@ export default function PositionFilePage() {
         <>
           <div className="section-title">
             <h2>{detail.fileName}</h2>
-            <span className="hint">{detail.rowCount} stored rows · {detail.columnMappings.length} source columns</span>
+            <span className="hint">{kindLabel(detail.mapCode)} · {detail.rowCount} stored rows · {detail.columnMappings.length} source columns</span>
           </div>
           <div className="filter-bar" style={{ flexWrap: 'wrap', gap: 12 }}>
             <label className="filter-pill">
