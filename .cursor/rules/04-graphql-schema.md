@@ -10,12 +10,6 @@ packages/graphql/
 │   ├── entity.graphql       # Entity system types
 │   ├── dataquality.graphql  # DQ rules and exceptions
 │   ├── intersection.graphql # Intersection system types
-│   ├── deal.graphql         # Deal-specific types
-│   ├── fund.graphql         # Fund-specific types
-│   ├── issuer.graphql       # Issuer-specific types
-│   ├── price.graphql        # Price-specific types
-│   ├── security.graphql     # Security-specific types
-│   ├── position.graphql     # Position-specific types
 │   └── filters.graphql      # Filter input types
 ├── src/
 │   ├── schema/

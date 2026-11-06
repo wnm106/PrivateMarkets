@@ -21,14 +21,6 @@ enum SourceType {
   CALCULATED
 }
 
-enum PositionType {
-  EQUITY
-  DEBT
-  FUND_INTEREST
-  DERIVATIVE
-  OTHER
-}
-
 enum DQRuleType {
   COMPLETENESS
   VALIDITY
