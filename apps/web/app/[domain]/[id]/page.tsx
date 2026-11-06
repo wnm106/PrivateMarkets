@@ -9,6 +9,7 @@ import { GoldenRecordSections, type TemplateAttribute, type LineageData } from '
 import { SourceContributionPanel } from '@/components/detail/SourceContributionPanel';
 import { ActiveConflictsPanel } from '@/components/detail/ActiveConflictsPanel';
 import { ActivityFeedPanel } from '@/components/detail/ActivityFeedPanel';
+import { EntityAccessPanel } from '@/components/security/EntityAccessPanel';
 import { sources, type SourceKey } from '@/lib/data';
 import { getDomainConfig, type DomainKey } from '@/lib/mock-data';
 import { useTemporalStore } from '@/lib/store';
@@ -478,6 +479,7 @@ export default function DynamicEntityDetailPage() {
         </div>
 
         <div>
+          <EntityAccessPanel entityId={entity.id} />
           <SourceContributionPanel sources={sourceContributions} />
           <ActiveConflictsPanel conflicts={conflicts} entityId={id} />
           <ActivityFeedPanel activities={activities} />

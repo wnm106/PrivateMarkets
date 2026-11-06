@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { graphqlQuery } from '@/lib/graphql';
+import { graphqlQuery, ME_QUERY } from '@/lib/graphql';
 import {
   DASHBOARDS_QUERY,
   NARRATIVES_QUERY,
@@ -30,16 +30,19 @@ export function EntityReports({ domainCode, entityId, asOfDate, embedded = false
   const [narratives, setNarratives] = useState<NarrativeTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Selection>(null);
+  const [canDesign, setCanDesign] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      const [d, n] = await Promise.all([
+      const [d, n, me] = await Promise.all([
         graphqlQuery<{ dashboards: DashboardTemplate[] }, any>(DASHBOARDS_QUERY, { domainCode, isActive: true }, 'network-only'),
         graphqlQuery<{ narratives: NarrativeTemplate[] }, any>(NARRATIVES_QUERY, { domainCode, isActive: true }, 'network-only'),
+        graphqlQuery<{ me: { isTenantAdmin: boolean } | null }, Record<string, never>>(ME_QUERY, undefined, 'network-only'),
       ]);
       if (cancelled) return;
+      setCanDesign(!!me.data?.me?.isTenantAdmin);
       const ds = d.data?.dashboards || [];
       const ns = n.data?.narratives || [];
       setDashboards(ds);
@@ -62,9 +65,14 @@ export function EntityReports({ domainCode, entityId, asOfDate, embedded = false
   if (dashboards.length === 0 && narratives.length === 0) {
     return (
       <div style={{ marginTop: '28px', padding: '16px 18px', border: '1px dashed var(--line)', fontSize: '12px', color: 'var(--ink-3)' }}>
-        No dashboards or narratives are defined for this entity type yet.{' '}
-        <Link href="/admin/dashboards" className="crumb-link">Design a dashboard</Link> or{' '}
-        <Link href="/admin/narratives" className="crumb-link">create a narrative</Link>.
+        No dashboards or narratives are defined for this entity type yet.
+        {canDesign && (
+          <>
+            {' '}
+            <Link href="/admin/dashboards" className="crumb-link">Design a dashboard</Link> or{' '}
+            <Link href="/admin/narratives" className="crumb-link">create a narrative</Link>.
+          </>
+        )}
       </div>
     );
   }
@@ -107,9 +115,11 @@ export function EntityReports({ domainCode, entityId, asOfDate, embedded = false
             entityId={entityId}
             asOfDate={asOfDate}
           />
+          {canDesign && (
           <div style={{ marginTop: '6px', fontSize: '11px' }}>
             <Link href={`/admin/dashboards/${activeDashboard.dashboardCode}`} className="crumb-link">Edit dashboard</Link>
           </div>
+          )}
         </div>
       )}
 
@@ -123,9 +133,11 @@ export function EntityReports({ domainCode, entityId, asOfDate, embedded = false
             entityId={entityId}
             asOfDate={asOfDate}
           />
+          {canDesign && (
           <div style={{ marginTop: '6px', fontSize: '11px' }}>
             <Link href={`/admin/narratives/${activeNarrative.narrativeCode}`} className="crumb-link">Edit narrative</Link>
           </div>
+          )}
         </div>
       )}
     </div>

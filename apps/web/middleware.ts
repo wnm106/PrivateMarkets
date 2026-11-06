@@ -1,7 +1,36 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+import { CLIENT_ADMIN_PERMISSIONS, isPlatformAdminPath } from '@/lib/admin-access';
 
 const PUBLIC_PATHS = ['/welcome', '/login', '/auth/callback', '/no-access'];
+
+async function adminAccess(supabase: { schema: (name: string) => any }, userId: string) {
+  const { data: profile, error: profileError } = await supabase
+    .schema('tenancy')
+    .from('profiles')
+    .select('is_tenant_admin')
+    .eq('id', userId)
+    .maybeSingle();
+  if (profileError) return { tenant: false, admin: false };
+  if (profile?.is_tenant_admin) return { tenant: true, admin: true };
+
+  const { data: rows, error: roleError } = await supabase
+    .schema('tenancy')
+    .from('user_roles')
+    .select('role:roles(role_permissions(permission:permissions(permission_code)))')
+    .eq('user_id', userId);
+  if (roleError) return { tenant: false, admin: false };
+
+  const codes = new Set<string>();
+  for (const row of rows || []) {
+    const role = (row as { role?: { role_permissions?: { permission?: { permission_code?: string } }[] } }).role;
+    for (const rp of role?.role_permissions || []) {
+      if (rp.permission?.permission_code) codes.add(rp.permission.permission_code);
+    }
+  }
+  const admin = CLIENT_ADMIN_PERMISSIONS.some((code) => codes.has(code));
+  return { tenant: false, admin };
+}
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -48,6 +77,18 @@ export async function middleware(request: NextRequest) {
     const redirectUrl = new URL('/login', request.url);
     redirectUrl.searchParams.set('redirectedFrom', request.nextUrl.pathname);
     return NextResponse.redirect(redirectUrl);
+  }
+
+  // Admin tools are limited to tenant admins and client administrators.
+  // Fail closed: if the role lookup errors, the admin area stays shut.
+  if (user && pathname.startsWith('/admin')) {
+    const access = await adminAccess(supabase, user.id);
+    if (!access.admin) {
+      return NextResponse.redirect(new URL('/', request.url));
+    }
+    if (!access.tenant && isPlatformAdminPath(pathname)) {
+      return NextResponse.redirect(new URL('/admin/tenancy', request.url));
+    }
   }
 
   return response;

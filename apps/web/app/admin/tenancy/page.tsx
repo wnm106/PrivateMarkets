@@ -9,16 +9,16 @@ import {
   CLIENT_USERS_QUERY,
   ROLES_QUERY,
   PERMISSIONS_CATALOG_QUERY,
-  ENTITY_GRANTS_QUERY,
   CREATE_CLIENT_MUTATION,
   CREATE_ROLE_MUTATION,
   INVITE_USER_MUTATION,
   ASSIGN_ROLE_MUTATION,
   REVOKE_ROLE_MUTATION,
   DEACTIVATE_CLIENT_USER_MUTATION,
-  GRANT_ENTITY_ACCESS_MUTATION,
-  REVOKE_ENTITY_ACCESS_MUTATION,
+  ENTITY_ACCESS_ROSTER_QUERY,
+  ME_QUERY,
 } from '@/lib/graphql';
+import { EntityRoleAccess, type AccessGrant } from '@/components/security/EntityRoleAccess';
 
 interface Client {
   id: string;
@@ -43,13 +43,19 @@ interface ClientUser {
   profile: { email: string | null; displayName: string | null } | null;
   roles: { id: string; roleCode: string; roleName: string }[];
 }
-interface EntityGrant {
-  id: string;
+interface AccessRecord {
   entityId: string;
-  granteeType: string;
-  granteeLabel: string | null;
-  accessLevel: string;
-  includeChildren: boolean;
+  clientId: string;
+  entityCode: string;
+  entityName: string;
+  domainCode: string;
+  restricted: boolean;
+  grants: AccessGrant[];
+}
+
+interface SessionAccess {
+  isTenantAdmin: boolean;
+  canManageEntityAccess: boolean;
 }
 
 type Tab = 'clients' | 'members' | 'entity-access';
@@ -60,6 +66,7 @@ export default function TenancyAdminPage() {
   const [selectedClientId, setSelectedClientId] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [me, setMe] = useState<SessionAccess | null>(null);
 
   const loadClients = async () => {
     const result = await graphqlClient.query(CLIENTS_QUERY, {}, { requestPolicy: 'network-only' }).toPromise();
@@ -70,15 +77,21 @@ export default function TenancyAdminPage() {
   };
 
   useEffect(() => {
-    loadClients().finally(() => setLoading(false));
+    Promise.all([
+      loadClients(),
+      graphqlClient.query(ME_QUERY, {}, { requestPolicy: 'network-only' }).toPromise(),
+    ]).then(([, meResult]) => {
+      const session = meResult.data?.me;
+      setMe(session ? { isTenantAdmin: session.isTenantAdmin, canManageEntityAccess: session.canManageEntityAccess } : null);
+    }).finally(() => setLoading(false));
   }, []);
 
   return (
     <div className="screen">
       <div className="mb-6">
-        <h1 className="text-3xl font-bold mb-2">Clients, Users &amp; Roles</h1>
+        <h1 className="text-3xl font-bold mb-2">Security</h1>
         <p className="text-gray-600">
-          Manage tenants (clients), who belongs to each, their roles, and fine-grained access to specific entities.
+          Tenants never see each other&apos;s entities. Inside a client, assign roles to an entity to close it — and every child under it — to everyone else.
         </p>
       </div>
 
@@ -93,7 +106,7 @@ export default function TenancyAdminPage() {
         {([
           ['clients', 'Clients'],
           ['members', 'Members & Roles'],
-          ['entity-access', 'Entity Access'],
+          ...(me?.canManageEntityAccess ? [['entity-access', 'Entity Access'] as [Tab, string]] : []),
         ] as [Tab, string][]).map(([key, label]) => (
           <button
             key={key}
@@ -108,7 +121,7 @@ export default function TenancyAdminPage() {
       {loading ? (
         <div className="text-center py-12 text-gray-500">Loading…</div>
       ) : tab === 'clients' ? (
-        <ClientsTab clients={clients} onChanged={loadClients} onError={setError} />
+        <ClientsTab clients={clients} onChanged={loadClients} onError={setError} canProvision={!!me?.isTenantAdmin} />
       ) : tab === 'members' ? (
         <MembersTab
           clients={clients}
@@ -123,7 +136,7 @@ export default function TenancyAdminPage() {
   );
 }
 
-function ClientsTab({ clients, onChanged, onError }: { clients: Client[]; onChanged: () => void; onError: (e: string | null) => void }) {
+function ClientsTab({ clients, onChanged, onError, canProvision }: { clients: Client[]; onChanged: () => void; onError: (e: string | null) => void; canProvision: boolean }) {
   const [showForm, setShowForm] = useState(false);
   const [clientCode, setClientCode] = useState('');
   const [clientName, setClientName] = useState('');
@@ -148,13 +161,15 @@ function ClientsTab({ clients, onChanged, onError }: { clients: Client[]; onChan
 
   return (
     <div>
+      {canProvision && (
       <div className="flex justify-end mb-4">
         <button onClick={() => setShowForm(!showForm)} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-sm">
           + Add Client
         </button>
       </div>
+      )}
 
-      {showForm && (
+      {canProvision && showForm && (
         <div className="bg-white rounded-lg shadow p-4 mb-4 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <input placeholder="Client code (e.g. ACME_CAPITAL)" value={clientCode} onChange={(e) => setClientCode(e.target.value)} className="px-3 py-2 border rounded" />
@@ -355,128 +370,111 @@ function MembersTab({
 }
 
 function EntityAccessTab({ clients, onError }: { clients: Client[]; onError: (e: string | null) => void }) {
-  const [entityId, setEntityId] = useState('');
-  const [grants, setGrants] = useState<EntityGrant[]>([]);
-  const [clientId, setClientId] = useState(clients[0]?.id ?? '');
-  const [roles, setRoles] = useState<Role[]>([]);
-  const [granteeType, setGranteeType] = useState<'USER' | 'ROLE'>('ROLE');
-  const [roleId, setRoleId] = useState('');
-  const [userId, setUserId] = useState('');
-  const [accessLevel, setAccessLevel] = useState<'READ' | 'WRITE'>('READ');
-  const [includeChildren, setIncludeChildren] = useState(true);
+  const [clientId, setClientId] = useState('');
+  const [search, setSearch] = useState('');
+  const [rows, setRows] = useState<AccessRecord[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loadingRows, setLoadingRows] = useState(false);
 
-  const load = async () => {
-    if (!entityId) return;
-    const result = await graphqlClient.query(ENTITY_GRANTS_QUERY, { entityId }, { requestPolicy: 'network-only' }).toPromise();
-    if (result.error) { onError(result.error.message); return; }
-    setGrants(result.data?.entityGrants ?? []);
+  const load = async (nextSearch = search) => {
+    if (!clientId) return;
+    setLoadingRows(true);
+    const result = await graphqlClient
+      .query(ENTITY_ACCESS_ROSTER_QUERY, { clientId, search: nextSearch || null }, { requestPolicy: 'network-only' })
+      .toPromise();
+    setLoadingRows(false);
+    if (result.error) {
+      onError(result.error.message);
+      setRows([]);
+      return;
+    }
+    const list: AccessRecord[] = result.data?.entityAccessRoster ?? [];
+    setRows(list);
+    setSelectedId((current) => (current && list.some((row) => row.entityId === current) ? current : list[0]?.entityId ?? null));
   };
 
   useEffect(() => {
-    if (clientId) {
-      graphqlClient.query(ROLES_QUERY, { clientId }).toPromise().then((r) => setRoles(r.data?.roles ?? []));
-    }
+    if (clientId || clients.length === 0) return;
+    setClientId(clients.find((c) => !c.isInternal)?.id ?? clients[0].id);
+  }, [clients, clientId]);
+
+  useEffect(() => {
+    if (!clientId) return;
+    load('');
+    // Reload when the client changes. Search is applied explicitly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientId]);
 
-  const handleGrant = async () => {
-    if (!entityId || !clientId) return;
-    const result = await graphqlClient
-      .mutation(GRANT_ENTITY_ACCESS_MUTATION, {
-        input: { clientId, entityId, granteeType, userId: granteeType === 'USER' ? userId : null, roleId: granteeType === 'ROLE' ? roleId : null, accessLevel, includeChildren },
-      })
-      .toPromise();
-    if (result.error || !result.data?.grantEntityAccess?.success) {
-      onError(result.error?.message ?? result.data?.grantEntityAccess?.errors?.[0]?.message ?? 'Grant failed');
-      return;
-    }
-    load();
-  };
-
-  const handleRevoke = async (id: string) => {
-    await graphqlClient.mutation(REVOKE_ENTITY_ACCESS_MUTATION, { id }).toPromise();
-    load();
-  };
-
-  const grantActions = useRef({ handleRevoke });
-  grantActions.current = { handleRevoke };
-  const grantContext = useMemo(() => ({ get: () => grantActions.current }), []);
+  const selected = rows.find((row) => row.entityId === selectedId) ?? null;
 
   return (
     <div>
       <p className="text-sm text-gray-600 mb-4">
-        Restrict who can see or edit a specific entity (e.g. a Fund) — adding any grant here hides it from everyone
-        else in the client except explicitly granted users/roles. With "Include children" on, this cascades to any
-        child entity linked via a parent/child relationship (e.g. the Fund's Positions, Deals, etc.).
+        Pick an entity and choose which roles may open it. Saving a role closes the entity to everyone else in the
+        client, and to every child entity under it. Leave every role on &quot;No access&quot; and save to open it again
+        to anyone who can view entities.
       </p>
 
-      <div className="bg-white rounded-lg shadow p-4 mb-4 space-y-3">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Entity ID</label>
-          <div className="flex gap-2">
-            <input value={entityId} onChange={(e) => setEntityId(e.target.value)} placeholder="UUID of the entity" className="flex-1 px-3 py-2 border rounded" />
-            <button onClick={load} className="px-4 py-2 bg-gray-200 rounded text-sm">Load grants</button>
-          </div>
-        </div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        <select value={clientId} onChange={(e) => setClientId(e.target.value)} className="px-3 py-2 border rounded">
+          {clients.map((c) => <option key={c.id} value={c.id}>{c.clientName}</option>)}
+        </select>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') load(search); }}
+          placeholder="Search by name or code"
+          className="flex-1 min-w-[16rem] px-3 py-2 border rounded"
+        />
+        <button onClick={() => load(search)} className="px-4 py-2 bg-gray-200 rounded text-sm">Search</button>
+      </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Client</label>
-            <select value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-full px-3 py-2 border rounded">
-              {clients.map((c) => <option key={c.id} value={c.id}>{c.clientName}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Access level</label>
-            <select value={accessLevel} onChange={(e) => setAccessLevel(e.target.value as any)} className="w-full px-3 py-2 border rounded">
-              <option value="READ">Read</option>
-              <option value="WRITE">Write</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Grant to</label>
-            <select value={granteeType} onChange={(e) => setGranteeType(e.target.value as any)} className="w-full px-3 py-2 border rounded">
-              <option value="ROLE">A role</option>
-              <option value="USER">A specific user</option>
-            </select>
-          </div>
-          {granteeType === 'ROLE' ? (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-              <select value={roleId} onChange={(e) => setRoleId(e.target.value)} className="w-full px-3 py-2 border rounded">
-                <option value="">Select…</option>
-                {roles.map((r) => <option key={r.id} value={r.id}>{r.roleName}</option>)}
-              </select>
-            </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          {loadingRows ? (
+            <div className="p-6 text-gray-500">Loading entities…</div>
           ) : (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">User ID</label>
-              <input value={userId} onChange={(e) => setUserId(e.target.value)} placeholder="UUID of the user" className="w-full px-3 py-2 border rounded" />
-            </div>
+            <ul className="divide-y divide-gray-100 max-h-[32rem] overflow-y-auto">
+              {rows.map((row) => {
+                const roleLabels = row.grants.filter((g) => g.granteeType === 'ROLE').map((g) => g.granteeLabel || 'Role');
+                return (
+                  <li key={row.entityId}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedId(row.entityId)}
+                      className={`w-full text-left px-4 py-3 ${selectedId === row.entityId ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                    >
+                      <div className="font-medium">{row.entityName}</div>
+                      <div className="text-xs text-gray-500">{row.entityCode} · {row.domainCode}</div>
+                      <div className="text-xs mt-1">
+                        {row.restricted
+                          ? <span className="text-amber-700">Closed{roleLabels.length ? `: ${roleLabels.join(', ')}` : ' by a parent'}</span>
+                          : <span className="text-gray-500">Open to the client</span>}
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+              {rows.length === 0 && <li className="p-6 text-gray-500 text-sm">No entities match.</li>}
+            </ul>
           )}
         </div>
 
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={includeChildren} onChange={(e) => setIncludeChildren(e.target.checked)} />
-          Include children (cascade restriction/grant down to related entities)
-        </label>
-
-        <button onClick={handleGrant} disabled={!entityId || !clientId} className="px-4 py-2 bg-blue-600 text-white rounded disabled:bg-gray-300 text-sm">
-          Add grant
-        </button>
-      </div>
-
-      <div className="bg-white rounded-lg shadow overflow-x-auto">
-        <AppGrid
-          rows={grants}
-          columns={GRANT_COLUMNS}
-          getRowId={(row) => row.id}
-          autoHeight
-          context={grantContext}
-          emptyMessage="No restrictions on this entity — visible to all client members with entity.read"
-        />
+        <div className="bg-white rounded-lg shadow p-4">
+          {selected ? (
+            <EntityRoleAccess
+              clientId={selected.clientId}
+              entityId={selected.entityId}
+              entityName={selected.entityName}
+              domainCode={selected.domainCode}
+              restricted={selected.restricted}
+              grants={selected.grants}
+              onChanged={() => load(search)}
+            />
+          ) : (
+            <div className="text-gray-500 text-sm">Select an entity to assign roles.</div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -584,22 +582,5 @@ const MEMBER_COLUMNS: ColDef[] = [
     cellRenderer: (params: any) => params.data.isActive
       ? <button type="button" onClick={() => params.context.get().handleDeactivate(params.data.userId)} className="text-red-600 hover:text-red-800">Remove</button>
       : null,
-  },
-];
-
-const GRANT_COLUMNS: ColDef[] = [
-  { colId: 'grantee', headerName: 'Grantee', flex: 1.4, valueGetter: (params) => params.data?.granteeLabel ?? params.data?.id ?? '' },
-  { field: 'granteeType', headerName: 'Type', width: 120 },
-  { field: 'accessLevel', headerName: 'Access', width: 120 },
-  { colId: 'children', headerName: 'Children', width: 120, valueGetter: (params) => (params.data?.includeChildren ? 'Yes' : 'No') },
-  {
-    colId: 'revoke',
-    headerName: '',
-    width: 110,
-    sortable: false,
-    filter: false,
-    cellRenderer: (params: any) => (
-      <button type="button" onClick={() => params.context.get().handleRevoke(params.data.id)} className="text-red-600 hover:text-red-800">Revoke</button>
-    ),
   },
 ];

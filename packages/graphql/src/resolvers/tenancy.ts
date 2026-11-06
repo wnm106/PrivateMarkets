@@ -1,13 +1,34 @@
 import { Context } from '../context';
 
-// `tenancy` lives in a non-public Postgres schema. For read-only operations
-// the anon-key client works (via exposed schema config), but writes require
-// the service-role client (`supabaseAdmin`) which has full schema access.
-// Authorization is enforced at the resolver level by scoping every operation
-// to `context.user.id` -- the service role bypasses RLS but the resolver
-// itself ensures users can only touch their own rows.
+// Always the caller's JWT. The service role bypasses row level security, so
+// tenancy reads and writes go through `supabase` and Postgres policies.
+// `supabaseAdmin` is reserved for auth.admin invite lookups.
 function tn(context: Context) {
-  return (context.supabaseAdmin ?? context.supabase).schema('tenancy');
+  return context.supabase.schema('tenancy');
+}
+
+const ADMIN_PERMISSIONS = ['user.manage', 'role.manage', 'entity_access.manage', 'client.manage'];
+
+function collectAccess(roleRows: any[] | null, isTenantAdmin: boolean) {
+  const permissionCodes = new Set<string>();
+  for (const row of roleRows || []) {
+    for (const rp of (row as any).role?.role_permissions || []) {
+      if (rp.permission?.permission_code) permissionCodes.add(rp.permission.permission_code);
+    }
+  }
+  const canManageEntityAccess = isTenantAdmin || permissionCodes.has('entity_access.manage');
+  const canAccessAdmin = isTenantAdmin || ADMIN_PERMISSIONS.some((code) => permissionCodes.has(code));
+  return { canAccessAdmin, canManageEntityAccess };
+}
+
+async function callerMayInvite(context: Context, clientId: string) {
+  const [{ data: allowed, error: allowedError }, { data: admin, error: adminError }] = await Promise.all([
+    tn(context).rpc('has_permission', { p_client_id: clientId, p_permission_code: 'user.manage' }),
+    tn(context).rpc('is_tenant_admin'),
+  ]);
+  if (allowedError) throw allowedError;
+  if (adminError) throw adminError;
+  return Boolean(allowed) || Boolean(admin);
 }
 
 export const tenancyResolvers = {
@@ -17,7 +38,7 @@ export const tenancyResolvers = {
         throw new Error('Not authenticated');
       }
 
-      const [{ data: profile }, { data: clientUsers }, { data: impersonation }] = await Promise.all([
+      const [{ data: profile }, { data: clientUsers }, { data: impersonation }, { data: roleRows }] = await Promise.all([
         tn(context).from('profiles').select('*').eq('id', context.user.id).maybeSingle(),
         tn(context).from('client_users').select('client:clients(*)').eq('user_id', context.user.id).eq('is_active', true),
         tn(context)
@@ -28,13 +49,22 @@ export const tenancyResolvers = {
           .order('started_at', { ascending: false })
           .limit(1)
           .maybeSingle(),
+        tn(context)
+          .from('user_roles')
+          .select('role:roles(role_permissions(permission:permissions(permission_code)))')
+          .eq('user_id', context.user.id),
       ]);
+
+      const isTenantAdmin = profile?.is_tenant_admin ?? false;
+      const access = collectAccess(roleRows, isTenantAdmin);
 
       return {
         id: context.user.id,
         email: context.user.email,
         displayName: profile?.display_name ?? null,
-        isTenantAdmin: profile?.is_tenant_admin ?? false,
+        isTenantAdmin,
+        canAccessAdmin: access.canAccessAdmin,
+        canManageEntityAccess: access.canManageEntityAccess,
         clients: (clientUsers || []).map((row: any) => mapClient(row.client)).filter(Boolean),
         impersonating: impersonation
           ? {
@@ -114,6 +144,29 @@ export const tenancyResolvers = {
       return (data || []).map(mapEntityGrant);
     },
 
+    entityAccess: async (_: any, args: { entityId: string }, context: Context) => {
+      if (!context.user) throw new Error('Not authenticated');
+      const { data, error } = await tn(context).rpc('entity_access_rows', {
+        p_client_id: await entityClientId(context, args.entityId),
+        p_entity_id: args.entityId,
+        p_search: null,
+      });
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : null;
+      return row ? mapAccessRecord(row) : null;
+    },
+
+    entityAccessRoster: async (_: any, args: { clientId: string; search?: string | null }, context: Context) => {
+      if (!context.user) throw new Error('Not authenticated');
+      const { data, error } = await tn(context).rpc('entity_access_rows', {
+        p_client_id: args.clientId,
+        p_entity_id: null,
+        p_search: args.search ?? null,
+      });
+      if (error) throw error;
+      return (data || []).map(mapAccessRecord);
+    },
+
     myPermissions: async (_: any, args: { clientId: string }, context: Context) => {
       const { data: rows, error: rowsError } = await tn(context)
         .from('user_roles')
@@ -181,6 +234,10 @@ export const tenancyResolvers = {
     // exists, skip the invite and just (re)assign membership/roles.
     inviteUser: async (_: any, args: { input: any }, context: Context) => {
       try {
+        if (!context.user) throw new Error('Not authenticated');
+        if (!(await callerMayInvite(context, args.input.clientId))) {
+          throw new Error('Not allowed to invite users');
+        }
         if (!context.supabaseAdmin) {
           throw new Error('User invitation requires SUPABASE_SERVICE_ROLE_KEY to be configured on the server');
         }
@@ -273,9 +330,27 @@ export const tenancyResolvers = {
             user_id: args.input.granteeType === 'USER' ? args.input.userId : null,
             role_id: args.input.granteeType === 'ROLE' ? args.input.roleId : null,
             access_level: args.input.accessLevel,
-            include_children: args.input.includeChildren,
+            include_children: args.input.includeChildren ?? true,
             created_by: context.user?.id,
           });
+        if (error) throw error;
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        return { success: false, errors: [{ field: 'general', message: error.message, code: 'GRANT_FAILED' }] };
+      }
+    },
+
+    setEntityRoleAccess: async (_: any, args: { clientId: string; entityId: string; roles: { roleId: string; accessLevel: string }[] }, context: Context) => {
+      try {
+        if (!context.user) throw new Error('Not authenticated');
+        const { error } = await tn(context).rpc('set_entity_role_access', {
+          p_client_id: args.clientId,
+          p_entity_id: args.entityId,
+          p_roles: (args.roles || []).map((role) => ({
+            role_id: role.roleId,
+            access_level: role.accessLevel,
+          })),
+        });
         if (error) throw error;
         return { success: true, errors: [] };
       } catch (error: any) {
@@ -324,26 +399,29 @@ export const tenancyResolvers = {
         if (args.input.displayName === undefined) {
           return { success: false, errors: [{ field: 'general', message: 'No fields to update', code: 'NO_CHANGES' }] };
         }
-        // Use supabaseAdmin (service role) which has full schema access
-        const supabase = context.supabaseAdmin ?? context.supabase;
-        const { data, error } = await supabase
-          .schema('tenancy')
+        const { data: profile, error } = await tn(context)
           .from('profiles')
-          .upsert({ id: context.user.id, display_name: args.input.displayName.trim() || null, updated_at: new Date().toISOString() }, { onConflict: 'id' })
-          .select();
-        if (error) throw error;
-        // Re-fetch the full me object to return
-        const { data: profile } = await supabase
-          .schema('tenancy')
-          .from('profiles')
-          .select('*')
+          .update({ display_name: args.input.displayName.trim() || null })
           .eq('id', context.user.id)
+          .select('*')
           .maybeSingle();
+        if (error) throw error;
+        if (!profile) {
+          return { success: false, errors: [{ field: 'general', message: 'Profile not found', code: 'NOT_FOUND' }] };
+        }
+        const { data: roleRows } = await tn(context)
+          .from('user_roles')
+          .select('role:roles(role_permissions(permission:permissions(permission_code)))')
+          .eq('user_id', context.user.id);
+        const isTenantAdmin = profile.is_tenant_admin ?? false;
+        const access = collectAccess(roleRows, isTenantAdmin);
         const meResult = {
           id: context.user.id,
           email: context.user.email,
-          displayName: profile?.display_name ?? null,
-          isTenantAdmin: profile?.is_tenant_admin ?? false,
+          displayName: profile.display_name ?? null,
+          isTenantAdmin,
+          canAccessAdmin: access.canAccessAdmin,
+          canManageEntityAccess: access.canManageEntityAccess,
           clients: [],
           impersonating: null,
         };
@@ -394,14 +472,43 @@ function mapRole(row: any) {
 function mapEntityGrant(row: any) {
   return {
     id: row.id,
-    clientId: row.client_id,
-    entityId: row.entity_id,
-    granteeType: row.grantee_type,
-    userId: row.user_id,
-    roleId: row.role_id,
-    granteeLabel: row.grantee_user?.display_name || row.grantee_role?.role_name || null,
-    accessLevel: row.access_level,
-    includeChildren: row.include_children,
-    createdAt: row.created_at,
+    clientId: row.client_id ?? row.clientId,
+    entityId: row.entity_id ?? row.entityId,
+    granteeType: row.grantee_type ?? row.granteeType,
+    userId: row.user_id ?? row.userId ?? null,
+    roleId: row.role_id ?? row.roleId ?? null,
+    granteeLabel: row.grantee_user?.display_name || row.grantee_role?.role_name || row.granteeLabel || null,
+    accessLevel: row.access_level ?? row.accessLevel,
+    includeChildren: row.include_children ?? row.includeChildren,
+    createdAt: row.created_at ?? row.createdAt,
   };
+}
+
+function mapAccessRecord(row: any) {
+  const grants = Array.isArray(row.grants) ? row.grants : [];
+  return {
+    entityId: row.entity_id,
+    clientId: row.client_id,
+    entityCode: row.entity_code,
+    entityName: row.entity_name,
+    domainCode: row.domain_code,
+    restricted: row.restricted,
+    grants: grants.map(mapEntityGrant),
+  };
+}
+
+// The directory function is client-scoped. Look up the entity's client with the
+// caller's JWT so a guessed id in another tenant returns nothing.
+async function entityClientId(context: Context, entityId: string) {
+  const { data, error } = await context.supabase
+    .schema('entity_instances')
+    .from('master_entities')
+    .select('client_id')
+    .eq('id', entityId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data?.client_id) {
+    throw new Error('Entity not found');
+  }
+  return data.client_id as string;
 }
