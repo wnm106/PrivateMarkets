@@ -500,7 +500,16 @@ export const complianceResolvers = {
 
     scopeAssignments: async (parent: any, _: any, context: Context) => {
       const { data } = await cx(context).from('rule_scope_assignments').select('*').eq('rule_id', parent.id);
-      return (data || []).map(mapScopeAssignment);
+      const rows = data || [];
+      const labels = await entityLabels(context, rows.map((row: any) => row.entity_id));
+      return rows.map((row: any) => {
+        const label = labels.get(row.entity_id);
+        return {
+          ...mapScopeAssignment(row),
+          entityCode: label?.entity_code || null,
+          entityName: label?.entity_name || null,
+        };
+      });
     },
   },
 
@@ -511,7 +520,16 @@ export const complianceResolvers = {
     },
     results: async (parent: any, _: any, context: Context) => {
       const { data } = await cx(context).from('rule_evaluation_results').select('*').eq('run_id', parent.id);
-      return (data || []).map(mapResult);
+      const rows = data || [];
+      const labels = await entityLabels(context, rows.map((row: any) => row.anchor_entity_id));
+      return rows.map((row: any) => {
+        const label = labels.get(row.anchor_entity_id);
+        return {
+          ...mapResult(row),
+          anchorEntityCode: label?.entity_code || null,
+          anchorEntityName: label?.entity_name || null,
+        };
+      });
     },
   },
 };
@@ -655,6 +673,20 @@ function mapCondition(row: any) {
     logicOperator: row.logic_operator,
     createdAt: row.created_at,
   };
+}
+
+async function entityLabels(context: Context, ids: string[]) {
+  const unique = [...new Set(ids.filter(Boolean))];
+  const labels = new Map<string, { entity_code: string; entity_name: string }>();
+  if (unique.length === 0) return labels;
+  const { data, error } = await context.supabase
+    .schema('entity_instances')
+    .from('master_entities')
+    .select('id, entity_code, entity_name')
+    .in('id', unique);
+  if (error) throw new Error(error.message);
+  for (const row of data || []) labels.set(row.id, row);
+  return labels;
 }
 
 function mapScopeAssignment(row: any) {

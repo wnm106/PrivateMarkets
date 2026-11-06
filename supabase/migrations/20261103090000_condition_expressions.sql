@@ -205,12 +205,12 @@ BEGIN
             v_cond_result := FALSE;
             IF v_cond.left_expression IS NOT NULL OR v_cond.right_expression IS NOT NULL THEN
                 v_cond_result := compliance.expression_condition_matches(
-                    p_entity_id, v_cond::compliance.rule_conditions, v_attr_path, v_cmp_path, p_as_of_date, p_knowledge_date, p_source_scope
+                    p_entity_id, jsonb_populate_record(NULL::compliance.rule_conditions, to_jsonb(v_cond)), v_attr_path, v_cmp_path, p_as_of_date, p_knowledge_date, p_source_scope
                 );
             ELSE
                 v_subjects := compliance.condition_subject_ids(p_entity_id, v_attr_path, p_as_of_date, p_knowledge_date);
                 IF v_subjects IS NULL OR array_length(v_subjects, 1) IS NULL THEN
-                    v_cond_result := compliance.condition_null_subject_matches(p_entity_id, v_cond::compliance.rule_conditions, v_attr_path, v_cmp_path, p_as_of_date, p_knowledge_date, p_source_scope);
+                    v_cond_result := compliance.condition_null_subject_matches(p_entity_id, jsonb_populate_record(NULL::compliance.rule_conditions, to_jsonb(v_cond)), v_attr_path, v_cmp_path, p_as_of_date, p_knowledge_date, p_source_scope);
                 ELSE
                     FOREACH v_subject IN ARRAY v_subjects LOOP
                         v_actual := compliance.get_text_value_dim(v_subject, v_cond.attribute_code, p_as_of_date, p_knowledge_date, p_source_scope, v_cond.attribute_dimension);
@@ -237,9 +237,9 @@ BEGIN
                     END LOOP;
                 END IF;
             END IF;
-            IF v_group_match IS NULL THEN v_group_match := v_cond_result;
-            ELSIF v_cond.logic_operator = 'OR' THEN v_group_match := v_group_match OR v_cond_result;
-            ELSE v_group_match := v_group_match AND v_cond_result;
+            IF v_group_match IS NULL THEN v_group_match := COALESCE(v_cond_result, FALSE);
+            ELSIF v_cond.logic_operator = 'OR' THEN v_group_match := v_group_match OR COALESCE(v_cond_result, FALSE);
+            ELSE v_group_match := v_group_match AND COALESCE(v_cond_result, FALSE);
             END IF;
         END LOOP;
         IF v_group_match THEN v_any_group_match := TRUE; END IF;

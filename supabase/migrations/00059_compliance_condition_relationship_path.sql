@@ -109,7 +109,7 @@ BEGIN
 
             IF v_subjects IS NULL OR array_length(v_subjects, 1) IS NULL THEN
                 v_cond_result := compliance.condition_null_subject_matches(
-                    p_entity_id, v_cond::compliance.rule_conditions, v_attr_path, v_cmp_path, p_as_of_date, p_knowledge_date, p_source_scope
+                    p_entity_id, jsonb_populate_record(NULL::compliance.rule_conditions, to_jsonb(v_cond)), v_attr_path, v_cmp_path, p_as_of_date, p_knowledge_date, p_source_scope
                 );
             ELSE
                 FOREACH v_subject IN ARRAY v_subjects LOOP

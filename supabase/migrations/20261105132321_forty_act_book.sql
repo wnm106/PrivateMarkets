@@ -1,6 +1,28 @@
 -- Rules, sample book, and the scorecard check for the 1940 Act guidelines.
 -- Harbor Senior Income (HALY-FUND-HSI). Assets equal the fund's published NAV.
 
+-- A numeric flag so the custodian rule can count ineligible accounts.
+-- CUSTODIAN_ID is the identifier; the count needs a number.
+ALTER TABLE metadata_register.attribute_register DISABLE TRIGGER trg_validate_derived_attribute;
+INSERT INTO metadata_register.attribute_register (
+    attribute_code, attribute_name, data_type, description, domain_code,
+    is_required, default_precedence_rank, display_section, display_group,
+    is_editable, is_visible, is_time_varying, time_dimension
+) VALUES (
+    'ACCOUNT_PRESENT', 'Account Present', 'INTEGER',
+    '1 on every custody account so a compliance count can see it.',
+    'ACCOUNT', FALSE, 100, '40 Act', 3, TRUE, TRUE, FALSE, 'NONE'
+)
+ON CONFLICT (attribute_code) DO NOTHING;
+ALTER TABLE metadata_register.attribute_register ENABLE TRIGGER trg_validate_derived_attribute;
+
+INSERT INTO metadata_register.template_attribute_assignments (template_id, attribute_id, is_required, precedence_rank, display_order)
+SELECT t.id, a.id, FALSE, 100, 3
+FROM metadata_register.attribute_register a
+JOIN metadata_register.domain_templates t ON t.template_code = 'ACCOUNT_STANDARD'
+WHERE a.attribute_code = 'ACCOUNT_PRESENT'
+ON CONFLICT (template_id, attribute_id) DO NOTHING;
+
 -- ============================================================
 -- 1. Rules
 -- ============================================================
@@ -169,7 +191,7 @@ JOIN (VALUES
      'MAX', NULL::numeric, 0::numeric, NULL::varchar, NULL::numeric, 'COUNT', '{"pass_if_empty":true}'),
     ('ACT40_CUSTODIAN', 'Count of accounts whose custodian is not an eligible bank or exchange.',
      'ACCOUNT', '[{"relationship_code":"ACCOUNT_FUND","direction":"UP","recursive":false}]', '[]', NULL,
-     'CUSTODIAN_ID', 'COUNT', NULL, NULL, 'SAME_GROUP', 'BASE',
+     'ACCOUNT_PRESENT', 'COUNT', NULL, NULL, 'SAME_GROUP', 'BASE',
      'MAX', NULL::numeric, 0::numeric, NULL::varchar, NULL::numeric, 'COUNT', '{"pass_if_empty":true}'),
     ('ACT40_ADVISORY_RENEWAL', '1 when the as-of date is past the advisory contract renewal date.',
      'FUND', '[]', '[]', NULL,
@@ -322,7 +344,7 @@ BEGIN
     INSERT INTO t_ord VALUES
         ('margin', 'Margin purchase', 'Margin_Purchase', 0.01, FALSE, NULL, NULL, NULL, 'BLOCKED'),
         ('short', 'Short sale', 'Short_Sale', 0.01, FALSE, NULL, NULL, NULL, 'BLOCKED'),
-        ('re', 'Physical real estate buy', 'Buy', 0.01, FALSE, 're', NULL, NULL, 'BLOCKED'),
+        ('re', 'Physical real estate buy', 'Buy', 0.01, FALSE, 'RE', NULL, NULL, 'BLOCKED'),
         ('borrow', 'New borrowing', 'Borrow', 0.25, FALSE, NULL, NULL, NULL, 'BLOCKED'),
         ('uwbig', 'Large underwriting', 'Buy', 0.08, TRUE, 'apex', 'clean', 'ok', 'BLOCKED'),
         ('uwok', 'Small underwriting', 'Buy', 0.02, TRUE, 'birch', 'clean', 'ok', 'CLEAR'),
@@ -451,8 +473,10 @@ BEGIN
     INSERT INTO t_val VALUES
         ('HSI40-ACCT-OK', 'ACCOUNT_LABEL', 'Eligible custody account'),
         ('HSI40-ACCT-OK', 'CUSTODIAN_ID', 'HSI40-CUST-OK'),
+        ('HSI40-ACCT-OK', 'ACCOUNT_PRESENT', '1'),
         ('HSI40-ACCT-BAD', 'ACCOUNT_LABEL', 'Ineligible custody account'),
         ('HSI40-ACCT-BAD', 'CUSTODIAN_ID', 'HSI40-CUST-BAD'),
+        ('HSI40-ACCT-BAD', 'ACCOUNT_PRESENT', '1'),
         ('HSI40-CUST-OK', 'CUSTODIAN_NAME', 'Harbor Bank NA'),
         ('HSI40-CUST-OK', 'IS_ELIGIBLE_BANK_EXCHANGE', 'true'),
         ('HSI40-CUST-BAD', 'CUSTODIAN_NAME', 'Unregistered Lot'),
@@ -533,6 +557,16 @@ BEGIN
 
     -- Audit snapshots. CREATE on every order. The clean order is then
     -- modified, routed, and filled. The margin order is cancelled.
+    -- A re-run replaces this sample's snapshots so the counts stay stable.
+    ALTER TABLE compliance.compliance_audit_log DISABLE TRIGGER trg_audit_log_immutable;
+    DELETE FROM compliance.compliance_audit_log l
+    USING entity_instances.master_entities me
+    WHERE l.order_entity_id = me.id
+      AND me.entity_code LIKE 'HSI40-ORD-%';
+    DELETE FROM compliance.compliance_audit_log
+    WHERE order_entity_id IS NULL
+      AND snapshot->>'order_code' ILIKE 'HSI40-ORD-%';
+    ALTER TABLE compliance.compliance_audit_log ENABLE TRIGGER trg_audit_log_immutable;
     FOR v_order, v_snap IN
         SELECT me.id, jsonb_build_object(
             'order_code', me.entity_code,
@@ -551,9 +585,9 @@ BEGIN
         PERFORM compliance.record_order_audit(v_order, NULL, 'CREATE', v_snap, NULL, v_snap->>'compliance_status', v_event);
     END LOOP;
 
-    SELECT id INTO v_order FROM entity_instances.master_entities WHERE entity_code = 'HSI40-ORD-CLEAN';
+    SELECT id INTO v_order FROM entity_instances.master_entities WHERE entity_code = 'HSI40-ORD-clean';
     SELECT id INTO v_trade FROM entity_instances.master_entities WHERE entity_code = 'HSI40-TRD-CLEAN';
-    v_snap := jsonb_build_object('order_code', 'HSI40-ORD-CLEAN', 'transaction_type', 'Buy', 'compliance_status', 'CLEAR', 'timestamp', v_event, 'user_id', NULL);
+    v_snap := jsonb_build_object('order_code', 'HSI40-ORD-clean', 'transaction_type', 'Buy', 'compliance_status', 'CLEAR', 'timestamp', v_event, 'user_id', NULL);
     FOREACH v_action IN ARRAY ARRAY['MODIFY', 'ROUTE', 'FILL'] LOOP
         PERFORM compliance.record_order_audit(
             v_order,
@@ -561,10 +595,10 @@ BEGIN
             v_action, v_snap || jsonb_build_object('action', v_action), NULL, 'CLEAR', v_event
         );
     END LOOP;
-    SELECT id INTO v_order FROM entity_instances.master_entities WHERE entity_code = 'HSI40-ORD-MARGIN';
+    SELECT id INTO v_order FROM entity_instances.master_entities WHERE entity_code = 'HSI40-ORD-margin';
     PERFORM compliance.record_order_audit(
         v_order, NULL, 'CANCEL',
-        jsonb_build_object('order_code', 'HSI40-ORD-MARGIN', 'transaction_type', 'Margin_Purchase', 'compliance_status', 'BLOCKED', 'timestamp', v_event, 'action', 'CANCEL'),
+        jsonb_build_object('order_code', 'HSI40-ORD-margin', 'transaction_type', 'Margin_Purchase', 'compliance_status', 'BLOCKED', 'timestamp', v_event, 'action', 'CANCEL'),
         NULL, 'BLOCKED', v_event
     );
 

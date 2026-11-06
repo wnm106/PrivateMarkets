@@ -689,7 +689,7 @@ function ResultsTable({ results, resultUnit }: { results: ResultDto[]; resultUni
       minWidth: 160,
       flex: 1.4,
       cellClass: 'mono',
-      valueGetter: (params) => params.data?.anchorEntityCode || params.data?.anchorEntityId || '',
+      valueGetter: (params) => params.data?.anchorEntityName || params.data?.anchorEntityCode || params.data?.anchorEntityId || '',
     },
     {
       field: 'groupByValue',
