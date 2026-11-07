@@ -71,6 +71,7 @@ function fieldLabel(assignment: ColumnAssignment, targets: MappingTarget[], name
   if (known) return known.label;
   if (assignment.role === 'ignore') return 'Not loaded';
   if (assignment.role === 'as_of') return 'As-of date';
+  if (assignment.role === 'source') return 'Source';
   if (assignment.role === 'filter') return 'Row filter';
   return `${domainLabel(assignment.domainCode)} · ${assignment.attributeCode || assignment.role}`;
 }
@@ -98,14 +99,14 @@ function defaultOtherKey(assignment: ColumnAssignment, targets: MappingTarget[])
   )];
   let best: { key: string; score: number } | null = null;
   for (const target of targets) {
-    if (target.key === current || target.role === 'ignore' || target.role === 'as_of' || target.role === 'filter') continue;
+    if (target.key === current || target.role === 'ignore' || target.role === 'as_of' || target.role === 'source' || target.role === 'filter') continue;
     const label = target.label.toLowerCase();
     const score = words.reduce((sum, word) => sum + (label.includes(word) ? word.length : 0), 0);
     if (score > (best?.score || 0)) best = { key: target.key, score };
   }
   return best?.key
     || targets.find((target) => target.role === 'attribute' && target.domainCode === assignment.domainCode && target.key !== current)?.key
-    || targets.find((target) => target.key !== current && target.key !== 'ignore' && target.role !== 'as_of' && target.role !== 'filter')?.key
+    || targets.find((target) => target.key !== current && target.key !== 'ignore' && target.role !== 'as_of' && target.role !== 'source' && target.role !== 'filter')?.key
     || 'ignore';
 }
 
@@ -323,7 +324,7 @@ export function LoadReview({
     for (const [code, rows] of byDomain) {
       buckets.push({ key: code, title: recordTypeName(code), countLabel: 'No identifier yet', rows });
     }
-    const fileRows = rowsFor((assignment) => assignment.role === 'as_of' || assignment.role === 'filter');
+    const fileRows = rowsFor((assignment) => assignment.role === 'as_of' || assignment.role === 'source' || assignment.role === 'filter');
     if (fileRows.length > 0) buckets.push({ key: 'file', title: 'File', countLabel: 'Applies to the load', rows: fileRows });
     const skipped = rowsFor((assignment) => assignment.role === 'ignore');
     if (skipped.length > 0) buckets.push({ key: 'skip', title: 'Not loaded', countLabel: `${skipped.length} column${skipped.length === 1 ? '' : 's'}`, rows: skipped });

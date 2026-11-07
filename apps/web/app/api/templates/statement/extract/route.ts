@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as XLSX from 'xlsx';
+import { extractPdfText } from '@tapestrai/graphql/src/lib/import-intake';
 import { visionJsonToStatementText } from '@tapestrai/graphql/src/lib/statement-template/parse';
 import { requireFeedUser } from '@/lib/feeds/require-user';
 
@@ -57,6 +58,11 @@ async function sourceFromFile(file: File) {
     return { sourceName: name, sourceKind: 'image' as const, text };
   }
   const lower = name.toLowerCase();
+  if (lower.endsWith('.pdf') || mime.includes('pdf')) {
+    const text = await extractPdfText(new Uint8Array(bytes));
+    if (!text.trim()) throw new Error(`${name} has no text layer. Export the statement to Excel or CSV.`);
+    return { sourceName: name, sourceKind: 'file' as const, text };
+  }
   if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || mime.includes('spreadsheet') || mime.includes('excel')) {
     return { sourceName: name, sourceKind: 'file' as const, text: workbookToText(bytes) };
   }

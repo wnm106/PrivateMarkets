@@ -617,6 +617,7 @@ function fieldTarget(assignment: Assignment) {
     return assignment.parentExisting ? `Link to ${assignment.parentDomainCode} already stored` : `Parent ${assignment.parentDomainCode}`;
   }
   if (assignment.role === 'as_of') return 'As-of date';
+  if (assignment.role === 'source') return 'Source';
   if (assignment.role === 'filter') return 'Keeps these rows';
   return assignment.role;
 }
@@ -668,7 +669,7 @@ function UnmappedAlert({
 
 function EntityMaps({ reading }: { reading: Reading }) {
   const assignments = reading.assignments || [];
-  const fileFields = assignments.filter((assignment) => assignment.role === 'as_of' || assignment.role === 'filter');
+  const fileFields = assignments.filter((assignment) => assignment.role === 'as_of' || assignment.role === 'source' || assignment.role === 'filter');
   const order = reading.loadWaves.flat();
   const domains = [...(reading.map?.domains || [])].sort((left, right) => {
     const leftIndex = order.indexOf(left.domainCode);
@@ -716,7 +717,7 @@ function EntityMaps({ reading }: { reading: Reading }) {
 }
 
 function FieldRows({ assignments }: { assignments: Assignment[] }) {
-  const order = ['identity', 'name', 'parent', 'attribute', 'as_of', 'filter'];
+  const order = ['identity', 'name', 'parent', 'attribute', 'as_of', 'source', 'filter'];
   const sorted = [...assignments].sort((left, right) => order.indexOf(left.role) - order.indexOf(right.role) || left.sourceColumn.localeCompare(right.sourceColumn));
   return (
     <>

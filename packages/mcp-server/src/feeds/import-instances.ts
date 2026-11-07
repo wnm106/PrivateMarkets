@@ -1,7 +1,21 @@
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { assertLocalSupabase, executeParsedFeed, localSupabase } from './feed-loader';
 import { dependencyLoadWaves } from './load-order';
+import { readImportFile } from './intake';
 import { parseTabularFile } from './parse-table';
+import {
+  applyReusableMap,
+  kindLabel,
+  mapTitle,
+  matchReusableMap,
+  mergeAssignments,
+  mergeHeaders,
+  newMapCode,
+  parseReusableMap,
+  storeAssignment,
+  type ReusableMap,
+} from './reusable-map';
+import { normalizeSourceCode } from './row-context';
 import {
   applyListSuggestions,
   feedMapFromAssignments,
@@ -9,6 +23,7 @@ import {
   suggestTransform,
   type AttributeChoice,
   type ColumnAssignment,
+  type ColumnHint,
   type ListChoice,
 } from './suggest';
 import type { FeedLoadResult } from './types';
@@ -33,6 +48,8 @@ export interface ImportInstanceSummary {
   startedAt: string | null;
   completedAt: string | null;
   asOfDate: string | null;
+  sourceCode: string | null;
+  mapReuse: 'exact' | 'extended' | 'new';
   errorMessage: string | null;
   runs: InstanceRun[];
   resultSummary: {
@@ -148,6 +165,8 @@ function toSummary(row: any, map?: { name: string | null; saved: boolean }): Imp
     startedAt: row.started_at,
     completedAt: row.completed_at,
     asOfDate: row.as_of_date,
+    sourceCode: row.source_code || null,
+    mapReuse: row.map_reuse === 'exact' || row.map_reuse === 'extended' ? row.map_reuse : 'new',
     errorMessage: row.error_message,
     runs: Array.isArray(row.runs) ? row.runs : [],
     resultSummary: summarize(row.result),
@@ -169,7 +188,7 @@ export async function listImportInstances(client: SupabaseClient = useClient()):
     client
       .schema('entity_instances')
       .from('import_instances')
-      .select('id, file_name, row_count, status, received_at, started_at, completed_at, as_of_date, error_message, runs, result, map_code')
+      .select('id, file_name, row_count, status, received_at, started_at, completed_at, as_of_date, source_code, error_message, runs, result, map_code, map_reuse')
       .order('received_at', { ascending: false }),
     savedMaps(client),
   ]);
@@ -188,10 +207,10 @@ function suggestedAsOf(assignments: ColumnAssignment[], rows: Record<string, str
   return dates.size === 1 ? [...dates][0] : null;
 }
 
-async function columnsForTable(client: SupabaseClient, headers: string[], rows: Record<string, string>[]): Promise<{ columnMappings: ColumnAssignment[]; identity: LoadMapIdentity }> {
+async function columnsForTable(client: SupabaseClient, headers: string[], rows: Record<string, string>[], hints: ColumnHint[] = []): Promise<{ columnMappings: ColumnAssignment[]; identity: LoadMapIdentity }> {
   const [catalog, lists] = await Promise.all([attributeCatalog(client), listReferenceLists(client)]);
   const stored = await findStoredMap(client, headerSignature(headers));
-  let suggested = suggestAssignments(headers, rows, catalog.attributes);
+  let suggested = suggestAssignments(headers, rows, catalog.attributes, hints);
   if (stored) suggested = overlayStoredMap(suggested, stored.template, stored.name);
   const reviewed = await reviewWithModel(suggested, catalog.attributes);
   const columnMappings = applyListSuggestions(reviewed, catalog.attributes, lists);
@@ -201,24 +220,36 @@ async function columnsForTable(client: SupabaseClient, headers: string[], rows: 
   return { columnMappings, identity };
 }
 
-export async function createImportInstance(fileName: string, mediaType: string, bytes: Buffer, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
+export async function createImportInstance(
+  fileName: string,
+  mediaType: string,
+  bytes: Buffer,
+  client: SupabaseClient = useClient(),
+  options?: { forceMapCode?: string; sourceCode?: string },
+): Promise<ImportInstanceDetail> {
   assertLocalSupabase(client);
-  const table = parseTabularFile(fileName, bytes);
-  const { columnMappings, identity } = await columnsForTable(client, table.headers, table.rows);
+  const upload = await readUpload(fileName, bytes, Boolean(options?.forceMapCode));
+  const planned = await planColumns(client, upload, options?.forceMapCode);
+  const identity = planned.identity;
+  const columnMappings = planned.columnMappings;
+  if (planned.artifact) await saveReusableMap(client, planned.artifact);
   const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', identity.sourceCode).maybeSingle();
   if (source.error || !source.data) throw new Error(source.error?.message || `Source ${identity.sourceCode} was not found`);
+  const fileSource = cleanSource(options?.sourceCode);
   const inserted = await client.schema('entity_instances').from('import_instances').insert({
     source_id: source.data.id,
     map_code: identity.mapCode,
+    ...(planned.mapReuse ? { map_reuse: planned.mapReuse } : {}),
+    ...(fileSource ? { source_code: fileSource } : {}),
     file_name: fileName,
     media_type: mediaType,
     source_base64: bytes.toString('base64'),
-    headers: table.headers,
-    parsed_rows: table.rows,
+    headers: upload.headers,
+    parsed_rows: upload.rows,
     column_mappings: columnMappings,
-    as_of_date: suggestedAsOf(columnMappings, table.rows),
+    as_of_date: suggestedAsOf(columnMappings, upload.rows),
     status: 'READY',
-    row_count: table.rows.length,
+    row_count: upload.rows.length,
     runs: [],
   }).select('id').single();
   if (inserted.error || !inserted.data) throw new Error(inserted.error?.message || 'The file could not be stored');
@@ -231,17 +262,20 @@ export async function refreshImportInstance(id: string, client: SupabaseClient =
   const existing = await client.schema('entity_instances').from('import_instances').select('id, file_name, source_base64').eq('id', id).single();
   if (existing.error || !existing.data) throw new Error(existing.error?.message || 'Import instance not found');
   if (!existing.data.source_base64) throw new Error('The original file is not stored, so it cannot be read again.');
-  const table = parseTabularFile(existing.data.file_name, Buffer.from(existing.data.source_base64, 'base64'));
-  const { columnMappings, identity } = await columnsForTable(client, table.headers, table.rows);
+  const upload = await readUpload(existing.data.file_name, Buffer.from(existing.data.source_base64, 'base64'), false);
+  const planned = await planColumns(client, upload);
+  if (planned.artifact) await saveReusableMap(client, planned.artifact);
+  const { columnMappings, identity } = planned;
   const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', identity.sourceCode).maybeSingle();
   if (source.error) throw new Error(source.error.message);
   const updated = await client.schema('entity_instances').from('import_instances').update({
-    headers: table.headers,
-    parsed_rows: table.rows,
+    headers: upload.headers,
+    parsed_rows: upload.rows,
     column_mappings: columnMappings,
-    row_count: table.rows.length,
-    as_of_date: suggestedAsOf(columnMappings, table.rows),
+    row_count: upload.rows.length,
+    as_of_date: suggestedAsOf(columnMappings, upload.rows),
     map_code: identity.mapCode,
+    ...(planned.mapReuse ? { map_reuse: planned.mapReuse } : {}),
     ...(source.data?.id ? { source_id: source.data.id } : {}),
   }).eq('id', id);
   if (updated.error) throw new Error(updated.error.message);
@@ -296,6 +330,16 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
   const map = feedMapFromAssignments(mappings, identity);
   if (map.domains.length === 0) throw new Error('Choose which column identifies each record before loading.');
   await saveLoadMap(db, { ...identity, signature, template: templateFromAssignments(mappings), feedMap: map });
+  const reusable = await getReusableMap(identity.mapCode, db);
+  if (reusable || existing.data.map_reuse) {
+    await saveReusableMap(db, reusableFromAssignments(
+      identity.mapCode,
+      reusable?.kind || 'TABULAR',
+      existing.data.headers || [],
+      mappings,
+      reusable,
+    ));
+  }
   const startedAt = new Date().toISOString();
   const marked = await db.schema('entity_instances').from('import_instances').update({
     status: 'PROCESSING',
@@ -311,7 +355,7 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
     const result = await executeParsedFeed(map, existing.data.file_name, {
       headers: existing.data.headers || [],
       rows: existing.data.parsed_rows || [],
-    }, asOf, db, clientId);
+    }, asOf, db, clientId, cleanSource(existing.data.source_code) || undefined);
     const summary = summarize(result);
     const failed = (summary?.failed || 0) > 0 || result.errors.length > 0;
     const completedAt = new Date().toISOString();
@@ -400,4 +444,191 @@ async function reviewWithModel(assignments: ColumnAssignment[], attributes: Attr
   } catch {
     return assignments;
   }
+}
+
+interface UploadTable {
+  headers: string[];
+  rows: Record<string, string>[];
+  hints: ColumnHint[];
+  kind: string | null;
+}
+
+async function readUpload(fileName: string, bytes: Buffer, forceInterpret: boolean): Promise<UploadTable> {
+  const lower = fileName.toLowerCase();
+  const document = lower.endsWith('.pdf') || lower.endsWith('.html') || lower.endsWith('.htm') || lower.endsWith('.json');
+  if (forceInterpret || document) {
+    try {
+      const read = await readImportFile(fileName, bytes);
+      return { headers: read.table.headers, rows: read.table.rows, hints: read.hints, kind: read.kind };
+    } catch (error) {
+      if (document) throw error;
+    }
+  } else {
+    try {
+      const read = await readImportFile(fileName, bytes);
+      if (read.kind === 'NAV_STATEMENT' || read.kind === 'FINANCIAL_STATEMENT') {
+        return { headers: read.table.headers, rows: read.table.rows, hints: read.hints, kind: read.kind };
+      }
+    } catch {
+      // A plain spreadsheet stays on the tabular parser.
+    }
+  }
+  const table = parseTabularFile(fileName, bytes);
+  return { headers: table.headers, rows: table.rows, hints: [], kind: null };
+}
+
+function cleanSource(value?: string | null): string | null {
+  if (!value || !String(value).trim()) return null;
+  const code = normalizeSourceCode(String(value));
+  return code || null;
+}
+
+export class MapMismatchError extends Error {
+  missingHeaders: string[];
+  constructor(mapCode: string, missingHeaders: string[]) {
+    super(missingHeaders.length
+      ? `This file is missing ${missingHeaders.join(', ')} from map ${mapCode}.`
+      : `This file does not match map ${mapCode}.`);
+    this.name = 'MapMismatchError';
+    this.missingHeaders = missingHeaders;
+  }
+}
+
+async function planColumns(
+  client: SupabaseClient,
+  upload: UploadTable,
+  forceMapCode?: string,
+): Promise<{ columnMappings: ColumnAssignment[]; identity: LoadMapIdentity; mapReuse: 'exact' | 'extended' | 'new' | null; artifact: ReusableMap | null }> {
+  const reusable = Boolean(forceMapCode)
+    || upload.kind === 'NAV_STATEMENT'
+    || upload.kind === 'FINANCIAL_STATEMENT'
+    || (upload.kind !== null && upload.hints.length > 0);
+  if (!reusable) {
+    const planned = await columnsForTable(client, upload.headers, upload.rows, upload.hints);
+    return { ...planned, mapReuse: null, artifact: null };
+  }
+
+  const saved = forceMapCode ? [await requireReusableMap(forceMapCode, client)] : await listReusableMaps(client);
+  const match = matchReusableMap(upload.headers, saved, forceMapCode ? undefined : upload.kind || undefined);
+  if (forceMapCode && match.type === 'none') throw new MapMismatchError(forceMapCode, match.missingHeaders);
+
+  if (match.type === 'exact' || match.type === 'extended') {
+    const fresh = match.type === 'extended'
+      ? (await columnsForTable(
+          client,
+          match.newHeaders,
+          upload.rows,
+          upload.hints.filter((hint) => match.newHeaders.includes(hint.sourceColumn)),
+        )).columnMappings
+      : [];
+    const columnMappings = applyReusableMap(upload.headers, upload.rows, match.map, fresh);
+    const artifact = reusableFromAssignments(match.map.mapCode, match.map.kind, upload.headers, columnMappings, match.map);
+    const stored = await findStoredMap(client, headerSignature(upload.headers));
+    const proposed = proposeLoadIdentity(upload.headers, columnMappings);
+    return {
+      columnMappings,
+      mapReuse: match.type,
+      artifact,
+      identity: {
+        mapCode: match.map.mapCode,
+        sourceCode: stored?.sourceCode || proposed.sourceCode,
+        name: artifact.name,
+        description: artifact.description,
+      },
+    };
+  }
+
+  const planned = await columnsForTable(client, upload.headers, upload.rows, upload.hints);
+  const mapCode = newMapCode(upload.kind || 'TABULAR', upload.headers);
+  const artifact = reusableFromAssignments(mapCode, upload.kind || 'TABULAR', upload.headers, planned.columnMappings, null);
+  return {
+    columnMappings: planned.columnMappings,
+    mapReuse: 'new',
+    artifact,
+    identity: { ...planned.identity, mapCode, name: artifact.name, description: artifact.description },
+  };
+}
+
+function reusableFromAssignments(
+  mapCode: string,
+  kind: string,
+  fileHeaders: string[],
+  assignments: ColumnAssignment[],
+  existing: ReusableMap | null,
+): ReusableMap {
+  const headers = mergeHeaders(existing?.headers || [], fileHeaders);
+  const coreHeaders = existing?.coreHeaders?.length ? existing.coreHeaders : fileHeaders.filter(Boolean);
+  return {
+    version: 1,
+    mapCode,
+    kind: existing?.kind || kind,
+    name: existing?.name || mapTitle(kind, coreHeaders),
+    description: existing?.description || `${kindLabel(kind)} column map. Load another file of this format with POST /api/feeds/maps/${mapCode}/load.`,
+    coreHeaders,
+    headers,
+    assignments: mergeAssignments(existing?.assignments || [], assignments.map(storeAssignment)),
+  };
+}
+
+export function assignmentsFromMap(map: ReusableMap): ColumnAssignment[] {
+  return map.assignments.map((assignment) => ({
+    ...assignment,
+    samples: [],
+    suggestion: { method: 'source_map' as const, confidence: 1, reason: `Saved map ${map.mapCode}` },
+  }));
+}
+
+export async function listReusableMaps(client: SupabaseClient = useClient()): Promise<ReusableMap[]> {
+  assertLocalSupabase(client);
+  const rows = await client.schema('entity_instances').from('feed_maps').select('column_mappings').eq('is_active', true);
+  if (rows.error) throw new Error(rows.error.message);
+  return (rows.data || []).map((row: { column_mappings: unknown }) => parseReusableMap(row.column_mappings)).filter((map): map is ReusableMap => Boolean(map));
+}
+
+export async function getReusableMap(mapCode: string, client: SupabaseClient = useClient()): Promise<ReusableMap | null> {
+  assertLocalSupabase(client);
+  const row = await client.schema('entity_instances').from('feed_maps').select('column_mappings').eq('map_code', mapCode).maybeSingle();
+  if (row.error) throw new Error(row.error.message);
+  return row.data ? parseReusableMap(row.data.column_mappings) : null;
+}
+
+async function requireReusableMap(mapCode: string, client: SupabaseClient): Promise<ReusableMap> {
+  const map = await getReusableMap(mapCode, client);
+  if (!map) throw new Error(`Map ${mapCode} was not found.`);
+  return map;
+}
+
+export async function saveReusableMap(client: SupabaseClient, artifact: ReusableMap): Promise<void> {
+  assertLocalSupabase(client);
+  const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', 'POSITION_FILE').maybeSingle();
+  if (source.error) throw new Error(source.error.message);
+  const payload = {
+    map_code: artifact.mapCode,
+    ...(source.data?.id ? { source_id: source.data.id } : {}),
+    map_name: artifact.name.slice(0, 200),
+    description: artifact.description,
+    column_mappings: artifact,
+    is_active: true,
+    updated_at: new Date().toISOString(),
+  };
+  const existing = await client.schema('entity_instances').from('feed_maps').select('id').eq('map_code', artifact.mapCode).maybeSingle();
+  if (existing.error) throw new Error(existing.error.message);
+  const write = existing.data
+    ? await client.schema('entity_instances').from('feed_maps').update(payload).eq('id', existing.data.id)
+    : await client.schema('entity_instances').from('feed_maps').insert(payload);
+  if (write.error) throw new Error(write.error.message);
+}
+
+export async function loadFileWithMap(
+  mapCode: string,
+  fileName: string,
+  mediaType: string,
+  bytes: Buffer,
+  asOfDate?: string,
+  client: SupabaseClient = useClient(),
+  sourceCode?: string,
+): Promise<ImportInstanceDetail> {
+  const instance = await createImportInstance(fileName, mediaType, bytes, client, { forceMapCode: mapCode, sourceCode });
+  const asOf = asOfDate || instance.asOfDate || new Date().toISOString().slice(0, 10);
+  return processImportInstance(instance.id, instance.columnMappings, asOf, client);
 }

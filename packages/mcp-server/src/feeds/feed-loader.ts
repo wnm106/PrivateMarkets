@@ -1,8 +1,10 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { EntityMatchIndex, identifierCatalog, type IdentifierCatalog, type MatchEntity } from './entity-match';
 import { chooseRelationship, dependencyLoadOrder, dependencyLoadWaves, relationshipEndpoints, type RelationshipTypeRow } from './load-order';
+import { readImportFile } from './intake';
 import { parseTabularFile } from './parse-table';
 import { POSITION_FILE_MAP } from './position-file-map';
+import { normalizeSourceCode, resolveRowContext } from './row-context';
 import type { DomainLoadStats, FeedLoadResult, FeedMap, FeedPreview, NormalizationHit, ParsedTable } from './types';
 import { applyTransform, coerceAttributeValue, dayBefore, indexReferenceLists, normalizeToList, parseUsDate, type ListValueRow } from './values';
 
@@ -21,6 +23,13 @@ interface EntityDraft {
   name: string;
   attributes: Map<string, string>;
   parents: Map<string, string>;
+  asOf: string;
+  sourceCode: string;
+}
+
+interface ValueSource {
+  id: string;
+  rank: number;
 }
 
 interface Catalog {
@@ -72,6 +81,7 @@ export function localSupabase(): SupabaseClient {
 function mappedColumns(map: FeedMap): Set<string> {
   const columns = new Set<string>();
   if (map.asOfHintColumn) columns.add(map.asOfHintColumn);
+  if (map.sourceHintColumn) columns.add(map.sourceHintColumn);
   if (map.rowFilter) columns.add(map.rowFilter.column);
   for (const domain of map.domains) {
     columns.add(domain.identityColumn);
@@ -108,11 +118,16 @@ function suggestedAsOf(map: FeedMap, rows: Record<string, string>[]): string | n
   return dates.size === 1 ? [...dates][0] : null;
 }
 
-function collectDrafts(map: FeedMap, rows: Record<string, string>[]): Map<string, EntityDraft[]> {
+function collectDrafts(
+  map: FeedMap,
+  rows: Record<string, string>[],
+  fallback: { asOf: string; source: string },
+): Map<string, EntityDraft[]> {
   const byDomain = new Map<string, Map<string, EntityDraft>>();
   for (const domain of map.domains) byDomain.set(domain.domainCode, new Map());
 
   for (const row of rows) {
+    const context = resolveRowContext(row, map, fallback, (record, column) => readCell(record, column, map));
     for (const domain of map.domains) {
       const code = readCell(row, domain.identityColumn, map);
       if (!code) continue;
@@ -124,6 +139,8 @@ function collectDrafts(map: FeedMap, rows: Record<string, string>[]): Map<string
           name: readCell(row, domain.nameColumn, map) || code,
           attributes: new Map(),
           parents: new Map(),
+          asOf: context.asOf,
+          sourceCode: context.source,
         };
         bucket.set(code, draft);
       }
@@ -238,10 +255,24 @@ function distinctNormalizations(hits: NormalizationHit[]): NormalizationHit[] {
   return [...seen.values()].sort((a, b) => a.attributeCode.localeCompare(b.attributeCode) || a.input.localeCompare(b.input));
 }
 
+async function tableFromFile(fileName: string, bytes: Buffer): Promise<ParsedTable> {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith('.pdf') || lower.endsWith('.html') || lower.endsWith('.htm') || lower.endsWith('.json')) {
+    return (await readImportFile(fileName, bytes)).table;
+  }
+  try {
+    const read = await readImportFile(fileName, bytes);
+    if (read.kind === 'NAV_STATEMENT' || read.kind === 'FINANCIAL_STATEMENT') return read.table;
+  } catch {
+    // A plain spreadsheet stays on the tabular parser.
+  }
+  return parseTabularFile(fileName, bytes);
+}
+
 export async function previewFeed(map: FeedMap, fileName: string, bytes: Buffer): Promise<FeedPreview> {
-  const table = parseTabularFile(fileName, bytes);
+  const table = await tableFromFile(fileName, bytes);
   const rows = filterRows(map, table);
-  const drafts = collectDrafts(map, rows);
+  const drafts = collectDrafts(map, rows, { asOf: suggestedAsOf(map, rows) || '1970-01-01', source: map.sourceCode });
   const db = localSupabase();
   const catalog = await loadCatalog(db, map);
   const used = mappedColumns(map);
@@ -291,7 +322,8 @@ export async function previewFeed(map: FeedMap, fileName: string, bytes: Buffer)
     unmappedColumns: table.headers.filter((header) => !used.has(header)),
     contextColumns: [
       ...(map.rowFilter ? [{ column: map.rowFilter.column, purpose: `Keep rows where the value is ${map.rowFilter.equals}` }] : []),
-      ...(map.asOfHintColumn ? [{ column: map.asOfHintColumn, purpose: 'Suggested as-of date. The date you choose is written on every value.' }] : []),
+      ...(map.asOfHintColumn ? [{ column: map.asOfHintColumn, purpose: 'As-of date for each row. A blank cell keeps the date chosen for the file.' }] : []),
+      ...(map.sourceHintColumn ? [{ column: map.sourceHintColumn, purpose: 'Source for each row. A blank cell keeps the file source.' }] : []),
     ],
     suggestedAsOfDate: suggestedAsOf(map, rows),
     normalizations: distinctNormalizations(hits),
@@ -401,21 +433,56 @@ function sameValue(existing: any, next: { golden_value: string; golden_value_num
   return existingDate === next.golden_value_date;
 }
 
-export async function executeFeed(map: FeedMap, fileName: string, bytes: Buffer, asOfDate: string, client?: SupabaseClient): Promise<FeedLoadResult> {
-  return executeParsedFeed(map, fileName, parseTabularFile(fileName, bytes), asOfDate, client);
+async function loadValueSources(db: SupabaseClient, codes: string[]): Promise<Map<string, ValueSource>> {
+  const wanted = [...new Set(codes.map((code) => normalizeSourceCode(code)).filter(Boolean))];
+  if (wanted.length === 0) return new Map();
+  const rows = await db.schema('entity_instances').from('source_registry').select('id, source_code, precedence_rank').in('source_code', wanted);
+  if (rows.error) throw new Error(rows.error.message);
+  const found = new Map<string, ValueSource>();
+  for (const row of rows.data || []) {
+    found.set(normalizeSourceCode(String(row.source_code)), { id: row.id, rank: row.precedence_rank ?? 100 });
+  }
+  const missing = wanted.filter((code) => !found.has(code));
+  if (missing.length > 0) throw new Error(`Source ${missing.join(', ')} was not found.`);
+  return found;
 }
 
-export async function executeParsedFeed(map: FeedMap, fileName: string, table: ParsedTable, asOfDate: string, client?: SupabaseClient, clientId?: string): Promise<FeedLoadResult> {
+export async function executeFeed(map: FeedMap, fileName: string, bytes: Buffer, asOfDate: string, client?: SupabaseClient): Promise<FeedLoadResult> {
+  return executeParsedFeed(map, fileName, await tableFromFile(fileName, bytes), asOfDate, client);
+}
+
+export async function executeParsedFeed(
+  map: FeedMap,
+  fileName: string,
+  table: ParsedTable,
+  asOfDate: string,
+  client?: SupabaseClient,
+  clientId?: string,
+  fallbackSource?: string,
+): Promise<FeedLoadResult> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
     throw new Error('As-of date must be YYYY-MM-DD');
   }
   const rows = filterRows(map, table);
-  const drafts = collectDrafts(map, rows);
+  const drafts = collectDrafts(map, rows, { asOf: asOfDate, source: fallbackSource || map.sourceCode });
   const order = dependencyLoadOrder(map.domains);
   const waves = dependencyLoadWaves(map.domains);
   const db = client || localSupabase();
   assertLocalSupabase(db);
   const catalog = await loadCatalog(db, map, clientId);
+  const mapSource = normalizeSourceCode(map.sourceCode);
+  const draftSources = new Set<string>([mapSource]);
+  const asOfDates = new Set<string>([asOfDate]);
+  for (const entities of drafts.values()) {
+    for (const entity of entities) {
+      draftSources.add(normalizeSourceCode(entity.sourceCode));
+      asOfDates.add(entity.asOf);
+    }
+  }
+  const varying = [...draftSources].some((code) => code !== mapSource) || [...asOfDates].some((date) => date !== asOfDate);
+  const valueSources = varying
+    ? await loadValueSources(db, [...draftSources])
+    : new Map<string, ValueSource>([[mapSource, { id: catalog.sourceId, rank: catalog.precedenceRank }]]);
   await rememberMap(db, map, catalog.sourceId);
 
   const ids = new Map<string, Map<string, string>>();
@@ -568,13 +635,19 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
     ids.set(domainCode, idByCode);
 
     const entityIds = [...new Set(idByCode.values())];
-    const pageAttributeRows = async (column: 'valid_to' | 'valid_from', value: string) => {
+    const pageAttributeRows = async (column: 'valid_to' | 'valid_from', value: string | string[]) => {
+      const values = Array.isArray(value) ? value : [value];
       const rows: any[] = [];
+      if (entityIds.length === 0 || values.length === 0) return rows;
       const pageSize = 1000;
+      const sourceIds = [...new Set([...valueSources.values()].map((source) => source.id))];
       for (let idFrom = 0; idFrom < entityIds.length; idFrom += 150) {
         const idChunk = entityIds.slice(idFrom, idFrom + 150);
         for (let from = 0; ; from += pageSize) {
-          const page = await db.schema('golden_master').from('entity_attribute_values').select('id, entity_id, attribute_id, valid_from, valid_to, golden_value, golden_value_numeric, golden_value_date').in('entity_id', idChunk).eq('source_id', catalog.sourceId).eq(column, value).range(from, from + pageSize - 1);
+          const select = 'id, entity_id, attribute_id, source_id, valid_from, valid_to, golden_value, golden_value_numeric, golden_value_date';
+          let query = db.schema('golden_master').from('entity_attribute_values').select(select).in('entity_id', idChunk);
+          query = varying ? query.in('source_id', sourceIds).in(column, values) : query.eq('source_id', catalog.sourceId).eq(column, values[0]);
+          const page = await query.range(from, from + pageSize - 1);
           if (page.error) throw new Error(page.error.message);
           rows.push(...(page.data || []));
           if ((page.data || []).length < pageSize) break;
@@ -583,7 +656,10 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
       return rows;
     };
     const [openAttributeRows, datedAttributeRows] = entityIds.length
-      ? await Promise.all([pageAttributeRows('valid_to', OPEN_TO), pageAttributeRows('valid_from', asOfDate)])
+      ? await Promise.all([
+          pageAttributeRows('valid_to', OPEN_TO),
+          pageAttributeRows('valid_from', varying ? [...asOfDates] : asOfDate),
+        ])
       : [[], []];
     const slicesByKey = new Map<string, any[]>();
     const seenIds = new Set<string>();
@@ -618,6 +694,8 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
     for (const entity of entities) {
       const entityId = idByCode.get(entity.code);
       if (!entityId) continue;
+      const valueSource = valueSources.get(normalizeSourceCode(entity.sourceCode)) || { id: catalog.sourceId, rank: catalog.precedenceRank };
+      const validFrom = entity.asOf || asOfDate;
       for (const [attributeCode, raw] of entity.attributes) {
         const meta = catalog.attributes.get(attributeCode);
         if (!meta) {
@@ -643,11 +721,11 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
           golden_value_numeric: coerced.golden_value_numeric,
           golden_value_date: coerced.golden_value_date,
         };
-        const sliceKey = `${entityId}|${meta.id}`;
+        const sliceKey = varying ? `${entityId}|${meta.id}|${valueSource.id}` : `${entityId}|${meta.id}`;
         if (queuedAttributes.has(sliceKey)) continue;
-        const slices = slicesByKey.get(sliceKey) || [];
+        const slices = (slicesByKey.get(`${entityId}|${meta.id}`) || []).filter((row) => !varying || row.source_id === valueSource.id);
         const openRows = slices.filter((row) => String(row.valid_to).slice(0, 10) === OPEN_TO);
-        const sameSlices = slices.filter((row) => String(row.valid_from).slice(0, 10) === asOfDate);
+        const sameSlices = slices.filter((row) => String(row.valid_from).slice(0, 10) === validFrom);
         if (sameSlices.length > 0) {
           let changed = false;
           for (const slice of sameSlices) {
@@ -660,8 +738,8 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
             }
             const update = await db.schema('golden_master').from('entity_attribute_values').update({
               ...value,
-              golden_source_id: catalog.sourceId,
-              precedence_rank: catalog.precedenceRank,
+              golden_source_id: valueSource.id,
+              precedence_rank: valueSource.rank,
               last_received_at: receivedAt,
               metadata: { raw_value: coerced.raw_value, list_code: hit?.listCode || null, match_type: hit?.matchType || null },
             }).eq('id', slice.id);
@@ -674,13 +752,13 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
           continue;
         }
 
-        const laterOpen = openRows.find((row) => String(row.valid_from).slice(0, 10) > asOfDate);
-        const earlierOpen = openRows.find((row) => String(row.valid_from).slice(0, 10) < asOfDate);
+        const laterOpen = openRows.find((row) => String(row.valid_from).slice(0, 10) > validFrom);
+        const earlierOpen = openRows.find((row) => String(row.valid_from).slice(0, 10) < validFrom);
         let validTo = OPEN_TO;
         if (laterOpen) validTo = dayBefore(String(laterOpen.valid_from).slice(0, 10));
         if (earlierOpen && !laterOpen) {
           const close = await db.schema('golden_master').from('entity_attribute_values').update({
-            valid_to: dayBefore(asOfDate),
+            valid_to: dayBefore(validFrom),
           }).eq('id', earlierOpen.id);
           if (close.error) errors.push(close.error.message);
         }
@@ -690,13 +768,13 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
           row: {
             entity_id: entityId,
             attribute_id: meta.id,
-            source_id: catalog.sourceId,
-            golden_source_id: catalog.sourceId,
+            source_id: valueSource.id,
+            golden_source_id: valueSource.id,
             ...value,
-            valid_from: asOfDate,
+            valid_from: validFrom,
             valid_to: validTo,
             last_received_at: receivedAt,
-            precedence_rank: catalog.precedenceRank,
+            precedence_rank: valueSource.rank,
             metadata: { raw_value: coerced.raw_value, list_code: hit?.listCode || null, match_type: hit?.matchType || null },
           },
         });
@@ -734,7 +812,7 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
           relationship_type: relationship.relationship_code,
           relationship_code: relationship.relationship_code,
           is_primary: true,
-          valid_from: asOfDate,
+          valid_from: entity.asOf || asOfDate,
           metadata: { feed_map: map.mapCode },
         });
       }
@@ -742,9 +820,12 @@ export async function executeParsedFeed(map: FeedMap, fileName: string, table: P
 
     const existingRelationships = new Set<string>();
     const childIds = [...new Set(relationshipRows.map((row) => String(row.child_entity_id)))];
+    const relationshipDates = varying ? [...asOfDates] : [asOfDate];
     for (let offset = 0; offset < childIds.length; offset += 150) {
       const chunk = childIds.slice(offset, offset + 150);
-      const found = await db.schema('entity_instances').from('entity_relationships').select('parent_entity_id, child_entity_id, relationship_code').in('child_entity_id', chunk).eq('valid_from', asOfDate);
+      const found = varying
+        ? await db.schema('entity_instances').from('entity_relationships').select('parent_entity_id, child_entity_id, relationship_code').in('child_entity_id', chunk).in('valid_from', relationshipDates)
+        : await db.schema('entity_instances').from('entity_relationships').select('parent_entity_id, child_entity_id, relationship_code').in('child_entity_id', chunk).eq('valid_from', asOfDate);
       if (found.error) throw new Error(found.error.message);
       for (const row of found.data || []) {
         existingRelationships.add(`${row.parent_entity_id}|${row.child_entity_id}|${row.relationship_code}`);

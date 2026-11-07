@@ -88,8 +88,17 @@ export function applyTransform(raw: string, transform?: { kind: string; find?: s
       return text.trim().toUpperCase();
     case 'lowercase':
       return text.trim().toLowerCase();
-    case 'number':
-      return text.replace(/,/g, '').trim();
+    case 'number': {
+      let numeric = text.trim().replace(/[$€£\s]/g, '');
+      let negative = false;
+      if (/^\(.*\)$/.test(numeric)) {
+        negative = true;
+        numeric = numeric.slice(1, -1);
+      }
+      numeric = numeric.replace(/,/g, '');
+      if (negative && numeric && !numeric.startsWith('-')) numeric = `-${numeric}`;
+      return numeric;
+    }
     case 'percent': {
       const trimmed = text.trim();
       if (!trimmed.endsWith('%')) return trimmed;
@@ -115,12 +124,28 @@ export function parseUsDate(input: string): string | null {
   const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
   const us = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!us) return null;
-  const month = Number(us[1]);
-  const day = Number(us[2]);
-  const year = Number(us[3]);
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  if (us) {
+    const month = Number(us[1]);
+    const day = Number(us[2]);
+    const year = Number(us[3]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+  const months: Record<string, number> = {
+    january: 1, jan: 1, february: 2, feb: 2, march: 3, mar: 3, april: 4, apr: 4,
+    may: 5, june: 6, jun: 6, july: 7, jul: 7, august: 8, aug: 8,
+    september: 9, sep: 9, sept: 9, october: 10, oct: 10, november: 11, nov: 11, december: 12, dec: 12,
+  };
+  const named = text.match(/^(\d{1,2})[-\s]([A-Za-z]{3,9})[-\s](\d{2,4})$/);
+  if (named && months[named[2].toLowerCase()]) {
+    const year = named[3].length === 2 ? 2000 + Number(named[3]) : Number(named[3]);
+    return `${year}-${String(months[named[2].toLowerCase()]).padStart(2, '0')}-${named[1].padStart(2, '0')}`;
+  }
+  const monthFirst = text.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (monthFirst && months[monthFirst[1].toLowerCase()]) {
+    return `${monthFirst[3]}-${String(months[monthFirst[1].toLowerCase()]).padStart(2, '0')}-${monthFirst[2].padStart(2, '0')}`;
+  }
+  return null;
 }
 
 export function dayBefore(isoDate: string): string {

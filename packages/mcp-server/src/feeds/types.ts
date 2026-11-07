@@ -46,6 +46,8 @@ export interface FeedMap {
   name: string;
   description: string;
   asOfHintColumn?: string;
+  /** Column whose values are source codes. A blank cell uses the file source. */
+  sourceHintColumn?: string;
   rowFilter?: { column: string; equals: string };
   domains: FeedDomainSpec[];
   /** Per source column. Absent means the loader applies its built-in coercions. */

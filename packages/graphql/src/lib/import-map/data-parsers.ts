@@ -4,9 +4,9 @@
  */
 
 import * as XLSX from 'xlsx';
-import * as csv from 'csv-parse/sync';
 import * as cheerio from 'cheerio';
 import * as xml2js from 'xml2js';
+import { extractPdfText, interpretMatrices, interpretText, type InterpretedImport } from '../import-intake';
 
 export interface ParsedField {
   name: string;
@@ -21,7 +21,9 @@ export interface ParsedData {
   fields: ParsedField[];
   records: Record<string, any>[];
   recordCount: number;
-  format: 'xlsx' | 'csv' | 'json' | 'html' | 'xml';
+  format: 'xlsx' | 'csv' | 'json' | 'html' | 'xml' | 'pdf';
+  documentKind?: string;
+  suggestedDomains?: string[];
 }
 
 /**
@@ -29,25 +31,29 @@ export interface ParsedData {
  */
 export async function parseData(
   data: Buffer | string,
-  format: 'xlsx' | 'csv' | 'json' | 'html' | 'xml',
+  format: 'xlsx' | 'csv' | 'json' | 'html' | 'xml' | 'pdf' | 'auto',
   options?: {
     sheetName?: string;
     delimiter?: string;
     tableSelector?: string;
     rootElement?: string;
+    fileName?: string;
   }
 ): Promise<ParsedData> {
-  switch (format) {
+  const detected = format === 'auto' ? detectDataFormat(data, options?.fileName) : format;
+  switch (detected) {
     case 'xlsx':
-      return parseXLSX(data as Buffer, options?.sheetName);
+      return parseXLSX(data, options?.sheetName, options?.fileName);
     case 'csv':
-      return parseCSV(data as string, options?.delimiter);
+      return parsedFromImport(interpretText(options?.fileName || 'import.csv', asText(data), 'csv'), 'csv');
+    case 'pdf':
+      return parsedFromImport(interpretText(options?.fileName || 'import.pdf', await extractPdfText(asBytes(data)), 'pdf'), 'pdf');
     case 'json':
-      return parseJSON(data as string);
+      return parseJSON(asText(data));
     case 'html':
-      return parseHTML(data as string, options?.tableSelector);
+      return parseHTML(asText(data), options?.tableSelector);
     case 'xml':
-      return parseXML(data as string, options?.rootElement);
+      return parseXML(asText(data), options?.rootElement);
     default:
       throw new Error(`Unsupported format: ${format}`);
   }
@@ -56,59 +62,83 @@ export async function parseData(
 /**
  * Parse Excel/Spreadsheet files
  */
-async function parseXLSX(data: Buffer, sheetName?: string): Promise<ParsedData> {
-  const workbook = XLSX.read(data, { type: 'buffer' });
-  
-  // Use specified sheet or first sheet
-  const sheet = sheetName 
-    ? workbook.Sheets[sheetName]
-    : workbook.Sheets[workbook.SheetNames[0]];
-  
-  if (!sheet) {
-    throw new Error(`Sheet not found: ${sheetName || 'first sheet'}`);
-  }
+async function parseXLSX(data: Buffer | string, sheetName?: string, fileName?: string): Promise<ParsedData> {
+  const workbook = XLSX.read(asBytes(data), { type: 'buffer', cellDates: true });
+  const names = sheetName ? [sheetName] : workbook.SheetNames;
+  const sheets = names.filter((name) => workbook.Sheets[name]).map((name) => ({
+    name,
+    rows: sheetMatrix(workbook.Sheets[name]),
+  }));
+  return parsedFromImport(interpretMatrices(fileName || sheetName || 'workbook.xlsx', sheets, 'xlsx'), 'xlsx');
+}
 
-  // Convert to JSON with headers
-  const records = XLSX.utils.sheet_to_json(sheet, { defval: null }) as Record<string, any>[];
-  
-  if (records.length === 0) {
-    return { fields: [], records: [], recordCount: 0, format: 'xlsx' };
-  }
+function sheetMatrix(sheet: XLSX.WorkSheet): string[][] {
+  const matrix = XLSX.utils.sheet_to_json<(string | number | Date | null)[]>(sheet, {
+    header: 1,
+    raw: true,
+    defval: '',
+    blankrows: false,
+  });
+  return matrix.map((row) => (row || []).map((cell) => {
+    if (cell instanceof Date && !Number.isNaN(cell.getTime())) {
+      return `${cell.getUTCMonth() + 1}/${cell.getUTCDate()}/${cell.getUTCFullYear()}`;
+    }
+    return cell === null || cell === undefined ? '' : String(cell).trim();
+  }));
+}
 
-  // Extract field metadata
-  const fields = extractFieldMetadata(records);
-  
+function parsedFromImport(doc: InterpretedImport, format: ParsedData['format']): ParsedData {
+  const statement = doc.kind === 'NAV_STATEMENT' || doc.kind === 'FINANCIAL_STATEMENT';
+  const records = statement
+    ? doc.rows.map((row) => {
+      const record: Record<string, any> = {};
+      for (const target of doc.targets) {
+        const key = target.attributeCode
+          || (target.role === 'identity' ? 'ENTITY_CODE' : target.role === 'name' ? 'ENTITY_NAME' : target.role === 'as_of' ? 'AS_OF_DATE' : target.column);
+        record[key] = row[target.column] ?? '';
+      }
+      return record;
+    })
+    : doc.rows;
   return {
-    fields,
+    fields: extractFieldMetadata(records),
     records,
     recordCount: records.length,
-    format: 'xlsx',
+    format,
+    documentKind: doc.kind,
+    suggestedDomains: doc.domains,
   };
 }
 
-/**
- * Parse CSV files
- */
-async function parseCSV(data: string, delimiter = ','): Promise<ParsedData> {
-  const records = csv.parse(data, {
-    delimiter,
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-  });
+function asText(data: Buffer | string): string {
+  return Buffer.isBuffer(data) ? data.toString('utf8') : data;
+}
 
-  if (records.length === 0) {
-    return { fields: [], records: [], recordCount: 0, format: 'csv' };
+function asBytes(data: Buffer | string): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  const compact = data.replace(/\s/g, '');
+  if (compact.length > 16 && compact.length % 4 === 0 && /^[A-Za-z0-9+/=]+$/.test(compact)) {
+    const decoded = Buffer.from(compact, 'base64');
+    if (decoded.subarray(0, 5).toString() === '%PDF-' || (decoded[0] === 0x50 && decoded[1] === 0x4b)) return decoded;
   }
+  return Buffer.from(data);
+}
 
-  const fields = extractFieldMetadata(records);
-  
-  return {
-    fields,
-    records,
-    recordCount: records.length,
-    format: 'csv',
-  };
+function detectDataFormat(data: Buffer | string, fileName?: string): 'xlsx' | 'csv' | 'json' | 'html' | 'xml' | 'pdf' {
+  const lower = (fileName || '').toLowerCase();
+  if (lower.endsWith('.pdf')) return 'pdf';
+  if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) return 'xlsx';
+  if (lower.endsWith('.json')) return 'json';
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html';
+  if (lower.endsWith('.xml')) return 'xml';
+  const bytes = asBytes(data);
+  if (bytes.subarray(0, 5).toString() === '%PDF-') return 'pdf';
+  if (bytes[0] === 0x50 && bytes[1] === 0x4b) return 'xlsx';
+  const text = bytes.subarray(0, 200).toString('utf8').trim();
+  if (text.startsWith('{') || text.startsWith('[')) return 'json';
+  if (/^<\?xml/.test(text) || (text.startsWith('<') && !/^<(!doctype|html|table)/i.test(text))) return 'xml';
+  if (/^<(?:!doctype|html|table)/i.test(text)) return 'html';
+  return 'csv';
 }
 
 /**

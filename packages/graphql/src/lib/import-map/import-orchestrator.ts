@@ -13,7 +13,7 @@ export interface ImportMap {
   id?: string;
   name: string;
   description?: string;
-  sourceFormat: 'xlsx' | 'csv' | 'json' | 'html' | 'xml';
+  sourceFormat: 'xlsx' | 'csv' | 'json' | 'html' | 'xml' | 'pdf' | 'auto';
   sourceData: Buffer | string;
   domainMappings: DomainImportMapping[];
   options?: ImportOptions;
@@ -112,9 +112,13 @@ export async function analyzeImportMap(
     parseOptions
   );
 
+  const domainMappings: DomainImportMapping[] = importMap.domainMappings.length > 0
+    ? importMap.domainMappings
+    : (parsedData.suggestedDomains || []).map((domainCode) => ({ domainCode, fieldMappings: [] }));
+
   // 2. Generate field mapping recommendations for each domain
   const recommendations: MappingRecommendation[] = [];
-  for (const domainMapping of importMap.domainMappings) {
+  for (const domainMapping of domainMappings) {
     const recommendation = await recommendFieldMappings(
       parsedData.fields,
       domainMapping.domainCode,
@@ -129,7 +133,7 @@ export async function analyzeImportMap(
 
   // 3. Validate identifier mappings
   const identifierValidations: IdentifierValidationResult[] = [];
-  for (const domainMapping of importMap.domainMappings) {
+  for (const domainMapping of domainMappings) {
     const recommendation = recommendations.find(r => r.domainCode === domainMapping.domainCode);
     if (recommendation) {
       const validation = await validateIdentifierMappings(
@@ -145,8 +149,8 @@ export async function analyzeImportMap(
   let importPlan: ImportPlan | undefined;
   let importBatches: ImportBatch[] | undefined;
 
-  if (importMap.domainMappings.length > 1) {
-    const domainCodes = importMap.domainMappings.map(d => d.domainCode);
+  if (domainMappings.length > 1) {
+    const domainCodes = domainMappings.map(d => d.domainCode);
     importPlan = await generateImportPlan(domainCodes, supabase);
     importBatches = planToBatches(importPlan);
   }
