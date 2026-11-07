@@ -23,6 +23,7 @@ import {
   type ColumnAssignment,
 } from './suggest';
 import type { FeedLoadResult } from './types';
+import { DEFAULT_IMPORT_SOURCE, normalizeSourceCode } from './row-context';
 import { parseUsDate } from './values';
 
 export interface ImportInstanceSummary {
@@ -34,6 +35,7 @@ export interface ImportInstanceSummary {
   startedAt: string | null;
   completedAt: string | null;
   asOfDate: string | null;
+  sourceCode: string | null;
   errorMessage: string | null;
   runs: InstanceRun[];
   mapCode: string;
@@ -125,6 +127,7 @@ function toSummary(row: any): ImportInstanceSummary {
     startedAt: row.started_at,
     completedAt: row.completed_at,
     asOfDate: row.as_of_date,
+    sourceCode: row.source_code || null,
     errorMessage: row.error_message,
     runs: Array.isArray(row.runs) ? row.runs : [],
     mapCode: row.map_code,
@@ -140,7 +143,7 @@ export async function listImportInstances(client: SupabaseClient = useClient()):
   const rows = await client
     .schema('entity_instances')
     .from('import_instances')
-    .select('id, file_name, row_count, status, received_at, started_at, completed_at, as_of_date, error_message, runs, result, map_code, map_reuse')
+    .select('id, file_name, row_count, status, received_at, started_at, completed_at, as_of_date, source_code, error_message, runs, result, map_code, map_reuse')
     .eq('source_id', source.data.id)
     .order('received_at', { ascending: false });
   if (rows.error) throw new Error(rows.error.message);
@@ -174,7 +177,7 @@ export async function createImportInstance(
   mediaType: string,
   bytes: Buffer,
   client: SupabaseClient = useClient(),
-  options?: { forceMapCode?: string },
+  options?: { forceMapCode?: string; sourceCode?: string },
 ): Promise<ImportInstanceDetail> {
   assertLocalSupabase(client);
   const read = await readImportFile(fileName, bytes);
@@ -216,6 +219,7 @@ export async function createImportInstance(
     source_id: source.data.id,
     map_code: mapCode,
     map_reuse: mapReuse,
+    source_code: cleanSource(options?.sourceCode),
     file_name: fileName,
     media_type: mediaType,
     source_base64: bytes.toString('base64'),
@@ -255,19 +259,21 @@ export async function saveImportInstance(id: string, columnMappings: ColumnAssig
   return getImportInstance(id, client);
 }
 
-export async function processImportInstance(id: string, columnMappings?: ColumnAssignment[], asOfDate?: string, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
+export async function processImportInstance(id: string, columnMappings?: ColumnAssignment[], asOfDate?: string, client: SupabaseClient = useClient(), sourceCode?: string): Promise<ImportInstanceDetail> {
   assertLocalSupabase(client);
   const existing = await client.schema('entity_instances').from('import_instances').select('*').eq('id', id).single();
   if (existing.error || !existing.data) throw new Error(existing.error?.message || 'Import instance not found');
   const mappings = columnMappings || (existing.data.column_mappings as ColumnAssignment[]);
   const asOf = asOfDate || existing.data.as_of_date;
   if (!asOf) throw new Error('Choose today or a specific as-of date');
+  const source = cleanSource(sourceCode || existing.data.source_code) || DEFAULT_IMPORT_SOURCE;
   const startedAt = new Date().toISOString();
   const marked = await client.schema('entity_instances').from('import_instances').update({
     status: 'PROCESSING',
     started_at: startedAt,
     column_mappings: mappings,
     as_of_date: asOf,
+    source_code: source,
     error_message: null,
   }).eq('id', id);
   if (marked.error) throw new Error(marked.error.message);
@@ -286,7 +292,7 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
     const result = await executeParsedFeed(map, existing.data.file_name, {
       headers: existing.data.headers || [],
       rows: existing.data.parsed_rows || [],
-    }, asOf, client);
+    }, asOf, client, source);
     await saveReusableMap(client, artifact);
     const summary = summarize(result);
     const failed = (summary?.failed || 0) > 0 || result.errors.length > 0;
@@ -476,6 +482,19 @@ export async function saveReusableMap(client: SupabaseClient, artifact: Reusable
   if (write.error) throw new Error(write.error.message);
 }
 
+export async function listImportSources(client: SupabaseClient = useClient()): Promise<Array<{ code: string; name: string }>> {
+  assertLocalSupabase(client);
+  const rows = await client.schema('entity_instances').from('source_registry').select('source_code, source_name').eq('is_active', true).order('source_name');
+  if (rows.error) throw new Error(rows.error.message);
+  return (rows.data || []).map((row: { source_code: string; source_name: string }) => ({ code: row.source_code, name: row.source_name }));
+}
+
+function cleanSource(value?: string | null): string | null {
+  if (!value || !String(value).trim()) return null;
+  const code = normalizeSourceCode(String(value));
+  return code || null;
+}
+
 export async function loadFileWithMap(
   mapCode: string,
   fileName: string,
@@ -483,10 +502,11 @@ export async function loadFileWithMap(
   bytes: Buffer,
   asOfDate?: string,
   client: SupabaseClient = useClient(),
+  sourceCode?: string,
 ): Promise<ImportInstanceDetail> {
-  const instance = await createImportInstance(fileName, mediaType, bytes, client, { forceMapCode: mapCode });
+  const instance = await createImportInstance(fileName, mediaType, bytes, client, { forceMapCode: mapCode, sourceCode });
   const asOf = asOfDate || instance.asOfDate || new Date().toISOString().slice(0, 10);
-  return processImportInstance(instance.id, instance.columnMappings, asOf, client);
+  return processImportInstance(instance.id, instance.columnMappings, asOf, client, sourceCode);
 }
 
 async function reviewWithModel(assignments: ColumnAssignment[], attributes: AttributeChoice[]): Promise<ColumnAssignment[]> {

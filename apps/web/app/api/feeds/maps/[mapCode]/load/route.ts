@@ -12,6 +12,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ma
   const file = form.get('file');
   if (!(file instanceof File)) return NextResponse.json({ error: 'Choose a CSV, Excel, or PDF file.' }, { status: 400 });
   const asOfDate = form.get('asOfDate');
+  const source = form.get('source');
   try {
     const bytes = Buffer.from(await file.arrayBuffer());
     const instance = await loadFileWithMap(
@@ -20,6 +21,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ma
       file.type || 'application/octet-stream',
       bytes,
       typeof asOfDate === 'string' && asOfDate ? asOfDate : undefined,
+      undefined,
+      typeof source === 'string' && source ? source : undefined,
     );
     return NextResponse.json({
       mapCode: instance.mapCode,

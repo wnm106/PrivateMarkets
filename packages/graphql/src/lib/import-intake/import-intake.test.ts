@@ -88,6 +88,18 @@ describe('position files', () => {
     expect(doc.rows[0].quantity).toBe('1,000');
   });
 
+  it('maps source and as-of columns onto the file rather than an entity', () => {
+    const doc = interpretText('book.csv', [
+      'Portfolio,ISIN,Shares,As Of,Source',
+      'Growth,US0378331005,10,9/30/2024,BLOOMBERG',
+      'Growth,US5949181045,5,1/31/2025,ALLVUE',
+    ].join('\n'), 'csv');
+    expect(doc.kind).toBe('POSITIONS');
+    expect(target(doc, 'As Of')).toMatchObject({ role: 'as_of' });
+    expect(target(doc, 'Source')).toMatchObject({ role: 'source' });
+    expect(doc.asOfDate).toBeNull();
+  });
+
   it('keeps a wide position sheet as holdings rather than a statement', () => {
     const doc = interpretMatrices('book.xlsx', [{
       name: 'Holdings',

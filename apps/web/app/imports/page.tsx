@@ -23,6 +23,7 @@ interface InstanceSummary {
   receivedAt: string;
   completedAt: string | null;
   asOfDate: string | null;
+  sourceCode: string | null;
   errorMessage: string | null;
   runs: { startedAt: string; completedAt: string; asOfDate: string; status: string; created: number; matched: number; failed: number }[];
   resultSummary: {
@@ -46,6 +47,7 @@ interface QueueResponse {
   name: string;
   description: string;
   targets: MappingTarget[];
+  sources: { code: string; name: string }[];
   instances: InstanceSummary[];
 }
 
@@ -94,6 +96,7 @@ export default function PositionFilePage() {
   const [detail, setDetail] = useState<InstanceDetail | null>(null);
   const [asOfMode, setAsOfMode] = useState<'today' | 'specific'>('specific');
   const [asOfDate, setAsOfDate] = useState(todayIso());
+  const [sourceCode, setSourceCode] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -136,6 +139,7 @@ export default function PositionFilePage() {
       setAsOfDate(instance.asOfDate);
       setAsOfMode('specific');
     }
+    setSourceCode(instance.sourceCode || '');
   }
 
   async function selectInstance(id: string) {
@@ -176,6 +180,7 @@ export default function PositionFilePage() {
         body: JSON.stringify({
           columnMappings: mappings,
           asOfDate: mappings ? chosenDate() : undefined,
+          sourceCode: sourceCode || undefined,
         }),
       });
       const body = await response.json();
@@ -283,6 +288,7 @@ export default function PositionFilePage() {
           </div>
           <div className="page-meta" style={{ marginBottom: 12 }}>
             Map <code>{detail.mapCode}</code>. Repeat this format with <code>POST /api/feeds/maps/{detail.mapCode}/load</code>.
+            A mapped As-of date or Source column is used on each row. The choices below fill a blank cell.
           </div>
           <div className="filter-bar" style={{ flexWrap: 'wrap', gap: 12 }}>
             <label className="filter-pill">
@@ -294,6 +300,15 @@ export default function PositionFilePage() {
             {asOfMode === 'specific' && (
               <input type="date" value={asOfDate} onChange={(event) => setAsOfDate(event.target.value)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '6px 8px' }} />
             )}
+            <label className="filter-pill">
+              Source
+              <select value={sourceCode} onChange={(event) => setSourceCode(event.target.value)} style={{ marginLeft: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '4px 6px' }}>
+                <option value="">Position file</option>
+                {(queue?.sources || []).filter((source) => source.code !== 'POSITION_FILE').map((source) => (
+                  <option key={source.code} value={source.code}>{source.name}</option>
+                ))}
+              </select>
+            </label>
             <button className="btn btn-primary" disabled={busy !== null} onClick={() => processInstance(detail.id, detail.columnMappings)}>
               {busy === detail.id ? 'Processing…' : `Process as of ${chosenDate()}`}
             </button>

@@ -12,7 +12,7 @@ import type { CatalogAttribute } from '../statement-template/types';
 
 export type ImportKind = 'POSITIONS' | 'NAV_STATEMENT' | 'FINANCIAL_STATEMENT' | 'TABULAR';
 export type ImportFormat = 'csv' | 'xlsx' | 'pdf' | 'html' | 'json' | 'text';
-export type ImportRole = 'ignore' | 'filter' | 'as_of' | 'identity' | 'name' | 'attribute' | 'parent';
+export type ImportRole = 'ignore' | 'filter' | 'as_of' | 'source' | 'identity' | 'name' | 'attribute' | 'parent';
 
 export interface ImportTarget {
   column: string;
@@ -72,6 +72,7 @@ const KNOWN_SECTIONS = new Set([
 ]);
 
 type Slot =
+  | 'source'
   | 'fund_code' | 'fund_name'
   | 'security_code' | 'security_name' | 'isin' | 'cusip' | 'ticker'
   | 'issuer_code' | 'issuer_name' | 'lei'
@@ -84,6 +85,7 @@ const SLOT_RULES: Array<{ slot: Slot; test: (name: string) => boolean }> = [
   { slot: 'lei', test: (name) => /\blei\b/.test(name) || name === 'legal entity identifier' },
   { slot: 'ticker', test: (name) => /\b(ticker|symbol)\b/.test(name) && !/\b(fund|issuer|currency)\b/.test(name) },
   { slot: 'as_of', test: (name) => /^(as of( date)?|asof|valuation date|position date|metric date|price date|statement date|valid from|holding date)$/.test(name) },
+  { slot: 'source', test: (name) => /^(source|source code|data source|feed source|vendor source|provider)$/.test(name) },
   { slot: 'quantity', test: (name) => /^(qty|quantity|shares|share quantity|units|quantity held|position quantity|par|par amount)$/.test(name) || (/\b(shares|quantity)\b/.test(name) && !/\b(price|value)\b/.test(name)) },
   { slot: 'market_value', test: (name) => /\b(market value|mkt value|fair value|fair market value|fmv)\b/.test(name) || name === 'mv' || name === 'market val' },
   { slot: 'cost', test: (name) => /\b(cost basis|book cost|amortized cost|amortised cost|book value|carrying value)\b/.test(name) || name === 'cost' },
@@ -420,6 +422,8 @@ function enrichPositions(
   const marketValue = columnFor('market_value');
   const cost = columnFor('cost');
   const currency = columnFor('currency');
+  const fileSource = columnFor('source');
+  if (fileSource) targets.push(target(fileSource, 'source', null, null, 0.92, 'Source code for the row. A blank cell uses the source chosen for the file.'));
   const asOf = columnFor('as_of');
   let positionCode = columnFor('position_code');
   const positionName = columnFor('position_name');
@@ -440,7 +444,7 @@ function enrichPositions(
     const code = domain === 'POSITION' ? 'POSITION_CURRENCY' : domain === 'SECURITY' ? 'CURRENCY' : 'NAV_CURRENCY';
     targets.push(target(currency, 'attribute', domain, code, 0.84, 'Currency of the amounts.'));
   }
-  if (asOf) targets.push(target(asOf, 'as_of', null, null, 0.9, 'Row date used as the as-of date when every row shares it.'));
+  if (asOf) targets.push(target(asOf, 'as_of', null, null, 0.9, 'As-of date for the row. A blank cell uses the date chosen for the file.'));
 
   return { headers: nextHeaders, rows: nextRows, targets };
 }
@@ -710,7 +714,7 @@ function target(
   return {
     column,
     role,
-    domainCode: role === 'as_of' || role === 'ignore' || role === 'filter' ? null : domainCode,
+    domainCode: role === 'as_of' || role === 'source' || role === 'ignore' || role === 'filter' ? null : domainCode,
     attributeCode: role === 'attribute' ? attributeCode : null,
     parentDomainCode: null,
     confidence,

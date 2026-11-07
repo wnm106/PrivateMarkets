@@ -2,7 +2,7 @@ import { POSITION_FILE_MAP } from './position-file-map';
 import type { ColumnTransform, FeedMap, TransformKind } from './types';
 import { applyTransform } from './values';
 
-export type AssignmentRole = 'ignore' | 'filter' | 'as_of' | 'identity' | 'name' | 'attribute' | 'parent';
+export type AssignmentRole = 'ignore' | 'filter' | 'as_of' | 'source' | 'identity' | 'name' | 'attribute' | 'parent';
 export type SuggestionMethod = 'source_map' | 'name' | 'sample' | 'ai' | 'manual';
 
 export interface ColumnHint {
@@ -191,7 +191,7 @@ function assignmentFromHint(
     ? attributes.find((item) => item.attributeCode === hint.attributeCode && item.domainCode === hint.domainCode)
       || attributes.find((item) => item.attributeCode === hint.attributeCode)
     : undefined;
-  const domainCode = hint.role === 'as_of' || hint.role === 'filter' || hint.role === 'ignore'
+  const domainCode = hint.role === 'as_of' || hint.role === 'source' || hint.role === 'filter' || hint.role === 'ignore'
     ? null
     : hint.domainCode || attribute?.domainCode || null;
   return {
@@ -204,6 +204,8 @@ function assignmentFromHint(
     filterEquals: hint.role === 'filter' ? mostCommon(rows, column) || null : null,
     transform: hint.role === 'as_of'
       ? { kind: 'date' }
+      : hint.role === 'source'
+        ? { kind: 'uppercase' }
       : hint.role === 'attribute'
         ? suggestTransform(samples, attribute?.dataType, attribute?.referenceListCode)
         : { kind: 'trim' },
@@ -333,6 +335,7 @@ export function suggestAssignments(
 export function targetKey(assignment: Pick<ColumnAssignment, 'role' | 'domainCode' | 'attributeCode' | 'parentDomainCode'>): string {
   if (assignment.role === 'ignore') return 'ignore';
   if (assignment.role === 'as_of') return 'as_of';
+  if (assignment.role === 'source') return 'source';
   if (assignment.role === 'filter') return 'filter';
   if (assignment.role === 'identity') return `identity:${assignment.domainCode}`;
   if (assignment.role === 'name') return `name:${assignment.domainCode}`;
@@ -344,6 +347,7 @@ export function mappingTargets(attributes: AttributeChoice[], domains: string[])
   const targets: MappingTarget[] = [
     { key: 'ignore', group: 'File', label: 'Do not load', role: 'ignore', domainCode: null, attributeCode: null, parentDomainCode: null, dataType: null, referenceListCode: null },
     { key: 'as_of', group: 'File', label: 'As-of date', role: 'as_of', domainCode: null, attributeCode: null, parentDomainCode: null, dataType: 'DATE', referenceListCode: null },
+    { key: 'source', group: 'File', label: 'Source', role: 'source', domainCode: null, attributeCode: null, parentDomainCode: null, dataType: 'STRING', referenceListCode: null },
     { key: 'filter', group: 'File', label: 'Row filter', role: 'filter', domainCode: null, attributeCode: null, parentDomainCode: null, dataType: null, referenceListCode: null },
   ];
   const domainList = domains.length > 0 ? domains : LOAD_DOMAINS;
@@ -424,6 +428,7 @@ export function feedMapFromAssignments(
   const domains = new Map<string, FeedMap['domains'][number]>();
   const transforms: Record<string, ColumnTransform> = {};
   let asOfHintColumn: string | undefined;
+  let sourceHintColumn: string | undefined;
   let rowFilter: FeedMap['rowFilter'];
 
   const ensure = (domainCode: string) => {
@@ -446,6 +451,7 @@ export function feedMapFromAssignments(
     if (assignment.transform?.kind) transforms[assignment.sourceColumn] = assignment.transform;
     if (assignment.role === 'ignore') continue;
     if (assignment.role === 'as_of') asOfHintColumn = assignment.sourceColumn;
+    if (assignment.role === 'source') sourceHintColumn = assignment.sourceColumn;
     if (assignment.role === 'filter') {
       rowFilter = { column: assignment.sourceColumn, equals: assignment.filterEquals || assignment.samples[0] || '' };
     }
@@ -478,6 +484,7 @@ export function feedMapFromAssignments(
     name: profile?.name || POSITION_FILE_MAP.name,
     description: profile?.description || POSITION_FILE_MAP.description,
     asOfHintColumn,
+    sourceHintColumn,
     rowFilter,
     domains: [...domains.values()].filter((domain) => domain.identityColumn),
     transforms,
