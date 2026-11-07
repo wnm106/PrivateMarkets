@@ -10,23 +10,23 @@ import { getIdentifierSuggestions } from '../lib/import-map/identifier-validator
 
 const analyzeImportMapTool: ToolDefinition = {
   name: 'analyze_import_map',
-  description: 'Analyze a data file and generate AI-assisted field mapping recommendations for MDM entities. Parses XLSX, CSV, JSON, HTML, or XML data, extracts field names, recommends entity attribute mappings, validates entity identifiers, and determines import sequencing based on entity relationships.',
+  description: 'Analyze a data file and generate field mapping recommendations for MDM entities. Reads PDF financials, CSV positions, Excel NAV statements, and JSON, HTML, or XML. Detects the document shape, recommends entity attribute mappings, validates identifiers, and determines import order.',
   category: 'import',
   inputSchema: {
     type: 'object',
     properties: {
       sourceData: {
         type: 'string',
-        description: 'Base64-encoded data for binary formats (XLSX), or raw string for text formats (CSV, JSON, HTML, XML)',
+        description: 'Base64-encoded data for binary formats (PDF, XLSX), or raw string for text formats (CSV, JSON, HTML, XML)',
       },
       sourceFormat: {
         type: 'string',
-        enum: ['xlsx', 'csv', 'json', 'html', 'xml'],
-        description: 'Format of the source data',
+        enum: ['auto', 'pdf', 'xlsx', 'csv', 'json', 'html', 'xml'],
+        description: 'Format of the source data. Use auto to detect a PDF, spreadsheet, or delimited file.',
       },
       domainMappings: {
         type: 'array',
-        description: 'Array of domain mappings specifying which entities to import',
+        description: 'Domains to import. Leave empty and the file shape chooses fund, issuer, security, and position.',
         items: {
           type: 'object',
           properties: {
@@ -59,14 +59,14 @@ const analyzeImportMapTool: ToolDefinition = {
         },
       },
     },
-    required: ['sourceData', 'sourceFormat', 'domainMappings'],
+    required: ['sourceData', 'sourceFormat'],
   },
   execute: async (args, supabase) => {
     const importMap: ImportMap = {
       name: 'AI Analysis',
-      sourceFormat: args.sourceFormat,
+      sourceFormat: args.sourceFormat || 'auto',
       sourceData: args.sourceData,
-      domainMappings: args.domainMappings,
+      domainMappings: args.domainMappings || [],
       options: args.options,
     };
 
@@ -93,16 +93,16 @@ const executeImportMapTool: ToolDefinition = {
     properties: {
       sourceData: {
         type: 'string',
-        description: 'Base64-encoded data for binary formats (XLSX), or raw string for text formats (CSV, JSON, HTML, XML)',
+        description: 'Base64-encoded data for binary formats (PDF, XLSX), or raw string for text formats (CSV, JSON, HTML, XML)',
       },
       sourceFormat: {
         type: 'string',
-        enum: ['xlsx', 'csv', 'json', 'html', 'xml'],
-        description: 'Format of the source data',
+        enum: ['auto', 'pdf', 'xlsx', 'csv', 'json', 'html', 'xml'],
+        description: 'Format of the source data. Use auto to detect a PDF, spreadsheet, or delimited file.',
       },
       domainMappings: {
         type: 'array',
-        description: 'Array of domain mappings with field mappings',
+        description: 'Array of domain mappings with field mappings. Leave empty to use the domains detected from the file.',
         items: {
           type: 'object',
           properties: {
@@ -161,9 +161,9 @@ const executeImportMapTool: ToolDefinition = {
   execute: async (args, supabase) => {
     const importMap: ImportMap = {
       name: 'AI Import',
-      sourceFormat: args.sourceFormat,
+      sourceFormat: args.sourceFormat || 'auto',
       sourceData: args.sourceData,
-      domainMappings: args.domainMappings,
+      domainMappings: args.domainMappings || [],
       options: args.options,
     };
 

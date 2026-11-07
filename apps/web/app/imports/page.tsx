@@ -16,11 +16,14 @@ import {
 interface InstanceSummary {
   id: string;
   fileName: string;
+  mapCode: string;
+  mapReuse: 'exact' | 'extended' | 'new';
   rowCount: number;
   status: string;
   receivedAt: string;
   completedAt: string | null;
   asOfDate: string | null;
+  sourceCode: string | null;
   errorMessage: string | null;
   runs: { startedAt: string; completedAt: string; asOfDate: string; status: string; created: number; matched: number; failed: number }[];
   resultSummary: {
@@ -44,6 +47,7 @@ interface QueueResponse {
   name: string;
   description: string;
   targets: MappingTarget[];
+  sources: { code: string; name: string }[];
   instances: InstanceSummary[];
 }
 
@@ -55,6 +59,20 @@ function todayIso() {
 function formatWhen(value: string | null) {
   if (!value) return '—';
   return new Date(value).toLocaleString();
+}
+
+function kindLabel(mapCode: string) {
+  const value = (mapCode || '').toUpperCase();
+  if (value === 'NAV_STATEMENT' || value.startsWith('NAV-')) return 'NAV statement';
+  if (value === 'FINANCIAL_STATEMENT' || value.startsWith('FINANCIAL-')) return 'Financial statement';
+  if (value === 'POSITION_FILE' || value.startsWith('POSITIONS-')) return 'Positions';
+  return 'Table';
+}
+
+function reuseLabel(reuse: string) {
+  if (reuse === 'exact') return 'Reused saved map';
+  if (reuse === 'extended') return 'Reused saved map · new columns added';
+  return 'New map';
 }
 
 function resultText(instance: InstanceSummary) {
@@ -78,6 +96,7 @@ export default function PositionFilePage() {
   const [detail, setDetail] = useState<InstanceDetail | null>(null);
   const [asOfMode, setAsOfMode] = useState<'today' | 'specific'>('specific');
   const [asOfDate, setAsOfDate] = useState(todayIso());
+  const [sourceCode, setSourceCode] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -120,6 +139,7 @@ export default function PositionFilePage() {
       setAsOfDate(instance.asOfDate);
       setAsOfMode('specific');
     }
+    setSourceCode(instance.sourceCode || '');
   }
 
   async function selectInstance(id: string) {
@@ -160,6 +180,7 @@ export default function PositionFilePage() {
         body: JSON.stringify({
           columnMappings: mappings,
           asOfDate: mappings ? chosenDate() : undefined,
+          sourceCode: sourceCode || undefined,
         }),
       });
       const body = await response.json();
@@ -178,14 +199,14 @@ export default function PositionFilePage() {
       <div className="crumbs">
         <Link href="/" className="crumb-link">Home</Link>
         <span className="sep">›</span>
-        <span className="crumb-current">Position File</span>
+        <span className="crumb-current">Data import</span>
       </div>
 
       <div className="page-header">
         <div className="page-title-block">
           <div style={{ width: '4px', height: '48px', background: '#1b3a4b' }} />
           <div>
-            <div className="page-title">Position file load</div>
+            <div className="page-title">Data import</div>
             <div className="page-meta">{queue ? `${queue.name} · source ${queue.sourceCode}` : 'Import source'}</div>
           </div>
         </div>
@@ -193,7 +214,7 @@ export default function PositionFilePage() {
           {busy === 'upload' ? 'Storing file…' : 'Upload file'}
           <input
             type="file"
-            accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            accept=".csv,.xlsx,.xls,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             style={{ display: 'none' }}
             onChange={async (event) => {
               const file = event.target.files?.[0];
@@ -220,7 +241,7 @@ export default function PositionFilePage() {
       </div>
 
       <p className="hero-sub" style={{ maxWidth: 820, marginTop: 0 }}>
-        Each upload is an instance on the {queue?.sourceCode || 'POSITION_FILE'} source. The original file is kept, so you can change the column mapping and reprocess without losing the source values.
+        Drop a CSV of positions, an Excel NAV statement, or a PDF of financials. The file is read, the shape is recognized, and each column is mapped before anything is written. The original file is kept, so you can change the mapping and reprocess.
       </p>
       {error && <div className="filter-bar" style={{ color: '#b42318' }}>{error}</div>}
 
@@ -238,12 +259,12 @@ export default function PositionFilePage() {
           <div></div>
         </div>
         {(queue?.instances || []).length === 0 ? (
-          <div className="tbl-row" style={{ gridTemplateColumns: '1fr' }}><div>No files stored yet. Upload a CSV or Excel file to add an instance.</div></div>
+          <div className="tbl-row" style={{ gridTemplateColumns: '1fr' }}><div>No files stored yet. Upload a CSV, Excel, or PDF file to add an instance.</div></div>
         ) : (
           queue?.instances.map((instance) => (
             <div key={instance.id} className="tbl-row" style={{ gridTemplateColumns: '190px 1.3fr 70px 110px 1.2fr 120px' }}>
               <div>{formatWhen(instance.receivedAt)}</div>
-              <button onClick={() => selectInstance(instance.id)} style={{ textAlign: 'left', background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit' }}>{instance.fileName}</button>
+              <button onClick={() => selectInstance(instance.id)} style={{ textAlign: 'left', background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit' }}>{instance.fileName}<div style={{ color: 'var(--ink-3)', fontSize: 12 }}>{kindLabel(instance.mapCode)} · {reuseLabel(instance.mapReuse)}</div></button>
               <div>{instance.rowCount}</div>
               <div>{instance.status}</div>
               <div>{resultText(instance)}</div>
@@ -263,7 +284,11 @@ export default function PositionFilePage() {
         <>
           <div className="section-title">
             <h2>{detail.fileName}</h2>
-            <span className="hint">{detail.rowCount} stored rows · {detail.columnMappings.length} source columns</span>
+            <span className="hint">{kindLabel(detail.mapCode)} · {reuseLabel(detail.mapReuse)} · {detail.rowCount} rows</span>
+          </div>
+          <div className="page-meta" style={{ marginBottom: 12 }}>
+            Map <code>{detail.mapCode}</code>. Repeat this format with <code>POST /api/feeds/maps/{detail.mapCode}/load</code>.
+            A mapped As-of date or Source column is used on each row. The choices below fill a blank cell.
           </div>
           <div className="filter-bar" style={{ flexWrap: 'wrap', gap: 12 }}>
             <label className="filter-pill">
@@ -275,6 +300,15 @@ export default function PositionFilePage() {
             {asOfMode === 'specific' && (
               <input type="date" value={asOfDate} onChange={(event) => setAsOfDate(event.target.value)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '6px 8px' }} />
             )}
+            <label className="filter-pill">
+              Source
+              <select value={sourceCode} onChange={(event) => setSourceCode(event.target.value)} style={{ marginLeft: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '4px 6px' }}>
+                <option value="">Position file</option>
+                {(queue?.sources || []).filter((source) => source.code !== 'POSITION_FILE').map((source) => (
+                  <option key={source.code} value={source.code}>{source.name}</option>
+                ))}
+              </select>
+            </label>
             <button className="btn btn-primary" disabled={busy !== null} onClick={() => processInstance(detail.id, detail.columnMappings)}>
               {busy === detail.id ? 'Processing…' : `Process as of ${chosenDate()}`}
             </button>

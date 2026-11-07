@@ -14,7 +14,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     const instance = await processImportInstance(
       id,
       Array.isArray(body.columnMappings) ? body.columnMappings as ColumnAssignment[] : undefined,
-      body.asOfDate ? String(body.asOfDate) : undefined
+      body.asOfDate ? String(body.asOfDate) : undefined,
+      undefined,
+      body.sourceCode ? String(body.sourceCode) : undefined,
     );
     return NextResponse.json(instance);
   } catch (error: any) {

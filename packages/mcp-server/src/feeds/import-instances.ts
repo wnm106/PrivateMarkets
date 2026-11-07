@@ -1,8 +1,20 @@
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { assertLocalSupabase, executeParsedFeed, localSupabase } from './feed-loader';
 import { dependencyLoadWaves } from './load-order';
-import { parseTabularFile } from './parse-table';
+import { readImportFile } from './intake';
 import { POSITION_FILE_MAP } from './position-file-map';
+import {
+  applyReusableMap,
+  kindLabel,
+  mapTitle,
+  matchReusableMap,
+  mergeAssignments,
+  mergeHeaders,
+  newMapCode,
+  parseReusableMap,
+  storeAssignment,
+  type ReusableMap,
+} from './reusable-map';
 import {
   feedMapFromAssignments,
   suggestAssignments,
@@ -11,6 +23,7 @@ import {
   type ColumnAssignment,
 } from './suggest';
 import type { FeedLoadResult } from './types';
+import { DEFAULT_IMPORT_SOURCE, normalizeSourceCode } from './row-context';
 import { parseUsDate } from './values';
 
 export interface ImportInstanceSummary {
@@ -22,8 +35,11 @@ export interface ImportInstanceSummary {
   startedAt: string | null;
   completedAt: string | null;
   asOfDate: string | null;
+  sourceCode: string | null;
   errorMessage: string | null;
   runs: InstanceRun[];
+  mapCode: string;
+  mapReuse: 'exact' | 'extended' | 'new';
   resultSummary: {
     created: number;
     matched: number;
@@ -111,8 +127,11 @@ function toSummary(row: any): ImportInstanceSummary {
     startedAt: row.started_at,
     completedAt: row.completed_at,
     asOfDate: row.as_of_date,
+    sourceCode: row.source_code || null,
     errorMessage: row.error_message,
     runs: Array.isArray(row.runs) ? row.runs : [],
+    mapCode: row.map_code,
+    mapReuse: row.map_reuse === 'exact' || row.map_reuse === 'extended' ? row.map_reuse : 'new',
     resultSummary: summarize(row.result),
   };
 }
@@ -124,7 +143,7 @@ export async function listImportInstances(client: SupabaseClient = useClient()):
   const rows = await client
     .schema('entity_instances')
     .from('import_instances')
-    .select('id, file_name, row_count, status, received_at, started_at, completed_at, as_of_date, error_message, runs, result')
+    .select('id, file_name, row_count, status, received_at, started_at, completed_at, as_of_date, source_code, error_message, runs, result, map_code, map_reuse')
     .eq('source_id', source.data.id)
     .order('received_at', { ascending: false });
   if (rows.error) throw new Error(rows.error.message);
@@ -142,16 +161,65 @@ function suggestedAsOf(assignments: ColumnAssignment[], rows: Record<string, str
   return dates.size === 1 ? [...dates][0] : null;
 }
 
-export async function createImportInstance(fileName: string, mediaType: string, bytes: Buffer, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
+export class MapMismatchError extends Error {
+  missingHeaders: string[];
+  constructor(mapCode: string, missingHeaders: string[]) {
+    super(missingHeaders.length
+      ? `This file is missing ${missingHeaders.join(', ')} from map ${mapCode}.`
+      : `This file does not match map ${mapCode}.`);
+    this.name = 'MapMismatchError';
+    this.missingHeaders = missingHeaders;
+  }
+}
+
+export async function createImportInstance(
+  fileName: string,
+  mediaType: string,
+  bytes: Buffer,
+  client: SupabaseClient = useClient(),
+  options?: { forceMapCode?: string; sourceCode?: string },
+): Promise<ImportInstanceDetail> {
   assertLocalSupabase(client);
-  const table = parseTabularFile(fileName, bytes);
+  const read = await readImportFile(fileName, bytes);
+  const table = read.table;
   const catalog = await attributeCatalog(client);
-  const columnMappings = await reviewWithModel(suggestAssignments(table.headers, table.rows, catalog.attributes), catalog.attributes);
+  const savedMaps = options?.forceMapCode
+    ? [await requireReusableMap(options.forceMapCode, client)]
+    : await listReusableMaps(client);
+  const match = matchReusableMap(table.headers, savedMaps, options?.forceMapCode ? undefined : read.kind);
+  if (options?.forceMapCode && match.type === 'none') {
+    throw new MapMismatchError(options.forceMapCode, match.missingHeaders);
+  }
+  let columnMappings: ColumnAssignment[];
+  let mapCode = newMapCode(read.kind, table.headers);
+  let mapReuse: 'exact' | 'extended' | 'new' = 'new';
+  if (match.type === 'exact') {
+    columnMappings = applyReusableMap(table.headers, table.rows, match.map, []);
+    mapCode = match.map.mapCode;
+    mapReuse = 'exact';
+  } else if (match.type === 'extended') {
+    const fresh = await reviewWithModel(
+      suggestAssignments(match.newHeaders, table.rows, openAttributes(catalog.attributes, match.map, table.headers), read.hints),
+      catalog.attributes,
+    );
+    columnMappings = applyReusableMap(table.headers, table.rows, match.map, fresh);
+    mapCode = match.map.mapCode;
+    mapReuse = 'extended';
+  } else {
+    columnMappings = await reviewWithModel(
+      suggestAssignments(table.headers, table.rows, catalog.attributes, read.hints),
+      catalog.attributes,
+    );
+  }
+  const artifact = reusableFromAssignments(mapCode, read.kind, table.headers, columnMappings, match.type === 'none' ? null : match.map);
+  await saveReusableMap(client, artifact);
   const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', POSITION_FILE_MAP.sourceCode).single();
   if (source.error || !source.data) throw new Error(source.error?.message || 'Position File source is missing');
   const inserted = await client.schema('entity_instances').from('import_instances').insert({
     source_id: source.data.id,
-    map_code: POSITION_FILE_MAP.mapCode,
+    map_code: mapCode,
+    map_reuse: mapReuse,
+    source_code: cleanSource(options?.sourceCode),
     file_name: fileName,
     media_type: mediaType,
     source_base64: bytes.toString('base64'),
@@ -191,30 +259,41 @@ export async function saveImportInstance(id: string, columnMappings: ColumnAssig
   return getImportInstance(id, client);
 }
 
-export async function processImportInstance(id: string, columnMappings?: ColumnAssignment[], asOfDate?: string, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
+export async function processImportInstance(id: string, columnMappings?: ColumnAssignment[], asOfDate?: string, client: SupabaseClient = useClient(), sourceCode?: string): Promise<ImportInstanceDetail> {
   assertLocalSupabase(client);
   const existing = await client.schema('entity_instances').from('import_instances').select('*').eq('id', id).single();
   if (existing.error || !existing.data) throw new Error(existing.error?.message || 'Import instance not found');
   const mappings = columnMappings || (existing.data.column_mappings as ColumnAssignment[]);
   const asOf = asOfDate || existing.data.as_of_date;
   if (!asOf) throw new Error('Choose today or a specific as-of date');
+  const source = cleanSource(sourceCode || existing.data.source_code) || DEFAULT_IMPORT_SOURCE;
   const startedAt = new Date().toISOString();
   const marked = await client.schema('entity_instances').from('import_instances').update({
     status: 'PROCESSING',
     started_at: startedAt,
     column_mappings: mappings,
     as_of_date: asOf,
+    source_code: source,
     error_message: null,
   }).eq('id', id);
   if (marked.error) throw new Error(marked.error.message);
 
   try {
-    const map = feedMapFromAssignments(mappings);
+    const mapCode = existing.data.map_code || newMapCode('TABULAR', existing.data.headers || []);
+    const savedMap = await getReusableMap(mapCode, client);
+    const artifact = reusableFromAssignments(mapCode, savedMap?.kind || 'TABULAR', existing.data.headers || [], mappings, savedMap);
+    const map = feedMapFromAssignments(mappings, {
+      mapCode,
+      name: artifact.name,
+      description: artifact.description,
+    });
     if (map.domains.length === 0) throw new Error('Map at least one column to an entity code before processing');
+    await ensureImportAttributes(client, mappings);
     const result = await executeParsedFeed(map, existing.data.file_name, {
       headers: existing.data.headers || [],
       rows: existing.data.parsed_rows || [],
-    }, asOf, client);
+    }, asOf, client, source);
+    await saveReusableMap(client, artifact);
     const summary = summarize(result);
     const failed = (summary?.failed || 0) > 0 || result.errors.length > 0;
     const completedAt = new Date().toISOString();
@@ -249,6 +328,185 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
     }).eq('id', id);
     throw error;
   }
+}
+
+const TEMPLATE_FOR_DOMAIN: Record<string, string> = {
+  FUND: 'FUND_STANDARD',
+  ISSUER: 'ISSUER_STANDARD',
+  SECURITY: 'SECURITY_STANDARD',
+  POSITION: 'POSITION_STANDARD',
+  DEAL: 'DEAL_STANDARD',
+  CASH_FLOW: 'STANDARD_CASHFLOW',
+};
+
+async function ensureImportAttributes(client: SupabaseClient, assignments: ColumnAssignment[]): Promise<void> {
+  const specs = new Map<string, { name: string; dataType: string; domainCode: string }>();
+  for (const assignment of assignments) {
+    if (assignment.role !== 'attribute' || !assignment.attributeCode || !assignment.domainCode) continue;
+    if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(assignment.attributeCode) || specs.has(assignment.attributeCode)) continue;
+    const dataType = assignment.transform.kind === 'date'
+      ? 'DATE'
+      : assignment.transform.kind === 'percent'
+        ? 'PERCENTAGE'
+        : assignment.transform.kind === 'number'
+          ? 'NUMBER'
+          : 'STRING';
+    specs.set(assignment.attributeCode, {
+      name: assignment.sourceColumn.slice(0, 200),
+      dataType,
+      domainCode: assignment.domainCode,
+    });
+  }
+  if (specs.size === 0) return;
+  const existing = await client.schema('metadata_register').from('attribute_register').select('id, attribute_code').in('attribute_code', [...specs.keys()]);
+  if (existing.error) throw new Error(existing.error.message);
+  const have = new Set((existing.data || []).map((row: { attribute_code: string }) => row.attribute_code));
+  const missing = [...specs.entries()].filter(([code]) => !have.has(code));
+  let created: Array<{ id: string; attribute_code: string }> = [];
+  if (missing.length > 0) {
+    const inserted = await client.schema('metadata_register').from('attribute_register').insert(missing.map(([code, spec]) => ({
+      attribute_code: code,
+      attribute_name: spec.name,
+      data_type: spec.dataType,
+      description: `Imported from “${spec.name}”.`,
+      domain_code: spec.domainCode,
+      is_required: false,
+      display_section: 'Imported',
+    }))).select('id, attribute_code');
+    if (inserted.error) throw new Error(inserted.error.message);
+    created = inserted.data || [];
+  }
+  if (created.length === 0) return;
+  const templates = await client.schema('metadata_register').from('domain_templates').select('id, template_code');
+  if (templates.error || !templates.data) return;
+  const templateId = new Map(templates.data.map((row: { id: string; template_code: string }) => [row.template_code, row.id]));
+  const rows = created.flatMap((row) => {
+    const spec = specs.get(row.attribute_code);
+    const template = spec ? templateId.get(TEMPLATE_FOR_DOMAIN[spec.domainCode] || '') : undefined;
+    if (!template) return [];
+    return [{
+      template_id: template,
+      attribute_id: row.id,
+      is_required: false,
+      display_order: 500,
+      display_label: spec?.name.slice(0, 200),
+    }];
+  });
+  if (rows.length === 0) return;
+  const assigned = await client.schema('metadata_register').from('template_attribute_assignments').insert(rows);
+  if (assigned.error && !/duplicate|unique/i.test(assigned.error.message)) {
+    throw new Error(assigned.error.message);
+  }
+}
+
+function reusableFromAssignments(
+  mapCode: string,
+  kind: string,
+  fileHeaders: string[],
+  assignments: ColumnAssignment[],
+  existing: ReusableMap | null,
+): ReusableMap {
+  const headers = mergeHeaders(existing?.headers || [], fileHeaders);
+  const coreHeaders = existing?.coreHeaders?.length ? existing.coreHeaders : fileHeaders.filter(Boolean);
+  return {
+    version: 1,
+    mapCode,
+    kind: existing?.kind || kind,
+    name: existing?.name || mapTitle(kind, coreHeaders),
+    description: existing?.description || `${kindLabel(kind)} column map. Load another file of this format with POST /api/feeds/maps/${mapCode}/load.`,
+    coreHeaders,
+    headers,
+    assignments: mergeAssignments(existing?.assignments || [], assignments.map(storeAssignment)),
+  };
+}
+
+function openAttributes(attributes: AttributeChoice[], map: ReusableMap, fileHeaders: string[]): AttributeChoice[] {
+  const present = new Set(fileHeaders.map((header) => header.trim().toLowerCase()));
+  const claimed = map.assignments.filter((assignment) => (
+    assignment.role === 'attribute'
+    && assignment.attributeCode
+    && present.has(assignment.sourceColumn.trim().toLowerCase())
+  ));
+  return attributes.filter((attribute) => !claimed.some((saved) => (
+    saved.attributeCode === attribute.attributeCode
+    && (!attribute.domainCode || !saved.domainCode || attribute.domainCode === saved.domainCode)
+  )));
+}
+
+export function assignmentsFromMap(map: ReusableMap): ColumnAssignment[] {
+  return map.assignments.map((assignment) => ({
+    ...assignment,
+    samples: [],
+    suggestion: { method: 'source_map' as const, confidence: 1, reason: `Saved map ${map.mapCode}` },
+  }));
+}
+
+export async function listReusableMaps(client: SupabaseClient = useClient()): Promise<ReusableMap[]> {
+  assertLocalSupabase(client);
+  const rows = await client.schema('entity_instances').from('feed_maps').select('column_mappings').eq('is_active', true);
+  if (rows.error) throw new Error(rows.error.message);
+  return (rows.data || []).map((row: { column_mappings: unknown }) => parseReusableMap(row.column_mappings)).filter((map): map is ReusableMap => Boolean(map));
+}
+
+export async function getReusableMap(mapCode: string, client: SupabaseClient = useClient()): Promise<ReusableMap | null> {
+  assertLocalSupabase(client);
+  const row = await client.schema('entity_instances').from('feed_maps').select('column_mappings').eq('map_code', mapCode).maybeSingle();
+  if (row.error) throw new Error(row.error.message);
+  return row.data ? parseReusableMap(row.data.column_mappings) : null;
+}
+
+async function requireReusableMap(mapCode: string, client: SupabaseClient): Promise<ReusableMap> {
+  const map = await getReusableMap(mapCode, client);
+  if (!map) throw new Error(`Map ${mapCode} was not found.`);
+  return map;
+}
+
+export async function saveReusableMap(client: SupabaseClient, artifact: ReusableMap): Promise<void> {
+  assertLocalSupabase(client);
+  const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', POSITION_FILE_MAP.sourceCode).single();
+  if (source.error || !source.data) throw new Error(source.error?.message || 'Position File source is missing');
+  const payload = {
+    map_code: artifact.mapCode,
+    source_id: source.data.id,
+    map_name: artifact.name.slice(0, 200),
+    description: artifact.description,
+    column_mappings: artifact,
+    is_active: true,
+    updated_at: new Date().toISOString(),
+  };
+  const existing = await client.schema('entity_instances').from('feed_maps').select('id').eq('map_code', artifact.mapCode).maybeSingle();
+  if (existing.error) throw new Error(existing.error.message);
+  const write = existing.data
+    ? await client.schema('entity_instances').from('feed_maps').update(payload).eq('id', existing.data.id)
+    : await client.schema('entity_instances').from('feed_maps').insert(payload);
+  if (write.error) throw new Error(write.error.message);
+}
+
+export async function listImportSources(client: SupabaseClient = useClient()): Promise<Array<{ code: string; name: string }>> {
+  assertLocalSupabase(client);
+  const rows = await client.schema('entity_instances').from('source_registry').select('source_code, source_name').eq('is_active', true).order('source_name');
+  if (rows.error) throw new Error(rows.error.message);
+  return (rows.data || []).map((row: { source_code: string; source_name: string }) => ({ code: row.source_code, name: row.source_name }));
+}
+
+function cleanSource(value?: string | null): string | null {
+  if (!value || !String(value).trim()) return null;
+  const code = normalizeSourceCode(String(value));
+  return code || null;
+}
+
+export async function loadFileWithMap(
+  mapCode: string,
+  fileName: string,
+  mediaType: string,
+  bytes: Buffer,
+  asOfDate?: string,
+  client: SupabaseClient = useClient(),
+  sourceCode?: string,
+): Promise<ImportInstanceDetail> {
+  const instance = await createImportInstance(fileName, mediaType, bytes, client, { forceMapCode: mapCode, sourceCode });
+  const asOf = asOfDate || instance.asOfDate || new Date().toISOString().slice(0, 10);
+  return processImportInstance(instance.id, instance.columnMappings, asOf, client, sourceCode);
 }
 
 async function reviewWithModel(assignments: ColumnAssignment[], attributes: AttributeChoice[]): Promise<ColumnAssignment[]> {

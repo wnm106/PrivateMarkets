@@ -2,8 +2,18 @@ import { POSITION_FILE_MAP } from './position-file-map';
 import type { ColumnTransform, FeedMap, TransformKind } from './types';
 import { applyTransform } from './values';
 
-export type AssignmentRole = 'ignore' | 'filter' | 'as_of' | 'identity' | 'name' | 'attribute' | 'parent';
+export type AssignmentRole = 'ignore' | 'filter' | 'as_of' | 'source' | 'identity' | 'name' | 'attribute' | 'parent';
 export type SuggestionMethod = 'source_map' | 'name' | 'sample' | 'ai' | 'manual';
+
+export interface ColumnHint {
+  sourceColumn: string;
+  role: AssignmentRole;
+  domainCode: string | null;
+  attributeCode: string | null;
+  parentDomainCode: string | null;
+  confidence: number;
+  reason: string;
+}
 
 export interface AttributeChoice {
   attributeCode: string;
@@ -101,15 +111,21 @@ function mostCommon(rows: Record<string, string>[], column: string): string {
 
 export function suggestTransform(samples: string[], dataType?: string | null, referenceListCode?: string | null): ColumnTransform {
   if (referenceListCode) return { kind: 'list' };
-  if (dataType === 'DATE' || samples.some((sample) => /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(sample))) return { kind: 'date' };
+  if (dataType === 'DATE' || samples.some((sample) => /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(sample) || /^[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}$/.test(sample))) return { kind: 'date' };
   if (dataType === 'PERCENTAGE' || samples.some((sample) => sample.trim().endsWith('%'))) return { kind: 'percent' };
   if (
     ['NUMBER', 'INTEGER', 'DECIMAL', 'CURRENCY'].includes(dataType || '') ||
-    samples.some((sample) => /,/.test(sample) && /\d/.test(sample))
+    (samples.length > 0 && samples.every(looksNumeric))
   ) {
     return { kind: 'number' };
   }
   return { kind: 'trim' };
+}
+
+function looksNumeric(sample: string): boolean {
+  const text = sample.trim().replace(/[$€£\s]/g, '').replace(/,/g, '');
+  const bare = text.replace(/^\((.*)\)$/, '$1');
+  return /^-?\d+(\.\d+)?$/.test(bare);
 }
 
 function knownAssignment(column: string, rows: Record<string, string>[]): ColumnAssignment | null {
@@ -164,6 +180,43 @@ function knownAssignment(column: string, rows: Record<string, string>[]): Column
   return null;
 }
 
+function assignmentFromHint(
+  column: string,
+  rows: Record<string, string>[],
+  hint: ColumnHint,
+  attributes: AttributeChoice[],
+): ColumnAssignment {
+  const samples = samplesFor(rows, column);
+  const attribute = hint.attributeCode
+    ? attributes.find((item) => item.attributeCode === hint.attributeCode && item.domainCode === hint.domainCode)
+      || attributes.find((item) => item.attributeCode === hint.attributeCode)
+    : undefined;
+  const domainCode = hint.role === 'as_of' || hint.role === 'source' || hint.role === 'filter' || hint.role === 'ignore'
+    ? null
+    : hint.domainCode || attribute?.domainCode || null;
+  return {
+    sourceColumn: column,
+    samples,
+    role: hint.role,
+    domainCode,
+    attributeCode: hint.role === 'attribute' ? hint.attributeCode : null,
+    parentDomainCode: hint.role === 'parent' ? hint.parentDomainCode : null,
+    filterEquals: hint.role === 'filter' ? mostCommon(rows, column) || null : null,
+    transform: hint.role === 'as_of'
+      ? { kind: 'date' }
+      : hint.role === 'source'
+        ? { kind: 'uppercase' }
+      : hint.role === 'attribute'
+        ? suggestTransform(samples, attribute?.dataType, attribute?.referenceListCode)
+        : { kind: 'trim' },
+    suggestion: {
+      method: 'name',
+      confidence: hint.confidence,
+      reason: hint.reason,
+    },
+  };
+}
+
 function base(
   column: string,
   samples: string[],
@@ -206,8 +259,10 @@ function scoreAttribute(header: string, attribute: AttributeChoice, domainCode: 
 export function suggestAssignments(
   headers: string[],
   rows: Record<string, string>[],
-  attributes: AttributeChoice[]
+  attributes: AttributeChoice[],
+  hints: ColumnHint[] = [],
 ): ColumnAssignment[] {
+  const hintByColumn = new Map(hints.map((hint) => [hint.sourceColumn, hint]));
   const usedAttributes = new Set<string>();
   return headers.filter(Boolean).map((column) => {
     const known = knownAssignment(column, rows);
@@ -218,6 +273,13 @@ export function suggestAssignments(
         known.transform = suggestTransform(known.samples, attribute?.dataType, attribute?.referenceListCode);
       }
       return known;
+    }
+
+    const hint = hintByColumn.get(column);
+    if (hint) {
+      const assignment = assignmentFromHint(column, rows, hint, attributes);
+      if (assignment.attributeCode && assignment.domainCode) usedAttributes.add(`${assignment.domainCode}:${assignment.attributeCode}`);
+      return assignment;
     }
 
     const samples = samplesFor(rows, column);
@@ -273,6 +335,7 @@ export function suggestAssignments(
 export function targetKey(assignment: Pick<ColumnAssignment, 'role' | 'domainCode' | 'attributeCode' | 'parentDomainCode'>): string {
   if (assignment.role === 'ignore') return 'ignore';
   if (assignment.role === 'as_of') return 'as_of';
+  if (assignment.role === 'source') return 'source';
   if (assignment.role === 'filter') return 'filter';
   if (assignment.role === 'identity') return `identity:${assignment.domainCode}`;
   if (assignment.role === 'name') return `name:${assignment.domainCode}`;
@@ -284,6 +347,7 @@ export function mappingTargets(attributes: AttributeChoice[], domains: string[])
   const targets: MappingTarget[] = [
     { key: 'ignore', group: 'File', label: 'Do not load', role: 'ignore', domainCode: null, attributeCode: null, parentDomainCode: null, dataType: null, referenceListCode: null },
     { key: 'as_of', group: 'File', label: 'As-of date', role: 'as_of', domainCode: null, attributeCode: null, parentDomainCode: null, dataType: 'DATE', referenceListCode: null },
+    { key: 'source', group: 'File', label: 'Source', role: 'source', domainCode: null, attributeCode: null, parentDomainCode: null, dataType: 'STRING', referenceListCode: null },
     { key: 'filter', group: 'File', label: 'Row filter', role: 'filter', domainCode: null, attributeCode: null, parentDomainCode: null, dataType: null, referenceListCode: null },
   ];
   const domainList = domains.length > 0 ? domains : LOAD_DOMAINS;
@@ -357,10 +421,14 @@ export function applyTarget(assignment: ColumnAssignment, target: MappingTarget)
   };
 }
 
-export function feedMapFromAssignments(assignments: ColumnAssignment[]): FeedMap {
+export function feedMapFromAssignments(
+  assignments: ColumnAssignment[],
+  profile?: { mapCode?: string; name?: string; description?: string },
+): FeedMap {
   const domains = new Map<string, FeedMap['domains'][number]>();
   const transforms: Record<string, ColumnTransform> = {};
   let asOfHintColumn: string | undefined;
+  let sourceHintColumn: string | undefined;
   let rowFilter: FeedMap['rowFilter'];
 
   const ensure = (domainCode: string) => {
@@ -383,6 +451,7 @@ export function feedMapFromAssignments(assignments: ColumnAssignment[]): FeedMap
     if (assignment.transform?.kind) transforms[assignment.sourceColumn] = assignment.transform;
     if (assignment.role === 'ignore') continue;
     if (assignment.role === 'as_of') asOfHintColumn = assignment.sourceColumn;
+    if (assignment.role === 'source') sourceHintColumn = assignment.sourceColumn;
     if (assignment.role === 'filter') {
       rowFilter = { column: assignment.sourceColumn, equals: assignment.filterEquals || assignment.samples[0] || '' };
     }
@@ -410,11 +479,12 @@ export function feedMapFromAssignments(assignments: ColumnAssignment[]): FeedMap
   }
 
   return {
-    mapCode: POSITION_FILE_MAP.mapCode,
+    mapCode: profile?.mapCode || POSITION_FILE_MAP.mapCode,
     sourceCode: POSITION_FILE_MAP.sourceCode,
-    name: POSITION_FILE_MAP.name,
-    description: POSITION_FILE_MAP.description,
+    name: profile?.name || POSITION_FILE_MAP.name,
+    description: profile?.description || POSITION_FILE_MAP.description,
     asOfHintColumn,
+    sourceHintColumn,
     rowFilter,
     domains: [...domains.values()].filter((domain) => domain.identityColumn),
     transforms,
