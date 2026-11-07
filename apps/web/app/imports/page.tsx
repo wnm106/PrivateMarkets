@@ -17,6 +17,7 @@ interface InstanceSummary {
   id: string;
   fileName: string;
   mapCode: string;
+  mapReuse: 'exact' | 'extended' | 'new';
   rowCount: number;
   status: string;
   receivedAt: string;
@@ -59,10 +60,17 @@ function formatWhen(value: string | null) {
 }
 
 function kindLabel(mapCode: string) {
-  if (mapCode === 'NAV_STATEMENT') return 'NAV statement';
-  if (mapCode === 'FINANCIAL_STATEMENT') return 'Financial statement';
-  if (mapCode === 'POSITION_FILE') return 'Positions';
+  const value = (mapCode || '').toUpperCase();
+  if (value === 'NAV_STATEMENT' || value.startsWith('NAV-')) return 'NAV statement';
+  if (value === 'FINANCIAL_STATEMENT' || value.startsWith('FINANCIAL-')) return 'Financial statement';
+  if (value === 'POSITION_FILE' || value.startsWith('POSITIONS-')) return 'Positions';
   return 'Table';
+}
+
+function reuseLabel(reuse: string) {
+  if (reuse === 'exact') return 'Reused saved map';
+  if (reuse === 'extended') return 'Reused saved map · new columns added';
+  return 'New map';
 }
 
 function resultText(instance: InstanceSummary) {
@@ -251,7 +259,7 @@ export default function PositionFilePage() {
           queue?.instances.map((instance) => (
             <div key={instance.id} className="tbl-row" style={{ gridTemplateColumns: '190px 1.3fr 70px 110px 1.2fr 120px' }}>
               <div>{formatWhen(instance.receivedAt)}</div>
-              <button onClick={() => selectInstance(instance.id)} style={{ textAlign: 'left', background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit' }}>{instance.fileName}<div style={{ color: 'var(--ink-3)', fontSize: 12 }}>{kindLabel(instance.mapCode)}</div></button>
+              <button onClick={() => selectInstance(instance.id)} style={{ textAlign: 'left', background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit' }}>{instance.fileName}<div style={{ color: 'var(--ink-3)', fontSize: 12 }}>{kindLabel(instance.mapCode)} · {reuseLabel(instance.mapReuse)}</div></button>
               <div>{instance.rowCount}</div>
               <div>{instance.status}</div>
               <div>{resultText(instance)}</div>
@@ -271,7 +279,10 @@ export default function PositionFilePage() {
         <>
           <div className="section-title">
             <h2>{detail.fileName}</h2>
-            <span className="hint">{kindLabel(detail.mapCode)} · {detail.rowCount} stored rows · {detail.columnMappings.length} source columns</span>
+            <span className="hint">{kindLabel(detail.mapCode)} · {reuseLabel(detail.mapReuse)} · {detail.rowCount} rows</span>
+          </div>
+          <div className="page-meta" style={{ marginBottom: 12 }}>
+            Map <code>{detail.mapCode}</code>. Repeat this format with <code>POST /api/feeds/maps/{detail.mapCode}/load</code>.
           </div>
           <div className="filter-bar" style={{ flexWrap: 'wrap', gap: 12 }}>
             <label className="filter-pill">

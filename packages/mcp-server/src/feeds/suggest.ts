@@ -417,7 +417,10 @@ export function applyTarget(assignment: ColumnAssignment, target: MappingTarget)
   };
 }
 
-export function feedMapFromAssignments(assignments: ColumnAssignment[]): FeedMap {
+export function feedMapFromAssignments(
+  assignments: ColumnAssignment[],
+  profile?: { mapCode?: string; name?: string; description?: string },
+): FeedMap {
   const domains = new Map<string, FeedMap['domains'][number]>();
   const transforms: Record<string, ColumnTransform> = {};
   let asOfHintColumn: string | undefined;
@@ -470,10 +473,10 @@ export function feedMapFromAssignments(assignments: ColumnAssignment[]): FeedMap
   }
 
   return {
-    mapCode: POSITION_FILE_MAP.mapCode,
+    mapCode: profile?.mapCode || POSITION_FILE_MAP.mapCode,
     sourceCode: POSITION_FILE_MAP.sourceCode,
-    name: POSITION_FILE_MAP.name,
-    description: POSITION_FILE_MAP.description,
+    name: profile?.name || POSITION_FILE_MAP.name,
+    description: profile?.description || POSITION_FILE_MAP.description,
     asOfHintColumn,
     rowFilter,
     domains: [...domains.values()].filter((domain) => domain.identityColumn),
