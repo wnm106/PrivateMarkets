@@ -2440,6 +2440,51 @@ export const DEACTIVATE_CLIENT_USER_MUTATION = `
   }
 `;
 
+export const CLIENT_AUTH_REQUIREMENTS_QUERY = `
+  query ClientAuthRequirements($clientId: ID!) {
+    clientAuthRequirements(clientId: $clientId) {
+      clientId
+      passwordEnabled
+      mfaRequired
+      emailDomains
+    }
+    clientIdentityProviders(clientId: $clientId) {
+      id
+      clientId
+      provider
+      displayName
+      emailDomain
+      azureTenantId
+      samlMetadataUrl
+      oidcIssuer
+      oidcClientId
+      oidcIdentifier
+      ssoProviderId
+      registrationStatus
+      registrationError
+      isEnabled
+    }
+  }
+`;
+
+export const UPDATE_CLIENT_AUTH_REQUIREMENTS_MUTATION = `
+  mutation UpdateClientAuthRequirements($input: UpdateClientAuthRequirementsInput!) {
+    updateClientAuthRequirements(input: $input) { success errors { field message code } }
+  }
+`;
+
+export const UPSERT_CLIENT_IDENTITY_PROVIDER_MUTATION = `
+  mutation UpsertClientIdentityProvider($input: UpsertClientIdentityProviderInput!) {
+    upsertClientIdentityProvider(input: $input) { success errors { field message code } }
+  }
+`;
+
+export const DELETE_CLIENT_IDENTITY_PROVIDER_MUTATION = `
+  mutation DeleteClientIdentityProvider($id: ID!) {
+    deleteClientIdentityProvider(id: $id) { success errors { field message code } }
+  }
+`;
+
 export const GRANT_ENTITY_ACCESS_MUTATION = `
   mutation GrantEntityAccess($input: GrantEntityAccessInput!) {
     grantEntityAccess(input: $input) { success errors { field message code } }

@@ -63,6 +63,16 @@ secret = "env(AZURE_CLIENT_SECRET)"
 url = "https://login.microsoftonline.com/common/v2.0"
 redirect_uri = ""
 
+# Enforces tenancy.client_auth_requirements when a token is issued. A client that
+# turns password off, or that only allows its own SAML / OIDC / Entra provider,
+# is refused here. The same function is created by
+# supabase/migrations/20261109180000_client_auth_requirements.sql.
+# On a hosted project, also select this Postgres function under
+# Authentication -> Hooks -> Customize Access Token.
+[auth.hook.custom_access_token]
+enabled = true
+uri = "pg-functions://postgres/tenancy/custom_access_token_hook"
+
 [edge_runtime]
 policy = "per_worker"
 
