@@ -4,6 +4,17 @@ import { CLIENT_ADMIN_PERMISSIONS, isPlatformAdminPath } from '@/lib/admin-acces
 
 const PUBLIC_PATHS = ['/welcome', '/login', '/auth/callback', '/no-access'];
 
+async function signInDecision(supabase: { schema: (name: string) => any }) {
+  const { data, error } = await supabase.schema('tenancy').rpc('current_sign_in_decision');
+  if (error || !data || typeof data !== 'object') return null;
+  return data as { allowed?: boolean; reason?: string | null; mfa_required?: boolean; mfa_satisfied?: boolean };
+}
+
+function withSessionCookies(next: NextResponse, response: NextResponse) {
+  response.cookies.getAll().forEach((cookie) => next.cookies.set(cookie));
+  return next;
+}
+
 async function adminAccess(supabase: { schema: (name: string) => any }, userId: string) {
   const { data: profile, error: profileError } = await supabase
     .schema('tenancy')
@@ -77,6 +88,33 @@ export async function middleware(request: NextRequest) {
     const redirectUrl = new URL('/login', request.url);
     redirectUrl.searchParams.set('redirectedFrom', request.nextUrl.pathname);
     return NextResponse.redirect(redirectUrl);
+  }
+
+  // A client's sign-in rules apply after the session exists. Direct data calls
+  // are also refused by the Auth access-token hook; this stops the app itself.
+  if (user) {
+    const decision = await signInDecision(supabase);
+    if (decision?.allowed === false) {
+      await supabase.auth.signOut();
+      const message = decision.reason || 'This sign-in method is not allowed for this organization.';
+      if (pathname.startsWith('/api/')) {
+        return withSessionCookies(NextResponse.json({ error: message }, { status: 403 }), response);
+      }
+      const redirectUrl = new URL('/login', request.url);
+      redirectUrl.searchParams.set('error', message);
+      return withSessionCookies(NextResponse.redirect(redirectUrl), response);
+    }
+    const needsMfa = Boolean(decision?.mfa_required && decision.mfa_satisfied === false);
+    if (needsMfa && !pathname.startsWith('/login/mfa') && !pathname.startsWith('/api/auth/')) {
+      if (pathname.startsWith('/api/')) {
+        return NextResponse.json({ error: 'Multi-factor authentication is required.' }, { status: 403 });
+      }
+      if (!isApiOrAsset) {
+        const redirectUrl = new URL('/login/mfa', request.url);
+        redirectUrl.searchParams.set('redirectedFrom', `${pathname}${request.nextUrl.search}`);
+        return NextResponse.redirect(redirectUrl);
+      }
+    }
   }
 
   // Admin tools are limited to tenant admins and client administrators.

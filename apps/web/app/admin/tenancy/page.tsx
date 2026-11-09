@@ -19,6 +19,7 @@ import {
   ME_QUERY,
 } from '@/lib/graphql';
 import { EntityRoleAccess, type AccessGrant } from '@/components/security/EntityRoleAccess';
+import { ClientAuthentication } from '@/components/admin/ClientAuthentication';
 
 interface Client {
   id: string;
@@ -58,7 +59,7 @@ interface SessionAccess {
   canManageEntityAccess: boolean;
 }
 
-type Tab = 'clients' | 'members' | 'entity-access';
+type Tab = 'clients' | 'members' | 'authentication' | 'entity-access';
 
 export default function TenancyAdminPage() {
   const [tab, setTab] = useState<Tab>('clients');
@@ -106,6 +107,7 @@ export default function TenancyAdminPage() {
         {([
           ['clients', 'Clients'],
           ['members', 'Members & Roles'],
+          ...(me?.isTenantAdmin ? [['authentication', 'Authentication'] as [Tab, string]] : []),
           ...(me?.canManageEntityAccess ? [['entity-access', 'Entity Access'] as [Tab, string]] : []),
         ] as [Tab, string][]).map(([key, label]) => (
           <button
@@ -124,6 +126,13 @@ export default function TenancyAdminPage() {
         <ClientsTab clients={clients} onChanged={loadClients} onError={setError} canProvision={!!me?.isTenantAdmin} />
       ) : tab === 'members' ? (
         <MembersTab
+          clients={clients}
+          selectedClientId={selectedClientId}
+          onSelectClient={setSelectedClientId}
+          onError={setError}
+        />
+      ) : tab === 'authentication' ? (
+        <ClientAuthentication
           clients={clients}
           selectedClientId={selectedClientId}
           onSelectClient={setSelectedClientId}

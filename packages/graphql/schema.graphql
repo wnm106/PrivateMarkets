@@ -1897,6 +1897,54 @@ input GrantEntityAccessInput {
   includeChildren: Boolean!
 }
 
+# Per-client sign-in rules. A tenant admin chooses password, Microsoft Entra ID,
+# SAML 2.0, and OpenID Connect for each client. Email domains select the rules.
+type ClientAuthRequirements {
+  clientId: ID!
+  passwordEnabled: Boolean!
+  mfaRequired: Boolean!
+  emailDomains: [String!]!
+}
+
+type ClientIdentityProvider {
+  id: ID!
+  clientId: ID!
+  provider: String!
+  displayName: String
+  emailDomain: String
+  azureTenantId: String
+  samlMetadataUrl: String
+  oidcIssuer: String
+  oidcClientId: String
+  oidcIdentifier: String
+  ssoProviderId: String
+  registrationStatus: String!
+  registrationError: String
+  isEnabled: Boolean!
+}
+
+input UpdateClientAuthRequirementsInput {
+  clientId: ID!
+  passwordEnabled: Boolean!
+  mfaRequired: Boolean!
+  emailDomains: [String!]!
+}
+
+input UpsertClientIdentityProviderInput {
+  id: ID
+  clientId: ID!
+  provider: String!
+  displayName: String
+  emailDomain: String
+  azureTenantId: String
+  samlMetadataUrl: String
+  samlMetadataXml: String
+  oidcIssuer: String
+  oidcClientId: String
+  oidcClientSecret: String
+  isEnabled: Boolean
+}
+
 # File: referencelist.graphql
 # Reference List Types
 
@@ -2716,6 +2764,8 @@ type Query {
   entityAccess(entityId: ID!): EntityAccessRecord
   entityAccessRoster(clientId: ID!, search: String): [EntityAccessRecord!]!
   myPermissions(clientId: ID!): [String!]!
+  clientAuthRequirements(clientId: ID!): ClientAuthRequirements
+  clientIdentityProviders(clientId: ID!): [ClientIdentityProvider!]!
 
   # Compliance Rules queries
   complianceRules(filter: ComplianceRuleFilter): [ComplianceRule!]!
@@ -2883,6 +2933,9 @@ type Mutation {
   startImpersonation(clientId: ID!, reason: String): MutationResult!
   stopImpersonation: MutationResult!
   updateProfile(input: UpdateProfileInput!): UpdateProfileResult!
+  updateClientAuthRequirements(input: UpdateClientAuthRequirementsInput!): MutationResult!
+  upsertClientIdentityProvider(input: UpsertClientIdentityProviderInput!): MutationResult!
+  deleteClientIdentityProvider(id: ID!): MutationResult!
 
   # Compliance Rules mutations
   createComplianceRule(input: CreateComplianceRuleInput!): CreateComplianceRuleResult!
