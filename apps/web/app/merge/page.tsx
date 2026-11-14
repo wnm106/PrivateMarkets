@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { entityHref } from '@/components/detail/EntityGraphPanel';
-import { planChildMerge, type ChildPlan, type ChildRecord } from '@tapestrai/graphql/lib/entity-resolution/children';
+import { planChildMerge, type ChildPlan, type ChildRecord } from '@tapestrai/graphql/src/lib/entity-resolution/children';
 import {
   graphqlMutation,
   graphqlQuery,

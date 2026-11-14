@@ -25,7 +25,7 @@ function unwrapGraphqlError(error: any) {
   return error;
 }
 
-export async function graphqlQuery<TData, TVariables extends Record<string, any>>(
+export async function graphqlQuery<TData, TVariables extends Record<string, any> = Record<string, any>>(
   query: string,
   variables?: TVariables,
   requestPolicy?: 'cache-first' | 'cache-and-network' | 'network-only' | 'cache-only',
@@ -51,7 +51,7 @@ export async function graphqlQuery<TData, TVariables extends Record<string, any>
   }
 }
 
-export async function graphqlMutation<TData, TVariables extends Record<string, any>>(
+export async function graphqlMutation<TData, TVariables extends Record<string, any> = Record<string, any>>(
   mutation: string,
   variables?: TVariables
 ): Promise<{ data?: TData; error?: any }> {

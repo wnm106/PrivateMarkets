@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { DomainKey } from '@/lib/mock-data'; // Only keeping DomainKey type
+import { auditLog, getAttributesForDomain, getDomainConfig, getTemplatesForDomain, type DomainKey } from '@/lib/mock-data';
 import { graphqlQuery, ATTRIBUTE_REGISTER_QUERY, ENTITY_QUERY } from '@/lib/graphql';
 import { sources, SourceKey } from '@/lib/data';
 
@@ -32,7 +32,7 @@ export default function EditEntityPage() {
       MATURITY_DATE: '2030-09-15',
       SPREAD_BPS: '575',
       REFERENCE_RATE: 'Term SOFR',
-    },
+    } as Record<string, any>,
     sources: ['wso', 'bloomberg', 'manual'],
   });
 

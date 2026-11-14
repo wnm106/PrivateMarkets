@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import type { ColDef } from 'ag-grid-community';
 import { AppGrid } from '@/components/grid/AppGrid';
-import { attributeLineage, type DomainKey } from '@/lib/mock-data';
+import { attributeLineage, getDomainConfig, type DomainKey } from '@/lib/mock-data';
 import { graphqlQuery, ENTITY_QUERY } from '@/lib/graphql';
 import { sources } from '@/lib/data';
 

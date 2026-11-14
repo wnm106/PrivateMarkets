@@ -183,11 +183,12 @@ async function resolveAndPersistGolden(
   const { data: attr } = await context.supabase.from("attribute_register").select("id").eq("attribute_code", attributeCode).single();
   if (!attr) throw new Error(`Attribute not found: ${attributeCode}`);
 
-  const current = () => context.supabase.from("entity_attribute_values")
+  const current = (columns: string) => context.supabase.from("entity_attribute_values")
+    .select(columns)
     .eq("entity_id", entityId).eq("attribute_id", attr.id)
     .eq("valid_to", "9999-12-31").eq("system_to", "9999-12-31 23:59:59");
 
-  const { data: sample, error: sampleError } = await current().select("id").limit(1).maybeSingle();
+  const { data: sample, error: sampleError } = await current("id").limit(1).maybeSingle<{ id: string }>();
   if (sampleError) throw sampleError;
   if (!sample?.id) return { winningSource: null, goldenValueId: null, goldenValue: null };
 
@@ -196,7 +197,8 @@ async function resolveAndPersistGolden(
     .eq("id", sample.id);
   if (touchError) throw touchError;
 
-  const { data: rows, error } = await current().select("id, source_id, golden_source_id, golden_value");
+  const { data: rows, error } = await current("id, source_id, golden_source_id, golden_value")
+    .returns<Array<{ id: string; source_id: string | null; golden_source_id: string | null; golden_value: string | null }>>();
   if (error) throw error;
   const winner = (rows || []).find((row) => row.golden_source_id && row.source_id === row.golden_source_id);
   let winningSource: string | null = null;

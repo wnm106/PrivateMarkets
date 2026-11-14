@@ -83,7 +83,7 @@ interface Attribute {
   isRequired: boolean;
   isMultiValued: boolean;
   referenceDomainCode?: string;
-  domainCode?: string;
+  domainCode?: string | null;
   displayFormat?: string;
   listValues?: string[];
   validationRules?: any;

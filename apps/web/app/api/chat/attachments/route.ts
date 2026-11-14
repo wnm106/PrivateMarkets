@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
     if (error || !created) {
       return NextResponse.json({ error: error?.message || 'Could not start a conversation' }, { status: 500 });
     }
-    conversationId = (created as { id: string }).id;
+    conversationId = (created as unknown as { id: string }).id;
   }
 
   // Enforce the per-turn cap against what is already staged on this thread.

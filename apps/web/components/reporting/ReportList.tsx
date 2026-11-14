@@ -1,5 +1,6 @@
 'use client';
 
+import type { ICellRendererParams } from 'ag-grid-community';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -127,7 +128,7 @@ export function ReportList({ kind }: { kind: 'dashboard' | 'narrative' }) {
       autoHeight: true,
       wrapText: true,
       valueGetter: (params) => params.data ? `${params.data.name} ${params.data.code} ${params.data.description || ''}` : '',
-      cellRenderer: (params) => {
+      cellRenderer: (params: ICellRendererParams<Row>) => {
         const row = params.data;
         if (!row) return params.value || '';
         return (

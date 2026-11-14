@@ -62,7 +62,7 @@ async function main() {
   const industry = instance.columnMappings.find((column) => column.sourceColumn === 'issuer industry');
   assert(industry?.attributeCode === 'INDUSTRY' && industry.domainCode === 'ISSUER' && industry.transform.kind === 'trim', 'industry suggestion');
 
-  const catalog = await listMappingCatalog();
+  const catalog = await listMappingCatalog(clientId);
   const fundIndustry = mappingTargets(catalog.attributes, catalog.domains).find((target) => target.key === 'attribute:FUND:INDUSTRY');
   assert(fundIndustry, 'FUND industry is a selectable target');
   const manual = applyTarget(industry!, fundIndustry!);
@@ -83,9 +83,9 @@ async function main() {
 
   const processed = await processImportInstance(instance.id, clientId, instance.columnMappings, '2026-09-30');
   assert(processed.status === 'SUCCEEDED', processed.errorMessage || processed.status);
-  assert(processed.resultSummary?.created === 0 && processed.resultSummary.matched === 56 && processed.resultSummary.failed === 0, `entities ${JSON.stringify(processed.resultSummary)}`);
-  assert(processed.resultSummary.attributesCreated === 0, `reprocess created ${processed.resultSummary.attributesCreated} attribute rows`);
-  assert(processed.resultSummary.relationshipsMatched === 60, `relationships matched ${processed.resultSummary.relationshipsMatched}`);
+  assert(processed.resultSummary?.created === 0 && processed.resultSummary!.matched === 56 && processed.resultSummary!.failed === 0, `entities ${JSON.stringify(processed.resultSummary)}`);
+  assert(processed.resultSummary!.attributesCreated === 0, `reprocess created ${processed.resultSummary!.attributesCreated} attribute rows`);
+  assert(processed.resultSummary!.relationshipsMatched === 60, `relationships matched ${processed.resultSummary!.relationshipsMatched}`);
   const afterFirst = await attributeRowCount(client);
   assert(afterFirst === before, `attribute rows grew from ${before} to ${afterFirst}`);
 

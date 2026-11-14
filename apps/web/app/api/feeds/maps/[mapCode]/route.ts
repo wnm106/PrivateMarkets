@@ -16,13 +16,14 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ ma
     if (!map) return NextResponse.json({ error: `Map ${mapCode} was not found.` }, { status: 404 });
     const feed = feedMapFromAssignments(assignmentsFromMap(map), {
       mapCode: map.mapCode,
+      sourceCode: '',
       name: map.name,
       description: map.description,
     });
     return NextResponse.json({
       ...map,
       load: {
-        sourceCode: feed.sourceCode,
+        sourceCode: feed.sourceCode || null,
         asOfHintColumn: feed.asOfHintColumn || null,
         domains: feed.domains,
       },

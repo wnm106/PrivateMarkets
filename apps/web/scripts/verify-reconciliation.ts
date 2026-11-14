@@ -44,6 +44,7 @@ async function main() {
       continue;
     }
     const definition = definitions.find((item: { domainCode: string }) => item.domainCode === domain);
+    if (!definition) continue;
     const result = await reconciliationResolvers.Mutation.openReconciliationRun({}, {
       input: {
         definitionCode: definition.definitionCode,
@@ -57,6 +58,7 @@ async function main() {
       continue;
     }
     const run = result.run;
+    if (!run) continue;
     opened.push(run.id);
     const kinds = run.lines.reduce((counts: Record<string, number>, line: { breakKind: string; isBreak: boolean }) => {
       const key = `${line.breakKind}${line.isBreak ? ':break' : ':match'}`;
@@ -70,7 +72,7 @@ async function main() {
       const resolved = await reconciliationResolvers.Mutation.resolveReconciliationLine({}, {
         input: { lineId: sample.id, status: 'ACCEPTED' },
       }, context as never);
-      console.log('resolved', sample.attributeCode, resolved.errors?.[0]?.message || resolved.run.status, 'open', resolved.run?.openBreakCount);
+      console.log('resolved', sample.attributeCode, resolved.errors?.[0]?.message || resolved.run?.status, 'open', resolved.run?.openBreakCount);
     }
   }
 

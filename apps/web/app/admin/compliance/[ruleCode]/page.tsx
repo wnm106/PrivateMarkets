@@ -1,5 +1,6 @@
 'use client';
 
+import type { ICellRendererParams } from 'ag-grid-community';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePublishViewContext } from '@/lib/view-context';
 import { useParams, useRouter } from 'next/navigation';
@@ -590,7 +591,7 @@ function ResultsTable({ results, resultUnit, onOpen }: { results: ResultDto[]; r
       field: 'status',
       headerName: 'Status',
       minWidth: 140,
-      cellRenderer: (params) => {
+      cellRenderer: (params: ICellRendererParams<ResultDto>) => {
         if (!params.value) return null;
         const style = STATUS_STYLE[String(params.value)] || STATUS_STYLE.NO_DATA;
         return <span style={{ fontSize: 11, padding: '3px 8px', background: style.bg, color: style.fg, fontWeight: 600 }}>{String(params.value).replace('_', ' ')}</span>;

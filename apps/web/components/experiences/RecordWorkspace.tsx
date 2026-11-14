@@ -272,7 +272,7 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
     setSaveError(null);
     const result = await graphqlMutation<
       { updateEntity: { errors: Array<{ message: string }> } },
-      { input: { id: string; attributes: Record<string, string> } }
+      { input: { id: string; attributes: Record<string, string>; asOfDate?: string | null } }
     >(UPDATE_ENTITY_MUTATION, { input: { id: entity.id, attributes: { [attributeCode]: value }, asOfDate } });
     const message = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
     if (message) {

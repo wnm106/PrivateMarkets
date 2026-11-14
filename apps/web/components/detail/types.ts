@@ -10,6 +10,7 @@ export interface RelationshipMember {
 export interface AttributeValue {
   value: any;
   source?: string;
+  source_code?: string;
   updatedAt?: string;
   reliability?: number;
 }

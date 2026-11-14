@@ -228,7 +228,7 @@ export default function DynamicEntityDetailPage() {
 
   const handleAddAttribute = async (attributeCode: string, value: string, source: SourceKey) => {
     if (!entity) throw new Error('Record is still loading');
-    const result = await graphqlMutation<{ updateEntity: { errors: Array<{ message: string }> } }, { input: { id: string; attributes: Record<string, string> } }>(
+    const result = await graphqlMutation<{ updateEntity: { errors: Array<{ message: string }> } }, { input: { id: string; attributes: Record<string, string>; asOfDate?: string | null } }>(
       UPDATE_ENTITY_MUTATION,
       { input: { id: entity.id, attributes: { [attributeCode]: value }, asOfDate } },
     );

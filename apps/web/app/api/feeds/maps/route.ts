@@ -21,7 +21,7 @@ export async function GET() {
         headers: map.headers,
         coreHeaders: map.coreHeaders,
         columnCount: map.assignments.length,
-        domains: feedMapFromAssignments(assignmentsFromMap(map), { mapCode: map.mapCode }).domains.map((domain) => domain.domainCode),
+        domains: feedMapFromAssignments(assignmentsFromMap(map), { mapCode: map.mapCode, sourceCode: '', name: map.name, description: map.description }).domains.map((domain) => domain.domainCode),
         loadUrl: `/api/feeds/maps/${encodeURIComponent(map.mapCode)}/load`,
       })),
     });

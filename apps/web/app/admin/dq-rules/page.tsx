@@ -1,5 +1,6 @@
 'use client';
 
+import type { ICellRendererParams } from 'ag-grid-community';
 import { useEffect, useMemo, useState } from 'react';
 import { usePublishViewContext } from '@/lib/view-context';
 import Link from 'next/link';
@@ -97,7 +98,7 @@ export default function DQRulesPage() {
       autoHeight: true,
       wrapText: true,
       valueGetter: (params) => params.data ? `${params.data.ruleName} ${params.data.ruleDescription || params.data.ruleExpression || ''}` : '',
-      cellRenderer: (params) => {
+      cellRenderer: (params: ICellRendererParams<DQRule>) => {
         const rule = params.data;
         if (!rule) return params.value || '';
         return (
@@ -112,7 +113,7 @@ export default function DQRulesPage() {
       field: 'ruleType',
       headerName: 'Type',
       minWidth: 140,
-      cellRenderer: (params) => params.value ? <span style={typeChip(String(params.value))}>{params.value}</span> : null,
+      cellRenderer: (params: ICellRendererParams<DQRule>) => params.value ? <span style={typeChip(String(params.value))}>{params.value}</span> : null,
     },
     {
       colId: 'applies',
@@ -122,7 +123,7 @@ export default function DQRulesPage() {
       autoHeight: true,
       wrapText: true,
       valueGetter: (params) => params.data ? `${params.data.domainCode || 'All domains'} ${params.data.attributeCode || 'Any attribute'}` : '',
-      cellRenderer: (params) => {
+      cellRenderer: (params: ICellRendererParams<DQRule>) => {
         const rule = params.data;
         if (!rule) return params.value || '';
         return (
@@ -137,7 +138,7 @@ export default function DQRulesPage() {
       field: 'severity',
       headerName: 'Severity',
       minWidth: 130,
-      cellRenderer: (params) => params.value ? (
+      cellRenderer: (params: ICellRendererParams<DQRule>) => params.value ? (
         <span>
           <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: severityColor(String(params.value)), marginRight: 6 }} />
           {params.value}
@@ -149,7 +150,7 @@ export default function DQRulesPage() {
       headerName: 'Status',
       minWidth: 120,
       valueGetter: (params) => params.data ? (params.data.isActive ? 'Active' : 'Inactive') : '',
-      cellRenderer: (params) => {
+      cellRenderer: (params: ICellRendererParams<DQRule>) => {
         if (!params.value) return null;
         const active = params.value === 'Active';
         return <span style={active ? activeChip : inactiveChip}>{params.value}</span>;

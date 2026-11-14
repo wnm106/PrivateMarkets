@@ -63,7 +63,7 @@ export function planChildMerge(keptChildren: ChildRecord[], movedChildren: Child
   const collisions: ChildCollision[] = [];
   const claimedMoved = new Set<string>();
 
-  const take = (incoming: ChildRecord, match: (existing: ChildRecord) => boolean) => {
+  const take = (incoming: ChildRecord, match: (left: string, right: string) => boolean) => {
     for (const existing of available.values()) {
       if (existing.domainCode !== incoming.domainCode) continue;
       if (!match(existing.entityName, incoming.entityName)) continue;

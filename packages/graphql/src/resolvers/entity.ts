@@ -124,7 +124,7 @@ async function assertParentPlacement(
   while (cursor) {
     if (seen.has(cursor)) throw new Error('That parent would create a loop.');
     seen.add(cursor);
-    const { data: row, error: walkError } = await supabase
+    const { data: row, error: walkError }: { data: { parent_domain_code: string | null } | null; error: Error | null } = await supabase
       .from('domain_types')
       .select('parent_domain_code')
       .eq('domain_code', cursor)

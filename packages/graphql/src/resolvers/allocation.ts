@@ -98,5 +98,5 @@ function emptyPreview(dealId: string, message: string): AllocationPreview & { er
     rows: [],
     adjustments: [],
     errors: [{ field: '', message, code: 'ALLOCATION' }],
-  };
+  } as AllocationPreview & { errors: Array<{ field: string; message: string; code: string }> };
 }

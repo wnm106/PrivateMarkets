@@ -121,7 +121,7 @@ export interface LineageEntry {
 
 // ============== DOMAIN CONFIG ==============
 export interface DomainConfig {
-  key: DomainKey;
+  key: DomainKey | string;
   name: string;
   color: string;
   count: number;

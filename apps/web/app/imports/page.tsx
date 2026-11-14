@@ -1,5 +1,6 @@
 'use client';
 
+import type { ICellRendererParams } from 'ag-grid-community';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { LoadReview } from '@/components/feeds/LoadReview';
@@ -180,11 +181,12 @@ export default function PositionFilePage() {
       width: 130,
       sortable: false,
       filter: false,
-      cellRenderer: (params) => {
-        if (!params.data) return null;
+      cellRenderer: (params: ICellRendererParams<InstanceSummary>) => {
+        const row = params.data;
+        if (!row) return null;
         const opening = params.context?.busy != null;
         return (
-          <button type="button" className="btn" disabled={opening} onClick={() => params.context?.open(params.data.id)}>
+          <button type="button" className="btn" disabled={opening} onClick={() => params.context?.open(row.id)}>
             {params.context?.busy === 'open' ? 'Opening…' : 'Review'}
           </button>
         );

@@ -45,7 +45,7 @@ export async function overlayTemporalAttributes(
   if (domainCode) definitions = definitions.eq('domain_code', domainCode);
   const { data: defs, error } = await definitions;
   if (error) throw error;
-  const codeOf = new Map((defs || []).map((row: { id: string; attribute_code: string }) => [row.id, row.attribute_code]));
+  const codeOf = new Map<string, string>((defs || []).map((row: { id: string; attribute_code: string }) => [row.id, row.attribute_code]));
   const attributeIds = [...codeOf.keys()];
   if (!attributeIds.length) {
     for (const node of nodes) node.attributes = {};

@@ -332,7 +332,6 @@ export async function loadFundRecInput(
         priorBookSource: priorBook.source,
         roll,
         flowSources: Object.keys(flowSources).length ? flowSources : undefined,
-        roll,
         rollId: rollId ?? null,
         rollName: rollId ? (rollName.get(rollId) || entity.entity_name) : null,
         openingFromHistory: {
