@@ -32,6 +32,11 @@ interface InstanceSummary {
 }
 
 interface InstanceDetail extends InstanceSummary {
+  sourceCode?: string | null;
+  intake?: { method: string; note: string | null; profile: { format: string; pages: number | null; route: string; reasons: string[] } | null } | null;
+  tables?: { id: string; name: string; rowCount: number; columnCount: number }[];
+  tableId?: string | null;
+  lastIssues?: { rejects: { kind: 'record' | 'value' | 'link'; domainCode: string; entityCode: string; attributeCode?: string; value?: string; message: string }[]; total: number } | null;
   columnMappings: ColumnAssignment[];
   loadWaves: string[][];
 }
@@ -47,6 +52,7 @@ interface QueueResponse {
   description: string;
   targets: MappingTarget[];
   lists: ReferenceListCatalog[];
+  sources?: { code: string; name: string }[];
   instances: InstanceSummary[];
 }
 
@@ -216,6 +222,64 @@ export default function PositionFilePage() {
     }
   }
 
+  async function selectTable(instanceId: string, tableId: string) {
+    setBusy('reload');
+    setError(null);
+    try {
+      const response = await fetch(`/api/feeds/position-file/${instanceId}/table`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tableId }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'The table could not be opened');
+      setMappingRevision((revision) => revision + 1);
+      openDetail(body);
+      await refreshQueue();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function changeSource(instanceId: string, sourceCode: string | null) {
+    const response = await fetch(`/api/feeds/position-file/${instanceId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceCode }),
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      setError(body.error || 'The source could not be saved');
+      return;
+    }
+    setDetail((current) => (current ? { ...current, sourceCode: body.sourceCode } : current));
+  }
+
+  async function trackAttribute(input: { domainCode: string; attributeName: string; dataType: string; column: string }) {
+    const response = await fetch('/api/feeds/position-file/attributes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'The field could not be added');
+    await refreshQueue();
+    return `attribute:${body.domainCode}:${body.attributeCode}`;
+  }
+
+  async function previewInstance(instanceId: string, mappings: ColumnAssignment[]) {
+    const response = await fetch(`/api/feeds/position-file/${instanceId}/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ columnMappings: mappings, asOfDate: chosenDate() }),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'The review could not be run');
+    return body;
+  }
+
   async function processInstance(instanceId: string, mappings?: ColumnAssignment[]) {
     setBusy(instanceId);
     setError(null);
@@ -251,6 +315,7 @@ export default function PositionFilePage() {
           targets={queue?.targets || []}
           lists={queue?.lists || []}
           resultText={detail.resultSummary ? resultText(detail) : null}
+          lastIssues={detail.lastIssues}
           errorMessage={detail.errorMessage}
           loading={busy === detail.id}
           reloading={busy === 'reload'}
@@ -262,6 +327,15 @@ export default function PositionFilePage() {
           onAsOfDate={setAsOfDate}
           onChange={updateAssignment}
           onLoad={() => processInstance(detail.id, detail.columnMappings)}
+          onPreview={() => previewInstance(detail.id, detail.columnMappings)}
+          intake={detail.intake}
+          tables={detail.tables}
+          tableId={detail.tableId}
+          onSelectTable={(tableId) => selectTable(detail.id, tableId)}
+          sources={queue?.sources}
+          sourceCode={detail.sourceCode}
+          onSourceChange={(code) => changeSource(detail.id, code)}
+          onTrackAttribute={trackAttribute}
           onReload={() => reloadFile(detail.id)}
           mapNote={detail.mapSaved
             ? `This file matches the saved map${detail.mapName ? ` ${detail.mapName}` : ''}. Columns already on that map are confirmed. Anything new still needs a decision, and loading updates the map.`
@@ -281,14 +355,14 @@ export default function PositionFilePage() {
           <div style={{ width: '4px', height: '48px', background: '#1b3a4b' }} />
           <div>
             <div className="page-title">Load data</div>
-            <div className="page-meta">CSV or Excel · a confirmed map is saved for the next file with the same columns</div>
+            <div className="page-meta">CSV, Excel, JSON, PDF, scans, and Word files · a confirmed map is saved for the next file with the same columns</div>
           </div>
         </div>
         <label className="btn btn-primary">
-          {busy === 'upload' ? 'Storing file…' : 'Upload file'}
+          {busy === 'upload' ? 'Reading file…' : 'Upload file'}
           <input
             type="file"
-            accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            accept=".csv,.xlsx,.xls,.json,.txt,.html,.htm,.pdf,.png,.jpg,.jpeg,.tif,.tiff,.docx,.doc"
             style={{ display: 'none' }}
             onChange={async (event) => {
               const file = event.target.files?.[0];
@@ -315,9 +389,8 @@ export default function PositionFilePage() {
       </div>
 
       <p className="hero-sub" style={{ maxWidth: 820, marginTop: 0 }}>
-        Upload a CSV or Excel file. Tapestr suggests where each column goes, using a saved map when the columns have been seen before and an AI review when they have not. Loading saves that map.
+        Upload any file: CSV, Excel, JSON, a PDF, a scan, or a Word document. Tapestr reads it, finds the tables, and suggests where each column goes, using a saved map when the columns have been seen before and an AI review when they have not. Loading saves that map.
         Each upload is an instance on the {queue?.sourceCode || 'POSITION_FILE'} source. The original file is kept, so you can change the column mapping and reprocess without losing the source values.
-        {' '}For any other file, use the <Link href="/load">data specialist</Link>.
       </p>
 
       <div className="section-title">
@@ -332,7 +405,7 @@ export default function PositionFilePage() {
           autoHeight={false}
           height="100%"
           loading={!queue}
-          emptyMessage="No files stored yet. Upload a CSV or Excel file to add an instance."
+          emptyMessage="No files stored yet. Upload a file to add an instance."
           onRowClicked={(row) => selectInstance(row.id)}
           context={{ busy, open: selectInstance }}
         />

@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
+import { defaultClientId } from '../lib/feeds/feed-loader';
 import { createImportInstance, listMappingCatalog, processImportInstance } from '../lib/feeds/import-instances';
 import { dependencyLoadOrder } from '../lib/feeds/load-order';
 import { applyTarget, feedMapFromAssignments, mappingTargets, previewTransform, targetKey } from '../lib/feeds/suggest';
@@ -39,12 +40,13 @@ async function main() {
   if (!csvPath) throw new Error('Pass the position file csv path');
   const bytes = readFileSync(csvPath);
   const client = db();
+  const clientId = await defaultClientId(client);
   const before = await attributeRowCount(client);
   const originalIndustry = await industryValues(client);
   const historicalBefore = originalIndustry.filter((row) => String(row.valid_from).slice(0, 10) === '2026-09-30').map((row) => row.golden_value);
   assert(historicalBefore.includes('Industrial Machinery'), `expected stored industry, got ${historicalBefore.join('|')}`);
 
-  const instance = await createImportInstance('Position_FIle.csv', 'text/csv', bytes);
+  const instance = await createImportInstance('Position_FIle.csv', 'text/csv', bytes, clientId);
   assert(instance.columnMappings.length === instance.headers.length, `mapping rows ${instance.columnMappings.length} headers ${instance.headers.length}`);
   assert(instance.headers.length === 42, `expected 42 source columns, got ${instance.headers.length}`);
   assert(instance.columnMappings.every((column) => column.role !== 'ignore'), `unmapped columns ${instance.columnMappings.filter((column) => column.role === 'ignore').map((column) => column.sourceColumn).join(', ')}`);
@@ -79,7 +81,7 @@ async function main() {
   assert(String(stored.data.parsed_rows[0]['fund aum']).includes(','), 'stored source still has the formatted amount');
   assert(stored.data.status === 'READY' && stored.data.as_of_date === '2026-09-30', `queue state ${stored.data.status} ${stored.data.as_of_date}`);
 
-  const processed = await processImportInstance(instance.id, instance.columnMappings, '2026-09-30');
+  const processed = await processImportInstance(instance.id, clientId, instance.columnMappings, '2026-09-30');
   assert(processed.status === 'SUCCEEDED', processed.errorMessage || processed.status);
   assert(processed.resultSummary?.created === 0 && processed.resultSummary.matched === 56 && processed.resultSummary.failed === 0, `entities ${JSON.stringify(processed.resultSummary)}`);
   assert(processed.resultSummary.attributesCreated === 0, `reprocess created ${processed.resultSummary.attributesCreated} attribute rows`);
@@ -90,19 +92,19 @@ async function main() {
   const upperMappings = processed.columnMappings.map((column) => (
     column.sourceColumn === 'issuer industry' ? { ...column, transform: { kind: 'uppercase' as const } } : column
   ));
-  const upper = await processImportInstance(instance.id, upperMappings, '2026-09-30');
+  const upper = await processImportInstance(instance.id, clientId, upperMappings, '2026-09-30');
   assert(upper.status === 'SUCCEEDED', upper.errorMessage || upper.status);
   assert((upper.resultSummary?.attributesUpdated || 0) > 0, 'uppercase transform did not update industry');
   const upperValues = await industryValues(client);
   assert(upperValues.some((row) => String(row.valid_from).slice(0, 10) === '2026-09-30' && row.golden_value === 'INDUSTRIAL MACHINERY'), 'historical industry was not transformed');
   assert(upperValues.filter((row) => String(row.valid_to).slice(0, 10) === '9999-12-31').every((row) => row.golden_value === 'Industrial Machinery'), 'open industry slice changed');
 
-  const restored = await processImportInstance(instance.id, processed.columnMappings, '2026-09-30');
+  const restored = await processImportInstance(instance.id, clientId, processed.columnMappings, '2026-09-30');
   assert(restored.status === 'SUCCEEDED' && restored.resultSummary?.attributesCreated === 0, `restore ${restored.errorMessage}`);
   const restoredValues = await industryValues(client);
   assert(restoredValues.filter((row) => String(row.valid_from).slice(0, 10) === '2026-09-30').every((row) => row.golden_value === 'Industrial Machinery'), `industry left as ${restoredValues.map((row) => row.golden_value).join('|')}`);
 
-  const again = await processImportInstance(instance.id);
+  const again = await processImportInstance(instance.id, clientId);
   assert(again.status === 'SUCCEEDED', again.errorMessage || again.status);
   assert(again.resultSummary?.created === 0 && again.resultSummary.attributesCreated === 0 && again.resultSummary.attributesUpdated === 0, `stored reprocess ${JSON.stringify(again.resultSummary)}`);
   assert(again.runs.length === 4, `expected 4 runs, got ${again.runs.length}`);

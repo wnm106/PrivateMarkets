@@ -10,10 +10,11 @@ import {
   type DataQuerySpec,
 } from '@tapestrai/graphql/src/lib/data-query-engine';
 
-export const QUERY_DATA_GUIDE = `
+/** How to ask data questions. Client-neutral: no answer-block format, so any MCP client can use it. */
+export const QUERY_DATA_GUIDE_CORE = `
 
 ## Asking questions about the data
-Answer counts, lists, filters, groups, and weighted figures with query_data. Do not add up list_entities pages, get_entity, or get_field_lineage and present that as a total. Those tools see one page or one record.
+Answer counts, lists, filters, groups, and weighted figures with query_data. Do not add up list_entities pages, get_entity, or get_field_lineage and present that as a total. Those tools see one page or one record. When they name the records and leave out an amount, a share, or a split the question asks for, call query_data for that field and continue.
 
 When the question is about records and how they relate — exposure by fund, positions by industry, investors in a deal, a weighted average — call get_model_map once. domainCode is the type you start from. toDomain is the type the answer has to reach, however many relationships away. The map returns the shortest path across the whole graph, not a two-step neighborhood. Copy that path's lookups in order. A lookup after the first sets from to the previous alias. A relationship marked repeats (a fund and its parent funds) is walked with path recursive, not one lookup per level. Do not also call list_domain_types, get_template_metadata, and get_relationship_types for that question. Do not invent codes. A REFERENCE attribute is a link. Do not sample it and treat a blank as proof the relationship is missing; follow the relationship named in readAs.
 
@@ -45,8 +46,22 @@ Value-grain examples:
 
 matchedEntities is the complete count. When truncated is true, rows are a page; do not add the page up. summaryOverAllMatched covers every matched record.
 
+## Finish the question
+Compare the question with the rows you have before you write the answer. A list of names and codes is unfinished when the question asks for an amount, a share, or how a total breaks down.
+
+Relationships from get_entity and list_entities carry the related record's name and code only. They do not carry that record's amounts. When the question asks what each allocation, exposure, balance, or holding is, follow with query_data: select or sum the amount and group by the identifier parts in readAs. One call takes up to five queries. Call again after you read the first result.
+
+A facility size, original principal, or deal value is the size of the instrument. Report it as that size. The allocation or exposure by fund is the position amount grouped by fund. When the booked amount is zero or absent, query the same positions again for a proposed book. Use the amount attributes get_model_map lists on POSITION, such as MARKET_VALUE, POSITION_ALLOCATION_SYSTEM_AMOUNT, FUNDED_PAR_AMOUNT, UNFUNDED_COMMITMENT_AMOUNT, and POSITION_IS_HYPOTHETICAL. Report the booked book and the proposed book as separate figures, each with its amount per fund.
+
+Read the result before you answer. A null column, a lookup whose direction is backwards, or rows that name the records and omit the metric means the question is still open: query again for that field. Use analyze_rows when the missing figure is a calculation across the rows, such as a share, a gap, or a screen. Cite summaryOverAllMatched and the metric totals. A truncated page is a sample.
+
+Add the missing metric, the fund or security name, and the funded-versus-proposed split to the working set until those rows can answer the question, or a query for that fact comes back empty. An empty field after you query it is not on file. Leave stored values as they are.
+
 When the user corrects how a phrase should be read, call save_lesson with the phrase, the reading, the query shape, and the answer shape, then answer that way. A block titled Lessons that match this question overrides a more general example. Do not save a lesson the user did not just teach.
-${CHAT_ANSWER_GUIDE}`;
+`;
+
+/** The guide the in-app chat gets: the core plus how its answer panel renders a reply. */
+export const QUERY_DATA_GUIDE = `${QUERY_DATA_GUIDE_CORE}${CHAT_ANSWER_GUIDE}`;
 
 const VALUE_FIELDS = new Set([
   'domain_code', 'entity_code', 'entity_name', 'entity_id',
@@ -140,7 +155,7 @@ function entitySpec(query: any, index: number): DataQuerySpec {
 const queryData: ToolDefinition = {
   name: 'query_data',
   description:
-    'Answer counts, lists, filters, groups, and weighted figures across records or sources. Do not add up list_entities, get_entity, or get_field_lineage; those are one page or one record. For a question that crosses entity types, call get_model_map first and copy its paths lookups; do not invent relationship or attribute codes, and do not treat a blank REFERENCE attribute as a missing link. Pass query as one JSON object or an array of up to five. grain "value" is one row per prevailing field. Its fields are domain_code, entity_code, entity_name, entity_id, attribute_code, attribute_name, value, numeric_value, source_code, source_name, valid_from, received_at. Filter source_name with the name a person says (Manual Entry). Operators: eq neq gt gte lt lte in nin contains startsWith between isNull notNull. Aggregations: COUNT, COUNT_DISTINCT, SUM, AVG, MIN, MAX. SUM and AVG only on numeric_value. grain "entity" is one row per record. start is DOMAIN or CONTEXT. CONTEXT requires entityId or entityCode. lookups follow relationships from get_model_map. filters, groupBy, orderBy, select, and metrics accept an attribute code or "<alias>.<ATTRIBUTE>" such as fund.entity_name or iss.INDUSTRY. Metrics also include WEIGHTED_AVG, which needs field and weightField. Group by the identifier parts in readAs, so a position is returned as its fund, security, and trade date. When truncated is true, rows are a sample; do not add them up. Example: {"grain":"entity","key":"exposure","start":"DOMAIN","domainCode":"POSITION","lookups":[{"alias":"fund","direction":"UP","relationshipCode":"POSITION_FUND","domainCode":"FUND"}],"groupBy":["fund.entity_name"],"metrics":[{"alias":"exposure","agg":"SUM","field":"MARKET_VALUE"}]}.',
+    'Answer counts, lists, filters, groups, and weighted figures across records or sources. Do not add up list_entities, get_entity, or get_field_lineage; those are one page or one record. For a question that crosses entity types, call get_model_map first and copy its paths lookups; do not invent relationship or attribute codes, and do not treat a blank REFERENCE attribute as a missing link. Pass query as one JSON object or an array of up to five. grain "value" is one row per prevailing field. Its fields are domain_code, entity_code, entity_name, entity_id, attribute_code, attribute_name, value, numeric_value, source_code, source_name, valid_from, received_at. Filter source_name with the name a person says (Manual Entry). Operators: eq neq gt gte lt lte in nin contains startsWith between isNull notNull. Aggregations: COUNT, COUNT_DISTINCT, SUM, AVG, MIN, MAX. SUM and AVG only on numeric_value. grain "entity" is one row per record. start is DOMAIN or CONTEXT. CONTEXT requires entityId or entityCode. lookups follow relationships from get_model_map. filters, groupBy, orderBy, select, and metrics accept an attribute code or "<alias>.<ATTRIBUTE>" such as fund.entity_name or iss.INDUSTRY. Metrics also include WEIGHTED_AVG, which needs field and weightField. Group by the identifier parts in readAs, so a position is returned as its fund, security, and trade date. When the rows name the records and omit the amount, share, or funded-versus-proposed split the question asked for, call again with that field in select or metrics before answering. A facility size or original principal is the instrument size, not the allocation by fund. When truncated is true, rows are a sample; do not add them up. Example: {"grain":"entity","key":"exposure","start":"DOMAIN","domainCode":"POSITION","lookups":[{"alias":"fund","direction":"UP","relationshipCode":"POSITION_FUND","domainCode":"FUND"}],"groupBy":["fund.entity_name"],"metrics":[{"alias":"exposure","agg":"SUM","field":"MARKET_VALUE"}]}.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -201,7 +216,7 @@ const queryData: ToolDefinition = {
 const getModelMap: ToolDefinition = {
   name: 'get_model_map',
   description:
-    'Attributes, identifiers, and relationships for one entity type, with a lookup path to every type it can reach. Call this before a question that filters, groups, weights, or reads across related records. domainCode is where you start, such as DEAL. toDomain is the far type, such as INVESTOR, at any number of steps (deal to security to position to fund to investor). path is the lookups to copy, in order. readAs is how to label each record: a composite identifier is shown as each of its parts, and a REFERENCE part is read through its relationship (a position is the fund, the security, and the trade date). A relationship with repeats is a hierarchy; walk it with path recursive. Omit domainCode for the relationship index only.',
+    'Attributes, identifiers, and relationships for one entity type, with a lookup path to every type it can reach. Call this before a question that filters, groups, weights, or reads across related records. domainCode is where you start, such as DEAL. toDomain is the far type, such as INVESTOR, at any number of steps (deal to security to position to fund to investor). path is the lookups to copy, in order. readAs is how to label each record: a composite identifier is shown as each of its parts, and a REFERENCE part is read through its relationship (a position is the fund, the security, and the trade date). The path does not include the other record amounts. Put the amount attribute in metrics or select on the query that follows, and call query_data again if the first rows omit it. A relationship with repeats is a hierarchy; walk it with path recursive. Omit domainCode for the relationship index only.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',

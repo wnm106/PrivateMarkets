@@ -137,7 +137,7 @@ const getTemplateMetadata: ToolDefinition = {
 
 const getEntity: ToolDefinition = {
   name: 'get_entity',
-  description: 'One record by id or entity code, including its current attribute values and relationships. Not a system-wide answer. For a count or a filter across records, use query_data.',
+  description: 'One record by id or entity code, including its current attribute values and relationships. Not a system-wide answer. Relationships list the related name and code only, not that record\'s amounts. When the question needs those amounts or a breakdown, call query_data for them before answering. For a count or a filter across records, use query_data.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -161,7 +161,7 @@ const getEntity: ToolDefinition = {
 
 const listEntities: ToolDefinition = {
   name: 'list_entities',
-  description: 'One page of records for an entity type. domainCode comes from list_domain_types. first defaults to 20 and is a page, not the population. For a count, a filter, or a question across records or sources, use query_data.',
+  description: 'One page of records for an entity type. domainCode comes from list_domain_types. first defaults to 20 and is a page, not the population. A page of names is unfinished when the question asks for an amount or a split: call query_data for that field before answering. For a count, a filter, or a question across records or sources, use query_data. Records can share a name: filtering by entity_name may return several, and a warning says when it does. Identify a record by entity_code or entity_id, and follow relationships with query_data lookups rather than matching by name.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -190,9 +190,32 @@ const listEntities: ToolDefinition = {
     const { data, error, count } = await query;
     if (error) throw error;
 
-    return { entities: data, totalCount: count };
+    return { entities: data, totalCount: count, ...duplicateNameWarning(data || []) };
   },
 };
+
+/**
+ * A name is not an identifier. When a page holds several records with the same name (for example an
+ * issuer created twice by different imports), say so, so nobody reads one record's values as another's.
+ */
+export function duplicateNameWarning(rows: Array<{ entity_name?: string | null; entity_code?: string | null; entity_id?: string | null }>):
+  { warnings?: string[]; duplicateNames?: Array<{ name: string; records: Array<{ entityCode: string | null; entityId: string | null }> }> } {
+  const byName = new Map<string, Array<{ entityCode: string | null; entityId: string | null; name: string }>>();
+  for (const r of rows) {
+    const name = String(r.entity_name ?? '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    byName.set(key, [...(byName.get(key) ?? []), { name, entityCode: r.entity_code ?? null, entityId: r.entity_id ?? null }]);
+  }
+  const duplicates = [...byName.values()].filter((list) => list.length > 1);
+  if (!duplicates.length) return {};
+  return {
+    duplicateNames: duplicates.map((list) => ({ name: list[0].name, records: list.map(({ entityCode, entityId }) => ({ entityCode, entityId })) })),
+    warnings: [
+      `${duplicates.length} name(s) belong to more than one record (${duplicates.slice(0, 3).map((l) => `"${l[0].name}" x${l.length}`).join(', ')}). They may be duplicates or different records. Never combine or compare their values as if they were one record. Identify a record by entity_code or entity_id, and follow relationships (query_data lookups) instead of matching by name.`,
+    ],
+  };
+}
 
 const createEntity: ToolDefinition = {
   name: 'create_entity',

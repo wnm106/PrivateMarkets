@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { graphqlClient, ME_QUERY } from '@/lib/graphql';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
@@ -46,6 +47,7 @@ export function UserMenu({
   showLabel?: boolean;
   variant?: 'bar' | 'sidebar';
 }) {
+  const pathname = usePathname() || '/';
   const [me, setMe] = useState<MeData | null>(null);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -81,7 +83,7 @@ export function UserMenu({
 
   if (!me) {
     return (
-      <Link href="/login" className={`user-chip ${variant === 'sidebar' ? 'user-chip-sidebar' : ''}`} style={{ textDecoration: 'none' }}>
+      <Link href={`/login?redirectedFrom=${encodeURIComponent(pathname)}`} className={`user-chip ${variant === 'sidebar' ? 'user-chip-sidebar' : ''}`} style={{ textDecoration: 'none' }}>
         <div className="avatar">?</div>
         {showLabel && <div style={{ fontSize: '12px', color: 'var(--accent)', fontWeight: 600 }}>Sign in</div>}
       </Link>

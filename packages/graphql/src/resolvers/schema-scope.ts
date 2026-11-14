@@ -51,6 +51,42 @@ export async function activeSurfaceClientId(context: Context): Promise<string | 
   return null;
 }
 
+export interface EntityClientCaller {
+  isTenantAdmin: boolean;
+  impersonatingId: string | null;
+  memberIds: string[];
+}
+
+/**
+ * The client that owns a new entity record.
+ * An explicit id is kept when the caller is allowed to use it.
+ * Otherwise the record inherits the client they are working in:
+ * the simulated client, or their only membership.
+ */
+export async function resolveEntityClientId(context: Context, requested?: string | null): Promise<string> {
+  const caller = await readCallerClients(context);
+  if (!caller) throw new Error('Not authenticated');
+  return inheritEntityClientId(caller, requested);
+}
+
+export function inheritEntityClientId(caller: EntityClientCaller, requested?: string | null): string {
+  const requestedId = requested || null;
+  if (caller.impersonatingId) {
+    if (requestedId && requestedId !== caller.impersonatingId) {
+      throw new Error('While simulating a client, new records belong to that client.');
+    }
+    return caller.impersonatingId;
+  }
+  if (requestedId) {
+    if (!caller.isTenantAdmin && !caller.memberIds.includes(requestedId)) {
+      throw new Error('You cannot add records for that client.');
+    }
+    return requestedId;
+  }
+  if (caller.memberIds.length === 1) return caller.memberIds[0];
+  throw new Error('Open the client you are working in before creating a record.');
+}
+
 /**
  * Decide which client owns a new schema row or entity.
  * A tenant admin who is not simulating a client may leave schema rows global.

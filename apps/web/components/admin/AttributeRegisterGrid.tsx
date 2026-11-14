@@ -76,7 +76,7 @@ function DescriptionCell(props: any) {
   const row = props.data as GridRow;
   if (!row.__editing || !row.__edit) {
     return row.description
-      ? <span>{row.description}</span>
+      ? <span title={row.description} style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.description}</span>
       : <span style={{ color: '#d1d5db', fontStyle: 'italic' }}>No description</span>;
   }
   const actions = props.context.get() as Actions;
@@ -85,7 +85,7 @@ function DescriptionCell(props: any) {
       value={row.__edit.description || ''}
       onChange={(event) => actions.setEditForm({ ...row.__edit, description: event.target.value })}
       placeholder="Enter description for MCP context..."
-      className="border border-gray-300 rounded px-2 py-1 text-sm w-full"
+      className="border border-gray-300 rounded px-2 py-1 text-[13px] w-full"
       rows={2}
       style={{ resize: 'vertical', minWidth: '200px' }}
     />
@@ -137,7 +137,7 @@ function AggregationCell(props: any) {
             weightAttributeCode: aggregationType === 'WEIGHTED_AVG' ? form.weightAttributeCode : '',
           });
         }}
-        className="border border-gray-300 rounded px-2 py-1 text-sm"
+        className="border border-gray-300 rounded px-2 py-1 text-[13px]"
       >
         <option value="NONE">None</option>
         <option value="MIN">Min</option>
@@ -150,7 +150,7 @@ function AggregationCell(props: any) {
         <select
           value={form.weightAttributeCode || ''}
           onChange={(event) => actions.setEditForm({ ...form, weightAttributeCode: event.target.value })}
-          className="border border-gray-300 rounded px-2 py-1 text-sm mt-1 w-full"
+          className="border border-gray-300 rounded px-2 py-1 text-[13px] mt-1 w-full"
         >
           <option value="">-- Select weight attribute --</option>
           {actions.attributes
@@ -196,7 +196,7 @@ function PrecisionCell(props: any) {
         actions.setEditForm({ ...row.__edit, numericPrecision: val === '' ? null : parseInt(val, 10) });
       }}
       placeholder="Default"
-      className="border border-gray-300 rounded px-2 py-1 text-sm w-20"
+      className="border border-gray-300 rounded px-2 py-1 text-[13px] w-20"
     />
   );
 }
@@ -209,7 +209,7 @@ function FormatCell(props: any) {
     <select
       value={row.__edit.displayFormat || ''}
       onChange={(event) => actions.setEditForm({ ...row.__edit, displayFormat: event.target.value })}
-      className="border border-gray-300 rounded px-2 py-1 text-sm"
+      className="border border-gray-300 rounded px-2 py-1 text-[13px]"
     >
       <option value="">None</option>
       <option value="currency">Currency</option>
@@ -229,7 +229,7 @@ function SectionCell(props: any) {
       type="text"
       value={row.__edit.displaySection || ''}
       onChange={(event) => actions.setEditForm({ ...row.__edit, displaySection: event.target.value })}
-      className="border border-gray-300 rounded px-2 py-1 text-sm w-32"
+      className="border border-gray-300 rounded px-2 py-1 text-[13px] w-32"
     />
   );
 }
@@ -312,13 +312,13 @@ function ListValuesCell(props: any) {
             }
           }}
           placeholder="Add value..."
-          className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
+          className="border border-gray-300 rounded px-2 py-1 text-[13px] flex-1"
         />
         <button
           type="button"
           onClick={() => actions.handleAddListValue()}
           disabled={!row.__newListValue.trim()}
-          className="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="px-2 py-1 bg-blue-600 text-white rounded text-[11px] hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           + Add
         </button>
@@ -341,7 +341,7 @@ function ActionsCell(props: any) {
   const actions = props.context.get() as Actions;
   if (row.__editing) {
     return (
-      <div className="whitespace-nowrap text-sm">
+      <div className="whitespace-nowrap text-[13px]">
         <button type="button" onClick={() => actions.handleSave()} className="text-blue-600 hover:text-blue-900 mr-3">Save</button>
         <button type="button" onClick={() => actions.handleCancel()} className="text-gray-600 hover:text-gray-900">Cancel</button>
       </div>
@@ -354,9 +354,9 @@ function ActionsCell(props: any) {
 
 const COLUMNS: ColDef<GridRow>[] = [
   { colId: 'select', headerName: '', width: 58, maxWidth: 58, sortable: false, filter: false, resizable: false, headerComponent: SelectAllHeader, cellRenderer: SelectCell },
-  { field: 'attributeCode', headerName: 'Code', minWidth: 160, flex: 1 },
-  { field: 'attributeName', headerName: 'Name', minWidth: 160, flex: 1 },
-  { colId: 'description', headerName: 'Description', minWidth: 220, flex: 1.4, sortable: false, filter: false, autoHeight: true, wrapText: true, cellRenderer: DescriptionCell },
+  { field: 'attributeName', headerName: 'Name', minWidth: 200, flex: 1, autoHeight: false, wrapText: false },
+  { field: 'attributeCode', headerName: 'Code', minWidth: 300, flex: 1, autoHeight: false, wrapText: false },
+  { colId: 'description', headerName: 'Description', minWidth: 420, flex: 3, sortable: false, filter: false, autoHeight: false, wrapText: false, cellRenderer: DescriptionCell },
   { field: 'dataType', headerName: 'Data Type', minWidth: 130 },
   { colId: 'aggregation', headerName: 'Aggregation', minWidth: 170, sortable: false, filter: false, autoHeight: true, cellRenderer: AggregationCell },
   { colId: 'precision', headerName: 'Precision', minWidth: 120, sortable: false, filter: false, cellRenderer: PrecisionCell },

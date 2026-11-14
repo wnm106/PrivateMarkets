@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePublishViewContext } from '@/lib/view-context';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   graphqlQuery,
@@ -14,11 +14,11 @@ import {
   DELETE_COMPLIANCE_SCOPE_ASSIGNMENT_MUTATION,
   EVALUATE_COMPLIANCE_RULE_MUTATION,
   COMPLIANCE_EVALUATION_RUN_QUERY,
-  COMPLIANCE_EVALUATION_RUNS_QUERY,
+  COMPLIANCE_RESULT_CONTRIBUTORS_QUERY,
   ENTITIES_QUERY,
 } from '@/lib/graphql';
 import { printExpression, type OperandContext } from '@/lib/condition-expression';
-import { ComplianceRuleForm, ComplianceRuleFormData, buildComplianceVersionInput, dimensionFromDto, describeDimension, emptyDimension } from '@/components/forms/ComplianceRuleForm';
+import { ComplianceRuleForm, ComplianceRuleFormData, MeasureLineForm, OPERATOR_LABELS, buildComplianceVersionInput, dimensionFromDto, describeDimension, emptyDimension } from '@/components/forms/ComplianceRuleForm';
 import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
 interface RollupHopDto {
@@ -59,6 +59,7 @@ interface VersionDto {
   metadata?: Record<string, any> | null;
   conditions: Array<{
     appliesTo: string;
+    conditionGroup?: number;
     conditionOrder: number;
     attributeCode: string;
     attributeDimension?: any;
@@ -69,6 +70,28 @@ interface VersionDto {
     leftExpression?: any;
     rightExpression?: any;
     logicOperator: string;
+  }>;
+  measureLines?: Array<{
+    side: MeasureLineForm['side'];
+    lineOrder: number;
+    label?: string | null;
+    kind: string;
+    sign: number;
+    attributeCode?: string | null;
+    dimension?: any;
+    expression?: any;
+    path?: RollupHopDto[];
+    weightAttributeCode?: string | null;
+    valuePath?: RollupHopDto[];
+    transform?: string | null;
+    priceAttributeCode?: string | null;
+    pct?: number | null;
+    pctAttributeCode?: string | null;
+    pctPath?: RollupHopDto[];
+    totalPath?: RollupHopDto[];
+    required?: boolean | null;
+    conditions?: VersionDto['conditions'];
+    totalConditions?: VersionDto['conditions'];
   }>;
 }
 
@@ -137,31 +160,25 @@ const STATUS_STYLE: Record<string, { bg: string; fg: string }> = {
 export default function ComplianceRuleDetailPage() {
   const params = useParams();
   const ruleCode = params.ruleCode as string;
+  const router = useRouter();
 
   const [rule, setRule] = useState<RuleDto | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showNewVersion, setShowNewVersion] = useState(false);
-  const [savingVersion, setSavingVersion] = useState(false);
 
-  const [asOfDate, setAsOfDate] = useState(new Date().toISOString().slice(0, 10));
-  const [knowledgeDate, setKnowledgeDate] = useState('');
-  const [sourceScope, setSourceScope] = useState('');
   const [evaluating, setEvaluating] = useState(false);
+  const [drillResult, setDrillResult] = useState<ResultDto | null>(null);
 
-  const [runs, setRuns] = useState<RunDto[]>([]);
   const [activeRun, setActiveRun] = useState<RunDto | null>(null);
   const [results, setResults] = useState<ResultDto[]>([]);
 
   const [newEntityCode, setNewEntityCode] = useState('');
   const [addingScope, setAddingScope] = useState(false);
-  const [editMode, setEditMode] = useState(false);
-  const [editData, setEditData] = useState<Partial<ComplianceRuleFormData>>({});
   const [savingEdit, setSavingEdit] = useState(false);
 
   usePublishViewContext(
     rule
       ? {
-          activity: editMode ? 'editing' : 'viewing',
+          activity: 'editing',
           kind: 'compliance-rule',
           label: rule.ruleName || rule.ruleCode,
           id: rule.id,
@@ -183,7 +200,6 @@ export default function ComplianceRuleDetailPage() {
                   denominatorAggregation: rule.currentVersion.denominatorAggregation,
                   resultUnit: rule.currentVersion.resultUnit,
                   resultTransform: rule.currentVersion.resultTransform,
-                  limitDirection: rule.currentVersion.limitDirection,
                   softLimitValue: rule.currentVersion.softLimitValue,
                   hardLimitValue: rule.currentVersion.hardLimitValue,
                   groupByAttributeCode: rule.currentVersion.groupByAttributeCode,
@@ -194,7 +210,6 @@ export default function ComplianceRuleDetailPage() {
               entityCode: scope.entityCode,
               entityName: scope.entityName,
             })),
-            draft: editMode ? editData : undefined,
           },
         }
       : null
@@ -216,44 +231,9 @@ export default function ComplianceRuleDetailPage() {
     }
   };
 
-  const fetchRuns = async (ruleId: string) => {
-    const result = await graphqlQuery<{ complianceEvaluationRuns: RunDto[] }, { ruleId: string; first: number }>(
-      COMPLIANCE_EVALUATION_RUNS_QUERY,
-      { ruleId, first: 10 },
-      'network-only'
-    );
-    if (result.data?.complianceEvaluationRuns) setRuns(result.data.complianceEvaluationRuns);
-  };
-
   useEffect(() => {
     fetchRule();
   }, [ruleCode]);
-
-  useEffect(() => {
-    if (rule?.id) fetchRuns(rule.id);
-  }, [rule?.id]);
-
-  const handleCreateVersion = async (data: ComplianceRuleFormData) => {
-    if (!rule) return;
-    setSavingVersion(true);
-    try {
-      const result = await graphqlMutation<{ createComplianceRuleVersion: { version: any; errors: any[] } }, any>(
-        CREATE_COMPLIANCE_RULE_VERSION_MUTATION,
-        { input: buildComplianceVersionInput(rule.id, data) }
-      );
-      const errors = result.data?.createComplianceRuleVersion?.errors || [];
-      if (errors.length > 0) {
-        alert(`Failed to create version: ${errors.map((e: any) => e.message).join(', ')}`);
-        return;
-      }
-      setShowNewVersion(false);
-      await fetchRule();
-    } catch (error: any) {
-      alert(`Error: ${error.message}`);
-    } finally {
-      setSavingVersion(false);
-    }
-  };
 
   const handleSaveEdit = async (data: ComplianceRuleFormData) => {
     if (!rule) return;
@@ -285,7 +265,6 @@ export default function ComplianceRuleDetailPage() {
         alert(`The name was saved, but the measure was not: ${versionErrors.map((e: any) => e.message).join(', ')}`);
         return;
       }
-      setEditMode(false);
       await fetchRule();
     } catch (error: any) {
       alert(`Error: ${error.message}`);
@@ -340,9 +319,10 @@ export default function ComplianceRuleDetailPage() {
         {
           input: {
             ruleCode: rule.ruleCode,
-            asOfDate,
-            knowledgeDate: knowledgeDate || undefined,
-            sourceScope: sourceScope || undefined,
+            // A test always runs as of today, on the sources the rule is set to read.
+            asOfDate: new Date().toISOString().slice(0, 10),
+            // No thresholds may exist yet while a rule is being built, so a test covers every fund.
+            allFunds: true,
           },
         }
       );
@@ -352,8 +332,8 @@ export default function ComplianceRuleDetailPage() {
         alert(`Evaluation failed: ${errors.map((e: any) => e.message).join(', ') || 'Unknown error'}`);
         return;
       }
+      setDrillResult(null);
       await loadRunResults(run.id);
-      await fetchRuns(rule.id);
     } catch (error: any) {
       alert(`Error: ${error.message}`);
     } finally {
@@ -408,70 +388,42 @@ export default function ComplianceRuleDetailPage() {
 
   return (
     <div className="view-fade">
-      <div className="crumbs">
-        <Link href="/" className="crumb-link">Home</Link>
-        <span className="sep">›</span>
-        <Link href="/admin/compliance" className="crumb-link">Compliance Rules</Link>
-        <span className="sep">›</span>
-        <span className="crumb-current">{rule.ruleCode}</span>
-      </div>
+      <nav className="subnav" aria-label="Navigation">
+        <Link href="/admin/compliance" className="subnav-back">← Back to compliance rules</Link>
+        <span className="subnav-trail">
+          <Link href="/" className="crumb-link">Home</Link>
+          <span className="sep">›</span>
+          <Link href="/admin/compliance" className="crumb-link">Compliance Rules</Link>
+          <span className="sep">›</span>
+          <span className="crumb-current">{rule.ruleCode}</span>
+        </span>
+      </nav>
 
-      <div className="page-header">
-        <div>
-          <div className="page-title">{rule.ruleName}</div>
-          <div className="page-meta">
-            <span className="mono">{rule.ruleCode}</span> · {rule.ruleCategory} · Anchor: {rule.anchorDomainCode}
-            {v ? ` · Version ${v.versionNumber}` : ' · No active version'}
-          </div>
-        </div>
-        <div className="page-actions">
-          <Link href="/admin/compliance"><button className="btn">← Back</button></Link>
-          <button className="btn" onClick={() => {
-            if (editMode) {
-              setEditMode(false);
-            } else {
-              setEditData(versionToFormData(rule, rule.currentVersion || rule.versions[0]));
-              setEditMode(true);
-            }
-          }}>
-            {editMode ? '✕ Cancel' : '✎ Edit Rule'}
-          </button>
-          <button className="btn btn-primary" onClick={() => setShowNewVersion(true)}>+ New Version</button>
-        </div>
-      </div>
+      <ComplianceRuleForm
+        key={v?.id || rule.id}
+        initial={versionToFormData(rule, v || rule.versions[0])}
+        onSubmit={handleSaveEdit}
+        onCancel={() => router.push('/admin/compliance')}
+        submitting={savingEdit}
+        onTest={handleEvaluate}
+        testing={evaluating}
+        testDisabled={!v}
+        ribbonHeader={(
+          <>
+            <div>
+              <div className="page-title">{rule.ruleName}</div>
+              <div className="page-meta">
+                <span className="mono">{rule.ruleCode}</span> · {rule.ruleCategory} · Anchor: {rule.anchorDomainCode}
+                {v ? ` · Version ${v.versionNumber}` : ' · No active version'}
+              </div>
+            </div>
+          </>
+        )}
+      />
 
-      {rule.description && !editMode && (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', padding: '14px 18px', marginBottom: '18px', fontSize: '13px', color: 'var(--ink-2)' }}>
-          {rule.description}
-        </div>
-      )}
-
-      {editMode ? (
-        <ComplianceRuleForm
-          initial={editData}
-          onSubmit={handleSaveEdit}
-          onCancel={() => setEditMode(false)}
-          submitting={savingEdit}
-        />
-      ) : showNewVersion ? (
-        <ComplianceRuleForm
-          initial={v ? versionToFormData(rule, v) : { ruleCode: rule.ruleCode, ruleName: rule.ruleName, ruleCategory: rule.ruleCategory, anchorDomainCode: rule.anchorDomainCode, appliesToAll: rule.appliesToAll, description: rule.description || '' }}
-          lockIdentity
-          onSubmit={handleCreateVersion}
-          onCancel={() => setShowNewVersion(false)}
-          submitting={savingVersion}
-        />
-      ) : (
+      <div style={{ height: 18 }} />
+      {(
         <>
-          {!v ? (
-            <section className="rb-block">
-              <h2 className="rb-block-title">Measure</h2>
-              <div className="rb-pad" style={{ color: 'var(--ink-3)', fontSize: 13 }}>No version defined yet. Edit the rule to set the measure.</div>
-            </section>
-          ) : (
-            <RuleReadout version={v} />
-          )}
-
           {/* Scope Assignments */}
           {!rule.appliesToAll && (
             <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', padding: '18px 22px', marginBottom: '18px' }}>
@@ -508,135 +460,67 @@ export default function ComplianceRuleDetailPage() {
             </div>
           )}
 
-          {/* Evaluate */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', padding: '18px 22px', marginBottom: '18px' }}>
-            <div className="section-kicker">Evaluate</div>
-            <div className="form-grid" style={{ marginTop: '10px' }}>
-              <div className="field">
-                <label>As-Of Date</label>
-                <input className="text-input mono" type="date" value={asOfDate} onChange={(e) => setAsOfDate(e.target.value)} />
-              </div>
-              <div className="field">
-                <label>Knowledge Date (optional)</label>
-                <input className="text-input mono" type="datetime-local" value={knowledgeDate} onChange={(e) => setKnowledgeDate(e.target.value)} />
-                <span className="field-hint">Reproduces historical rule behavior — leave blank for "as known now"</span>
-              </div>
-              <div className="field">
-                <label>Source Scope Override (optional)</label>
-                <input className="text-input" value={sourceScope} onChange={(e) => setSourceScope(e.target.value)} placeholder={v?.defaultSourceScope || 'GOLDEN'} />
-              </div>
-            </div>
-            <button className="btn btn-primary" onClick={handleEvaluate} disabled={evaluating || !v} style={{ marginTop: '8px' }}>
-              {evaluating ? 'Evaluating...' : 'Run Evaluation'}
-            </button>
-
-            {activeRun && (
-              <div style={{ marginTop: '18px', borderTop: '1px solid var(--line)', paddingTop: '14px' }}>
-                <div style={{ display: 'flex', gap: '20px', fontSize: '12px', marginBottom: '12px' }}>
-                  <span>Status: <strong>{activeRun.runStatus}</strong></span>
-                  <span>Results: <strong className="mono">{activeRun.resultCount ?? results.length}</strong></span>
-                  <span>Breaches: <strong className="mono" style={{ color: (activeRun.breachCount ?? 0) > 0 ? 'var(--red)' : 'var(--green)' }}>{activeRun.breachCount ?? results.filter((r) => r.status !== 'PASS').length}</strong></span>
+          {/* Test results pop-up */}
+          {activeRun && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Test results"
+              onClick={() => { setActiveRun(null); setDrillResult(null); }}
+              style={{ position: 'fixed', inset: 0, zIndex: 50, background: 'rgba(15, 23, 42, 0.45)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '3vh 16px', overflow: 'hidden' }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: '0 20px 50px rgba(15, 23, 42, 0.3)', width: 'min(1100px, 100%)', height: '94vh', display: 'flex', flexDirection: 'column', padding: '18px 22px' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                  <div>
+                    <div className="section-kicker">Test results · {rule.ruleName}</div>
+                    <div className="field-hint" style={{ marginTop: 4 }}>Run as of today for every fund, whether or not it has a threshold yet. Click a fund to see the records behind its number.</div>
+                  </div>
+                  <button type="button" className="btn btn-sm" aria-label="Close test results" onClick={() => { setActiveRun(null); setDrillResult(null); }}>Close</button>
                 </div>
-                {activeRun.errorMessage && <div style={{ color: 'var(--red)', fontSize: '12px', marginBottom: '10px' }}>{activeRun.errorMessage}</div>}
-                {results.length > 0 && (
-                  <ResultsTable results={results} resultUnit={v?.resultUnit} />
-                )}
+                <div style={{ marginTop: '14px', borderTop: '1px solid var(--line)', paddingTop: '14px', flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                  <div style={{ display: 'flex', gap: '20px', fontSize: '12px', marginBottom: '12px' }}>
+                    <span>Status: <strong>{activeRun.runStatus}</strong></span>
+                    <span>Results: <strong className="mono">{activeRun.resultCount ?? results.length}</strong></span>
+                    <span>Breaches: <strong className="mono" style={{ color: (activeRun.breachCount ?? 0) > 0 ? 'var(--red)' : 'var(--green)' }}>{activeRun.breachCount ?? results.filter((r) => r.status !== 'PASS').length}</strong></span>
+                  </div>
+                  {activeRun.errorMessage && <div style={{ color: 'var(--red)', fontSize: '12px', marginBottom: '10px' }}>{activeRun.errorMessage}</div>}
+                  {results.length > 0 ? (
+                    <div style={{ maxHeight: '30vh', overflow: 'auto', border: '1px solid var(--line)', borderRadius: 6 }}>
+                      <ResultsTable results={results} resultUnit={v?.resultUnit} onOpen={setDrillResult} />
+                    </div>
+                  ) : (
+                    <div className="field-hint">No funds were scored.</div>
+                  )}
+                  {drillResult && results.some((r) => r.id === drillResult.id) && (
+                    <ContributorsPanel result={drillResult} resultUnit={v?.resultUnit} onClose={() => setDrillResult(null)} />
+                  )}
+                </div>
               </div>
-            )}
-          </div>
-
-          {/* Run History */}
-          {runs.length > 0 && (
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', padding: '18px 22px' }}>
-              <div className="section-kicker">Evaluation History</div>
-              <RunHistory runs={runs} onOpen={loadRunResults} />
             </div>
           )}
+
         </>
       )}
     </div>
   );
 }
 
-function RuleReadout({ version }: { version: VersionDto }) {
-  const baseFilters = version.conditions.filter((c) => c.appliesTo === 'BASE');
-  const grouped = !!version.groupByAttributeCode;
-  const limitMode = version.metadata?.limitMode === 'RANK' || version.metadata?.limitMode === 'NAMED' ? version.metadata.limitMode : 'UNIFORM';
-  const dividedBy = denominatorText(version);
-  const sharesRecords = dividedBy.startsWith('Total of');
+function conditionSentence(c: VersionDto['conditions'][number]) {
+  const left = c.leftExpression ? printExpression(c.leftExpression, NO_CONTEXT) : `${pathPrefix(c.attributeDimension)}${words(c.attributeCode)}`;
+  const right = c.rightExpression
+    ? printExpression(c.rightExpression, NO_CONTEXT)
+    : c.compareAttributeCode
+    ? `${pathPrefix(c.compareDimension)}${words(c.compareAttributeCode)}`
+    : displayConditionValue(c.operator, c.value);
+  const nullary = c.operator === 'is_null' || c.operator === 'is_not_null';
   return (
-    <div className="rb">
-      <section className="rb-block">
-        <h2 className="rb-block-title">Measure</h2>
-        <div className="rb-line">
-          <div className="rb-line-label">Numerator</div>
-          <div className="rb-read">{aggWord(version.numeratorAggregation)} of {words(version.baseDomainCode)} · {words(version.numeratorAttributeCode)}</div>
-        </div>
-        <div className="rb-line">
-          <div className="rb-line-label">Where</div>
-          <div className="rb-read">{baseFilters.length === 0 ? 'All records qualify' : baseFilters.map((c, i) => `${i > 0 ? `${c.logicOperator} ` : ''}${conditionText(c)}`).join(' ')}</div>
-        </div>
-        <div className="rb-line">
-          <div className="rb-line-label">Divided by</div>
-          <div className="rb-read">{dividedBy}</div>
-        </div>
-        {sharesRecords && (
-          <div className="rb-line">
-            <div className="rb-line-label">Where</div>
-            <div className="rb-read">{baseFilters.length === 0 ? 'All records qualify' : 'Same records as the numerator'}</div>
-          </div>
-        )}
-      </section>
-      <section className="rb-block">
-        <h2 className="rb-block-title">Test &amp; limits</h2>
-        <div className="rb-line">
-          <div className="rb-line-label">Group by</div>
-          <div className="rb-read">{grouped ? `Each ${words(version.groupByAttributeCode)}` : 'One figure for the whole set'}</div>
-        </div>
-        <div className="rb-line">
-          <div className="rb-line-label">Breach when</div>
-          <div className="rb-read">{version.limitDirection === 'MIN' ? 'Below limit' : 'Above limit'} · {unitWord(version.resultUnit)}</div>
-        </div>
-        <div className="rb-line">
-          <div className="rb-line-label">Limit type</div>
-          <div className="rb-read">{limitMode === 'RANK' ? 'Limit by rank' : limitMode === 'NAMED' ? 'Limit by named group' : 'Same limit for every group'}</div>
-        </div>
-        <p className="rb-help">Limit values are set when the rule is assigned to a fund.</p>
-        <details className="rb-def">
-          <summary>View saved definition</summary>
-          <div className="rb-def-body">
-            <DetailRow label="Base entity" value={version.baseDomainCode} />
-            <DetailRow label="Rollup path" value={formatHops(version.baseRollupPath)} />
-            <DetailRow label="Group-by path" value={formatHops(version.groupByPath)} />
-            <DetailRow label="Group-by attribute" value={version.groupByAttributeCode || '—'} />
-            <DetailRow label="Numerator reads" value={describeDimension(version.numeratorDimension)} />
-            <DetailRow label="Denominator reads" value={version.denominatorAttributeCode ? describeDimension(version.denominatorDimension) : '—'} />
-            <DetailRow label="Result calculation" value={version.resultTransform || 'NONE'} />
-            <DetailRow label="Source" value={version.defaultSourceScope} />
-            <DetailRow label="Effective" value={`${version.validFrom} → ${version.validTo === '9999-12-31' ? 'present' : version.validTo}`} />
-            {version.conditions.length > 0 && (
-              <div>
-                {['BASE', 'ANCHOR'].map((scope) => {
-                  const scopeConds = version.conditions.filter((c) => c.appliesTo === scope).sort((a, b) => a.conditionOrder - b.conditionOrder);
-                  if (scopeConds.length === 0) return null;
-                  return (
-                    <div key={scope} style={{ marginBottom: 8, fontSize: 12 }}>
-                      <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}>{scope === 'BASE' ? 'Records' : 'Entities'}: </span>
-                      {scopeConds.map((c, i) => (
-                        <span key={i} className="mono">
-                          {i > 0 && <span style={{ color: 'var(--accent)' }}> {c.logicOperator} </span>}
-                          {conditionText(c)}
-                        </span>
-                      ))}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </details>
-      </section>
-    </div>
+    <>
+      <b>{left}</b> {OPERATOR_LABELS[c.operator as keyof typeof OPERATOR_LABELS] || c.operator}
+      {!nullary && <> <b>{right || '…'}</b></>}
+    </>
   );
 }
 
@@ -681,11 +565,11 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
   );
 }
 
-function ResultsTable({ results, resultUnit }: { results: ResultDto[]; resultUnit?: string }) {
+function ResultsTable({ results, resultUnit, onOpen }: { results: ResultDto[]; resultUnit?: string; onOpen?: (row: ResultDto) => void }) {
   const columns = useMemo<ColDef<ResultDto>[]>(() => [
     {
       colId: 'anchor',
-      headerName: 'Anchor Entity',
+      headerName: 'Fund',
       minWidth: 160,
       flex: 1.4,
       cellClass: 'mono',
@@ -700,6 +584,7 @@ function ResultsTable({ results, resultUnit }: { results: ResultDto[]; resultUni
     },
     { field: 'numeratorValue', headerName: 'Numerator', minWidth: 120, valueFormatter: (params) => formatNum(params.value) },
     { field: 'denominatorValue', headerName: 'Denominator', minWidth: 130, valueFormatter: (params) => formatNum(params.value) },
+    { field: 'contributingCount', headerName: 'Records', minWidth: 100, valueFormatter: (params) => (params.value == null ? '—' : String(params.value)) },
     { field: 'computedValue', headerName: 'Value', minWidth: 130, valueFormatter: (params) => formatNum(params.value, resultUnit) },
     {
       field: 'status',
@@ -719,33 +604,114 @@ function ResultsTable({ results, resultUnit }: { results: ResultDto[]; resultUni
       getRowId={(row) => row.id}
       autoHeight
       emptyMessage="No results."
+      onRowClicked={onOpen}
     />
   );
 }
 
-function RunHistory({ runs, onOpen }: { runs: RunDto[]; onOpen: (id: string) => void }) {
-  const columns = useMemo<ColDef<RunDto>[]>(() => [
-    {
-      colId: 'when',
-      headerName: 'Run',
-      minWidth: 240,
-      flex: 1.4,
-      valueGetter: (params) => params.data ? `${params.data.asOfDate} · ${new Date(params.data.startedAt).toLocaleString()}` : '',
-    },
-    { field: 'sourceScope', headerName: 'Scope', minWidth: 140 },
-    { field: 'runStatus', headerName: 'Status', minWidth: 130 },
-    { field: 'resultCount', headerName: 'Results', minWidth: 110 },
-    { field: 'breachCount', headerName: 'Breaches', minWidth: 110 },
-  ], []);
+interface ContributorRow {
+  entityId: string;
+  entityCode: string;
+  entityName?: string | null;
+  numeratorValue?: number | null;
+  sharePercent?: number | null;
+  values: Record<string, string | null>;
+  amountLabel?: string | null;
+  amountSide?: string | null;
+}
+
+interface ContributorsDto {
+  baseDomainCode?: string | null;
+  numeratorAggregation?: string | null;
+  total: number;
+  columns: Array<{ code: string; label: string; role: string }>;
+  rows: ContributorRow[];
+}
+
+function ContributorsPanel({ result, resultUnit, onClose }: { result: ResultDto; resultUnit?: string; onClose: () => void }) {
+  const [data, setData] = useState<ContributorsDto | null>(null);
+  const [error, setError] = useState('');
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // The fund list can be long, so bring the records into view when a fund is picked.
+  useEffect(() => {
+    panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [result.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setData(null);
+    setError('');
+    graphqlQuery<{ complianceResultContributors: ContributorsDto }, { resultId: string }>(
+      COMPLIANCE_RESULT_CONTRIBUTORS_QUERY,
+      { resultId: result.id },
+      'network-only',
+    ).then((res) => {
+      if (cancelled) return;
+      if (res.error || !res.data?.complianceResultContributors) setError(res.error?.message || 'Could not load the records.');
+      else setData(res.data.complianceResultContributors);
+    });
+    return () => { cancelled = true; };
+  }, [result.id]);
+
+  const columns = useMemo<ColDef<ContributorRow>[]>(() => {
+    const cols: ColDef<ContributorRow>[] = [
+      ...(data?.rows.some((row) => row.amountLabel) ? [{ colId: 'amount', headerName: 'Amount', minWidth: 170, flex: 1, valueGetter: (p: any) => p.data?.amountLabel || '' }] : []),
+      { colId: 'record', headerName: 'Record', minWidth: 200, flex: 1.4, valueGetter: (p) => (p.data ? `${p.data.entityName || p.data.entityCode}` : '') },
+      { colId: 'code', headerName: 'Code', minWidth: 140, cellClass: 'mono', valueGetter: (p) => p.data?.entityCode || '' },
+    ];
+    for (const col of data?.columns || []) {
+      cols.push({ colId: `v-${col.code}`, headerName: `${col.label} (${col.role.toLowerCase()})`, minWidth: 150, flex: 1, valueGetter: (p) => p.data?.values?.[col.code] ?? '—' });
+    }
+    cols.push(
+      { colId: 'contribution', headerName: data?.numeratorAggregation?.startsWith('COUNT') ? 'Count' : 'Contribution', minWidth: 130, valueGetter: (p) => p.data?.numeratorValue, valueFormatter: (p) => formatNum(p.value) },
+      { colId: 'share', headerName: 'Share', minWidth: 100, valueGetter: (p) => p.data?.sharePercent, valueFormatter: (p) => (p.value == null ? '—' : `${Number(p.value).toFixed(1)}%`) },
+    );
+    return cols;
+  }, [data]);
+
   return (
-    <AppGrid
-      rows={runs}
-      columns={columns}
-      getRowId={(row) => row.id}
-      autoHeight
-      emptyMessage="No evaluations yet."
-      onRowClicked={(row) => onOpen(row.id)}
-    />
+    <div ref={panelRef} style={{ marginTop: '18px', border: '2px solid var(--accent)', borderRadius: 6, padding: '14px 16px', background: 'var(--bg)', scrollMarginTop: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+        <div>
+          <strong>{result.anchorEntityName || result.anchorEntityCode || 'Fund'}</strong>
+          {result.groupByValue && <span style={{ color: 'var(--ink-3)' }}> · {result.groupByValue}</span>}
+          <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · result {formatNum(result.computedValue, resultUnit)} = {formatNum(result.numeratorValue)} ÷ {result.denominatorValue == null ? '—' : formatNum(result.denominatorValue)}</span>
+        </div>
+        <button className="btn" type="button" onClick={onClose}>Close</button>
+      </div>
+      {error && <div style={{ color: 'var(--red)', fontSize: 12 }}>{error}</div>}
+      {!data && !error && <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Loading records…</div>}
+      {data && (
+        <>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 8 }}>
+            {data.total} {data.baseDomainCode ? `${data.baseDomainCode.toLowerCase()} ` : ''}record{data.total === 1 ? '' : 's'} contributed to this result.
+          </div>
+          {data.rows.some((row) => row.amountSide) ? (
+            (['NUMERATOR', 'DENOMINATOR'] as const).map((side) => {
+              const sideRows = data.rows.filter((row) => row.amountSide === side);
+              if (!sideRows.length) return null;
+              const total = sideRows.reduce((sum, row) => sum + (row.numeratorValue ?? 0), 0);
+              return (
+                <div key={side} style={{ marginTop: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                    <strong>{side === 'NUMERATOR' ? 'Numerator' : 'Denominator'}</strong>
+                    <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{sideRows.length} record{sideRows.length === 1 ? '' : 's'} · total {formatNum(total)}</span>
+                  </div>
+                  <div style={{ maxHeight: '40vh', overflow: 'auto', border: '1px solid var(--line)', borderRadius: 6 }}>
+                    <AppGrid rows={sideRows} columns={columns} getRowId={(row) => `${row.amountSide || ''}:${row.amountLabel || ''}:${row.entityId}`} autoHeight emptyMessage="No records contributed." />
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <div style={{ maxHeight: '40vh', overflow: 'auto', border: '1px solid var(--line)', borderRadius: 6 }}>
+              <AppGrid rows={data.rows} columns={columns} getRowId={(row) => row.entityId} autoHeight emptyMessage="No records contributed." />
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -783,6 +749,29 @@ function formatHops(hops: RollupHopDto[]) {
 
 const NO_CONTEXT: OperandContext = { fields: [], relationshipTypes: [] };
 
+function hopToForm(hop: RollupHopDto) {
+  return { relationshipCode: hop.relationshipCode, direction: hop.direction as 'UP' | 'DOWN', recursive: Boolean(hop.recursive) };
+}
+
+function conditionToForm(c: VersionDto['conditions'][number], index: number) {
+  return {
+    appliesTo: 'LINE' as const,
+    conditionGroup: c.conditionGroup || 1,
+    conditionOrder: c.conditionOrder || index + 1,
+    attributeCode: c.attributeCode,
+    attributePath: (c.attributeDimension?.relationshipPath || []).map((h: RollupHopDto) => ({ relationshipCode: h.relationshipCode, direction: h.direction as 'UP' | 'DOWN' })),
+    attributeDimension: dimensionFromDto(c.attributeDimension),
+    operator: c.operator,
+    value: displayConditionValue(c.operator, c.value),
+    compareAttributeCode: c.compareAttributeCode || '',
+    compareAttributePath: (c.compareDimension?.relationshipPath || []).map((h: RollupHopDto) => ({ relationshipCode: h.relationshipCode, direction: h.direction as 'UP' | 'DOWN' })),
+    compareDimension: dimensionFromDto(c.compareDimension),
+    leftExpression: c.leftExpression || null,
+    rightExpression: c.rightExpression || null,
+    logicOperator: c.logicOperator as 'AND' | 'OR',
+  };
+}
+
 function versionToFormData(rule: RuleDto, v: VersionDto): Partial<ComplianceRuleFormData> {
   return {
     ruleCode: rule.ruleCode,
@@ -809,7 +798,6 @@ function versionToFormData(rule: RuleDto, v: VersionDto): Partial<ComplianceRule
       : (!v.denominatorAttributeCode && v.denominatorScope !== 'CONSTANT' ? 'NONE' : v.denominatorScope),
     denominatorConstantValue: v.denominatorConstantValue != null ? String(v.denominatorConstantValue) : '',
     resultUnit: v.resultUnit,
-    limitDirection: v.limitDirection,
     softLimitValue: v.softLimitValue != null ? String(v.softLimitValue) : '',
     hardLimitValue: v.hardLimitValue != null ? String(v.hardLimitValue) : '',
     hardLimitAttributeCode: v.hardLimitAttributeCode || '',
@@ -817,9 +805,31 @@ function versionToFormData(rule: RuleDto, v: VersionDto): Partial<ComplianceRule
     defaultSourceScope: v.defaultSourceScope,
     limitMode: v.metadata?.limitMode === 'RANK' || v.metadata?.limitMode === 'NAMED' ? v.metadata.limitMode : 'UNIFORM',
     versionMetadata: v.metadata && typeof v.metadata === 'object' ? v.metadata : undefined,
+    measureLines: (v.measureLines || []).map((line) => ({
+      key: `${line.side}-${line.lineOrder}`,
+      side: line.side,
+      label: line.label || '',
+      kind: line.kind,
+      sign: line.sign === -1 ? -1 as const : 1 as const,
+      attributeCode: line.attributeCode || '',
+      dimension: dimensionFromDto(line.dimension),
+      expression: line.expression || undefined,
+      path: (line.path || []).map(hopToForm),
+      weightAttributeCode: line.weightAttributeCode || '',
+      valuePath: (line.valuePath || []).map(hopToForm),
+      transform: line.transform || '',
+      priceAttributeCode: line.priceAttributeCode || '',
+      pct: line.pct == null ? '' : String(line.pct),
+      pctAttributeCode: line.pctAttributeCode || '',
+      pctPath: (line.pctPath || []).map(hopToForm),
+      totalPath: (line.totalPath || []).map(hopToForm),
+      required: Boolean(line.required),
+      conditions: (line.conditions || []).map((c, index) => conditionToForm(c, index)),
+      totalConditions: (line.totalConditions || []).map((c, index) => conditionToForm(c, index)),
+    })),
     conditions: v.conditions.map((c) => ({
       appliesTo: c.appliesTo as 'BASE' | 'ANCHOR',
-      conditionGroup: 1,
+      conditionGroup: c.conditionGroup || 1,
       conditionOrder: c.conditionOrder,
       attributeCode: c.attributeCode,
       attributePath: (c.attributeDimension?.relationshipPath || []).map((h: any) => ({ relationshipCode: h.relationshipCode, direction: h.direction })),

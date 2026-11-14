@@ -262,28 +262,35 @@ export default function AdminAttributesPage() {
 
   return (
     <div className="screen">
-      <h1 className="text-3xl font-bold mb-2">Attribute Management</h1>
-      <p className="text-gray-600 mb-3">
-        Configure display formats, list values, validation rules, and other metadata for attributes.
-      </p>
+      <div className="page-header">
+        <div className="page-title-block">
+          <div style={{ width: '4px', height: '48px', background: 'var(--accent)' }}></div>
+          <div>
+            <div className="page-title">Attribute Management</div>
+            <div className="page-meta">
+              Configure display formats, list values, validation rules, and other metadata for attributes.
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Bulk Edit Controls */}
       {selectedIds.size > 0 && (
         <div className="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-blue-900">
+            <span className="text-[13px] font-medium text-blue-900">
               {selectedIds.size} attribute{selectedIds.size !== 1 ? 's' : ''} selected
             </span>
             <div className="flex gap-2">
               <button
                 onClick={handleBulkEdit}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-[13px]"
               >
                 Bulk Edit
               </button>
               <button
                 onClick={() => setSelectedIds(new Set())}
-                className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-sm"
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-[13px]"
               >
                 Clear Selection
               </button>
@@ -295,14 +302,14 @@ export default function AdminAttributesPage() {
       {/* Bulk Edit Panel */}
       {showBulkEdit && (
         <div className="mb-6 p-6 bg-white rounded-lg shadow-lg border-2 border-blue-300">
-          <h2 className="text-xl font-bold mb-4">Bulk Edit {selectedIds.size} Attributes</h2>
+          <h2 className="text-[18px] font-semibold mb-4">Bulk Edit {selectedIds.size} Attributes</h2>
           <div className="grid grid-cols-3 gap-4 mb-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Display Format</label>
+              <label className="block text-[13px] font-medium text-gray-700 mb-1">Display Format</label>
               <select
                 value={bulkEditForm.displayFormat || ''}
                 onChange={e => setBulkEditForm({ ...bulkEditForm, displayFormat: e.target.value })}
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                className="w-full border border-gray-300 rounded px-3 py-2 text-[13px]"
               >
                 <option value="">No change</option>
                 <option value="currency">Currency</option>
@@ -313,17 +320,17 @@ export default function AdminAttributesPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Section</label>
+              <label className="block text-[13px] font-medium text-gray-700 mb-1">Section</label>
               <input
                 type="text"
                 value={bulkEditForm.displaySection || ''}
                 onChange={e => setBulkEditForm({ ...bulkEditForm, displaySection: e.target.value })}
                 placeholder="No change"
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                className="w-full border border-gray-300 rounded px-3 py-2 text-[13px]"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Multi-Select</label>
+              <label className="block text-[13px] font-medium text-gray-700 mb-1">Multi-Select</label>
               <select
                 value={bulkEditForm.isMultiValued === undefined ? '' : String(bulkEditForm.isMultiValued)}
                 onChange={e => {
@@ -333,7 +340,7 @@ export default function AdminAttributesPage() {
                     isMultiValued: val === '' ? undefined : val === 'true' 
                   });
                 }}
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                className="w-full border border-gray-300 rounded px-3 py-2 text-[13px]"
               >
                 <option value="">No change</option>
                 <option value="true">Enabled</option>
@@ -342,7 +349,7 @@ export default function AdminAttributesPage() {
             </div>
           </div>
           <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">List Values</label>
+            <label className="block text-[13px] font-medium text-gray-700 mb-2">List Values</label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {/* Current list values as removable chips */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', minHeight: '28px' }}>
@@ -409,7 +416,7 @@ export default function AdminAttributesPage() {
                     }
                   }}
                   placeholder="Add value..."
-                  className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
+                  className="border border-gray-300 rounded px-2 py-1 text-[13px] flex-1"
                 />
                 <button
                   type="button"
@@ -424,7 +431,7 @@ export default function AdminAttributesPage() {
                     }
                   }}
                   disabled={!newListValue.trim()}
-                  className="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="px-2 py-1 bg-blue-600 text-white rounded text-[11px] hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   + Add
                 </button>
@@ -434,13 +441,13 @@ export default function AdminAttributesPage() {
           <div className="flex gap-2">
             <button
               onClick={handleBulkSave}
-              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm"
+              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-[13px]"
             >
               Apply to Selected
             </button>
             <button
               onClick={() => { setShowBulkEdit(false); setBulkEditForm({}); }}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-sm"
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-[13px]"
             >
               Cancel
             </button>

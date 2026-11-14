@@ -86,21 +86,37 @@ export const NARRATIVE_BLOCKS: SkillArtifact = {
   body: `{
   "narrativeName": "Morning breach review",
   "description": "What changed overnight that a portfolio manager must act on.",
-  "instructions": "Answer only from breaches and exposure. Cite query keys in each sentence that contains a figure. If breaches.rows is empty, say there were none. Do not estimate a number that is not in the rows.",
-  "dataQueries": [
+  "persona": "You are a credit analyst briefing a portfolio manager before the open.",
+  "audience": "Portfolio manager",
+  "exposedDomains": ["FUND"],
+  "allowExternalSearch": false,
+  "parameters": [],
+  "sections": [
     {
       "key": "breaches",
-      "start": "CONTEXT",
-      "select": ["BORROWER", "COVENANT", "HEADROOM"],
-      "limit": 25
+      "title": "Covenant breaches",
+      "purpose": "Which borrowers breached a covenant, and how far?",
+      "instructions": "Answer only from the breaches data set and the thin_cushion screen. Cite query keys in each sentence that contains a figure. If breaches.rows is empty, say there were none. Do not estimate a number that is not in the rows.",
+      "dataQueries": [
+        { "key": "breaches", "start": "CONTEXT", "select": ["BORROWER", "COVENANT", "HEADROOM"], "limit": 500 }
+      ],
+      "comparisons": [{ "label": "Today" }, { "label": "Last quarter", "offset": { "months": 3 } }],
+      "measures": [{ "query": "breaches", "alias": "cushion", "expr": "HEADROOM / 100", "unit": "percent" }],
+      "screens": [{ "key": "thin_cushion", "label": "Cushion under 15%", "query": "breaches", "when": "cushion < 0.15", "severity": "high" }],
+      "blocks": [
+        { "type": "markdown", "key": "lead", "title": "What needs a decision", "guidance": "Two sentences. Name the count from the thin_cushion screen and the thinnest cushion." },
+        { "type": "scorecard", "key": "breach-table", "title": "Breaches", "statusColumn": "Status", "guidance": "One row per flagged borrower. Columns: borrower, covenant, cushion, status." },
+        { "type": "chart", "key": "by-covenant", "title": "Breaches by covenant", "guidance": "Bar chart of breaches grouped by covenant. Direct labels, one muted color." }
+      ]
+    },
+    {
+      "key": "summary",
+      "title": "Next action",
+      "instructions": "One action, tied to a flagged borrower. No action if nothing was flagged.",
+      "dependsOn": ["breaches"],
+      "dataQueries": [],
+      "blocks": [{ "type": "insights", "key": "next", "title": "Next action", "guidance": "One item." }]
     }
-  ],
-  "parameters": [],
-  "outputBlocks": [
-    { "type": "markdown", "key": "lead", "title": "What needs a decision", "guidance": "Two sentences. Name the count from breaches.summary and the largest headroom breach." },
-    { "type": "table", "key": "breach-table", "title": "Breaches", "guidance": "One row per breaches.rows entry. Columns: borrower, covenant, headroom. Right-align headroom." },
-    { "type": "chart", "key": "by-covenant", "title": "Breaches by covenant", "guidance": "Bar chart of breaches grouped by covenant. Direct labels, one muted color." },
-    { "type": "insights", "key": "next", "title": "Next action", "guidance": "One action, tied to a row. No action if breaches.rows is empty." }
   ]
 }`,
 };

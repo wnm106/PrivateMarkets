@@ -1,5 +1,6 @@
 import { Context } from '../context';
 import { listExpressionFunctions } from '../lib/expression-library';
+import { knowledgeCutoff } from '../lib/on-read-values';
 
 export interface CalculatedAttributeState {
   entityId: string;
@@ -209,13 +210,14 @@ export const calculationResolvers = {
     ) => loadCalculatedAttributeStates(context, args.entityId),
     calcBreakdown: async (
       _: unknown,
-      args: { entityId: string; attributeCode: string; asOfDate?: string | null },
+      args: { entityId: string; attributeCode: string; asOfDate?: string | null; knowledgeDate?: string | null },
       context: Context,
     ) => {
       const { data, error } = await context.supabase.rpc('explain_calc', {
         p_entity_id: args.entityId,
         p_attribute_code: args.attributeCode,
         p_as_of: args.asOfDate || null,
+        p_knowledge: knowledgeCutoff(args.knowledgeDate),
       });
       if (error) {
         const missing = error.code === 'PGRST202'
@@ -324,9 +326,6 @@ export const calculationResolvers = {
         });
         const unbound = resolved.find((item) => item.traversal !== 'SELF' && item.relationshipCodes.length === 0);
         if (unbound) return { definition: null, errors: [calcError(`Choose the entity ${unbound.ref} is read from`)] };
-        if (definition.evaluation_mode === 'ON_READ' && resolved.some((item) => item.traversal !== 'SELF')) {
-          return { definition: null, errors: [calcError('This calculation can only read attributes on the same record')] };
-        }
         const codes = [...new Set(resolved.flatMap((item) => item.relationshipCodes))];
         if (codes.length) {
           const { data: types, error: typeError } = await db

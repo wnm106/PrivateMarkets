@@ -2,8 +2,9 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
+import { nestDomainLinks } from '@/lib/domain-nav';
 import { domainHref } from '@/lib/domain-routes';
 import { SKILL_NAV } from '@/lib/skill-catalog';
 import { BrandLogo } from './BrandLogo';
@@ -25,7 +26,6 @@ const TOOLS = [
   { href: '/pipeline', label: 'Deal Pipeline', icon: 'layers' },
   { href: '/fund-surface', label: 'Fund surface', icon: 'chart' },
   { href: '/fund-rec', label: 'Fund reconciliation', icon: 'chart' },
-  { href: '/quality', label: 'Data Quality', icon: 'chart' },
   { href: '/merge', label: 'Entity Resolution', icon: 'nodes' },
   { href: '/reconcile', label: 'Reconcile', icon: 'chart' },
   { href: '/lists', label: 'Value Lists', icon: 'layers' },
@@ -278,7 +278,6 @@ export function AppSidebar() {
             parentCode: domain.parentDomainCode || null,
             color: domain.group?.color || '#6b7280',
           }))
-          .sort((a, b) => a.groupOrder - b.groupOrder || a.displayOrder - b.displayOrder || a.name.localeCompare(b.name))
       );
     }
     if (!exceptionsResult.error && exceptionsResult.data) {
@@ -290,9 +289,10 @@ export function AppSidebar() {
     load();
   }, [load, pathname]);
 
+  const domainRows = useMemo(() => nestDomainLinks(domains), [domains]);
+
   useEffect(() => {
-    const sources = pathname === '/admin/sources' || pathname.startsWith('/admin/sources/');
-    if (pathname.startsWith('/admin') && !sources) {
+    if (pathname.startsWith('/admin')) {
       setOpenSection('admin');
       writeOpenSection('admin');
     }
@@ -377,46 +377,34 @@ export function AppSidebar() {
         </button>
         {!collapsed && openSection === 'domains' && (
           <div className="sidebar-sub">
-            {domains.length === 0 && <div className="sidebar-empty">No domains yet</div>}
-            {domains.map((domain, index) => {
-              const showGroup = index === 0 || domains[index - 1].groupName !== domain.groupName;
-              return (
-                <div key={domain.code}>
-                  {showGroup && <div className="sidebar-group">{domain.groupName}</div>}
-                  <Link
-                    href={domain.href}
-                    className={`sidebar-sublink ${domain.parentCode ? 'nested' : ''} ${navActive(pathname, domain.href) ? 'active' : ''}`}
-                    title={domain.name}
-                    aria-current={navActive(pathname, domain.href) ? 'page' : undefined}
-                  >
-                    <span className="sidebar-mark" style={{ background: domain.color }} />
-                    <span className="sidebar-label">{domain.name}</span>
-                    <span className="sidebar-count">{domain.count.toLocaleString()}</span>
-                  </Link>
-                </div>
-              );
-            })}
+            {domainRows.length === 0 && <div className="sidebar-empty">No domains yet</div>}
+            {domainRows.map(({ domain, depth, showGroup }) => (
+              <div key={domain.code}>
+                {showGroup && <div className="sidebar-group">{domain.groupName}</div>}
+                <Link
+                  href={domain.href}
+                  className={`sidebar-sublink ${navActive(pathname, domain.href) ? 'active' : ''}`}
+                  style={{ paddingLeft: 8 + depth * 14 }}
+                  title={domain.name}
+                  aria-current={navActive(pathname, domain.href) ? 'page' : undefined}
+                >
+                  <span className="sidebar-mark" style={{ background: domain.color }} />
+                  <span className="sidebar-label">{domain.name}</span>
+                  <span className="sidebar-count">{domain.count.toLocaleString()}</span>
+                </Link>
+              </div>
+            ))}
           </div>
         )}
 
         <Link
-          href="/admin/sources"
-          className={`sidebar-link ${navActive(pathname, '/admin/sources') ? 'active' : ''}`}
-          title="Sources"
-          aria-current={navActive(pathname, '/admin/sources') ? 'page' : undefined}
-        >
-          <NavIcon name="sources" />
-          {!collapsed && <span className="sidebar-label">Sources</span>}
-        </Link>
-
-        <Link
           href="/quality"
           className={`sidebar-link ${navActive(pathname, '/quality') ? 'active' : ''}`}
-          title="Exceptions"
+          title="Data Quality"
           aria-current={navActive(pathname, '/quality') ? 'page' : undefined}
         >
           <NavIcon name="alert" />
-          {!collapsed && <span className="sidebar-label">Exceptions</span>}
+          {!collapsed && <span className="sidebar-label">Data Quality</span>}
           {openExceptions > 0 && (
             <span className={collapsed ? 'sidebar-dot' : 'sidebar-badge'}>{collapsed ? '' : openExceptions.toLocaleString()}</span>
           )}

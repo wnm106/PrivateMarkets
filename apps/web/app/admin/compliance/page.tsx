@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -11,6 +11,7 @@ import {
   CREATE_COMPLIANCE_RULE_VERSION_MUTATION,
 } from '@/lib/graphql';
 import { ComplianceRuleForm, ComplianceRuleFormData, buildComplianceVersionInput } from '@/components/forms/ComplianceRuleForm';
+import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
 interface ComplianceRuleRow {
   id: string;
@@ -38,6 +39,8 @@ const CATEGORY: Record<string, string> = {
   LEVERAGE: 'Leverage',
   LIQUIDITY: 'Liquidity',
   FORTY_ACT: '40 Act',
+  COVERAGE: 'Coverage',
+  COLLATERAL_QUALITY: 'Collateral quality',
   OTHER: 'Other',
 };
 
@@ -50,38 +53,38 @@ function unitLabel(unit?: string | null) {
   if (unit === 'PERCENTAGE') return 'Percentage';
   if (unit === 'CURRENCY') return 'Currency';
   if (unit === 'COUNT') return 'Count';
+  if (unit === 'RATIO') return 'Ratio';
   return unit || '';
-}
-
-function limitText(value: number | null | undefined, unit?: string | null) {
-  if (value == null) return '—';
-  if (unit === 'CURRENCY' && Math.abs(value) >= 1_000_000) {
-    return `$${(value / 1_000_000).toLocaleString('en-US', { maximumFractionDigits: 1 })}M`;
-  }
-  return String(value);
 }
 
 export default function ComplianceRulesPage() {
   const router = useRouter();
   const [rules, setRules] = useState<ComplianceRuleRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [filterCategory, setFilterCategory] = useState('all');
-  const [filterActive, setFilterActive] = useState('all');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const fetchRules = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const result = await graphqlQuery<{ complianceRules: ComplianceRuleRow[] }, {}>(
         COMPLIANCE_RULES_QUERY,
         {},
         'network-only'
       );
-      if (result.data?.complianceRules) setRules(result.data.complianceRules);
+      if (result.error || !result.data?.complianceRules) {
+        const message = result.error?.message || 'The rule book could not be loaded.';
+        setLoadError(message);
+        setRules([]);
+        return;
+      }
+      setRules(result.data.complianceRules);
     } catch (error) {
       console.error('Error fetching compliance rules:', error);
+      setLoadError(error instanceof Error ? error.message : 'The rule book could not be loaded.');
+      setRules([]);
     } finally {
       setLoading(false);
     }
@@ -91,16 +94,38 @@ export default function ComplianceRulesPage() {
     fetchRules();
   }, []);
 
-  const filteredRules = rules.filter((rule) => {
-    if (filterCategory !== 'all' && rule.ruleCategory !== filterCategory) return false;
-    if (filterActive === 'enabled' && !rule.isActive) return false;
-    if (filterActive === 'disabled' && rule.isActive) return false;
-    return true;
-  });
-
-  const selected = filteredRules.find((rule) => rule.id === selectedId) || filteredRules[0] || null;
-  const activeCount = rules.filter((rule) => rule.isActive).length;
-  const activeShare = rules.length ? Math.round((activeCount / rules.length) * 100) : 0;
+  const columns = useMemo<ColDef<ComplianceRuleRow>[]>(() => [
+    {
+      colId: 'ruleName',
+      headerName: 'Rule',
+      minWidth: 260,
+      flex: 2,
+      sort: 'asc',
+      valueGetter: (params) => params.data?.ruleName || '',
+      comparator: (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' }),
+      cellRenderer: (params: { data?: ComplianceRuleRow }) => (
+        params.data ? (
+          <Link href={`/admin/compliance/${encodeURIComponent(params.data.ruleCode)}`} style={{ fontWeight: 600 }}>
+            {params.data.ruleName}
+          </Link>
+        ) : null
+      ),
+    },
+    { colId: 'ruleCode', headerName: 'Code', minWidth: 170, flex: 1, cellClass: 'mono', valueGetter: (params) => params.data?.ruleCode || '' },
+    { colId: 'category', headerName: 'Category', minWidth: 150, flex: 1, valueGetter: (params) => (params.data ? CATEGORY[params.data.ruleCategory] || params.data.ruleCategory : '') },
+    { colId: 'anchor', headerName: 'Anchor', minWidth: 140, flex: 1, valueGetter: (params) => plainCode(params.data?.anchorDomainCode) },
+    { colId: 'appliesTo', headerName: 'Applies to', minWidth: 150, flex: 1, valueGetter: (params) => (params.data ? (params.data.appliesToAll ? 'All entities' : 'Specific entities') : '') },
+    { colId: 'unit', headerName: 'Result', minWidth: 120, flex: 1, valueGetter: (params) => (params.data?.currentVersion ? unitLabel(params.data.currentVersion.resultUnit) : 'No version') },
+    {
+      colId: 'status',
+      headerName: 'Status',
+      minWidth: 120,
+      valueGetter: (params) => (params.data ? (params.data.isActive ? 'Active' : 'Disabled') : ''),
+      cellRenderer: (params: { data?: ComplianceRuleRow }) => (
+        params.data ? <span className={`da-st ${params.data.isActive ? 'ok' : 'na'}`}>{params.data.isActive ? 'Active' : 'Disabled'}</span> : null
+      ),
+    },
+  ], []);
 
   const handleCreate = async (data: ComplianceRuleFormData) => {
     setSubmitting(true);
@@ -161,17 +186,6 @@ export default function ComplianceRulesPage() {
           <h1>Compliance</h1>
           <p>Limits that score a fund, an issuer, or a book. A fund can keep the book limit or set its own.</p>
         </div>
-        <div className="da-facts">
-          <div className="da-fact big"><span>Rules defined</span><strong>{loading ? '—' : rules.length}</strong></div>
-          <div className="da-fact"><span>Active</span><strong>{loading ? '—' : activeCount}</strong></div>
-          <div className="da-fact"><span>Disabled</span><strong>{loading ? '—' : rules.length - activeCount}</strong></div>
-          <div className="da-fact"><span>Showing</span><strong>{loading ? '—' : filteredRules.length}</strong></div>
-        </div>
-        <div className="da-holdbox">
-          <div className="da-holdtop"><span>Active share of the book</span><b>{loading ? '—' : `${activeShare}%`}</b></div>
-          <div className="da-bar"><i style={{ width: `${activeShare}%` }} /></div>
-          <p>{loading ? 'Loading the rule book.' : `${activeCount} of ${rules.length} rules are scoring positions.`}</p>
-        </div>
       </header>
 
       <div className="da-tabs" role="tablist">
@@ -196,108 +210,24 @@ export default function ComplianceRulesPage() {
           <div className="da-sechead">
             <div>
               <h2>Rules</h2>
-              <p>Select a rule to read its limits. Open it to edit the definition.</p>
+              <p>Select a rule name to open and edit it. Use the column filters to search.</p>
             </div>
             <div className="page-actions">
-              <select className="select" value={filterCategory} onChange={(event) => setFilterCategory(event.target.value)} aria-label="Category">
-                <option value="all">All categories</option>
-                {Object.entries(CATEGORY).map(([code, label]) => <option key={code} value={code}>{label}</option>)}
-              </select>
-              <select className="select" value={filterActive} onChange={(event) => setFilterActive(event.target.value)} aria-label="Status">
-                <option value="all">All status</option>
-                <option value="enabled">Active</option>
-                <option value="disabled">Disabled</option>
-              </select>
               <button type="button" className="btn btn-primary" onClick={() => setShowCreateForm(true)}>New rule</button>
             </div>
           </div>
 
-          <div className="da-main">
-            <div className="da-gridwrap">
-              <table className="da-grid" style={{ minWidth: 720 }}>
-                <thead>
-                  <tr>
-                    <th>Rule</th>
-                    <th>Category</th>
-                    <th>Anchor</th>
-                    <th>Direction</th>
-                    <th className="num">Limits</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {loading && (
-                    <tr><td colSpan={6}>Loading the rule book…</td></tr>
-                  )}
-                  {!loading && filteredRules.length === 0 && (
-                    <tr><td colSpan={6}>No compliance rules found.</td></tr>
-                  )}
-                  {filteredRules.map((rule) => {
-                    const version = rule.currentVersion;
-                    return (
-                      <tr key={rule.id} className={selected?.id === rule.id ? 'sel' : ''} onClick={() => setSelectedId(rule.id)}>
-                        <td><b>{rule.ruleName}</b></td>
-                        <td>{CATEGORY[rule.ruleCategory] || rule.ruleCategory}</td>
-                        <td>
-                          <b>{plainCode(rule.anchorDomainCode)}</b>
-                          <small>{rule.appliesToAll ? 'All entities' : 'Specific entities'}</small>
-                        </td>
-                        <td>{version?.limitDirection || '—'}</td>
-                        <td className="num">
-                          {version ? (
-                            <>
-                              {version.softLimitValue != null && <span className="da-st near">Soft {limitText(version.softLimitValue, version.resultUnit)}</span>}
-                              {' '}
-                              {version.hardLimitValue != null && <span className="da-st breach">Hard {limitText(version.hardLimitValue, version.resultUnit)}</span>}
-                              <small>{unitLabel(version.resultUnit)}</small>
-                            </>
-                          ) : <small>No version</small>}
-                        </td>
-                        <td><span className={`da-st ${rule.isActive ? 'ok' : 'na'}`}>{rule.isActive ? 'Active' : 'Disabled'}</span></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <aside className="da-panel">
-              {selected ? <RulePanel rule={selected} onOpen={() => router.push(`/admin/compliance/${selected.ruleCode}`)} /> : <p className="da-note" style={{ padding: 16 }}>Select a rule to see its limits.</p>}
-            </aside>
-          </div>
+          {loadError && <p className="da-note" style={{ color: 'var(--red)' }}>{loadError}</p>}
+          <AppGrid
+            rows={rules}
+            columns={columns}
+            getRowId={(row) => row.id}
+            loading={loading}
+            autoHeight
+            emptyMessage="No compliance rules found."
+          />
         </section>
       )}
     </div>
-  );
-}
-
-function RulePanel({ rule, onOpen }: { rule: ComplianceRuleRow; onOpen: () => void }) {
-  const version = rule.currentVersion;
-  const headline = version?.hardLimitValue ?? version?.softLimitValue;
-  return (
-    <>
-      <div className="da-ph">
-        <small>{CATEGORY[rule.ruleCategory] || rule.ruleCategory}</small>
-        <h3>{rule.ruleName}</h3>
-        <div className="da-big">{limitText(headline, version?.resultUnit)}</div>
-        <p className="da-note">{version ? `${unitLabel(version.resultUnit)} · ${version.limitDirection || 'limit'}` : 'No version yet'}</p>
-        <span className={`da-st ${rule.isActive ? 'ok' : 'na'}`}>{rule.isActive ? 'Active' : 'Disabled'}</span>
-      </div>
-      <section>
-        <h4>Definition</h4>
-        <table>
-          <tbody>
-            <tr><td>Anchor</td><td>{plainCode(rule.anchorDomainCode)}</td></tr>
-            <tr><td>Applies to</td><td>{rule.appliesToAll ? 'All entities' : 'Specific entities'}</td></tr>
-            <tr><td>Soft limit</td><td>{limitText(version?.softLimitValue, version?.resultUnit)}</td></tr>
-            <tr><td>Hard limit</td><td>{limitText(version?.hardLimitValue, version?.resultUnit)}</td></tr>
-            <tr><td>Version</td><td>{version?.versionNumber ?? '—'}</td></tr>
-          </tbody>
-        </table>
-        {rule.description && <p className="da-note" style={{ marginTop: 8 }}>{rule.description}</p>}
-        <div className="page-actions" style={{ marginTop: 12 }}>
-          <button type="button" className="btn" onClick={onOpen}>Open rule</button>
-        </div>
-      </section>
-    </>
   );
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { usePublishViewContext } from '@/lib/view-context';
 import { graphqlQuery } from '@/lib/graphql';
 
@@ -47,6 +47,13 @@ export default function ExpressionFunctionsPage() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (id: string) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   usePublishViewContext(
     category
@@ -69,10 +76,15 @@ export default function ExpressionFunctionsPage() {
       });
   }, []);
 
-  const visible = useMemo(
-    () => functions.filter((fn) => !category || fn.category === category),
-    [functions, category],
-  );
+  const visible = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return functions.filter((fn) => {
+      if (category && fn.category !== category) return false;
+      if (!query) return true;
+      return [fn.code, fn.name, fn.signature, fn.description, fn.returnType]
+        .some((value) => String(value || '').toLowerCase().includes(query));
+    });
+  }, [functions, category, search]);
 
   const copyExample = async (fn: ExpressionFunctionRow) => {
     try {
@@ -90,65 +102,109 @@ export default function ExpressionFunctionsPage() {
         <span className="sep">›</span>
         <span className="crumb-current">Expression functions</span>
       </div>
-      <h1 style={{ fontSize: 22, margin: '12px 0' }}>Expression functions</h1>
-      <p style={{ color: 'var(--ink-3)', maxWidth: 760 }}>
-        Row functions go inside a calculated attribute as <code>{'{"fn":"CONCAT","args":[...]}'}</code>.
-        Arithmetic can also be written as <code>{'{"op":"mul","args":[...]}'}</code>.
-        Group functions are the aggregate on a relationship. Domain entries are patterns to copy.
-        Format stays on the attribute display format.
-      </p>
+      <div className="page-header">
+        <div className="page-title-block">
+          <div style={{ width: '4px', height: '48px', background: 'var(--accent)' }}></div>
+          <div>
+            <div className="page-title">Expression functions</div>
+            <div className="page-meta">
+              Row functions go inside a calculated attribute as <code>{'{"fn":"CONCAT","args":[...]}'}</code>.
+              Arithmetic can also be written as <code>{'{"op":"mul","args":[...]}'}</code>.
+              Group functions are the aggregate on a relationship. Domain entries are patterns to copy.
+              Format stays on the attribute display format.
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <div style={{ display: 'flex', gap: 8, margin: '16px 0' }}>
-        {CATEGORIES.map((item) => (
-          <button
-            key={item.id || 'all'}
-            type="button"
-            className="btn"
-            onClick={() => setCategory(item.id)}
-            style={{
-              background: category === item.id ? 'var(--accent)' : 'transparent',
-              color: category === item.id ? 'white' : 'var(--ink-2)',
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
+      <div className="filter-bar" style={{ margin: '16px 0', flexWrap: 'wrap' }} role="tablist">
+        {CATEGORIES.map((item) => {
+          const count = item.id ? functions.filter((fn) => fn.category === item.id).length : functions.length;
+          const active = category === item.id;
+          return (
+            <button
+              key={item.id || 'all'}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              className="btn"
+              onClick={() => setCategory(item.id)}
+              style={{
+                background: active ? 'var(--accent)' : 'transparent',
+                color: active ? 'white' : 'var(--ink-2)',
+              }}
+            >
+              {item.label} ({count})
+            </button>
+          );
+        })}
+        <input
+          className="text-input"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search name, signature, or description"
+          style={{ minWidth: 260 }}
+        />
+        <div className="filter-count">Showing <strong>{visible.length}</strong> of {functions.length}</div>
       </div>
 
       {message && <div style={{ color: 'var(--danger, #9b2c2c)', marginBottom: 12 }}>{message}</div>}
       {loading && <div style={{ color: 'var(--ink-3)' }}>Loading functions…</div>}
       {!loading && visible.length === 0 && !message && (
-        <div style={{ color: 'var(--ink-3)' }}>No functions in this category.</div>
+        <div style={{ color: 'var(--ink-3)' }}>No functions match this selection.</div>
       )}
 
-      <div style={{ display: 'grid', gap: 12, maxWidth: 880 }}>
-        {visible.map((fn) => (
-          <section key={fn.id} className="field-section" style={{ padding: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
-              <strong>{fn.name}</strong>
-              <span style={{ color: 'var(--ink-3)', fontSize: 12 }}>
-                {fn.category} · {fn.callable ? 'Use in an expression' : 'Pattern'} · {fn.returnType}
-              </span>
-            </div>
-            <div style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 13, margin: '6px 0' }}>{fn.signature}</div>
-            <p style={{ margin: '6px 0 10px', color: 'var(--ink-2)' }}>{fn.description}</p>
-            <pre style={{
-              margin: 0,
-              padding: 12,
-              background: 'var(--bg-alt)',
-              borderRadius: 8,
-              overflow: 'auto',
-              fontSize: 12,
-            }}
-            >
-              {JSON.stringify(fn.example, null, 2)}
-            </pre>
-            <button type="button" className="btn" style={{ marginTop: 8 }} onClick={() => copyExample(fn)}>
-              {copiedId === fn.id ? 'Copied' : 'Copy example'}
-            </button>
-          </section>
-        ))}
-      </div>
+      {visible.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: 'var(--ink-3)', fontSize: 11, textTransform: 'uppercase' }}>
+              <th style={{ width: 28 }} />
+              <th style={cell}>Name</th>
+              <th style={cell}>Signature</th>
+              <th style={cell}>Category</th>
+              <th style={cell}>Returns</th>
+              <th style={cell}>Use</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((fn) => {
+              const open = expanded.has(fn.id);
+              return (
+                <Fragment key={fn.id}>
+                  <tr
+                    onClick={() => toggle(fn.id)}
+                    style={{ cursor: 'pointer', borderTop: '1px solid var(--line, #e5e5e5)' }}
+                    aria-expanded={open}
+                  >
+                    <td style={{ ...cell, color: 'var(--ink-3)' }}>{open ? '▾' : '▸'}</td>
+                    <td style={{ ...cell, fontWeight: 500 }}>{fn.name}</td>
+                    <td style={{ ...cell, fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}>{fn.signature}</td>
+                    <td style={cell}>{fn.category}</td>
+                    <td style={cell}>{fn.returnType}</td>
+                    <td style={cell}>{fn.callable ? 'Expression' : 'Pattern'}</td>
+                  </tr>
+                  {open && (
+                    <tr>
+                      <td />
+                      <td colSpan={5} style={{ padding: '4px 8px 16px' }}>
+                        <p style={{ margin: '0 0 10px', color: 'var(--ink-2)' }}>{fn.description}</p>
+                        <pre style={{ margin: 0, padding: 12, background: 'var(--bg-alt)', borderRadius: 8, overflow: 'auto', fontSize: 12 }}>
+                          {JSON.stringify(fn.example, null, 2)}
+                        </pre>
+                        <button type="button" className="btn" style={{ marginTop: 8 }} onClick={() => copyExample(fn)}>
+                          {copiedId === fn.id ? 'Copied' : 'Copy example'}
+                        </button>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
+
+const cell: React.CSSProperties = { padding: '8px 8px', verticalAlign: 'top' };

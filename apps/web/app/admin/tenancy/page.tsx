@@ -88,11 +88,16 @@ export default function TenancyAdminPage() {
 
   return (
     <div className="screen">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold mb-2">Security</h1>
-        <p className="text-gray-600">
-          Tenants never see each other&apos;s entities. Inside a client, assign roles to an entity to close it — and every child under it — to everyone else.
-        </p>
+      <div className="page-header">
+        <div className="page-title-block">
+          <div style={{ width: '4px', height: '48px', background: 'var(--accent)' }}></div>
+          <div>
+            <div className="page-title">Security</div>
+            <div className="page-meta">
+              Tenants never see each other&apos;s entities. Inside a client, assign roles to an entity to close it — and every child under it — to everyone else.
+            </div>
+          </div>
+        </div>
       </div>
 
       {error && (
@@ -111,7 +116,7 @@ export default function TenancyAdminPage() {
           <button
             key={key}
             onClick={() => setTab(key)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${tab === key ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+            className={`px-4 py-2 text-[13px] font-medium border-b-2 -mb-px ${tab === key ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
             {label}
           </button>
@@ -163,7 +168,7 @@ function ClientsTab({ clients, onChanged, onError, canProvision }: { clients: Cl
     <div>
       {canProvision && (
       <div className="flex justify-end mb-4">
-        <button onClick={() => setShowForm(!showForm)} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-sm">
+        <button onClick={() => setShowForm(!showForm)} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-[13px]">
           + Add Client
         </button>
       </div>
@@ -176,7 +181,7 @@ function ClientsTab({ clients, onChanged, onError, canProvision }: { clients: Cl
             <input placeholder="Client name" value={clientName} onChange={(e) => setClientName(e.target.value)} className="px-3 py-2 border rounded" />
           </div>
           <input placeholder="First admin's email (optional)" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} className="w-full px-3 py-2 border rounded" />
-          <button disabled={saving || !clientCode || !clientName} onClick={handleCreate} className="px-4 py-2 bg-blue-600 text-white rounded disabled:bg-gray-300 text-sm">
+          <button disabled={saving || !clientCode || !clientName} onClick={handleCreate} className="px-4 py-2 bg-blue-600 text-white rounded disabled:bg-gray-300 text-[13px]">
             Create
           </button>
         </div>
@@ -293,7 +298,7 @@ function MembersTab({
   return (
     <div>
       <div className="mb-4">
-        <label className="block text-sm font-medium text-gray-700 mb-1">Client</label>
+        <label className="block text-[13px] font-medium text-gray-700 mb-1">Client</label>
         <select value={selectedClientId} onChange={(e) => onSelectClient(e.target.value)} className="px-3 py-2 border rounded">
           {clients.map((c) => (
             <option key={c.id} value={c.id}>{c.clientName}</option>
@@ -313,7 +318,7 @@ function MembersTab({
                 <option value="">Role…</option>
                 {roles.map((r) => <option key={r.id} value={r.id}>{r.roleName}</option>)}
               </select>
-              <button onClick={handleInvite} disabled={!inviteEmail || !inviteRoleId} className="px-4 py-2 bg-blue-600 text-white rounded disabled:bg-gray-300 text-sm">
+              <button onClick={handleInvite} disabled={!inviteEmail || !inviteRoleId} className="px-4 py-2 bg-blue-600 text-white rounded disabled:bg-gray-300 text-[13px]">
                 Invite
               </button>
             </div>
@@ -335,20 +340,20 @@ function MembersTab({
             <h3 className="font-semibold mb-3">Roles</h3>
             <ul className="mb-4 space-y-1">
               {roles.map((r) => (
-                <li key={r.id} className="text-sm text-gray-700">
+                <li key={r.id} className="text-[13px] text-gray-700">
                   <strong>{r.roleName}</strong>{r.isSystemRole && <span className="text-gray-400"> (system)</span>} — {r.permissionCodes.join(', ') || 'no permissions'}
                 </li>
               ))}
             </ul>
             <div className="border-t pt-4">
-              <h4 className="text-sm font-medium mb-2">New custom role for this client</h4>
+              <h4 className="text-[13px] font-medium mb-2">New custom role for this client</h4>
               <div className="grid grid-cols-2 gap-2 mb-2">
-                <input placeholder="ROLE_CODE" value={newRoleCode} onChange={(e) => setNewRoleCode(e.target.value)} className="px-3 py-2 border rounded text-sm" />
-                <input placeholder="Role name" value={newRoleName} onChange={(e) => setNewRoleName(e.target.value)} className="px-3 py-2 border rounded text-sm" />
+                <input placeholder="ROLE_CODE" value={newRoleCode} onChange={(e) => setNewRoleCode(e.target.value)} className="px-3 py-2 border rounded text-[13px]" />
+                <input placeholder="Role name" value={newRoleName} onChange={(e) => setNewRoleName(e.target.value)} className="px-3 py-2 border rounded text-[13px]" />
               </div>
               <div className="flex flex-wrap gap-2 mb-2">
                 {permCatalog.map((p) => (
-                  <label key={p} className="text-xs flex items-center gap-1">
+                  <label key={p} className="text-[11px] flex items-center gap-1">
                     <input
                       type="checkbox"
                       checked={newRolePerms.includes(p)}
@@ -358,7 +363,7 @@ function MembersTab({
                   </label>
                 ))}
               </div>
-              <button onClick={handleCreateRole} disabled={!newRoleCode || !newRoleName} className="px-4 py-2 bg-blue-600 text-white rounded disabled:bg-gray-300 text-sm">
+              <button onClick={handleCreateRole} disabled={!newRoleCode || !newRoleName} className="px-4 py-2 bg-blue-600 text-white rounded disabled:bg-gray-300 text-[13px]">
                 Create role
               </button>
             </div>
@@ -409,7 +414,7 @@ function EntityAccessTab({ clients, onError }: { clients: Client[]; onError: (e:
 
   return (
     <div>
-      <p className="text-sm text-gray-600 mb-4">
+      <p className="text-[13px] text-gray-600 mb-4">
         Pick an entity and choose which roles may open it. Saving a role closes the entity to everyone else in the
         client, and to every child entity under it. Leave every role on &quot;No access&quot; and save to open it again
         to anyone who can view entities.
@@ -426,7 +431,7 @@ function EntityAccessTab({ clients, onError }: { clients: Client[]; onError: (e:
           placeholder="Search by name or code"
           className="flex-1 min-w-[16rem] px-3 py-2 border rounded"
         />
-        <button onClick={() => load(search)} className="px-4 py-2 bg-gray-200 rounded text-sm">Search</button>
+        <button onClick={() => load(search)} className="px-4 py-2 bg-gray-200 rounded text-[13px]">Search</button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -445,8 +450,8 @@ function EntityAccessTab({ clients, onError }: { clients: Client[]; onError: (e:
                       className={`w-full text-left px-4 py-3 ${selectedId === row.entityId ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
                     >
                       <div className="font-medium">{row.entityName}</div>
-                      <div className="text-xs text-gray-500">{row.entityCode} · {row.domainCode}</div>
-                      <div className="text-xs mt-1">
+                      <div className="text-[11px] text-gray-500">{row.entityCode} · {row.domainCode}</div>
+                      <div className="text-[11px] mt-1">
                         {row.restricted
                           ? <span className="text-amber-700">Closed{roleLabels.length ? `: ${roleLabels.join(', ')}` : ' by a parent'}</span>
                           : <span className="text-gray-500">Open to the client</span>}
@@ -455,7 +460,7 @@ function EntityAccessTab({ clients, onError }: { clients: Client[]; onError: (e:
                   </li>
                 );
               })}
-              {rows.length === 0 && <li className="p-6 text-gray-500 text-sm">No entities match.</li>}
+              {rows.length === 0 && <li className="p-6 text-gray-500 text-[13px]">No entities match.</li>}
             </ul>
           )}
         </div>
@@ -472,7 +477,7 @@ function EntityAccessTab({ clients, onError }: { clients: Client[]; onError: (e:
               onChanged={() => load(search)}
             />
           ) : (
-            <div className="text-gray-500 text-sm">Select an entity to assign roles.</div>
+            <div className="text-gray-500 text-[13px]">Select an entity to assign roles.</div>
           )}
         </div>
       </div>
@@ -490,7 +495,7 @@ const CLIENT_COLUMNS: ColDef[] = [
     cellRenderer: (params: any) => (
       <span className="font-medium">
         {params.data.clientName}
-        {params.data.isInternal && <span className="ml-2 text-xs text-gray-400">(internal)</span>}
+        {params.data.isInternal && <span className="ml-2 text-[11px] text-gray-400">(internal)</span>}
       </span>
     ),
   },
@@ -498,7 +503,7 @@ const CLIENT_COLUMNS: ColDef[] = [
     field: 'clientCode',
     headerName: 'Code',
     minWidth: 160,
-    cellRenderer: (params: any) => <code className="text-sm bg-gray-100 px-2 py-1 rounded">{params.value}</code>,
+    cellRenderer: (params: any) => <code className="text-[13px] bg-gray-100 px-2 py-1 rounded">{params.value}</code>,
   },
   {
     colId: 'status',
@@ -506,7 +511,7 @@ const CLIENT_COLUMNS: ColDef[] = [
     width: 130,
     valueGetter: (params) => (params.data?.isActive ? 'Active' : 'Inactive'),
     cellRenderer: (params: any) => (
-      <span className={`px-2 py-1 text-xs font-medium rounded ${params.data.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
+      <span className={`px-2 py-1 text-[11px] font-medium rounded ${params.data.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
         {params.data.isActive ? 'Active' : 'Inactive'}
       </span>
     ),
@@ -532,7 +537,7 @@ const MEMBER_COLUMNS: ColDef[] = [
     cellRenderer: (params: any) => (
       <div className="flex flex-wrap gap-1">
         {params.data.roles.map((role: { id: string; roleName: string }) => (
-          <span key={role.id} className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded">
+          <span key={role.id} className="inline-flex items-center gap-1 px-2 py-1 text-[11px] bg-blue-100 text-blue-800 rounded">
             {role.roleName}
             <button type="button" onClick={() => params.context.get().handleRevoke(params.data.userId, role.id)} className="text-blue-500 hover:text-blue-900">×</button>
           </span>
@@ -553,7 +558,7 @@ const MEMBER_COLUMNS: ColDef[] = [
           params.context.get().handleAssign(params.data.userId, event.target.value);
           event.target.value = '';
         }}
-        className="px-2 py-1 border rounded text-sm"
+        className="px-2 py-1 border rounded text-[13px]"
       >
         <option value="">+ role…</option>
         {params.context.get().roles
@@ -568,7 +573,7 @@ const MEMBER_COLUMNS: ColDef[] = [
     width: 130,
     valueGetter: (params) => (params.data?.isActive ? 'Active' : 'Removed'),
     cellRenderer: (params: any) => (
-      <span className={`px-2 py-1 text-xs font-medium rounded ${params.data.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
+      <span className={`px-2 py-1 text-[11px] font-medium rounded ${params.data.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
         {params.data.isActive ? 'Active' : 'Removed'}
       </span>
     ),

@@ -126,11 +126,18 @@ export default function DisplayLayoutsPage() {
         <span className="sep">›</span>
         <span className="crumb-current">Display layouts</span>
       </div>
-      <h1 style={{ fontSize: 22, margin: '12px 0' }}>Display layouts</h1>
-      <p style={{ color: 'var(--ink-3)', maxWidth: 720 }}>
-        Place attribute slots in HTML. A series layout repeats each slot across fiscal period ends.
-        Bind the layout to an issuer, with a relationship code, when the statement belongs to that issuer and the values live on child entities.
-      </p>
+      <div className="page-header">
+        <div className="page-title-block">
+          <div style={{ width: '4px', height: '48px', background: 'var(--accent)' }}></div>
+          <div>
+            <div className="page-title">Display layouts</div>
+            <div className="page-meta">
+              Place attribute slots in HTML. A series layout repeats each slot across fiscal period ends.
+              Bind the layout to an issuer, with a relationship code, when the statement belongs to that issuer and the values live on child entities.
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div className="field-section" style={{ marginTop: 16 }}>
         <div className="field-section-head"><div className="field-section-name">Layouts</div></div>

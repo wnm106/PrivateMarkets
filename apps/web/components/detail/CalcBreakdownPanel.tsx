@@ -77,8 +77,8 @@ interface CalcBreakdown {
 }
 
 const BREAKDOWN_QUERY = `
-  query CalcBreakdown($entityId: ID!, $attributeCode: String!, $asOfDate: Date) {
-    calcBreakdown(entityId: $entityId, attributeCode: $attributeCode, asOfDate: $asOfDate) {
+  query CalcBreakdown($entityId: ID!, $attributeCode: String!, $asOfDate: Date, $knowledgeDate: DateTime) {
+    calcBreakdown(entityId: $entityId, attributeCode: $attributeCode, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate) {
       attributeCode
       calcKind
       domainCode
@@ -111,6 +111,7 @@ export function CalcBreakdownPanel({
   entityId,
   attributeCode,
   asOfDate,
+  knowledgeDate,
   formula,
   displayedValue,
   displayedSourceName,
@@ -120,6 +121,7 @@ export function CalcBreakdownPanel({
   entityId: string;
   attributeCode: string;
   asOfDate?: string;
+  knowledgeDate?: string;
   formula?: string;
   displayedValue?: string;
   displayedSourceName?: string;
@@ -136,9 +138,9 @@ export function CalcBreakdownPanel({
     let cancelled = false;
     setLoading(true);
     setError('');
-    graphqlQuery<{ calcBreakdown: CalcBreakdown | null }>(
+    graphqlQuery<{ calcBreakdown: CalcBreakdown | null }, { entityId: string; attributeCode: string; asOfDate: string | null; knowledgeDate: string | null }>(
       BREAKDOWN_QUERY,
-      { entityId, attributeCode, asOfDate: asOfDate || null },
+      { entityId, attributeCode, asOfDate: asOfDate || null, knowledgeDate: knowledgeDate || null },
       'network-only',
     ).then((result) => {
       if (cancelled) return;
@@ -147,7 +149,7 @@ export function CalcBreakdownPanel({
       setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [entityId, attributeCode, asOfDate, refreshKey]);
+  }, [entityId, attributeCode, asOfDate, knowledgeDate, refreshKey]);
 
   if (loading) return <div className="calc-break-note">Loading the values used in this calculation…</div>;
   if (error) return <div className="calc-break-note">{error}</div>;
@@ -239,6 +241,7 @@ export function CalcBreakdownPanel({
                     entityId={component.entityId}
                     attributeCode={component.attributeCode}
                     asOfDate={asOfDate}
+                    knowledgeDate={knowledgeDate}
                     refreshKey={refreshKey}
                     depth={depth + 1}
                   />

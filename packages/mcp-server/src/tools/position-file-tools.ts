@@ -4,6 +4,7 @@
  */
 
 import type { JSONSchema7 } from 'json-schema';
+import { sessionClientId } from '../feeds/session-client';
 import { ToolRegistry } from '../lib/tool-registry.js';
 import { ToolDefinition } from '../lib/types.js';
 import {
@@ -46,7 +47,7 @@ const listPositionFileImportsTool: ToolDefinition = {
   category: 'import',
   inputSchema: { type: 'object', properties: {} },
   execute: async (_args, supabase) => {
-    const instances = await listImportInstances(supabase);
+    const instances = await listImportInstances(await sessionClientId(supabase));
     return { sourceCode: 'POSITION_FILE', instances };
   },
 };
@@ -57,7 +58,7 @@ const listPositionFileTargetsTool: ToolDefinition = {
   category: 'import',
   inputSchema: { type: 'object', properties: {} },
   execute: async (_args, supabase) => {
-    const catalog = await listMappingCatalog(supabase);
+    const catalog = await listMappingCatalog(await sessionClientId(supabase));
     return { targets: mappingTargets(catalog.attributes, catalog.domains) };
   },
 };
@@ -84,7 +85,7 @@ const createPositionFileImportTool: ToolDefinition = {
     const mediaType = fileName.toLowerCase().endsWith('.csv')
       ? 'text/csv'
       : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    return createImportInstance(fileName, mediaType, bytes, supabase);
+    return createImportInstance(fileName, mediaType, bytes, await sessionClientId(supabase));
   },
 };
 
@@ -99,7 +100,7 @@ const getPositionFileImportTool: ToolDefinition = {
     },
     required: ['instanceId'],
   },
-  execute: async (args, supabase) => getImportInstance(String(args.instanceId), supabase),
+  execute: async (args, supabase) => getImportInstance(String(args.instanceId), await sessionClientId(supabase)),
 };
 
 const updatePositionFileImportTool: ToolDefinition = {
@@ -119,7 +120,7 @@ const updatePositionFileImportTool: ToolDefinition = {
     const mappings = args.columnMappings as ColumnAssignment[];
     if (!Array.isArray(mappings)) throw new Error('columnMappings must be a list');
     const asOfDate = args.asOfDate ? String(args.asOfDate) : null;
-    return saveImportInstance(String(args.instanceId), mappings, asOfDate, supabase);
+    return saveImportInstance(String(args.instanceId), mappings, asOfDate, await sessionClientId(supabase));
   },
 };
 
@@ -138,9 +139,9 @@ const processPositionFileImportTool: ToolDefinition = {
   },
   execute: async (args, supabase) => processImportInstance(
     String(args.instanceId),
+    await sessionClientId(supabase),
     Array.isArray(args.columnMappings) ? args.columnMappings as ColumnAssignment[] : undefined,
-    args.asOfDate ? String(args.asOfDate) : undefined,
-    supabase
+    args.asOfDate ? String(args.asOfDate) : undefined
   ),
 };
 

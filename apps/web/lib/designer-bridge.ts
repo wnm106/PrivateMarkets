@@ -47,7 +47,8 @@ export function isDesignerProposal(value: unknown): value is Record<string, any>
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value);
   const known = ['dashboardName', 'narrativeName', 'name', 'description', 'htmlTemplate',
-    'instructions', 'dataQueries', 'parameters', 'outputBlocks'];
+    'instructions', 'dataQueries', 'parameters', 'outputBlocks',
+    'sections', 'persona', 'audience', 'rules', 'exposedDomains', 'allowExternalSearch'];
   return keys.some((k) => known.includes(k));
 }
 

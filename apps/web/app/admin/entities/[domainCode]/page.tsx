@@ -43,7 +43,8 @@ import { RelationshipTypeForm } from '@/components/forms/RelationshipTypeForm';
 import { SchemaScopeBadge, SchemaScopeField } from '@/components/admin/SchemaScopeField';
 import { GroupField } from '@/components/admin/GroupField';
 import { EntityIdentifierDefinitionForm } from '@/components/forms/EntityIdentifierDefinitionForm';
-import { parentEntityColumns } from '@/lib/parent-entities';
+import { definingParentDomains, parentEntityColumns, toParentLinkCounts, type ParentLinkCount } from '@/lib/parent-entities';
+import { supabaseBrowserClient } from '@/lib/supabase-browser';
 import { TemplateAttributePicker, type PickerAttribute } from '@/components/forms/TemplateAttributePicker';
 import { EntityAttributeGrid } from '@/components/admin/EntityAttributeGrid';
 import { AttributeSectionsPanel } from '@/components/admin/AttributeSectionsPanel';
@@ -205,6 +206,7 @@ export default function EntityTypeDetailPage() {
   const [attributes, setAttributes] = useState<Attribute[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [relationshipTypes, setRelationshipTypes] = useState<RelationshipType[]>([]);
+  const [linkCounts, setLinkCounts] = useState<ParentLinkCount[] | null>(null);
   const [identifiers, setIdentifiers] = useState<EntityIdentifierDefinition[]>([]);
   const [intersectionTypes, setIntersectionTypes] = useState<IntersectionType[]>([]);
   const [referenceLists, setReferenceLists] = useState<{ id: string; listCode: string; listName: string }[]>([]);
@@ -363,6 +365,8 @@ export default function EntityTypeDetailPage() {
 
       const relationshipsResult = await graphqlClient.query(RELATIONSHIP_TYPES_QUERY, {}, { requestPolicy: 'network-only' }).toPromise();
       setRelationshipTypes(relationshipsResult.data?.relationshipTypes || []);
+      const counts = await supabaseBrowserClient().rpc('relationship_link_counts');
+      setLinkCounts(counts.error ? [] : toParentLinkCounts((counts.data || []) as Array<Record<string, unknown>>));
 
       const identifiersResult = await graphqlClient
         .query(ENTITY_IDENTIFIER_DEFINITIONS_QUERY, { domainCode }, { requestPolicy: 'network-only' })
@@ -808,7 +812,9 @@ export default function EntityTypeDetailPage() {
     rel => rel.parentDomainCode === domain.domainCode || rel.childDomainCode === domain.domainCode
   );
   const parentNames = Object.fromEntries(allDomainTypes.map((item) => [item.domainCode, item.domainName]));
-  const parentTypes = parentEntityColumns(domain.domainCode, relationshipTypes, parentNames);
+  const parentTypes = linkCounts
+    ? parentEntityColumns(domain.domainCode, relationshipTypes, parentNames, linkCounts, definingParentDomains(domain.domainCode, intersectionTypes))
+    : [];
 
   // Attributes are now pre-filtered by domain_code from the GraphQL query.
   // Sort: attributes assigned to templates first, then the rest.
@@ -941,7 +947,7 @@ export default function EntityTypeDetailPage() {
       {activeTab === 'attributes' && (
         <Section
           title={`Attributes (${domainAttributes.length})`}
-          subtitle="Fields are columns. Expand a row to edit that attribute in place."
+          subtitle="Attributes sit in their sections. Drag a row to reorder it or move it to another section."
           action={<button className="btn" onClick={() => setShowCreateAttributeModal(true)}>+ Attribute</button>}
         >
           <EntityAttributeGrid
@@ -1213,6 +1219,7 @@ export default function EntityTypeDetailPage() {
       {/* Create Attribute Modal */}
       {showCreateAttributeModal && (
         <CreateAttributeModal
+          domainCode={domain.domainCode}
           domainTypes={allDomainTypes}
           owner={domain.clientId ? { id: domain.clientId, name: domain.clientName || 'This client' } : null}
           onClose={() => setShowCreateAttributeModal(false)}
@@ -1679,11 +1686,13 @@ function EditDomainModal({
 
 // Create Attribute Modal
 function CreateAttributeModal({
+  domainCode,
   domainTypes,
   owner,
   onClose,
   onSubmit
 }: {
+  domainCode: string;
   domainTypes: DomainType[];
   owner?: { id: string; name: string } | null;
   onClose: () => void;
@@ -1695,15 +1704,34 @@ function CreateAttributeModal({
     dataType: 'STRING',
     description: '',
     referenceDomainCode: '',
+    displaySection: '',
     isRequired: false,
     isMultiValued: false,
     clientId: null as string | null,
   });
+  const [sections, setSections] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void graphqlClient.query(ATTRIBUTE_SECTIONS_QUERY, { domainCode }, { requestPolicy: 'network-only' }).toPromise().then((result) => {
+      if (cancelled) return;
+      const names = ((result.data?.attributeSections || []) as Array<{ sectionName: string; displayOrder: number }>)
+        .slice()
+        .sort((a, b) => (a.displayOrder || 0) - (b.displayOrder || 0))
+        .map((section) => section.sectionName)
+        .filter(Boolean);
+      const options = names.length ? names : ['General'];
+      setSections(options);
+      setFormData((current) => ({ ...current, displaySection: current.displaySection || options[0] }));
+    });
+    return () => { cancelled = true; };
+  }, [domainCode]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit({
       ...formData,
+      displaySection: formData.displaySection || 'General',
       referenceDomainCode: formData.referenceDomainCode || undefined
     });
   };
@@ -1785,6 +1813,23 @@ function CreateAttributeModal({
                   <option value="TIMESTAMP">Timestamp</option>
                   <option value="BOOLEAN">Boolean</option>
                 </select>
+              </div>
+              <div className="field">
+                <label>Section *</label>
+                <select
+                  className="select"
+                  value={formData.displaySection}
+                  onChange={e => setFormData(prev => ({ ...prev, displaySection: e.target.value }))}
+                  required
+                >
+                  {formData.displaySection === '' && <option value="">Loading sections…</option>}
+                  {(sections.length ? sections : ['General']).map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+                <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '4px' }}>
+                  The attribute is listed under this section
+                </div>
               </div>
               <div className="field">
                 <label>Reference Domain (optional)</label>

@@ -12,7 +12,21 @@ const SEVERITY: Record<string, { bg: string; fg: string; label: string }> = {
   positive: { bg: '#e1f1e7', fg: '#047857', label: 'Positive' },
   warning: { bg: '#fdf3d7', fg: '#a16207', label: 'Warning' },
   critical: { bg: '#fdecec', fg: '#b91c1c', label: 'Critical' },
+  high: { bg: '#fdecec', fg: '#b91c1c', label: 'High' },
+  medium: { bg: '#fdf3d7', fg: '#a16207', label: 'Medium' },
+  low: { bg: '#e8eef2', fg: '#1b3a4b', label: 'Low' },
 };
+
+/** Credit status words to a colour, so a scorecard reads at a glance. */
+function statusStyle(value: unknown): { background: string; color: string } | undefined {
+  const text = String(value ?? '').toLowerCase();
+  if (!text) return undefined;
+  if (/non[- ]?accrual/.test(text)) return { background: '#fdecec', color: '#b91c1c' };
+  if (/under\s?perform/.test(text)) return { background: '#fdeee3', color: '#c2410c' };
+  if (/watch/.test(text)) return { background: '#fdf3d7', color: '#a16207' };
+  if (/perform/.test(text)) return { background: '#e1f1e7', color: '#047857' };
+  return undefined;
+}
 
 export function NarrativeBlocks({ blocks }: { blocks: NarrativeBlock[] }) {
   return (
@@ -42,7 +56,9 @@ function BlockBody({ block }: { block: NarrativeBlock }) {
           dangerouslySetInnerHTML={{ __html: sanitizeHtmlLinks(markdownToHtml(block.text)) }}
         />
       );
-    case 'table': {
+    case 'table':
+    case 'scorecard': {
+      const statusIndex = block.type === 'scorecard' && block.statusColumn ? block.columns.indexOf(block.statusColumn) : -1;
       const numeric = block.columns.map((_, index) => (
         block.rows.length > 0
         && block.rows.every((row) => row[index] == null || row[index] === '' || typeof row[index] === 'number')
@@ -58,6 +74,7 @@ function BlockBody({ block }: { block: NarrativeBlock }) {
         valueFormatter: (params) => typeof params.value === 'number'
           ? params.value.toLocaleString(undefined, { maximumFractionDigits: 2 })
           : String(params.value ?? ''),
+        cellStyle: index === statusIndex ? (params) => statusStyle(params.value) ?? null : undefined,
       }));
       const rows = block.rows.map((row, index) => {
         const record: Record<string, unknown> = { __id: String(index) };
@@ -76,6 +93,60 @@ function BlockBody({ block }: { block: NarrativeBlock }) {
     }
     case 'chart':
       return <Chart block={block} />;
+    case 'kpis':
+      return (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
+          {block.items.map((item, i) => (
+            <div key={i} style={{ border: '1px solid var(--line)', padding: '10px 14px', background: 'white' }}>
+              <div style={{ fontSize: '11px', color: 'var(--ink-3)' }}>{item.label}</div>
+              <div
+                style={/^data not available/i.test(item.value)
+                  ? { fontSize: '13px', fontWeight: 500, margin: '6px 0', color: 'var(--ink-3)' }
+                  : { fontSize: '22px', fontWeight: 600, margin: '2px 0' }}
+              >
+                {item.value}
+                {item.trend && (
+                  <span style={{ fontSize: '12px', marginLeft: '6px', color: item.trend === 'up' ? '#047857' : item.trend === 'down' ? '#b91c1c' : 'var(--ink-3)' }}>
+                    {item.trend === 'up' ? '▲' : item.trend === 'down' ? '▼' : '▬'}
+                  </span>
+                )}
+              </div>
+              {item.detail && <div style={{ fontSize: '11px', color: 'var(--ink-3)' }}>{item.detail}</div>}
+            </div>
+          ))}
+        </div>
+      );
+    case 'callouts':
+      return (
+        <div style={{ display: 'grid', gap: '10px' }}>
+          {block.items.map((item, i) => {
+            const s = SEVERITY[item.severity] || SEVERITY.info;
+            return (
+              <div key={i} style={{ borderLeft: `3px solid ${s.fg}`, background: s.bg, padding: '10px 14px' }}>
+                <div style={{ fontSize: '11px', fontWeight: 600, color: s.fg }}>{s.label}</div>
+                <div style={{ fontWeight: 600, fontSize: '13px', margin: '2px 0 6px' }}>{item.title}</div>
+                {item.fields.map((field, j) => (
+                  <div key={j} style={{ fontSize: '13px', color: 'var(--ink-2)', margin: '3px 0' }}>
+                    <strong>{field.label}:</strong> {field.value}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      );
+    case 'sources':
+      return (
+        <ol style={{ fontSize: '12px', color: 'var(--ink-2)', paddingLeft: '18px', margin: 0 }}>
+          {block.items.map((item, i) => (
+            <li key={i} style={{ margin: '3px 0' }}>
+              {item.url ? <a href={item.url} target="_blank" rel="noreferrer noopener" className="crumb-link">{item.title}</a> : item.title}
+              {item.publisher ? `, ${item.publisher}` : ''}{item.date ? ` (${item.date})` : ''}
+              {item.note ? ` - ${item.note}` : ''}
+            </li>
+          ))}
+        </ol>
+      );
     case 'insights':
       return (
         <div style={{ display: 'grid', gap: '8px' }}>
@@ -131,7 +202,87 @@ function Chart({ block }: { block: Extract<NarrativeBlock, { type: 'chart' }> })
     );
   }
 
-  const all = series.flatMap((s) => s.values);
+  if (chartType === 'heatmap') {
+    const flat = series.flatMap((s) => s.values);
+    const lo = Math.min(...flat, 0);
+    const hi = Math.max(...flat, 0);
+    const shade = (v: number) => {
+      // Negative is red, positive is green; intensity follows the distance from zero.
+      const t = v < 0 ? (lo === 0 ? 0 : v / lo) : (hi === 0 ? 0 : v / hi);
+      const a = Math.min(Math.max(t, 0), 1) * 0.75;
+      return v < 0 ? `rgba(185,28,28,${a})` : `rgba(4,120,87,${a})`;
+    };
+    return (
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse', fontSize: '12px' }}>
+          <thead>
+            <tr>
+              <th />
+              {labels.map((l, i) => <th key={i} style={{ padding: '4px 8px', fontWeight: 500, color: 'var(--ink-3)', textAlign: 'center' }}>{l}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {series.map((row, ri) => (
+              <tr key={ri}>
+                <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>{row.name}</td>
+                {labels.map((_, ci) => (
+                  <td key={ci} style={{ padding: '4px 10px', textAlign: 'center', background: shade(row.values[ci] ?? 0), border: '1px solid white' }}>
+                    {(row.values[ci] ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  if (chartType === 'waterfall') {
+    // Values are deltas; "totals" marks the indexes drawn as a running total from zero.
+    const totals = new Set(block.totals ?? []);
+    let running = 0;
+    const bars = series[0].values.map((v, i) => {
+      if (totals.has(i)) { const t = i === 0 ? v : running; running = t; return { from: 0, to: t, total: true }; }
+      const from = running; running += v; return { from, to: running, total: false };
+    });
+    const points = bars.flatMap((b) => [b.from, b.to]);
+    const wmax = Math.max(...points, 1);
+    const wmin = Math.min(...points, 0);
+    const wspan = wmax - wmin || 1;
+    const wn = labels.length;
+    const wPlotW = w - pad.l - pad.r;
+    const wPlotH = h - pad.t - pad.b;
+    const wy = (v: number) => pad.t + (1 - (v - wmin) / wspan) * wPlotH;
+    const group = wPlotW / wn;
+    return (
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" style={{ maxWidth: w }} role="img">
+        <line x1={pad.l} y1={wy(0)} x2={w - pad.r} y2={wy(0)} stroke="#ccc" />
+        {bars.map((b, i) => {
+          const top = Math.min(wy(b.from), wy(b.to));
+          const height = Math.max(Math.abs(wy(b.from) - wy(b.to)), 1);
+          const color = b.total ? '#1b3a4b' : b.to >= b.from ? '#047857' : '#b91c1c';
+          const x = pad.l + i * group + group * 0.15;
+          return (
+            <g key={i}>
+              <rect x={x} y={top} width={group * 0.7} height={height} fill={color} />
+              <text x={x + group * 0.35} y={top - 3} fontSize={9} textAnchor="middle" fill="#444">
+                {(b.total ? b.to : b.to - b.from).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+              </text>
+              <text x={x + group * 0.35} y={h - pad.b + 14} fontSize={10} textAnchor="middle" fill="#666">
+                {labels[i].length > 12 ? `${labels[i].slice(0, 11)}…` : labels[i]}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    );
+  }
+
+  const stacked = chartType === 'stacked';
+  const all = stacked
+    ? labels.flatMap((_, i) => [series.reduce((a, s) => a + Math.max(s.values[i] ?? 0, 0), 0), series.reduce((a, s) => a + Math.min(s.values[i] ?? 0, 0), 0)])
+    : series.flatMap((s) => s.values);
   const max = Math.max(...all, 1);
   const min = Math.min(...all, 0);
   const span = max - min || 1;
@@ -146,7 +297,22 @@ function Chart({ block }: { block: Extract<NarrativeBlock, { type: 'chart' }> })
         <line x1={pad.l} y1={y(0)} x2={w - pad.r} y2={y(0)} stroke="#ccc" />
         <text x={4} y={pad.t + 4} fontSize={10} fill="#666">{max.toLocaleString(undefined, { maximumFractionDigits: 1 })}</text>
         <text x={4} y={h - pad.b} fontSize={10} fill="#666">{min.toLocaleString(undefined, { maximumFractionDigits: 1 })}</text>
-        {chartType === 'bar'
+        {stacked
+          ? labels.map((_, i) => {
+              const group = plotW / n;
+              let pos = 0;
+              let neg = 0;
+              return series.map((s, si) => {
+                const v = s.values[i] ?? 0;
+                const from = v >= 0 ? pos : neg;
+                const to = from + v;
+                if (v >= 0) pos = to; else neg = to;
+                return (
+                  <rect key={`${si}-${i}`} x={pad.l + i * group + group * 0.15} y={Math.min(y(from), y(to))} width={group * 0.7} height={Math.abs(y(from) - y(to))} fill={PALETTE[si % PALETTE.length]} />
+                );
+              });
+            })
+          : chartType === 'bar'
           ? series.map((s, si) => {
               const group = plotW / n;
               const bw = (group * 0.8) / series.length;
@@ -166,7 +332,7 @@ function Chart({ block }: { block: Extract<NarrativeBlock, { type: 'chart' }> })
             })}
         {labels.map((l, i) => {
           if (n > 12 && i % Math.ceil(n / 12) !== 0) return null;
-          const x = chartType === 'bar' ? pad.l + (i + 0.5) * (plotW / n) : pad.l + (n <= 1 ? 0 : (i * plotW) / (n - 1));
+          const x = chartType === 'bar' || stacked ? pad.l + (i + 0.5) * (plotW / n) : pad.l + (n <= 1 ? 0 : (i * plotW) / (n - 1));
           return <text key={i} x={x} y={h - pad.b + 14} fontSize={10} textAnchor="middle" fill="#666">{l.length > 12 ? `${l.slice(0, 11)}…` : l}</text>;
         })}
       </svg>

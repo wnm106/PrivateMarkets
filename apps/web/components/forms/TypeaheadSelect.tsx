@@ -34,9 +34,11 @@ export function TypeaheadSelect({ options, value, onChange, placeholder = 'Selec
   const selected = options.find((o) => o.value === value);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    // Ignore case, apostrophes and punctuation so "moodys" finds "Moody's".
+    const squash = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, '').replace(/ +/g, ' ');
+    const q = squash(query.trim());
     if (!q) return options;
-    return options.filter((o) => `${o.label} ${o.search || ''} ${o.group || ''}`.toLowerCase().includes(q));
+    return options.filter((o) => squash(`${o.label} ${o.search || ''} ${(o.search || '').replace(/_/g, ' ')} ${o.group || ''}`).includes(q));
   }, [options, query]);
 
   const close = () => {

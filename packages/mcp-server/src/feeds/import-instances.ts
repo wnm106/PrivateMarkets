@@ -1,5 +1,11 @@
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { assertLocalSupabase, executeParsedFeed, localSupabase } from './feed-loader';
+import { reviewColumns, type ReviewContext } from './semantic-review';
+import { intakeFile, type IntakeTable } from './intake-file';
+import { ensureSource, materialize } from './load-sessions';
+import { profileDocument, formatOf, type DocumentProfile } from './llama-parse';
+import { parseWorkbook } from './parse-table';
+import type { SchemaRecommendation } from './specialist';
 import { dependencyLoadWaves } from './load-order';
 import { readImportFile } from './intake';
 import { parseTabularFile } from './parse-table';
@@ -18,7 +24,9 @@ import {
 import { normalizeSourceCode } from './row-context';
 import {
   applyListSuggestions,
+  describeOrphans,
   feedMapFromAssignments,
+  orphanColumns,
   suggestAssignments,
   suggestTransform,
   type AttributeChoice,
@@ -26,10 +34,12 @@ import {
   type ColumnHint,
   type ListChoice,
 } from './suggest';
-import type { FeedLoadResult } from './types';
+import type { CellLocation, FeedLoadResult, LoadReject, PageSize } from './types';
 import { parseUsDate } from './values';
 import {
   findStoredMap,
+  preferOwnMap,
+  visibleToClient,
   headerSignature,
   mapNameFromAssignments,
   overlayStoredMap,
@@ -77,7 +87,29 @@ export interface InstanceRun {
   failed: number;
 }
 
+export interface ImportIntake {
+  method: string;
+  note: string | null;
+  profile: DocumentProfile | null;
+}
+
+export interface ImportTableChoice {
+  id: string;
+  name: string;
+  rowCount: number;
+  columnCount: number;
+  /** The original document can show where each value came from. */
+  located: boolean;
+}
+
 export interface ImportInstanceDetail extends ImportInstanceSummary {
+  /** How the file was read, and why. */
+  intake: ImportIntake | null;
+  /** Every table found in the file. Empty for a plain CSV. */
+  tables: ImportTableChoice[];
+  tableId: string | null;
+  /** Issues from the latest load: refused records, skipped values, links that could not be made. */
+  lastIssues: { rejects: LoadReject[]; total: number } | null;
   columnMappings: ColumnAssignment[];
   loadWaves: string[][];
   headers: string[];
@@ -89,10 +121,11 @@ function useClient(client?: SupabaseClient): SupabaseClient {
   return db;
 }
 
-async function attributeCatalog(client: SupabaseClient): Promise<{ attributes: AttributeChoice[]; domains: string[] }> {
+/** The shared catalog plus this client's own additions. Another client's fields and record types stay out. */
+async function attributeCatalog(client: SupabaseClient, clientId: string): Promise<{ attributes: AttributeChoice[]; domains: string[] }> {
   const [attributes, domains] = await Promise.all([
-    client.schema('metadata_register').from('attribute_register').select('attribute_code, attribute_name, data_type, domain_code, reference_list_code').order('attribute_name'),
-    client.schema('metadata_register').from('domain_types').select('domain_code').eq('is_active', true).order('domain_code'),
+    visibleToClient(client.schema('metadata_register').from('attribute_register').select('attribute_code, attribute_name, data_type, domain_code, reference_list_code'), clientId).order('attribute_name'),
+    visibleToClient(client.schema('metadata_register').from('domain_types').select('domain_code').eq('is_active', true), clientId).order('domain_code'),
   ]);
   if (attributes.error) throw new Error(attributes.error.message);
   if (domains.error) throw new Error(domains.error.message);
@@ -108,9 +141,9 @@ async function attributeCatalog(client: SupabaseClient): Promise<{ attributes: A
   };
 }
 
-export async function listMappingCatalog(client: SupabaseClient = useClient()) {
+export async function listMappingCatalog(clientId: string, client: SupabaseClient = useClient()) {
   assertLocalSupabase(client);
-  const catalog = await attributeCatalog(client);
+  const catalog = await attributeCatalog(client, clientId);
   return catalog;
 }
 
@@ -176,21 +209,22 @@ function toSummary(row: any, map?: { name: string | null; saved: boolean }): Imp
   };
 }
 
-async function savedMaps(client: SupabaseClient): Promise<Map<string, { name: string | null; saved: boolean }>> {
-  const maps = await client.schema('entity_instances').from('feed_maps').select('map_code, map_name, header_signature');
+async function savedMaps(client: SupabaseClient, clientId: string): Promise<Map<string, { name: string | null; saved: boolean }>> {
+  const maps = await visibleToClient(client.schema('entity_instances').from('feed_maps').select('map_code, map_name, header_signature'), clientId);
   if (maps.error) throw new Error(maps.error.message);
   return new Map((maps.data || []).map((row: any) => [row.map_code, { name: row.map_name, saved: Boolean(row.header_signature) }]));
 }
 
-export async function listImportInstances(client: SupabaseClient = useClient()): Promise<ImportInstanceSummary[]> {
+export async function listImportInstances(clientId: string, client: SupabaseClient = useClient()): Promise<ImportInstanceSummary[]> {
   assertLocalSupabase(client);
   const [rows, maps] = await Promise.all([
     client
       .schema('entity_instances')
       .from('import_instances')
       .select('id, file_name, row_count, status, received_at, started_at, completed_at, as_of_date, source_code, error_message, runs, result, map_code, map_reuse')
+      .eq('client_id', clientId)
       .order('received_at', { ascending: false }),
-    savedMaps(client),
+    savedMaps(client, clientId),
   ]);
   if (rows.error) throw new Error(rows.error.message);
   return (rows.data || []).map((row) => toSummary(row, maps.get(row.map_code)));
@@ -207,12 +241,12 @@ function suggestedAsOf(assignments: ColumnAssignment[], rows: Record<string, str
   return dates.size === 1 ? [...dates][0] : null;
 }
 
-async function columnsForTable(client: SupabaseClient, headers: string[], rows: Record<string, string>[], hints: ColumnHint[] = []): Promise<{ columnMappings: ColumnAssignment[]; identity: LoadMapIdentity }> {
-  const [catalog, lists] = await Promise.all([attributeCatalog(client), listReferenceLists(client)]);
-  const stored = await findStoredMap(client, headerSignature(headers));
+async function columnsForTable(client: SupabaseClient, clientId: string, headers: string[], rows: Record<string, string>[], hints: ColumnHint[] = [], context: ReviewContext = {}): Promise<{ columnMappings: ColumnAssignment[]; identity: LoadMapIdentity }> {
+  const [catalog, lists] = await Promise.all([attributeCatalog(client, clientId), listReferenceLists(client)]);
+  const stored = await findStoredMap(client, clientId, headerSignature(headers));
   let suggested = suggestAssignments(headers, rows, catalog.attributes, hints);
   if (stored) suggested = overlayStoredMap(suggested, stored.template, stored.name);
-  const reviewed = await reviewWithModel(suggested, catalog.attributes);
+  const reviewed = await reviewColumns(suggested, catalog.attributes, catalog.domains, { ...context, rowCount: rows.length });
   const columnMappings = applyListSuggestions(reviewed, catalog.attributes, lists);
   const identity: LoadMapIdentity = stored
     ? { mapCode: stored.mapCode, sourceCode: stored.sourceCode, name: stored.name, description: stored.description }
@@ -224,19 +258,22 @@ export async function createImportInstance(
   fileName: string,
   mediaType: string,
   bytes: Buffer,
+  clientId: string,
   client: SupabaseClient = useClient(),
   options?: { forceMapCode?: string; sourceCode?: string },
 ): Promise<ImportInstanceDetail> {
   assertLocalSupabase(client);
-  const upload = await readUpload(fileName, bytes, Boolean(options?.forceMapCode));
-  const planned = await planColumns(client, upload, options?.forceMapCode);
+  const upload = await readUpload(fileName, mediaType, bytes, Boolean(options?.forceMapCode));
+  upload.context = { fileName, note: upload.intake?.note };
+  const planned = await planColumns(client, clientId, upload, options?.forceMapCode);
   const identity = planned.identity;
   const columnMappings = planned.columnMappings;
-  if (planned.artifact) await saveReusableMap(client, planned.artifact);
+  if (planned.artifact) await saveReusableMap(client, clientId, planned.artifact);
   const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', identity.sourceCode).maybeSingle();
   if (source.error || !source.data) throw new Error(source.error?.message || `Source ${identity.sourceCode} was not found`);
   const fileSource = cleanSource(options?.sourceCode);
   const inserted = await client.schema('entity_instances').from('import_instances').insert({
+    client_id: clientId,
     source_id: source.data.id,
     map_code: identity.mapCode,
     ...(planned.mapReuse ? { map_reuse: planned.mapReuse } : {}),
@@ -251,20 +288,24 @@ export async function createImportInstance(
     status: 'READY',
     row_count: upload.rows.length,
     runs: [],
+    ...intakeColumns(upload),
   }).select('id').single();
   if (inserted.error || !inserted.data) throw new Error(inserted.error?.message || 'The file could not be stored');
-  return getImportInstance(inserted.data.id, client);
+  return getImportInstance(inserted.data.id, clientId, client);
 }
 
 /** Re-read the stored file and replace the column mapping. Load history stays. */
-export async function refreshImportInstance(id: string, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
+export async function refreshImportInstance(id: string, clientId: string, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
   assertLocalSupabase(client);
-  const existing = await client.schema('entity_instances').from('import_instances').select('id, file_name, source_base64').eq('id', id).single();
+  const existing = await client.schema('entity_instances').from('import_instances').select('id, file_name, media_type, source_base64, intake_method, tables, table_id').eq('id', id).eq('client_id', clientId).single();
   if (existing.error || !existing.data) throw new Error(existing.error?.message || 'Import instance not found');
   if (!existing.data.source_base64) throw new Error('The original file is not stored, so it cannot be read again.');
-  const upload = await readUpload(existing.data.file_name, Buffer.from(existing.data.source_base64, 'base64'), false);
-  const planned = await planColumns(client, upload);
-  if (planned.artifact) await saveReusableMap(client, planned.artifact);
+  // A document that was read by an outside reader keeps its tables. Reading it again would cost another parse.
+  const stored = storedUpload(existing.data);
+  const upload = stored || await readUpload(existing.data.file_name, existing.data.media_type || '', Buffer.from(existing.data.source_base64, 'base64'), false);
+  upload.context = { fileName: existing.data.file_name, note: upload.intake?.note };
+  const planned = await planColumns(client, clientId, upload);
+  if (planned.artifact) await saveReusableMap(client, clientId, planned.artifact);
   const { columnMappings, identity } = planned;
   const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', identity.sourceCode).maybeSingle();
   if (source.error) throw new Error(source.error.message);
@@ -277,40 +318,167 @@ export async function refreshImportInstance(id: string, client: SupabaseClient =
     map_code: identity.mapCode,
     ...(planned.mapReuse ? { map_reuse: planned.mapReuse } : {}),
     ...(source.data?.id ? { source_id: source.data.id } : {}),
-  }).eq('id', id);
+  }).eq('id', id).eq('client_id', clientId);
   if (updated.error) throw new Error(updated.error.message);
-  return getImportInstance(id, client);
+  return getImportInstance(id, clientId, client);
 }
 
-export async function getImportInstance(id: string, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
+export async function getImportInstance(id: string, clientId: string, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
   assertLocalSupabase(client);
-  const row = await client.schema('entity_instances').from('import_instances').select('*').eq('id', id).single();
+  const row = await client.schema('entity_instances').from('import_instances').select('*').eq('id', id).eq('client_id', clientId).single();
   if (row.error || !row.data) throw new Error(row.error?.message || 'Import instance not found');
   const mappings = (row.data.column_mappings || []) as ColumnAssignment[];
-  const maps = await savedMaps(client);
+  const maps = await savedMaps(client, clientId);
   const map = feedMapFromAssignments(mappings);
   return {
     ...toSummary(row.data, maps.get(row.data.map_code)),
+    lastIssues: row.data.result?.rejects
+      ? { rejects: row.data.result.rejects as LoadReject[], total: Number(row.data.result.rejectCount ?? row.data.result.rejects.length) }
+      : null,
+    intake: row.data.intake_method
+      ? { method: row.data.intake_method, note: row.data.intake_note || null, profile: (row.data.intake_profile as DocumentProfile | null) || null }
+      : null,
+    tables: (Array.isArray(row.data.tables) ? row.data.tables : []).map((table: StoredImportTable) => ({
+      id: table.id,
+      name: table.name,
+      rowCount: table.rows.length,
+      columnCount: table.headers.length,
+      located: Boolean(table.locations?.length),
+    })),
+    tableId: row.data.table_id || null,
     columnMappings: mappings,
     headers: row.data.headers || [],
     loadWaves: map.domains.length > 0 ? dependencyLoadWaves(map.domains) : [],
   };
 }
 
-export async function saveImportInstance(id: string, columnMappings: ColumnAssignment[], asOfDate: string | null, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
+export async function saveImportInstance(id: string, columnMappings: ColumnAssignment[], asOfDate: string | null, clientId: string, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
   assertLocalSupabase(client);
   const updated = await client.schema('entity_instances').from('import_instances').update({
     column_mappings: columnMappings,
     as_of_date: asOfDate,
-  }).eq('id', id);
+  }).eq('id', id).eq('client_id', clientId);
   if (updated.error) throw new Error(updated.error.message);
-  return getImportInstance(id, client);
+  return getImportInstance(id, clientId, client);
 }
 
-export async function processImportInstance(id: string, columnMappings?: ColumnAssignment[], asOfDate?: string, client?: SupabaseClient, clientId?: string): Promise<ImportInstanceDetail> {
+/** Switch which table of a multi-table file is loaded. The mapping is suggested again for it. */
+export async function selectImportTable(id: string, clientId: string, tableId: string, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
+  assertLocalSupabase(client);
+  const existing = await client.schema('entity_instances').from('import_instances').select('id, file_name, tables, intake_method, intake_note').eq('id', id).eq('client_id', clientId).single();
+  if (existing.error || !existing.data) throw new Error(existing.error?.message || 'Import instance not found');
+  const tables = (Array.isArray(existing.data.tables) ? existing.data.tables : []) as StoredImportTable[];
+  const chosen = tables.find((table) => table.id === tableId);
+  if (!chosen) throw new Error('That table is not in this file.');
+  const upload: UploadTable = { headers: chosen.headers, rows: chosen.rows, hints: [], kind: null, context: { fileName: existing.data.file_name, note: existing.data.intake_note } };
+  const planned = await planColumns(client, clientId, upload);
+  if (planned.artifact) await saveReusableMap(client, clientId, planned.artifact);
+  const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', planned.identity.sourceCode).maybeSingle();
+  if (source.error) throw new Error(source.error.message);
+  const updated = await client.schema('entity_instances').from('import_instances').update({
+    table_id: chosen.id,
+    headers: chosen.headers,
+    parsed_rows: chosen.rows,
+    row_count: chosen.rows.length,
+    column_mappings: planned.columnMappings,
+    as_of_date: suggestedAsOf(planned.columnMappings, chosen.rows),
+    map_code: planned.identity.mapCode,
+    ...(planned.mapReuse ? { map_reuse: planned.mapReuse } : {}),
+    ...(source.data?.id ? { source_id: source.data.id } : {}),
+  }).eq('id', id).eq('client_id', clientId);
+  if (updated.error) throw new Error(updated.error.message);
+  return getImportInstance(id, clientId, client);
+}
+
+/** The original bytes of an upload, for showing the source document. */
+export async function getImportFile(id: string, clientId: string, client: SupabaseClient = useClient()): Promise<{ fileName: string; mediaType: string; bytes: Buffer }> {
+  assertLocalSupabase(client);
+  const row = await client.schema('entity_instances').from('import_instances').select('file_name, media_type, source_base64').eq('id', id).eq('client_id', clientId).single();
+  if (row.error || !row.data) throw new Error(row.error?.message || 'Import instance not found');
+  if (!row.data.source_base64) throw new Error('The original file is not stored.');
+  return { fileName: row.data.file_name, mediaType: row.data.media_type || 'application/octet-stream', bytes: Buffer.from(row.data.source_base64, 'base64') };
+}
+
+export interface ImportLocations {
+  tableId: string | null;
+  headers: string[];
+  pages: PageSize[];
+  /** One entry per row, one per column. Null where the reader gave no position. */
+  locations: (CellLocation | null)[][];
+}
+
+/** Where each value of the loaded table sits in the original document. Null when the file has no layout. */
+export async function getImportLocations(id: string, clientId: string, client: SupabaseClient = useClient()): Promise<ImportLocations | null> {
+  assertLocalSupabase(client);
+  const row = await client.schema('entity_instances').from('import_instances').select('tables, table_id').eq('id', id).eq('client_id', clientId).single();
+  if (row.error || !row.data) throw new Error(row.error?.message || 'Import instance not found');
+  const table = activeStoredTable(row.data);
+  if (!table?.locations?.length) return null;
+  return { tableId: table.id, headers: table.headers, pages: table.pages || [], locations: table.locations };
+}
+
+export interface SourceChoice {
+  code: string;
+  name: string;
+}
+
+export async function listSources(client: SupabaseClient = useClient()): Promise<SourceChoice[]> {
+  assertLocalSupabase(client);
+  const rows = await client.schema('entity_instances').from('source_registry').select('source_code, source_name').eq('is_active', true).order('source_name');
+  if (rows.error) throw new Error(rows.error.message);
+  return (rows.data || []).map((row: any) => ({ code: row.source_code, name: row.source_name }));
+}
+
+/** Which source the values in this file belong to. A name that is not in the registry is created when the file loads. */
+export async function setImportSource(id: string, clientId: string, source: string | null, client: SupabaseClient = useClient()): Promise<ImportInstanceDetail> {
+  assertLocalSupabase(client);
+  const code = cleanSource(source);
+  const updated = await client.schema('entity_instances').from('import_instances').update({ source_code: code }).eq('id', id).eq('client_id', clientId).select('id');
+  if (updated.error) throw new Error(updated.error.message);
+  if (!updated.data || updated.data.length === 0) throw new Error('Import instance not found');
+  return getImportInstance(id, clientId, client);
+}
+
+function sourceTitle(code: string): string {
+  return code.toLowerCase().split('_').filter(Boolean).map((word) => word[0].toUpperCase() + word.slice(1)).join(' ');
+}
+
+function attributeCodeFrom(text: string): string {
+  return text.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+}
+
+/**
+ * Add a field to the catalog for a column that has nowhere to live, and put it on
+ * the record type's standard template. Nothing is created unless the user asks.
+ */
+export async function trackImportAttribute(
+  input: { domainCode: string; attributeName: string; dataType?: string; column?: string },
+  clientId: string,
+  client: SupabaseClient = useClient(),
+): Promise<{ attributeCode: string; domainCode: string }> {
+  assertLocalSupabase(client);
+  const attributeCode = attributeCodeFrom(input.attributeName);
+  if (!attributeCode) throw new Error('Name the field first.');
+  if (!input.domainCode) throw new Error('Choose which record type the field belongs to.');
+  const dataType = ['STRING', 'NUMBER', 'DATE', 'PERCENTAGE', 'CURRENCY', 'BOOLEAN'].includes(String(input.dataType)) ? String(input.dataType) : 'STRING';
+  const recommendation: SchemaRecommendation = {
+    id: `track:${input.domainCode}:${attributeCode}`,
+    kind: 'attribute',
+    title: input.attributeName,
+    rationale: `Added from a file load${input.column ? ` for the column "${input.column}"` : ''}.`,
+    payload: { domainCode: input.domainCode, attributeCode, attributeName: input.attributeName.trim(), dataType, column: input.column },
+  };
+  await materialize(client, clientId, [recommendation], [recommendation.id]);
+  return { attributeCode, domainCode: input.domainCode };
+}
+
+/** A load still marked PROCESSING after this long is treated as abandoned. */
+const PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
+
+export async function processImportInstance(id: string, clientId: string, columnMappings?: ColumnAssignment[], asOfDate?: string, client?: SupabaseClient): Promise<ImportInstanceDetail> {
   const db = client || useClient();
   assertLocalSupabase(db);
-  const existing = await db.schema('entity_instances').from('import_instances').select('*').eq('id', id).single();
+  const existing = await db.schema('entity_instances').from('import_instances').select('*').eq('id', id).eq('client_id', clientId).single();
   if (existing.error || !existing.data) throw new Error(existing.error?.message || 'Import instance not found');
   const mappings = columnMappings || (existing.data.column_mappings as ColumnAssignment[]);
   const asOf = asOfDate || existing.data.as_of_date;
@@ -318,7 +486,7 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
   const sourceRow = await db.schema('entity_instances').from('source_registry').select('source_code').eq('id', existing.data.source_id).maybeSingle();
   if (sourceRow.error) throw new Error(sourceRow.error.message);
   const signature = headerSignature(existing.data.headers || []);
-  const stored = await findStoredMap(db, signature);
+  const stored = await findStoredMap(db, clientId, signature);
   const identity: LoadMapIdentity = stored
     ? { mapCode: stored.mapCode, sourceCode: stored.sourceCode, name: stored.name, description: stored.description }
     : {
@@ -329,10 +497,14 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
       };
   const map = feedMapFromAssignments(mappings, identity);
   if (map.domains.length === 0) throw new Error('Choose which column identifies each record before loading.');
-  await saveLoadMap(db, { ...identity, signature, template: templateFromAssignments(mappings), feedMap: map });
-  const reusable = await getReusableMap(identity.mapCode, db);
+  const orphans = orphanColumns(mappings);
+  if (orphans.length > 0) {
+    throw new Error(`${describeOrphans(orphans)}. Choose an identity column for it, or set the column to "do not load".`);
+  }
+  await saveLoadMap(db, { ...identity, clientId, signature, template: templateFromAssignments(mappings), feedMap: map });
+  const reusable = await getReusableMap(identity.mapCode, clientId, db);
   if (reusable || existing.data.map_reuse) {
-    await saveReusableMap(db, reusableFromAssignments(
+    await saveReusableMap(db, clientId, reusableFromAssignments(
       identity.mapCode,
       reusable?.kind || 'TABULAR',
       existing.data.headers || [],
@@ -341,6 +513,11 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
     ));
   }
   const startedAt = new Date().toISOString();
+  const fileSource = cleanSource(existing.data.source_code);
+  if (fileSource) await ensureSource(db, fileSource, sourceTitle(fileSource));
+  // Claim the file. A second request finds it already PROCESSING and is refused,
+  // unless that run started long ago and was most likely cut off.
+  const staleBefore = new Date(Date.now() - PROCESSING_TIMEOUT_MS).toISOString();
   const marked = await db.schema('entity_instances').from('import_instances').update({
     status: 'PROCESSING',
     started_at: startedAt,
@@ -348,14 +525,20 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
     map_code: identity.mapCode,
     as_of_date: asOf,
     error_message: null,
-  }).eq('id', id);
+  }).eq('id', id).eq('client_id', clientId).or(`status.neq.PROCESSING,started_at.lt.${staleBefore}`).select('id');
   if (marked.error) throw new Error(marked.error.message);
+  if (!marked.data || marked.data.length === 0) {
+    throw new Error('This file is already loading. Wait for it to finish before loading it again.');
+  }
 
   try {
+    const located = activeStoredTable(existing.data);
     const result = await executeParsedFeed(map, existing.data.file_name, {
       headers: existing.data.headers || [],
       rows: existing.data.parsed_rows || [],
-    }, asOf, db, clientId, cleanSource(existing.data.source_code) || undefined);
+      locations: located?.locations,
+      pages: located?.pages,
+    }, asOf, db, clientId, cleanSource(existing.data.source_code) || undefined, { provenance: { instanceId: id, tableId: existing.data.table_id || null } });
     const summary = summarize(result);
     const failed = (summary?.failed || 0) > 0 || result.errors.length > 0;
     const completedAt = new Date().toISOString();
@@ -375,9 +558,9 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
       result,
       runs,
       error_message: failed ? result.errors.slice(0, 3).join(' ') : null,
-    }).eq('id', id);
+    }).eq('id', id).eq('client_id', clientId);
     if (saved.error) throw new Error(saved.error.message);
-    return getImportInstance(id, db);
+    return getImportInstance(id, clientId, db);
   } catch (error: any) {
     const completedAt = new Date().toISOString();
     const runs = Array.isArray(existing.data.runs) ? existing.data.runs : [];
@@ -387,63 +570,68 @@ export async function processImportInstance(id: string, columnMappings?: ColumnA
       completed_at: completedAt,
       runs,
       error_message: error?.message || 'Process failed',
-    }).eq('id', id);
+    }).eq('id', id).eq('client_id', clientId);
     throw error;
   }
 }
 
-async function reviewWithModel(assignments: ColumnAssignment[], attributes: AttributeChoice[]): Promise<ColumnAssignment[]> {
-  const key =
-    process.env.GEMINI_API_KEY ||
-    process.env.GOOGLE_AI_API_KEY ||
-    process.env.NEXT_PUBLIC_GEMINI_API_KEY ||
-    '';
-  if (!key) return assignments;
-  const unmapped = assignments.filter((assignment) => assignment.role === 'ignore');
-  if (unmapped.length === 0) return assignments;
-  const catalog = attributes.slice(0, 180).map((attribute) => `${attribute.domainCode || 'SHARED'}:${attribute.attributeCode}`).join(', ');
-  const columns = unmapped.map((assignment) => `${assignment.sourceColumn} (samples: ${assignment.samples.join(' | ')})`).join('\n');
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${key}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: `Map source columns to entity attributes. Reply with a JSON array only. Each item is {"sourceColumn","domainCode","attributeCode"}. Use only attribute codes from this catalog: ${catalog}. Columns:\n${columns}`,
-            }],
-          }],
-        }),
-        signal: AbortSignal.timeout(8000),
-      }
-    );
-    if (!response.ok) return assignments;
-    const body = await response.json();
-    const text = body?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const match = text.match(/\[[\s\S]*\]/);
-    if (!match) return assignments;
-    const proposed = JSON.parse(match[0]) as { sourceColumn: string; domainCode: string; attributeCode: string }[];
-    return assignments.map((assignment) => {
-      if (assignment.role !== 'ignore') return assignment;
-      const hit = proposed.find((item) => item.sourceColumn === assignment.sourceColumn);
-      const attribute = hit && attributes.find((item) => item.attributeCode === hit.attributeCode);
-      if (!hit || !attribute) return assignment;
-      const domainCode = attribute.domainCode || hit.domainCode;
-      if (!domainCode) return assignment;
-      return {
-        ...assignment,
-        role: 'attribute' as const,
-        domainCode,
-        attributeCode: attribute.attributeCode,
-        transform: suggestTransform(assignment.samples, attribute.dataType, attribute.referenceListCode),
-        suggestion: { method: 'ai' as const, confidence: 0.72, reason: `AI suggested ${attribute.attributeName}. Confirm it and the map is saved for the next file like this.` },
+/**
+ * Run the load without writing anything. Matching, coercion, and the slice
+ * rules are the real ones, so the counts are what a load would produce now.
+ * The instance, the saved map, and the data are all left as they were.
+ */
+export async function previewImportInstance(
+  id: string,
+  clientId: string,
+  columnMappings?: ColumnAssignment[],
+  asOfDate?: string,
+  client?: SupabaseClient,
+): Promise<FeedLoadResult> {
+  const db = client || useClient();
+  assertLocalSupabase(db);
+  const existing = await db.schema('entity_instances').from('import_instances').select('*').eq('id', id).eq('client_id', clientId).single();
+  if (existing.error || !existing.data) throw new Error(existing.error?.message || 'Import instance not found');
+  const mappings = columnMappings || (existing.data.column_mappings as ColumnAssignment[]);
+  const asOf = asOfDate || existing.data.as_of_date;
+  if (!asOf) throw new Error('Choose today or a specific as-of date');
+  const sourceRow = await db.schema('entity_instances').from('source_registry').select('source_code').eq('id', existing.data.source_id).maybeSingle();
+  if (sourceRow.error) throw new Error(sourceRow.error.message);
+  const stored = await findStoredMap(db, clientId, headerSignature(existing.data.headers || []));
+  const identity: LoadMapIdentity = stored
+    ? { mapCode: stored.mapCode, sourceCode: stored.sourceCode, name: stored.name, description: stored.description }
+    : {
+        mapCode: existing.data.map_code || 'IMPORT',
+        sourceCode: sourceRow.data?.source_code || 'IMPORT',
+        name: mapNameFromAssignments(mappings),
+        description: 'Preview only.',
       };
-    });
-  } catch {
-    return assignments;
+  const map = feedMapFromAssignments(mappings, identity);
+  if (map.domains.length === 0) throw new Error('Choose which column identifies each record before loading.');
+  const orphans = orphanColumns(mappings);
+  if (orphans.length > 0) {
+    throw new Error(`${describeOrphans(orphans)}. Choose an identity column for it, or set the column to "do not load".`);
   }
+  const located = activeStoredTable(existing.data);
+  return executeParsedFeed(
+    map,
+    existing.data.file_name,
+    { headers: existing.data.headers || [], rows: existing.data.parsed_rows || [], locations: located?.locations, pages: located?.pages },
+    asOf,
+    db,
+    clientId,
+    cleanSource(existing.data.source_code) || undefined,
+    { dryRun: true },
+  );
+}
+
+interface StoredImportTable {
+  id: string;
+  name: string;
+  headers: string[];
+  rows: Record<string, string>[];
+  /** Where each value sits in the original document. Same shape as rows by headers. */
+  locations?: (CellLocation | null)[][];
+  pages?: PageSize[];
 }
 
 interface UploadTable {
@@ -451,17 +639,102 @@ interface UploadTable {
   rows: Record<string, string>[];
   hints: ColumnHint[];
   kind: string | null;
+  intake?: { method: string; note: string | null; profile: DocumentProfile | null };
+  /** What the semantic review is told about the file. */
+  context?: ReviewContext;
+  /** Every table in the file, when there is more than one or a document reader found them. */
+  tables?: StoredImportTable[];
+  tableId?: string;
 }
 
-async function readUpload(fileName: string, bytes: Buffer, forceInterpret: boolean): Promise<UploadTable> {
+const DOCUMENT_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp', '.docx', '.doc'];
+
+/** Only what this file has to record, so a plain CSV never touches the intake columns. */
+function intakeColumns(upload: UploadTable) {
+  const columns: Record<string, unknown> = {};
+  if (upload.intake) {
+    columns.intake_method = upload.intake.method;
+    columns.intake_note = upload.intake.note;
+    columns.intake_profile = upload.intake.profile;
+  }
+  if (upload.tables) {
+    columns.tables = upload.tables;
+    columns.table_id = upload.tableId || null;
+  }
+  return columns;
+}
+
+/**
+ * The table to load by default. One that is at least three times the size of
+ * the next is obvious. Otherwise the first, and the review asks the user to confirm.
+ */
+export function pickTable(tables: { id: string; table: { rows: unknown[] } }[]): string {
+  const ranked = [...tables].sort((left, right) => right.table.rows.length - left.table.rows.length);
+  if (ranked.length > 1 && ranked[0].table.rows.length >= ranked[1].table.rows.length * 3) return ranked[0].id;
+  return tables[0].id;
+}
+
+function uploadFromTables(
+  tables: IntakeTable[],
+  intake: { method: string; note: string | null; profile: DocumentProfile | null },
+  chosenId?: string,
+): UploadTable {
+  const chosen = tables.find((table) => table.id === chosenId) || tables.find((table) => table.id === pickTable(tables)) || tables[0];
+  return {
+    headers: chosen.table.headers,
+    rows: chosen.table.rows,
+    hints: [],
+    kind: null,
+    intake,
+    tables: tables.map((table) => ({ id: table.id, name: table.name, headers: table.table.headers, rows: table.table.rows, locations: table.table.locations, pages: table.table.pages })),
+    tableId: chosen.id,
+  };
+}
+
+function activeStoredTable(row: { tables?: unknown; table_id?: string | null }): StoredImportTable | null {
+  const tables = (Array.isArray(row.tables) ? row.tables : []) as StoredImportTable[];
+  return tables.find((table) => table.id === row.table_id) || tables[0] || null;
+}
+
+/** A document read by an outside reader is not read again. Its stored tables are used. */
+function storedUpload(row: { intake_method?: string | null; tables?: unknown; table_id?: string | null }): UploadTable | null {
+  if (!row.intake_method || !['llamaparse', 'azure_layout', 'agent'].includes(row.intake_method)) return null;
+  const tables = (Array.isArray(row.tables) ? row.tables : []) as StoredImportTable[];
+  if (tables.length === 0) return null;
+  return uploadFromTables(
+    tables.map((table) => ({ id: table.id, name: table.name, table: { headers: table.headers, rows: table.rows, locations: table.locations, pages: table.pages } })),
+    { method: row.intake_method, note: null, profile: null },
+    row.table_id || undefined,
+  );
+}
+
+async function readUpload(fileName: string, mediaType: string, bytes: Buffer, forceInterpret: boolean): Promise<UploadTable> {
   const lower = fileName.toLowerCase();
-  const document = lower.endsWith('.pdf') || lower.endsWith('.html') || lower.endsWith('.htm') || lower.endsWith('.json');
-  if (forceInterpret || document) {
+  const isDocument = DOCUMENT_EXTENSIONS.some((extension) => lower.endsWith(extension));
+  const textual = lower.endsWith('.html') || lower.endsWith('.htm') || lower.endsWith('.json');
+
+  if (isDocument) {
+    // A short statement with a text layer is read here, which keeps its column hints.
+    const profile = await profileDocument(fileName, bytes);
+    if (formatOf(fileName) === 'pdf' && profile.route === 'local') {
+      try {
+        const read = await readImportFile(fileName, bytes);
+        return { headers: read.table.headers, rows: read.table.rows, hints: read.hints, kind: read.kind, intake: { method: 'local', note: profile.reasons[0] || null, profile } };
+      } catch {
+        // Not a statement the built-in reader knows. The document readers get a turn.
+      }
+    }
+    const intake = await intakeFile(fileName, mediaType, bytes);
+    if (intake.tables.length === 0) throw new Error(intake.note);
+    return uploadFromTables(intake.tables, { method: intake.method, note: intake.note, profile: intake.profile || profile });
+  }
+
+  if (forceInterpret || textual) {
     try {
       const read = await readImportFile(fileName, bytes);
       return { headers: read.table.headers, rows: read.table.rows, hints: read.hints, kind: read.kind };
     } catch (error) {
-      if (document) throw error;
+      if (textual) throw error;
     }
   } else {
     try {
@@ -471,6 +744,13 @@ async function readUpload(fileName: string, bytes: Buffer, forceInterpret: boole
       }
     } catch {
       // A plain spreadsheet stays on the tabular parser.
+    }
+  }
+
+  if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+    const sheets = parseWorkbook(bytes).filter((sheet) => sheet.table.headers.length > 0 && sheet.table.rows.length > 0);
+    if (sheets.length > 1) {
+      return uploadFromTables(sheets, { method: 'tabular', note: `The workbook has ${sheets.length} sheets.`, profile: null });
     }
   }
   const table = parseTabularFile(fileName, bytes);
@@ -496,6 +776,7 @@ export class MapMismatchError extends Error {
 
 async function planColumns(
   client: SupabaseClient,
+  clientId: string,
   upload: UploadTable,
   forceMapCode?: string,
 ): Promise<{ columnMappings: ColumnAssignment[]; identity: LoadMapIdentity; mapReuse: 'exact' | 'extended' | 'new' | null; artifact: ReusableMap | null }> {
@@ -504,11 +785,11 @@ async function planColumns(
     || upload.kind === 'FINANCIAL_STATEMENT'
     || (upload.kind !== null && upload.hints.length > 0);
   if (!reusable) {
-    const planned = await columnsForTable(client, upload.headers, upload.rows, upload.hints);
+    const planned = await columnsForTable(client, clientId, upload.headers, upload.rows, upload.hints, upload.context);
     return { ...planned, mapReuse: null, artifact: null };
   }
 
-  const saved = forceMapCode ? [await requireReusableMap(forceMapCode, client)] : await listReusableMaps(client);
+  const saved = forceMapCode ? [await requireReusableMap(forceMapCode, clientId, client)] : await listReusableMaps(clientId, client);
   const match = matchReusableMap(upload.headers, saved, forceMapCode ? undefined : upload.kind || undefined);
   if (forceMapCode && match.type === 'none') throw new MapMismatchError(forceMapCode, match.missingHeaders);
 
@@ -516,14 +797,16 @@ async function planColumns(
     const fresh = match.type === 'extended'
       ? (await columnsForTable(
           client,
+          clientId,
           match.newHeaders,
           upload.rows,
           upload.hints.filter((hint) => match.newHeaders.includes(hint.sourceColumn)),
+          upload.context,
         )).columnMappings
       : [];
     const columnMappings = applyReusableMap(upload.headers, upload.rows, match.map, fresh);
     const artifact = reusableFromAssignments(match.map.mapCode, match.map.kind, upload.headers, columnMappings, match.map);
-    const stored = await findStoredMap(client, headerSignature(upload.headers));
+    const stored = await findStoredMap(client, clientId, headerSignature(upload.headers));
     const proposed = proposeLoadIdentity(upload.headers, columnMappings);
     return {
       columnMappings,
@@ -538,7 +821,7 @@ async function planColumns(
     };
   }
 
-  const planned = await columnsForTable(client, upload.headers, upload.rows, upload.hints);
+  const planned = await columnsForTable(client, clientId, upload.headers, upload.rows, upload.hints, upload.context);
   const mapCode = newMapCode(upload.kind || 'TABULAR', upload.headers);
   const artifact = reusableFromAssignments(mapCode, upload.kind || 'TABULAR', upload.headers, planned.columnMappings, null);
   return {
@@ -578,31 +861,33 @@ export function assignmentsFromMap(map: ReusableMap): ColumnAssignment[] {
   }));
 }
 
-export async function listReusableMaps(client: SupabaseClient = useClient()): Promise<ReusableMap[]> {
+export async function listReusableMaps(clientId: string, client: SupabaseClient = useClient()): Promise<ReusableMap[]> {
   assertLocalSupabase(client);
-  const rows = await client.schema('entity_instances').from('feed_maps').select('column_mappings').eq('is_active', true);
+  const rows = await visibleToClient(client.schema('entity_instances').from('feed_maps').select('column_mappings').eq('is_active', true), clientId);
   if (rows.error) throw new Error(rows.error.message);
   return (rows.data || []).map((row: { column_mappings: unknown }) => parseReusableMap(row.column_mappings)).filter((map): map is ReusableMap => Boolean(map));
 }
 
-export async function getReusableMap(mapCode: string, client: SupabaseClient = useClient()): Promise<ReusableMap | null> {
+export async function getReusableMap(mapCode: string, clientId: string, client: SupabaseClient = useClient()): Promise<ReusableMap | null> {
   assertLocalSupabase(client);
-  const row = await client.schema('entity_instances').from('feed_maps').select('column_mappings').eq('map_code', mapCode).maybeSingle();
-  if (row.error) throw new Error(row.error.message);
-  return row.data ? parseReusableMap(row.data.column_mappings) : null;
+  const rows = await visibleToClient(client.schema('entity_instances').from('feed_maps').select('column_mappings, client_id').eq('map_code', mapCode), clientId);
+  if (rows.error) throw new Error(rows.error.message);
+  const row = preferOwnMap(rows.data as any[], clientId);
+  return row ? parseReusableMap(row.column_mappings) : null;
 }
 
-async function requireReusableMap(mapCode: string, client: SupabaseClient): Promise<ReusableMap> {
-  const map = await getReusableMap(mapCode, client);
+async function requireReusableMap(mapCode: string, clientId: string, client: SupabaseClient): Promise<ReusableMap> {
+  const map = await getReusableMap(mapCode, clientId, client);
   if (!map) throw new Error(`Map ${mapCode} was not found.`);
   return map;
 }
 
-export async function saveReusableMap(client: SupabaseClient, artifact: ReusableMap): Promise<void> {
+export async function saveReusableMap(client: SupabaseClient, clientId: string, artifact: ReusableMap): Promise<void> {
   assertLocalSupabase(client);
   const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', 'POSITION_FILE').maybeSingle();
   if (source.error) throw new Error(source.error.message);
   const payload = {
+    client_id: clientId,
     map_code: artifact.mapCode,
     ...(source.data?.id ? { source_id: source.data.id } : {}),
     map_name: artifact.name.slice(0, 200),
@@ -611,7 +896,7 @@ export async function saveReusableMap(client: SupabaseClient, artifact: Reusable
     is_active: true,
     updated_at: new Date().toISOString(),
   };
-  const existing = await client.schema('entity_instances').from('feed_maps').select('id').eq('map_code', artifact.mapCode).maybeSingle();
+  const existing = await client.schema('entity_instances').from('feed_maps').select('id').eq('client_id', clientId).eq('map_code', artifact.mapCode).maybeSingle();
   if (existing.error) throw new Error(existing.error.message);
   const write = existing.data
     ? await client.schema('entity_instances').from('feed_maps').update(payload).eq('id', existing.data.id)
@@ -624,11 +909,12 @@ export async function loadFileWithMap(
   fileName: string,
   mediaType: string,
   bytes: Buffer,
+  clientId: string,
   asOfDate?: string,
   client: SupabaseClient = useClient(),
   sourceCode?: string,
 ): Promise<ImportInstanceDetail> {
-  const instance = await createImportInstance(fileName, mediaType, bytes, client, { forceMapCode: mapCode, sourceCode });
+  const instance = await createImportInstance(fileName, mediaType, bytes, clientId, client, { forceMapCode: mapCode, sourceCode });
   const asOf = asOfDate || instance.asOfDate || new Date().toISOString().slice(0, 10);
-  return processImportInstance(instance.id, instance.columnMappings, asOf, client);
+  return processImportInstance(instance.id, clientId, instance.columnMappings, asOf, client);
 }

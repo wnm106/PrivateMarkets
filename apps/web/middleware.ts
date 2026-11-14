@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import { CLIENT_ADMIN_PERMISSIONS, isPlatformAdminPath } from '@/lib/admin-access';
+import { NEXT_PATH_COOKIE, safeNextPath } from '@/lib/safe-next-path';
 
 const PUBLIC_PATHS = ['/welcome', '/login', '/auth/callback', '/no-access'];
 
@@ -34,6 +35,7 @@ async function adminAccess(supabase: { schema: (name: string) => any }, userId: 
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
+  const refreshedCookies: { name: string; value: string; options?: Record<string, unknown> }[] = [];
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -44,6 +46,7 @@ export async function middleware(request: NextRequest) {
           return request.cookies.getAll();
         },
         setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
+          refreshedCookies.splice(0, refreshedCookies.length, ...cookiesToSet);
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
           response = NextResponse.next({ request });
           cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options as any));
@@ -52,10 +55,29 @@ export async function middleware(request: NextRequest) {
     }
   );
 
+  const redirectTo = (pathname: string) => {
+    const redirect = NextResponse.redirect(new URL(pathname, request.url));
+    refreshedCookies.forEach(({ name, value, options }) => redirect.cookies.set(name, value, options as any));
+    return redirect;
+  };
+
   // Refreshes the session token if expired -- required for Server Components.
   const { data: { user } } = await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
+
+  // Microsoft sign-in sometimes returns the auth code to the site root
+  // instead of /auth/callback. Trading that code here is what creates the session.
+  const oauthCode = request.nextUrl.searchParams.get('code');
+  if (oauthCode && oauthCode.length > 20 && (pathname === '/' || pathname === '/login' || pathname === '/welcome')) {
+    const callback = new URL('/auth/callback', request.url);
+    request.nextUrl.searchParams.forEach((value, key) => callback.searchParams.set(key, value));
+    if (!callback.searchParams.get('redirectedFrom')) {
+      const remembered = request.cookies.get(NEXT_PATH_COOKIE)?.value;
+      if (remembered) callback.searchParams.set('redirectedFrom', safeNextPath(decodeURIComponent(remembered)));
+    }
+    return NextResponse.redirect(callback);
+  }
   const isPublicPath = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   const isApiOrAsset =
     pathname.startsWith('/api/') ||
@@ -65,18 +87,21 @@ export async function middleware(request: NextRequest) {
 
   // Signed-out visitors to the root see the marketing landing page.
   if (!user && pathname === '/') {
-    return NextResponse.redirect(new URL('/welcome', request.url));
+    return redirectTo('/welcome');
   }
 
-  // Signed-in users have no need for the marketing page.
-  if (user && pathname === '/welcome') {
-    return NextResponse.redirect(new URL('/', request.url));
+  // Signed-in users have no need for the marketing page or the sign-in form.
+  if (user && (pathname === '/welcome' || pathname === '/login')) {
+    const next = pathname === '/login' ? safeNextPath(request.nextUrl.searchParams.get('redirectedFrom')) : '/';
+    return redirectTo(next);
   }
 
   if (!user && !isPublicPath && !isApiOrAsset) {
     const redirectUrl = new URL('/login', request.url);
     redirectUrl.searchParams.set('redirectedFrom', request.nextUrl.pathname);
-    return NextResponse.redirect(redirectUrl);
+    const redirect = NextResponse.redirect(redirectUrl);
+    refreshedCookies.forEach(({ name, value, options }) => redirect.cookies.set(name, value, options as any));
+    return redirect;
   }
 
   // Admin tools are limited to tenant admins and client administrators.
@@ -84,10 +109,10 @@ export async function middleware(request: NextRequest) {
   if (user && pathname.startsWith('/admin')) {
     const access = await adminAccess(supabase, user.id);
     if (!access.admin) {
-      return NextResponse.redirect(new URL('/', request.url));
+      return redirectTo('/');
     }
     if (!access.tenant && isPlatformAdminPath(pathname)) {
-      return NextResponse.redirect(new URL('/admin/tenancy', request.url));
+      return redirectTo('/admin/tenancy');
     }
   }
 

@@ -2,6 +2,8 @@
  * MCP Resources — expose the data model and compliance rule guide to agents.
  */
 import { SupabaseClient } from '@supabase/supabase-js';
+import { NARRATIVE_COMPOSE_GUIDE } from './lib/narrative-guide';
+import { narrativePlan, narrativeSpecFromRow } from '@tapestrai/graphql/src/lib/narrative-engine';
 
 export interface ResourceDefinition {
   uri: string;
@@ -11,6 +13,12 @@ export interface ResourceDefinition {
 }
 
 const STATIC_RESOURCES: ResourceDefinition[] = [
+  {
+    uri: 'tapestrai://model/narrative-guide',
+    name: 'Narrative and Report Composition Guide',
+    mimeType: 'text/markdown',
+    description: 'The method for answering a large analytical request (portfolio review, LP briefing, credit review): use a saved narrative or plan sections, gather evidence with the tools, do arithmetic in tools, cite sources, state data gaps. Read this BEFORE answering any multi-part, multi-date, or report-style request.',
+  },
   {
     uri: 'tapestrai://model/compliance-guide',
     name: 'Compliance Rules Guide',
@@ -42,6 +50,18 @@ export async function listResources(supabase: SupabaseClient | null): Promise<Re
 
   if (supabase) {
     try {
+      const { data: narratives } = await supabase
+        .from('narrative_templates').select('narrative_code, narrative_name, domain_code, exposed_domains, description').eq('is_active', true);
+      for (const n of narratives || []) {
+        resources.push({
+          uri: `tapestrai://narrative/${n.narrative_code}`,
+          name: `Narrative: ${n.narrative_name}`,
+          mimeType: 'application/json',
+          description: `${n.description || 'Saved narrative'} Offered on ${[n.domain_code, ...(n.exposed_domains || [])].join(', ')}. Run it with start_narrative_run.`,
+        });
+      }
+    } catch { /* DB not available */ }
+    try {
       const { data: templates } = await supabase
         .from('domain_templates').select('id, template_code, domain_code, template_name').eq('is_active', true);
       for (const t of templates || []) {
@@ -58,6 +78,7 @@ export async function listResources(supabase: SupabaseClient | null): Promise<Re
 }
 
 export async function readResource(uri: string, supabase: SupabaseClient | null): Promise<{ mimeType: string; text: string }> {
+  if (uri === 'tapestrai://model/narrative-guide') return { mimeType: 'text/markdown', text: NARRATIVE_COMPOSE_GUIDE };
   if (uri === 'tapestrai://model/compliance-guide') return { mimeType: 'text/markdown', text: COMPLIANCE_GUIDE };
   if (uri === 'tapestrai://model/overview') return { mimeType: 'text/markdown', text: DATA_MODEL_OVERVIEW };
   if (uri === 'tapestrai://model/entity-design-guide') return { mimeType: 'text/markdown', text: ENTITY_DESIGN_GUIDE };
@@ -78,6 +99,15 @@ export async function readResource(uri: string, supabase: SupabaseClient | null)
     const { data, error } = await supabase.from('attribute_register').select('attribute_code, attribute_name, data_type, description, unit_of_measure, is_required, reference_domain_code, list_values').order('attribute_code');
     if (error) throw error;
     return { mimeType: 'application/json', text: JSON.stringify({ attributes: data || [] }, null, 2) };
+  }
+
+  const narrativeMatch = uri.match(/^tapestrai:\/\/narrative\/(.+)$/);
+  if (narrativeMatch) {
+    const { data: row } = await supabase.from('narrative_templates').select('*').eq('narrative_code', narrativeMatch[1]).maybeSingle();
+    if (!row) throw new Error(`Narrative not found: ${narrativeMatch[1]}`);
+    const spec = narrativeSpecFromRow(row);
+    const { sections, order } = narrativePlan(spec);
+    return { mimeType: 'application/json', text: JSON.stringify({ ...spec, sections, runOrder: order }, null, 2) };
   }
 
   const templateMatch = uri.match(/^tapestrai:\/\/template\/(.+)$/);
@@ -205,12 +235,14 @@ Example: "per-fund industry concentration" → base=POSITION, group-by hop to SE
 Relationship direction follows the registry. POSITION is the parent of FUND and of SECURITY, and SECURITY is the parent of ISSUER. From a fund, positions are direction UP. From a position, the security and then the issuer are direction DOWN.
 
 ### Limits
-- limitDirection: MAX (breach above) or MIN (breach below)
+Limits are not part of the rule. Each fund sets a limit as a maximum or a minimum.
+- A maximum is breached when the result is above it. A minimum is breached when the result is below it.
 - softLimitValue: warning threshold, in the result unit
 - hardLimitValue: breach threshold, in the result unit
 - hardLimitAttributeCode: optional attribute on the fund that supplies the hard limit
 - softLimitFactor: when the hard limit comes from the fund, the warning is the hard limit times this factor (0 to 1)
 - resultUnit: PERCENTAGE, RATIO, CURRENCY, or COUNT
+- Do not set limitDirection on the rule. Older rules may still carry it as a fallback until the fund has its own limit.
 
 ### Conditions (Eligibility Filters)
 - appliesTo: ANCHOR or BASE
@@ -230,7 +262,7 @@ groupByPath: [{ relationshipCode: "POSITION_SECURITY", direction: "DOWN" }, { re
 groupByAttributeCode: "ISSUER_LEGAL_NAME"
 numeratorAttributeCode: "MARKET_VALUE", numeratorAggregation: "SUM"
 denominatorAttributeCode: "NAV", denominatorAggregation: "VALUE", denominatorScope: "SAME_GROUP", denominatorSource: "ANCHOR"
-limitDirection: "MAX", hardLimitValue: 5, resultUnit: "PERCENTAGE"
+resultUnit: "PERCENTAGE"
 \`\`\`
 
 ### Example 2: "Each issuer market cap >= $100M"
@@ -241,7 +273,7 @@ anchorDomainCode: "ISSUER"
 baseDomainCode: "ISSUER"
 baseRollupPath: []   (single-record)
 numeratorAttributeCode: "MARKET_CAP", numeratorAggregation: "VALUE"
-limitDirection: "MIN", hardLimitValue: 100000000, resultUnit: "CURRENCY"
+hardLimitValue: 100000000, resultUnit: "CURRENCY"
 \`\`\`
 
 ### Example 3: "Fund-of-funds NAV <= $500M"
@@ -252,7 +284,7 @@ anchorDomainCode: "FUND"
 baseDomainCode: "FUND"
 baseRollupPath: [{ relationshipCode: "FUND_PARENT", direction: "DOWN", recursive: true }]
 numeratorAttributeCode: "NAV", numeratorAggregation: "SUM"
-limitDirection: "MAX", hardLimitValue: 500000000, resultUnit: "CURRENCY"
+hardLimitValue: 500000000, resultUnit: "CURRENCY"
 \`\`\`
 
 ## Workflow: Building a Rule
@@ -263,7 +295,7 @@ limitDirection: "MAX", hardLimitValue: 500000000, resultUnit: "CURRENCY"
 4. **Determine grouping**: Sub-grouped? By what attribute?
 5. **Identify numerator**: What attribute, what aggregation?
 6. **Identify denominator**: Same? Different? Constant? What scope?
-7. **Set limits**: Upper (MAX) or lower (MIN)? Soft/hard thresholds? Percent, count, or currency?
+7. **Set limits on the fund**: a minimum or a maximum, with soft and hard numbers, in percent, count, or currency
 8. **Consider conditions**: Any eligibility filters?
 9. **Create rule** → create_compliance_rule
 10. **Create version** → create_compliance_rule_version

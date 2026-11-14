@@ -20,3 +20,13 @@ export async function feedClientId(): Promise<string | null> {
   }
   return null;
 }
+
+/**
+ * Whether this session may add fields or record types for the client. The
+ * database decides, with the same rule its own schema policies use.
+ */
+export async function canChangeSchema(clientId: string): Promise<boolean> {
+  const supabase = await supabaseServerClient();
+  const { data, error } = await supabase.schema('tenancy').rpc('can_write_schema_row', { p_client_id: clientId });
+  return !error && data === true;
+}

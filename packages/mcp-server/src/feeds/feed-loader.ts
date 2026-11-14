@@ -5,11 +5,14 @@ import { readImportFile } from './intake';
 import { parseTabularFile } from './parse-table';
 import { POSITION_FILE_MAP } from './position-file-map';
 import { normalizeSourceCode, resolveRowContext } from './row-context';
-import type { DomainLoadStats, FeedLoadResult, FeedMap, FeedPreview, NormalizationHit, ParsedTable } from './types';
-import { applyTransform, coerceAttributeValue, dayBefore, indexReferenceLists, normalizeToList, parseUsDate, type ListValueRow } from './values';
+import type { DomainLoadStats, FeedLoadResult, FeedMap, FeedPreview, LoadReject, NormalizationHit, ParsedTable } from './types';
+import { applyTransform, coerceAttributeValue, dayBefore, planPeriod, indexReferenceLists, normalizeToList, parseUsDate, type ListValueRow } from './values';
 
 const OPEN_TO = '9999-12-31';
-const CLIENT_CODE = 'MERIDIAN_INTERNAL';
+const MAX_REJECTS = 500;
+const DRY_PREFIX = 'dry:';
+/** Client that scripts and tests load into. The app always passes the signed-in user's client instead. */
+export const DEFAULT_CLIENT_CODE = 'MERIDIAN_INTERNAL';
 
 interface AttributeMeta {
   id: string;
@@ -18,13 +21,25 @@ interface AttributeMeta {
   reference_list_code: string | null;
 }
 
+/** Values one source reported for one record as of one date. A file can hold several per record. */
+interface ValuePeriod {
+  asOf: string;
+  sourceCode: string;
+  attributes: Map<string, string>;
+  /** The row and column each value was first read from, for pointing back at the source. */
+  origins: Map<string, { row: number; column: string }>;
+}
+
 interface EntityDraft {
   code: string;
   name: string;
+  /** First non-blank value across all rows. Used to match the record to an existing one. */
   attributes: Map<string, string>;
   parents: Map<string, string>;
+  /** Earliest as-of date on any row for this record. Links start here. */
   asOf: string;
   sourceCode: string;
+  periods: Map<string, ValuePeriod>;
 }
 
 interface ValueSource {
@@ -122,6 +137,7 @@ function collectDrafts(
   map: FeedMap,
   rows: Record<string, string>[],
   fallback: { asOf: string; source: string },
+  originOf: (row: Record<string, string>) => number | undefined = () => undefined,
 ): Map<string, EntityDraft[]> {
   const byDomain = new Map<string, Map<string, EntityDraft>>();
   for (const domain of map.domains) byDomain.set(domain.domainCode, new Map());
@@ -141,8 +157,16 @@ function collectDrafts(
           parents: new Map(),
           asOf: context.asOf,
           sourceCode: context.source,
+          periods: new Map(),
         };
         bucket.set(code, draft);
+      }
+      if (context.asOf < draft.asOf) draft.asOf = context.asOf;
+      const periodKey = `${context.asOf}|${context.source}`;
+      let period = draft.periods.get(periodKey);
+      if (!period) {
+        period = { asOf: context.asOf, sourceCode: context.source, attributes: new Map(), origins: new Map() };
+        draft.periods.set(periodKey, period);
       }
       const name = readCell(row, domain.nameColumn, map);
       if (name && draft.name === draft.code) draft.name = name;
@@ -150,6 +174,11 @@ function collectDrafts(
         const value = readCell(row, attribute.column, map);
         if (value && !draft.attributes.has(attribute.attributeCode)) {
           draft.attributes.set(attribute.attributeCode, value);
+        }
+        if (value && !period.attributes.has(attribute.attributeCode)) {
+          period.attributes.set(attribute.attributeCode, value);
+          const originRow = originOf(row);
+          if (originRow !== undefined) period.origins.set(attribute.attributeCode, { row: originRow, column: attribute.column });
         }
       }
       for (const parent of domain.parents) {
@@ -166,14 +195,18 @@ function collectDrafts(
   return result;
 }
 
-async function loadCatalog(db: SupabaseClient, map: FeedMap, clientId?: string): Promise<Catalog> {
+export async function defaultClientId(db: SupabaseClient): Promise<string> {
+  const found = await db.schema('tenancy').from('clients').select('id').eq('client_code', DEFAULT_CLIENT_CODE).single();
+  if (found.error || !found.data?.id) throw new Error(`Client ${DEFAULT_CLIENT_CODE} was not found`);
+  return found.data.id;
+}
+
+async function loadCatalog(db: SupabaseClient, map: FeedMap, clientId: string): Promise<Catalog> {
   const attributeCodes = [...new Set(map.domains.flatMap((domain) => domain.attributes.map((attribute) => attribute.attributeCode)))];
   const templateCodes = [...new Set(map.domains.map((domain) => domain.templateCode))];
 
-  const [client, source, templates, attributes, listValues, relationshipTypes] = await Promise.all([
-    clientId
-      ? Promise.resolve({ data: { id: clientId }, error: null })
-      : db.from('tenant_clients').select('id').eq('client_code', CLIENT_CODE).single(),
+  if (!clientId) throw new Error('A client is required to load a file');
+  const [source, templates, attributes, listValues, relationshipTypes] = await Promise.all([
     db.schema('entity_instances').from('source_registry').select('id, precedence_rank').eq('source_code', map.sourceCode).single(),
     templateCodes.length
       ? db.schema('metadata_register').from('domain_templates').select('id, template_code').in('template_code', templateCodes)
@@ -185,9 +218,8 @@ async function loadCatalog(db: SupabaseClient, map: FeedMap, clientId?: string):
     db.schema('metadata_register').from('relationship_types').select('relationship_code, parent_domain_code, child_domain_code, is_required').eq('is_active', true),
   ]);
 
-  const failure = client.error || source.error || templates.error || attributes.error || listValues.error || relationshipTypes.error;
+  const failure = source.error || templates.error || attributes.error || listValues.error || relationshipTypes.error;
   if (failure) throw new Error(failure.message);
-  if (!client.data?.id) throw new Error(`Client ${CLIENT_CODE} was not found`);
   if (!source.data?.id) throw new Error(`Source ${map.sourceCode} is not in the source registry.`);
 
   const lists: ListValueRow[] = (listValues.data || []).map((row: any) => ({
@@ -198,7 +230,7 @@ async function loadCatalog(db: SupabaseClient, map: FeedMap, clientId?: string):
   }));
 
   return {
-    clientId: client.data.id,
+    clientId,
     sourceId: source.data.id,
     precedenceRank: source.data.precedence_rank ?? 45,
     templates: new Map((templates.data || []).map((row: any) => [row.template_code, row.id])),
@@ -208,8 +240,9 @@ async function loadCatalog(db: SupabaseClient, map: FeedMap, clientId?: string):
   };
 }
 
-async function rememberMap(db: SupabaseClient, map: FeedMap, sourceId: string) {
+async function rememberMap(db: SupabaseClient, clientId: string, map: FeedMap, sourceId: string) {
   const payload = {
+    client_id: clientId,
     map_code: map.mapCode,
     source_id: sourceId,
     map_name: map.name,
@@ -218,12 +251,31 @@ async function rememberMap(db: SupabaseClient, map: FeedMap, sourceId: string) {
     is_active: true,
     updated_at: new Date().toISOString(),
   };
-  const existing = await db.schema('entity_instances').from('feed_maps').select('id').eq('map_code', map.mapCode).maybeSingle();
+  const existing = await db.schema('entity_instances').from('feed_maps').select('id').eq('client_id', clientId).eq('map_code', map.mapCode).maybeSingle();
   if (existing.error) throw new Error(existing.error.message);
   const write = existing.data
     ? await db.schema('entity_instances').from('feed_maps').update(payload).eq('id', existing.data.id)
     : await db.schema('entity_instances').from('feed_maps').insert(payload);
   if (write.error) throw new Error(write.error.message);
+}
+
+/** Where a stored value came from: the file, the cell, and its place on the page. */
+function sourceRef(
+  table: ParsedTable,
+  origin: { row: number; column: string },
+  provenance: { instanceId: string; tableId: string | null },
+) {
+  const columnIndex = table.headers.indexOf(origin.column);
+  const location = columnIndex >= 0 ? table.locations?.[origin.row]?.[columnIndex] || null : null;
+  const size = location ? table.pages?.find((page) => page.page === location.page) || null : null;
+  return {
+    instance_id: provenance.instanceId,
+    table_id: provenance.tableId,
+    row: origin.row,
+    column: origin.column,
+    location,
+    page_size: size ? { width: size.width, height: size.height } : null,
+  };
 }
 
 function normalizationFor(
@@ -269,12 +321,12 @@ async function tableFromFile(fileName: string, bytes: Buffer): Promise<ParsedTab
   return parseTabularFile(fileName, bytes);
 }
 
-export async function previewFeed(map: FeedMap, fileName: string, bytes: Buffer): Promise<FeedPreview> {
+export async function previewFeed(map: FeedMap, fileName: string, bytes: Buffer, clientId: string): Promise<FeedPreview> {
   const table = await tableFromFile(fileName, bytes);
   const rows = filterRows(map, table);
   const drafts = collectDrafts(map, rows, { asOf: suggestedAsOf(map, rows) || '1970-01-01', source: map.sourceCode });
   const db = localSupabase();
-  const catalog = await loadCatalog(db, map);
+  const catalog = await loadCatalog(db, map, clientId);
   const used = mappedColumns(map);
   const hits: NormalizationHit[] = [];
   const warnings: string[] = [];
@@ -433,7 +485,7 @@ function sameValue(existing: any, next: { golden_value: string; golden_value_num
   return existingDate === next.golden_value_date;
 }
 
-async function loadValueSources(db: SupabaseClient, codes: string[]): Promise<Map<string, ValueSource>> {
+async function loadValueSources(db: SupabaseClient, codes: string[], allowMissing = false): Promise<Map<string, ValueSource>> {
   const wanted = [...new Set(codes.map((code) => normalizeSourceCode(code)).filter(Boolean))];
   if (wanted.length === 0) return new Map();
   const rows = await db.schema('entity_instances').from('source_registry').select('id, source_code, precedence_rank').in('source_code', wanted);
@@ -443,12 +495,18 @@ async function loadValueSources(db: SupabaseClient, codes: string[]): Promise<Ma
     found.set(normalizeSourceCode(String(row.source_code)), { id: row.id, rank: row.precedence_rank ?? 100 });
   }
   const missing = wanted.filter((code) => !found.has(code));
-  if (missing.length > 0) throw new Error(`Source ${missing.join(', ')} was not found.`);
+  if (missing.length > 0 && allowMissing) {
+    // A review can run before a new source is created. Rank it like any other file source.
+    for (const code of missing) found.set(code, { id: `${DRY_PREFIX}source:${code}`, rank: 50 });
+  } else if (missing.length > 0) {
+    throw new Error(`Source ${missing.join(', ')} was not found.`);
+  }
   return found;
 }
 
-export async function executeFeed(map: FeedMap, fileName: string, bytes: Buffer, asOfDate: string, client?: SupabaseClient): Promise<FeedLoadResult> {
-  return executeParsedFeed(map, fileName, await tableFromFile(fileName, bytes), asOfDate, client);
+export async function executeFeed(map: FeedMap, fileName: string, bytes: Buffer, asOfDate: string, client?: SupabaseClient, clientId?: string): Promise<FeedLoadResult> {
+  const db = client || localSupabase();
+  return executeParsedFeed(map, fileName, await tableFromFile(fileName, bytes), asOfDate, db, clientId || await defaultClientId(db));
 }
 
 export async function executeParsedFeed(
@@ -456,15 +514,19 @@ export async function executeParsedFeed(
   fileName: string,
   table: ParsedTable,
   asOfDate: string,
-  client?: SupabaseClient,
-  clientId?: string,
+  client: SupabaseClient | undefined,
+  clientId: string,
   fallbackSource?: string,
+  options: { dryRun?: boolean; provenance?: { instanceId: string; tableId: string | null } } = {},
 ): Promise<FeedLoadResult> {
+  const dry = options.dryRun === true;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
     throw new Error('As-of date must be YYYY-MM-DD');
   }
   const rows = filterRows(map, table);
-  const drafts = collectDrafts(map, rows, { asOf: asOfDate, source: fallbackSource || map.sourceCode });
+  const rowNumber = new Map<Record<string, string>, number>();
+  table.rows.forEach((row, index) => rowNumber.set(row, index));
+  const drafts = collectDrafts(map, rows, { asOf: asOfDate, source: fallbackSource || map.sourceCode }, (row) => rowNumber.get(row));
   const order = dependencyLoadOrder(map.domains);
   const waves = dependencyLoadWaves(map.domains);
   const db = client || localSupabase();
@@ -475,15 +537,17 @@ export async function executeParsedFeed(
   const asOfDates = new Set<string>([asOfDate]);
   for (const entities of drafts.values()) {
     for (const entity of entities) {
-      draftSources.add(normalizeSourceCode(entity.sourceCode));
-      asOfDates.add(entity.asOf);
+      for (const period of entity.periods.values()) {
+        draftSources.add(normalizeSourceCode(period.sourceCode));
+        asOfDates.add(period.asOf);
+      }
     }
   }
   const varying = [...draftSources].some((code) => code !== mapSource) || [...asOfDates].some((date) => date !== asOfDate);
   const valueSources = varying
-    ? await loadValueSources(db, [...draftSources])
+    ? await loadValueSources(db, [...draftSources], dry)
     : new Map<string, ValueSource>([[mapSource, { id: catalog.sourceId, rank: catalog.precedenceRank }]]);
-  await rememberMap(db, map, catalog.sourceId);
+  if (!dry) await rememberMap(db, clientId, map, catalog.sourceId);
 
   const ids = new Map<string, Map<string, string>>();
   const domainByCode = new Map(map.domains.map((domain) => [domain.domainCode, domain]));
@@ -512,6 +576,12 @@ export async function executeParsedFeed(
   const warnings: string[] = [];
   const errors: string[] = [];
   const hits: NormalizationHit[] = [];
+  const rejects: LoadReject[] = [];
+  let rejectCount = 0;
+  const reject = (item: LoadReject) => {
+    rejectCount += 1;
+    if (rejects.length < MAX_REJECTS) rejects.push(item);
+  };
   const attributeStats = { created: 0, updated: 0, unchanged: 0 };
   const relationshipStats = { created: 0, matched: 0, failed: 0 };
   const receivedAt = new Date().toISOString();
@@ -554,15 +624,19 @@ export async function executeParsedFeed(
         stats.failed += 1;
         stats.errors.push(hit.message);
         errors.push(hit.message);
+        reject({ kind: 'record', domainCode, entityCode: entity.code, message: hit.message });
         continue;
       }
       if (hit.kind === 'match') {
         index.absorb(hit.entity.id, incoming);
         linkedTo.set(entity.code, hit.entity.id);
         if (!hit.entity.provisional) {
-          const update = await db.schema('entity_instances').from('master_entities').update({
-            entity_name: entity.name,
-            ...(templateId ? { template_id: templateId } : {}),
+          // The name changes only when the file has a name column of its own and this row filled it.
+          // A code used as the name, or a blank cell, must never overwrite the stored name.
+          const separateName = Boolean(domain.nameColumn) && domain.nameColumn !== domain.identityColumn;
+          const rowName = separateName && entity.name && entity.name !== entity.code ? entity.name : null;
+          const update = dry || !rowName ? { error: null } : await db.schema('entity_instances').from('master_entities').update({
+            entity_name: rowName,
             updated_at: new Date().toISOString(),
           }).eq('id', hit.entity.id);
           if (update.error) {
@@ -602,6 +676,13 @@ export async function executeParsedFeed(
     }
 
     const toCreate = [...pending.values()];
+    if (dry) {
+      for (const entity of toCreate) {
+        stats.created += 1;
+        rememberInserted(entity.code, `${DRY_PREFIX}${domainCode}:${entity.code}`);
+      }
+      toCreate.length = 0;
+    }
     for (let offset = 0; offset < toCreate.length; offset += 200) {
       const chunk = toCreate.slice(offset, offset + 200);
       const payload = chunk.map((entity) => ({
@@ -634,20 +715,23 @@ export async function executeParsedFeed(
     }
     ids.set(domainCode, idByCode);
 
-    const entityIds = [...new Set(idByCode.values())];
-    const pageAttributeRows = async (column: 'valid_to' | 'valid_from', value: string | string[]) => {
-      const values = Array.isArray(value) ? value : [value];
+    const entityIds = [...new Set(idByCode.values())].filter((id) => !id.startsWith(DRY_PREFIX));
+    // The whole history of these values for this source, so a load into the past
+    // can see every period it would overlap, closed ones included.
+    const pageAttributeRows = async () => {
       const rows: any[] = [];
-      if (entityIds.length === 0 || values.length === 0) return rows;
+      if (entityIds.length === 0) return rows;
       const pageSize = 1000;
-      const sourceIds = [...new Set([...valueSources.values()].map((source) => source.id))];
+      // A source that does not exist yet (a review before the file loads) has no stored values to read.
+      const sourceIds = [...new Set([...valueSources.values()].map((source) => source.id))].filter((sourceId) => !sourceId.startsWith(DRY_PREFIX));
+      if (varying && sourceIds.length === 0) return rows;
       for (let idFrom = 0; idFrom < entityIds.length; idFrom += 150) {
         const idChunk = entityIds.slice(idFrom, idFrom + 150);
         for (let from = 0; ; from += pageSize) {
           const select = 'id, entity_id, attribute_id, source_id, valid_from, valid_to, golden_value, golden_value_numeric, golden_value_date';
           let query = db.schema('golden_master').from('entity_attribute_values').select(select).in('entity_id', idChunk);
-          query = varying ? query.in('source_id', sourceIds).in(column, values) : query.eq('source_id', catalog.sourceId).eq(column, values[0]);
-          const page = await query.range(from, from + pageSize - 1);
+          query = varying ? query.in('source_id', sourceIds) : query.eq('source_id', catalog.sourceId);
+          const page = await query.order('valid_from', { ascending: true }).range(from, from + pageSize - 1);
           if (page.error) throw new Error(page.error.message);
           rows.push(...(page.data || []));
           if ((page.data || []).length < pageSize) break;
@@ -655,15 +739,10 @@ export async function executeParsedFeed(
       }
       return rows;
     };
-    const [openAttributeRows, datedAttributeRows] = entityIds.length
-      ? await Promise.all([
-          pageAttributeRows('valid_to', OPEN_TO),
-          pageAttributeRows('valid_from', varying ? [...asOfDates] : asOfDate),
-        ])
-      : [[], []];
+    const attributeHistory = await pageAttributeRows();
     const slicesByKey = new Map<string, any[]>();
     const seenIds = new Set<string>();
-    for (const row of [...openAttributeRows, ...datedAttributeRows]) {
+    for (const row of attributeHistory) {
       if (seenIds.has(row.id)) continue;
       seenIds.add(row.id);
       const key = `${row.entity_id}|${row.attribute_id}`;
@@ -675,6 +754,11 @@ export async function executeParsedFeed(
     const pendingAttributes: { label: string; row: Record<string, unknown> }[] = [];
     const queuedAttributes = new Set<string>();
     const flushAttributes = async () => {
+      if (dry) {
+        attributeStats.created += pendingAttributes.length;
+        pendingAttributes.length = 0;
+        return;
+      }
       for (let offset = 0; offset < pendingAttributes.length; offset += 200) {
         const chunk = pendingAttributes.slice(offset, offset + 200);
         const insert = await db.schema('golden_master').from('entity_attribute_values').insert(chunk.map((item) => item.row));
@@ -694,9 +778,12 @@ export async function executeParsedFeed(
     for (const entity of entities) {
       const entityId = idByCode.get(entity.code);
       if (!entityId) continue;
-      const valueSource = valueSources.get(normalizeSourceCode(entity.sourceCode)) || { id: catalog.sourceId, rank: catalog.precedenceRank };
-      const validFrom = entity.asOf || asOfDate;
-      for (const [attributeCode, raw] of entity.attributes) {
+      const entityPeriods = [...entity.periods.values()].sort((a, b) => a.asOf.localeCompare(b.asOf));
+      for (const period of entityPeriods) {
+      const valueSource = valueSources.get(normalizeSourceCode(period.sourceCode)) || { id: catalog.sourceId, rank: catalog.precedenceRank };
+      const validFrom = period.asOf || asOfDate;
+      for (const [attributeCode, raw] of period.attributes) {
+        const origin = period.origins.get(attributeCode);
         const meta = catalog.attributes.get(attributeCode);
         if (!meta) {
           warnings.push(`${domainCode} ${entity.code}: attribute ${attributeCode} is not registered`);
@@ -709,11 +796,13 @@ export async function executeParsedFeed(
         if (hit) hits.push(hit);
         if (hit?.matchType === 'unmapped') {
           warnings.push(`${domainCode} ${entity.code}: ${attributeCode} value "${raw}" is not in ${hit.listCode}`);
+          reject({ kind: 'value', domainCode, entityCode: entity.code, attributeCode, value: raw, message: `Not on list ${hit.listCode}. Stored as typed.`, row: origin?.row, column: origin?.column });
         }
         const coerced = coerceAttributeValue(stored, meta.data_type);
         if (!coerced) continue;
         if ('error' in coerced) {
           warnings.push(`${domainCode} ${entity.code}: ${attributeCode} ${coerced.error}`);
+          reject({ kind: 'value', domainCode, entityCode: entity.code, attributeCode, value: raw, message: coerced.error, row: origin?.row, column: origin?.column });
           continue;
         }
         const value = {
@@ -721,27 +810,32 @@ export async function executeParsedFeed(
           golden_value_numeric: coerced.golden_value_numeric,
           golden_value_date: coerced.golden_value_date,
         };
-        const sliceKey = varying ? `${entityId}|${meta.id}|${valueSource.id}` : `${entityId}|${meta.id}`;
+        const valueMetadata = {
+          raw_value: coerced.raw_value,
+          list_code: hit?.listCode || null,
+          match_type: hit?.matchType || null,
+          ...(origin && options.provenance ? { source_ref: sourceRef(table, origin, options.provenance) } : {}),
+        };
+        const sliceKey = varying ? `${entityId}|${meta.id}|${valueSource.id}|${validFrom}` : `${entityId}|${meta.id}|${validFrom}`;
         if (queuedAttributes.has(sliceKey)) continue;
         const slices = (slicesByKey.get(`${entityId}|${meta.id}`) || []).filter((row) => !varying || row.source_id === valueSource.id);
-        const openRows = slices.filter((row) => String(row.valid_to).slice(0, 10) === OPEN_TO);
         const sameSlices = slices.filter((row) => String(row.valid_from).slice(0, 10) === validFrom);
         if (sameSlices.length > 0) {
           let changed = false;
           for (const slice of sameSlices) {
             if (sameValue(slice, value)) {
-              const touch = await db.schema('golden_master').from('entity_attribute_values').update({
+              const touch = dry ? { error: null } : await db.schema('golden_master').from('entity_attribute_values').update({
                 last_received_at: receivedAt,
               }).eq('id', slice.id);
               if (touch.error) errors.push(touch.error.message);
               continue;
             }
-            const update = await db.schema('golden_master').from('entity_attribute_values').update({
+            const update = dry ? { error: null } : await db.schema('golden_master').from('entity_attribute_values').update({
               ...value,
               golden_source_id: valueSource.id,
               precedence_rank: valueSource.rank,
               last_received_at: receivedAt,
-              metadata: { raw_value: coerced.raw_value, list_code: hit?.listCode || null, match_type: hit?.matchType || null },
+              metadata: valueMetadata,
             }).eq('id', slice.id);
             if (update.error) errors.push(update.error.message);
             else changed = true;
@@ -752,32 +846,46 @@ export async function executeParsedFeed(
           continue;
         }
 
-        const laterOpen = openRows.find((row) => String(row.valid_from).slice(0, 10) > validFrom);
-        const earlierOpen = openRows.find((row) => String(row.valid_from).slice(0, 10) < validFrom);
-        let validTo = OPEN_TO;
-        if (laterOpen) validTo = dayBefore(String(laterOpen.valid_from).slice(0, 10));
-        if (earlierOpen && !laterOpen) {
-          const close = await db.schema('golden_master').from('entity_attribute_values').update({
-            valid_to: dayBefore(validFrom),
-          }).eq('id', earlierOpen.id);
+        const planned = planPeriod(slices.map((row) => ({ id: row.id, validFrom: String(row.valid_from).slice(0, 10), validTo: String(row.valid_to).slice(0, 10) })), validFrom);
+        const validTo = planned.validTo;
+        if (planned.closeId) {
+          const covering = slices.find((row) => row.id === planned.closeId);
+          const queuedRow = planned.closeId.startsWith('pending:') ? (covering as any)?.queued : null;
+          if (queuedRow) queuedRow.valid_to = planned.closeTo;
+          const close = dry || queuedRow ? { error: null } : await db.schema('golden_master').from('entity_attribute_values').update({
+            valid_to: planned.closeTo,
+          }).eq('id', planned.closeId);
           if (close.error) errors.push(close.error.message);
+          else if (covering) covering.valid_to = planned.closeTo;
         }
         queuedAttributes.add(sliceKey);
+        const queuedValues: Record<string, unknown> = {
+          entity_id: entityId,
+          attribute_id: meta.id,
+          source_id: valueSource.id,
+          golden_source_id: valueSource.id,
+          ...value,
+          valid_from: validFrom,
+          valid_to: validTo,
+          last_received_at: receivedAt,
+          precedence_rank: valueSource.rank,
+          metadata: valueMetadata,
+        };
+        const historyKey = `${entityId}|${meta.id}`;
+        slicesByKey.set(historyKey, [...(slicesByKey.get(historyKey) || []), {
+          id: `pending:${pendingAttributes.length}:${entity.code}:${attributeCode}:${validFrom}`,
+          entity_id: entityId,
+          attribute_id: meta.id,
+          source_id: valueSource.id,
+          valid_from: validFrom,
+          valid_to: validTo,
+          queued: queuedValues,
+        }]);
         pendingAttributes.push({
           label: `${entity.code} ${attributeCode}`,
-          row: {
-            entity_id: entityId,
-            attribute_id: meta.id,
-            source_id: valueSource.id,
-            golden_source_id: valueSource.id,
-            ...value,
-            valid_from: validFrom,
-            valid_to: validTo,
-            last_received_at: receivedAt,
-            precedence_rank: valueSource.rank,
-            metadata: { raw_value: coerced.raw_value, list_code: hit?.listCode || null, match_type: hit?.matchType || null },
-          },
+          row: queuedValues,
         });
+      }
       }
     }
     await flushAttributes();
@@ -791,12 +899,14 @@ export async function executeParsedFeed(
         if (!parentCode) {
           relationshipStats.failed += 1;
           errors.push(`${domainCode} ${entity.code} is missing ${parent.parentDomainCode}`);
+          reject({ kind: 'link', domainCode, entityCode: entity.code, message: `No ${parent.parentDomainCode} code on this row` });
           continue;
         }
         const parentId = ids.get(parent.parentDomainCode)?.get(parentCode) || externalIds.get(parent.parentDomainCode)?.get(parentCode);
         if (!parentId) {
           relationshipStats.failed += 1;
           errors.push(`${domainCode} ${entity.code} references unknown ${parent.parentDomainCode} ${parentCode}`);
+          reject({ kind: 'link', domainCode, entityCode: entity.code, value: parentCode, message: `${parent.parentDomainCode} ${parentCode} was not found` });
           continue;
         }
         const relationship = chooseRelationship(domainCode, parent.parentDomainCode, catalog.relationshipTypes);
@@ -818,27 +928,57 @@ export async function executeParsedFeed(
       }
     }
 
-    const existingRelationships = new Set<string>();
-    const childIds = [...new Set(relationshipRows.map((row) => String(row.child_entity_id)))];
-    const relationshipDates = varying ? [...asOfDates] : [asOfDate];
+    // A link is current when it is open on the load date, whatever date it started on.
+    // Reloading the same hierarchy at a later date must not stack a second copy.
+    type StoredLink = { id: string; parent_entity_id: string; child_entity_id: string; relationship_code: string; valid_from: string; valid_to: string; metadata: { feed_map?: string } | null };
+    const storedLinks = new Map<string, StoredLink[]>();
+    const childIds = [...new Set(relationshipRows.map((row) => String(row.child_entity_id)))].filter((id) => !id.startsWith(DRY_PREFIX));
     for (let offset = 0; offset < childIds.length; offset += 150) {
       const chunk = childIds.slice(offset, offset + 150);
-      const found = varying
-        ? await db.schema('entity_instances').from('entity_relationships').select('parent_entity_id, child_entity_id, relationship_code').in('child_entity_id', chunk).in('valid_from', relationshipDates)
-        : await db.schema('entity_instances').from('entity_relationships').select('parent_entity_id, child_entity_id, relationship_code').in('child_entity_id', chunk).eq('valid_from', asOfDate);
+      const found = await db.schema('entity_instances').from('entity_relationships')
+        .select('id, parent_entity_id, child_entity_id, relationship_code, valid_from, valid_to, metadata')
+        .in('child_entity_id', chunk)
+        .gte('system_to', receivedAt);
       if (found.error) throw new Error(found.error.message);
-      for (const row of found.data || []) {
-        existingRelationships.add(`${row.parent_entity_id}|${row.child_entity_id}|${row.relationship_code}`);
+      for (const row of (found.data || []) as StoredLink[]) {
+        const key = `${row.child_entity_id}|${row.relationship_code}`;
+        const list = storedLinks.get(key) || [];
+        list.push(row);
+        storedLinks.set(key, list);
       }
     }
+    const day = (value: unknown) => String(value).slice(0, 10);
     const relationshipInserts: Record<string, unknown>[] = [];
+    const replaced: { id: string; validTo: string }[] = [];
     for (const row of relationshipRows) {
-      const key = `${row.parent_entity_id}|${row.child_entity_id}|${row.relationship_code}`;
-      if (existingRelationships.has(key)) relationshipStats.matched += 1;
-      else {
-        existingRelationships.add(key);
-        relationshipInserts.push(row);
+      const date = day(row.valid_from);
+      const links = storedLinks.get(`${row.child_entity_id}|${row.relationship_code}`) || [];
+      const covering = links.filter((link) => day(link.valid_from) <= date && day(link.valid_to) >= date);
+      if (covering.some((link) => link.parent_entity_id === row.parent_entity_id)) {
+        relationshipStats.matched += 1;
+        continue;
       }
+      // The file now names a different parent. Close the link an earlier load made, so the child has one current parent.
+      for (const link of covering) {
+        if (link.metadata?.feed_map && day(link.valid_from) < date && day(link.valid_to) === OPEN_TO) {
+          replaced.push({ id: link.id, validTo: dayBefore(date) });
+          link.valid_to = dayBefore(date);
+        }
+      }
+      links.push({ id: '', parent_entity_id: String(row.parent_entity_id), child_entity_id: String(row.child_entity_id), relationship_code: String(row.relationship_code), valid_from: date, valid_to: OPEN_TO, metadata: { feed_map: map.mapCode } });
+      storedLinks.set(`${row.child_entity_id}|${row.relationship_code}`, links);
+      relationshipInserts.push(row);
+    }
+    if (!dry) {
+      for (const change of replaced) {
+        const closed = await db.schema('entity_instances').from('entity_relationships').update({ valid_to: change.validTo }).eq('id', change.id);
+        if (closed.error) errors.push(closed.error.message);
+      }
+    }
+    if (replaced.length > 0) warnings.push(`${domainCode}: ${replaced.length} ${replaced.length === 1 ? 'link was' : 'links were'} moved to a new parent as of this load`);
+    if (dry) {
+      relationshipStats.created += relationshipInserts.length;
+      relationshipInserts.length = 0;
     }
     for (let offset = 0; offset < relationshipInserts.length; offset += 200) {
       const chunk = relationshipInserts.slice(offset, offset + 200);
@@ -861,7 +1001,7 @@ export async function executeParsedFeed(
     domainStats.push(stats);
   }
 
-  await db.schema('entity_instances').from('feed_lineage').insert({
+  if (!dry) await db.schema('entity_instances').from('feed_lineage').insert({
     source_id: catalog.sourceId,
     feed_batch_id: crypto.randomUUID(),
     feed_received_at: receivedAt,
@@ -886,6 +1026,9 @@ export async function executeParsedFeed(
     normalizations: distinctNormalizations(hits),
     warnings: [...new Set(warnings)],
     errors,
+    dryRun: dry,
+    rejects,
+    rejectCount,
   };
 }
 

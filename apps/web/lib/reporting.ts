@@ -1,7 +1,15 @@
 import type { DataQuerySpec, DataQueryResult } from '@tapestrai/graphql/src/lib/data-query-engine';
 import { readBrowserAccessToken } from '@/lib/auth-token';
+import type { RunReview, ReviewIssue } from '@tapestrai/graphql/src/lib/narrative-review';
+import type {
+  NarrativeBlock,
+  NarrativeSection,
+  OutputBlockSpec,
+  OutputBlockType,
+} from '@tapestrai/graphql/src/lib/narrative-spec';
 
-export type { DataQuerySpec, DataQueryResult };
+export type { RunReview, ReviewIssue };
+export type { DataQuerySpec, DataQueryResult, NarrativeBlock, NarrativeSection, OutputBlockSpec, OutputBlockType };
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,15 +37,6 @@ export interface DashboardTemplate {
   isActive: boolean;
 }
 
-export type OutputBlockType = 'markdown' | 'table' | 'chart' | 'insights';
-
-export interface OutputBlockSpec {
-  type: OutputBlockType;
-  key: string;
-  title?: string;
-  guidance?: string;
-}
-
 export interface NarrativeTemplate {
   id: string;
   narrativeCode: string;
@@ -48,15 +47,33 @@ export interface NarrativeTemplate {
   dataQueries: DataQuerySpec[];
   parameters: ReportParameter[];
   outputBlocks: OutputBlockSpec[];
+  sections: NarrativeSection[];
+  persona?: string | null;
+  audience?: string | null;
+  rules: string[];
+  /** Entity types, besides domainCode, whose record pages offer this narrative. */
+  exposedDomains: string[];
+  allowExternalSearch: boolean;
   model?: string | null;
   isActive: boolean;
 }
 
-export type NarrativeBlock =
-  | { type: 'markdown'; key: string; title?: string; text: string }
-  | { type: 'table'; key: string; title?: string; columns: string[]; rows: any[][] }
-  | { type: 'chart'; key: string; title?: string; chartType: 'bar' | 'line' | 'pie'; labels: string[]; series: Array<{ name: string; values: number[] }> }
-  | { type: 'insights'; key: string; title?: string; items: Array<{ title: string; detail: string; severity: 'info' | 'positive' | 'warning' | 'critical' }> };
+export type SectionStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+
+export interface NarrativeRunSectionRecord {
+  id?: string | null;
+  runId?: string | null;
+  sectionKey: string;
+  ord: number;
+  title?: string | null;
+  status: SectionStatus;
+  blocks: NarrativeBlock[];
+  research?: { queries?: string[]; sources?: Array<{ title: string; url?: string }>; notes?: string };
+  verification?: { checked?: number; matched?: number; unmatched?: Array<{ block: string; figure: string }> };
+  notes?: string[];
+  errorMessage?: string | null;
+  model?: string | null;
+}
 
 export interface NarrativeRunRecord {
   id: string | null;
@@ -64,11 +81,34 @@ export interface NarrativeRunRecord {
   entityId: string | null;
   parameters: Record<string, any>;
   blocks: NarrativeBlock[];
-  status: 'COMPLETED' | 'FAILED';
+  status: 'RUNNING' | 'COMPLETED' | 'PARTIAL' | 'FAILED';
   errorMessage?: string | null;
   model?: string | null;
   createdAt: string;
+  asOfDate?: string | null;
+  sources?: Array<{ title: string; url?: string; publisher?: string; date?: string }>;
+  verification?: {
+    checked?: number;
+    matched?: number;
+    notTraced?: Array<{ section: string; block: string; figure: string }>;
+    /** A second reader's check of the finished report against its own evidence. */
+    review?: RunReview;
+  };
+  origin?: string;
+  createdByLabel?: string | null;
+  publishedAt?: string | null;
+  publishedBy?: string | null;
+  publishedByLabel?: string | null;
+  publishedLabel?: string | null;
+  sections?: NarrativeRunSectionRecord[];
 }
+
+/** A run as listed: enough to choose between runs without loading their sections. */
+export type NarrativeRunSummary = Pick<
+  NarrativeRunRecord,
+  'id' | 'narrativeId' | 'entityId' | 'status' | 'asOfDate' | 'createdAt' | 'origin' | 'createdByLabel'
+  | 'publishedAt' | 'publishedByLabel' | 'publishedLabel' | 'errorMessage'
+>;
 
 export interface DataQueryPayload {
   entity: Record<string, any> | null;
@@ -85,7 +125,8 @@ const DASHBOARD_FIELDS = `
 `;
 
 const NARRATIVE_FIELDS = `
-  id narrativeCode narrativeName description domainCode instructions dataQueries parameters outputBlocks model isActive createdAt updatedAt
+  id narrativeCode narrativeName description domainCode instructions dataQueries parameters outputBlocks
+  sections persona audience rules exposedDomains allowExternalSearch model isActive createdAt updatedAt
 `;
 
 export const DASHBOARDS_QUERY = `
@@ -148,13 +189,42 @@ export const DELETE_NARRATIVE_MUTATION = `
   }
 `;
 
+const RUN_SUMMARY_FIELDS = `
+  id narrativeId entityId status asOfDate createdAt origin createdByLabel publishedAt publishedByLabel publishedLabel errorMessage
+`;
+
+/** Finished runs for one record, newest first. Sections are loaded separately for the run being shown. */
 export const NARRATIVE_RUNS_QUERY = `
-  query NarrativeRuns($narrativeId: ID!, $entityId: ID, $first: Int) {
-    narrativeRuns(narrativeId: $narrativeId, entityId: $entityId, first: $first) {
-      id narrativeId entityId parameters blocks status errorMessage model createdAt
+  query NarrativeRuns($narrativeId: ID!, $entityId: ID, $first: Int, $statuses: [String!]) {
+    narrativeRuns(narrativeId: $narrativeId, entityId: $entityId, first: $first, statuses: $statuses) {
+      ${RUN_SUMMARY_FIELDS}
     }
   }
 `;
+
+export const NARRATIVE_RUN_QUERY = `
+  query NarrativeRun($id: ID!) {
+    narrativeRun(id: $id) {
+      ${RUN_SUMMARY_FIELDS}
+      parameters blocks model sources verification
+      sections { sectionKey ord title status blocks research verification notes errorMessage model }
+    }
+  }
+`;
+
+export const PUBLISH_NARRATIVE_RUN_MUTATION = `
+  mutation PublishNarrativeRun($id: ID!, $label: String) {
+    publishNarrativeRun(id: $id, label: $label) { ${RUN_SUMMARY_FIELDS} }
+  }
+`;
+
+export const UNPUBLISH_NARRATIVE_RUN_MUTATION = `
+  mutation UnpublishNarrativeRun($id: ID!) {
+    unpublishNarrativeRun(id: $id) { ${RUN_SUMMARY_FIELDS} }
+  }
+`;
+
+export { ageOf, chooseRun } from './narrative-runs';
 
 export const RUN_DATA_QUERIES_QUERY = `
   query RunDataQueries($queries: JSON!, $entityId: ID, $params: JSON, $asOfDate: String) {
@@ -228,6 +298,52 @@ export async function runNarrative(args: {
   if (!res.ok) throw new Error(body.error || `Run failed (${res.status})`);
   return body.run as NarrativeRunRecord;
 }
+
+async function postRun(body: Record<string, unknown>): Promise<any> {
+  const res = await fetch('/api/narratives/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `Run failed (${res.status})`);
+  return json;
+}
+
+export interface StartedRun {
+  run: NarrativeRunRecord;
+  order: string[];
+  sections: Array<{ key: string; title: string; purpose?: string; dependsOn: string[]; batched: boolean; research: boolean; agentic: boolean }>;
+  allowExternalSearch: boolean;
+}
+
+export const startNarrativeRun = (args: { narrativeId: string; entityId?: string; asOfDate?: string; params?: Record<string, any> }): Promise<StartedRun> =>
+  postRun({ action: 'start', ...args });
+
+export interface SectionResponse {
+  section: NarrativeRunSectionRecord;
+  batch: { index: number; count: number; done: boolean } | null;
+  /** Draft runs only: this batch's blocks, for the caller to merge. */
+  batchBlocks?: NarrativeBlock[];
+}
+
+export const runNarrativeSection = (args: {
+  runId?: string;
+  draft?: Partial<NarrativeTemplate>;
+  sectionKey: string;
+  batchIndex?: number;
+  entityId?: string;
+  asOfDate?: string;
+  params?: Record<string, any>;
+  prior?: Array<{ key: string; title: string; markdown: string }>;
+  /** Problems a reviewer found in this section's earlier version, which the new version must fix. */
+  reviewNotes?: string;
+}): Promise<SectionResponse> => postRun({ action: 'section', ...args });
+
+/** Asks a second reader to check a finished run for contradictions and unsupported claims. */
+export const reviewNarrativeRun = (runId: string): Promise<{ review: RunReview; saved: boolean }> => postRun({ action: 'review', runId });
+
+export const finishNarrativeRun = (runId: string): Promise<{ run: NarrativeRunRecord }> => postRun({ action: 'finish', runId });
 
 /** Only allow http(s)/mailto/relative links in model-authored markdown. */
 export function sanitizeHtmlLinks(html: string): string {

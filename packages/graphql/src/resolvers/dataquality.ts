@@ -33,6 +33,28 @@ export const dataQualityResolvers = {
       return rule;
     },
     
+    dqRulePreview: async (_: any, args: { input: any }, context: Context) => {
+      const { input } = args;
+      const { data, error } = await context.supabase.rpc('dq_rule_preview', {
+        p_domain_code: input.domainCode || null,
+        p_expression: String(input.ruleExpression || ''),
+        p_attribute_code: input.attributeCode || null,
+        p_columns: input.columns || null,
+        p_as_of: input.asOfDate || null,
+        p_outcome: input.outcome || 'FAIL',
+        p_limit: input.limit ?? 20,
+        p_offset: input.offset ?? 0,
+      });
+      if (error) throw new Error(error.message);
+      const preview = (data || {}) as { total?: number; passed?: number; failed?: number; rows?: unknown[] };
+      return {
+        total: preview.total ?? 0,
+        passed: preview.passed ?? 0,
+        failed: preview.failed ?? 0,
+        rows: preview.rows || [],
+      };
+    },
+
     staleAttributes: async (
       _: any,
       args: { domainCode?: string | null; olderThanDays?: number | null; asOfDate?: string | null; knowledgeDate?: string | null; entityId?: string | null },

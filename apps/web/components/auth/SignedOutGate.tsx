@@ -28,15 +28,22 @@ export function SignedOutGate() {
       window.location.replace(destinationFor(pathname));
     };
 
-    if (!browserSessionIsActive()) {
+    let cancelled = false;
+    const confirmSignedOut = async () => {
+      if (browserSessionIsActive()) return;
+      const { data: sessionData } = await supabaseBrowserClient().auth.getSession();
+      if (cancelled || sessionData.session) return;
       leave();
-      return;
-    }
+    };
+    void confirmSignedOut();
 
     const { data } = supabaseBrowserClient().auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT' && !browserSessionIsActive()) leave();
     });
-    return () => data.subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      data.subscription.unsubscribe();
+    };
   }, [pathname]);
 
   return null;

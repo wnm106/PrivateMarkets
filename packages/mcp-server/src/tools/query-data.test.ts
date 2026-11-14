@@ -32,5 +32,8 @@ describe('query_data', () => {
     expect(QUERY_DATA_GUIDE).toContain('WEIGHTED_AVG');
     expect(QUERY_DATA_GUIDE).toContain('fund.entity_name');
     expect(QUERY_DATA_GUIDE).toContain('iss.INDUSTRY');
+    expect(QUERY_DATA_GUIDE).toContain('Finish the question');
+    expect(QUERY_DATA_GUIDE).toContain('POSITION_ALLOCATION_SYSTEM_AMOUNT');
+    expect(QUERY_DATA_GUIDE).toContain('every row carries that row\'s amount');
   });
 });

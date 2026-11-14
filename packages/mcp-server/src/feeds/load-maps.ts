@@ -113,6 +113,17 @@ export function overlayStoredMap(discovered: ColumnAssignment[], template: Colum
   });
 }
 
+/** Maps a client can read: its own, plus built-in maps that have no owner. */
+export function visibleToClient<T>(query: T, clientId: string): T {
+  return (query as any).or(`client_id.eq.${clientId},client_id.is.null`);
+}
+
+/** When a client has its own copy of a map, that copy wins over the built-in one. */
+export function preferOwnMap<T extends { client_id?: string | null }>(rows: T[] | null | undefined, clientId: string): T | null {
+  const list = rows || [];
+  return list.find((row) => row.client_id === clientId) || list.find((row) => !row.client_id) || null;
+}
+
 export interface StoredLoadMap {
   mapCode: string;
   name: string;
@@ -121,14 +132,14 @@ export interface StoredLoadMap {
   template: ColumnAssignment[];
 }
 
-export async function findStoredMap(client: SupabaseClient, signature: string): Promise<StoredLoadMap | null> {
-  const row = await client
+export async function findStoredMap(client: SupabaseClient, clientId: string, signature: string): Promise<StoredLoadMap | null> {
+  const rows = await visibleToClient(client
     .schema('entity_instances')
     .from('feed_maps')
-    .select('map_code, map_name, description, assignment_template, source_id')
-    .eq('header_signature', signature)
-    .maybeSingle();
-  if (row.error) throw new Error(row.error.message);
+    .select('map_code, map_name, description, assignment_template, source_id, client_id')
+    .eq('header_signature', signature), clientId);
+  if (rows.error) throw new Error(rows.error.message);
+  const row = { data: preferOwnMap(rows.data as any[], clientId) };
   if (!row.data?.assignment_template) return null;
   const template = row.data.assignment_template as ColumnAssignment[];
   if (!Array.isArray(template) || template.length === 0) return null;
@@ -145,11 +156,12 @@ export async function findStoredMap(client: SupabaseClient, signature: string): 
 
 export async function saveLoadMap(
   client: SupabaseClient,
-  input: LoadMapIdentity & { signature: string; template: ColumnAssignment[]; feedMap?: FeedMap }
+  input: LoadMapIdentity & { clientId: string; signature: string; template: ColumnAssignment[]; feedMap?: FeedMap }
 ): Promise<void> {
   const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', input.sourceCode).maybeSingle();
   if (source.error || !source.data) throw new Error(source.error?.message || `Source ${input.sourceCode} was not found`);
   const payload = {
+    client_id: input.clientId,
     map_name: input.name,
     description: input.description,
     source_id: source.data.id,
@@ -158,14 +170,14 @@ export async function saveLoadMap(
     is_active: true,
     updated_at: new Date().toISOString(),
   };
-  const bySignature = await client.schema('entity_instances').from('feed_maps').select('id').eq('header_signature', input.signature).maybeSingle();
+  const bySignature = await client.schema('entity_instances').from('feed_maps').select('id').eq('client_id', input.clientId).eq('header_signature', input.signature).maybeSingle();
   if (bySignature.error) throw new Error(bySignature.error.message);
   if (bySignature.data) {
     const updated = await client.schema('entity_instances').from('feed_maps').update(payload).eq('id', bySignature.data.id);
     if (updated.error) throw new Error(updated.error.message);
     return;
   }
-  const byCode = await client.schema('entity_instances').from('feed_maps').select('id').eq('map_code', input.mapCode).maybeSingle();
+  const byCode = await client.schema('entity_instances').from('feed_maps').select('id').eq('client_id', input.clientId).eq('map_code', input.mapCode).maybeSingle();
   if (byCode.error) throw new Error(byCode.error.message);
   if (byCode.data) {
     const updated = await client.schema('entity_instances').from('feed_maps').update(payload).eq('id', byCode.data.id);

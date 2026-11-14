@@ -1,4 +1,4 @@
-export { extractPdfText, itemsToLines } from './pdf-text';
+export { extractPdfFragments, extractPdfPages, extractPdfText, itemsToLines, type PdfFragment, type PdfPageFragments } from './pdf-text';
 export {
   findDate,
   interpretMatrices,

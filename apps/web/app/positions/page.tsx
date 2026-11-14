@@ -2,8 +2,6 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { graphqlMutation, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
-import { EntityForm } from '@/components/forms/EntityForm';
 import { type RelatedAttributeColumn } from '@/components/entities/EntityAttributeTable';
 import { EntityHome } from '@/components/entities/EntityHome';
 import { useTemporalStore } from '@/lib/store';
@@ -31,32 +29,7 @@ const RELATED: RelatedAttributeColumn[] = [
 
 export default function PositionsPage() {
   const [totalCount, setTotalCount] = useState(0);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [showCreateModal, setShowCreateModal] = useState(false);
   const asOfDate = useTemporalStore(state => state.asOfDate);
-
-  const handleCreate = async (formData: any) => {
-    const { data } = await graphqlMutation<{ createEntity: { entity: any; errors: any[] } }>(
-      CREATE_ENTITY_MUTATION,
-      {
-        input: {
-          entityCode: formData.code,
-          entityName: formData.name,
-          domainCode: 'POSITION',
-          templateCode: formData.template,
-          description: formData.description || '',
-          clientId: formData.clientId || null,
-          attributes: formData.attributes || {},
-          parentRelationships: toRelationshipInputs(formData.parentRelationships, 'parent'),
-          childRelationships: toRelationshipInputs(formData.childRelationships, 'child'),
-        },
-      }
-    );
-    if (data?.createEntity?.entity) {
-      setShowCreateModal(false);
-      setRefreshKey((k) => k + 1);
-    }
-  };
 
   return (
     <div className="view-fade">
@@ -77,7 +50,7 @@ export default function PositionsPage() {
         <div className="page-actions">
           <Link href="/imports" className="btn">Load position file</Link>
           <Link href="/load" className="btn">Any file</Link>
-          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>+ New Record</button>
+          <Link href="/positions/new" className="btn btn-primary">+ New Record</Link>
         </div>
       </div>
 
@@ -85,28 +58,10 @@ export default function PositionsPage() {
         domainCode="POSITION"
         domainKey="positions"
         asOfDate={asOfDate}
-        refreshKey={refreshKey}
         emptyMessage="No positions yet. Load a position file to create issuers, funds, securities, and positions."
         related={RELATED}
         onTotalChange={setTotalCount}
       />
-
-      {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px', maxHeight: '90vh', overflow: 'auto' }}>
-            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Create New Position</h2>
-              <button onClick={() => setShowCreateModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer' }}>×</button>
-            </div>
-            <EntityForm
-              domain="positions"
-              mode="create"
-              onSubmit={handleCreate}
-              onCancel={() => setShowCreateModal(false)}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 }

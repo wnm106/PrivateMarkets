@@ -7,7 +7,10 @@ import {
   collectCalcRefs,
   decompileCalcExpression,
   deleteCalcDraft,
+  enclosingCall,
+  exprPullsLatest,
   insertCalcDraft,
+  relatedFieldText,
   tokenizeCalcDraft,
   type CalcDraftToken,
 } from '@/lib/calc-expression';
@@ -134,7 +137,7 @@ export function CalculationWorkspace({
       attributeRegister: CalcAttributeOption[];
       relationshipTypes: CalcRelationship[];
       expressionFunctions: ExpressionFn[];
-    }>(CATALOG_QUERY, {}, 'network-only').then((result) => {
+    }, Record<string, never>>(CATALOG_QUERY, {}, 'network-only').then((result) => {
       if (cancelled || !result.data) return;
       const nextNames: Record<string, string> = {};
       for (const domain of result.data.domainTypes || []) nextNames[domain.domainCode] = domain.domainName;
@@ -143,6 +146,53 @@ export function CalculationWorkspace({
       setRelationships(result.data.relationshipTypes || []);
       const loaded = result.data.expressionFunctions || [];
       const codes = new Set(loaded.map((fn) => fn.code));
+      const fallbacks: ExpressionFn[] = [
+        {
+          code: 'LATEST',
+          name: 'Latest related value',
+          category: 'ROW',
+          description: 'Reads an attribute on the latest related record, as of the page date and known at the knowledge date. LATEST(PERIOD_EBITDA, PERIOD_LABEL, "LTM") keeps the latest record whose label is LTM.',
+          signature: 'LATEST(attribute)',
+          callable: true,
+        },
+        {
+          code: 'PRIOR',
+          name: 'Prior period',
+          category: 'ROW',
+          description: 'The attribute on the previous period of this record. The first period stays blank.',
+          signature: 'PRIOR(attribute)',
+          callable: true,
+        },
+        {
+          code: 'TRAIL',
+          name: 'Trailing sum',
+          category: 'ROW',
+          description: 'Sums the attribute over this period and the periods before it. The result stays blank until that many periods exist.',
+          signature: 'TRAIL(attribute, periods)',
+          callable: true,
+        },
+        {
+          code: 'CUMSUM',
+          name: 'Cumulative sum',
+          category: 'ROW',
+          description: 'Sums the attribute from the first period through this one.',
+          signature: 'CUMSUM(attribute)',
+          callable: true,
+        },
+        {
+          code: 'WHEN_PRIOR',
+          name: 'When a prior period exists',
+          category: 'ROW',
+          description: 'The attribute on this period once a prior period exists. The first period stays blank.',
+          signature: 'WHEN_PRIOR(attribute)',
+          callable: true,
+        },
+      ];
+      for (const fn of fallbacks) {
+        if (codes.has(fn.code)) continue;
+        loaded.push(fn);
+        codes.add(fn.code);
+      }
       const periods = AS_OF_PERIODS.map((period) => ({
         code: period.code,
         name: period.name,
@@ -158,7 +208,7 @@ export function CalculationWorkspace({
     return () => { cancelled = true; };
   }, []);
 
-  const selfOnly = spec.evaluationMode === 'ON_READ';
+  const selfOnly = false;
   const returnType = attributes.find((item) => item.attributeCode === spec.attributeCode)?.dataType || '';
   const choices = useMemo(
     () => fieldChoices(spec.domainCode, attributes, relationships, names, selfOnly),
@@ -375,7 +425,10 @@ function ExpressionDesigner({
         relationshipCodes: choice.place.relationshipCodes,
       },
     }));
-    writeInsertion(choice.attributeCode);
+    const text = choice.place.traversal !== 'SELF' && !enclosingCall(tokens, safeGap, 'LATEST')
+      ? relatedFieldText(choice.attributeCode)
+      : choice.attributeCode;
+    writeInsertion(text);
   };
 
   const insertRow = (row: PickerRow) => {
@@ -401,7 +454,7 @@ function ExpressionDesigner({
     if (event.key === 'Enter') {
       event.preventDefault();
       const typed = partial.trim();
-      if (isCalcNumber(typed)) {
+      if (isCalcNumber(typed) || isCalcString(typed)) {
         writeInsertion(typed);
         return;
       }
@@ -454,7 +507,7 @@ function ExpressionDesigner({
       const operands = used.map((code) => bindings[code] || inferBinding(code, choices, spec.domainCode));
       const result = await graphqlMutation<{
         updateCalcExpression: { definition: CalculationSpec | null; errors: Array<{ message: string }> };
-      }>(SAVE_EXPRESSION, { id: spec.id, expression, operands });
+      }, { id: string; expression: unknown; operands: CalcOperandBinding[] }>(SAVE_EXPRESSION, { id: spec.id, expression, operands });
       const saved = result.data?.updateCalcExpression;
       const message = result.error?.message || saved?.errors?.[0]?.message;
       if (message || !saved?.definition) {
@@ -474,9 +527,7 @@ function ExpressionDesigner({
     }
   };
 
-  const help = selfOnly
-    ? 'Every attribute comes from this record. Type to search, or press /.'
-    : 'Build the value from other attributes. Type to search, or press /.';
+  const help = 'Build the value from other attributes. A field on a related record uses LATEST, which reads the latest one as of the page date and known at the knowledge date. LATEST(PERIOD_EBITDA, PERIOD_LABEL, "LTM") keeps the latest record whose label is LTM.';
 
   const fieldMeta = (code: string) => {
     const binding = bindings[code] || inferBinding(code, choices, spec.domainCode);
@@ -567,7 +618,7 @@ function ExpressionDesigner({
                 caption={meta.caption}
                 hint={meta.hint}
                 onActivate={() => activate(index + 1)}
-                onRemove={token.kind === 'field' || token.kind === 'fn' || token.kind === 'number' || token.kind === 'text' ? () => removeAt(index) : undefined}
+                onRemove={token.kind === 'field' || token.kind === 'fn' || token.kind === 'number' || token.kind === 'string' || token.kind === 'text' ? () => removeAt(index) : undefined}
               />
             </Fragment>
           );
@@ -674,6 +725,9 @@ function ExpressionDesigner({
                   relationshipCodes: choice.place.relationshipCodes,
                 }));
                 const attribute = options[0] || choices.find((choice) => choice.attributeCode === code);
+                const from = sourceCaption(binding, spec.domainCode, relationships, names);
+                const latest = Boolean(compiled.expr && exprPullsLatest(compiled.expr, code) && binding.traversal !== 'SELF');
+                const fromLabel = latest ? `Latest · ${from}` : from;
                 return (
                   <div key={code} className="calc-read">
                     <span title={code}>{attribute?.attributeName || code}</span>
@@ -695,13 +749,13 @@ function ExpressionDesigner({
                           }));
                         }}
                       >
-                        {selected < 0 && <option value="current">{sourceCaption(binding, spec.domainCode, relationships, names)}</option>}
+                        {selected < 0 && <option value="current">{fromLabel}</option>}
                         {options.map((choice, index) => (
                           <option key={choice.groupLabel} value={index}>{choice.groupLabel}</option>
                         ))}
                       </select>
                     ) : (
-                      <span className="calc-read-from">{sourceCaption(binding, spec.domainCode, relationships, names)}</span>
+                      <span className="calc-read-from">{fromLabel}</span>
                     )}
                   </div>
                 );
@@ -761,7 +815,7 @@ function FormulaChip({
   if (token.kind === 'keyword') {
     return <button type="button" className="calc-keyword" tabIndex={-1} onMouseDown={hold}>{token.text.toUpperCase()}</button>;
   }
-  const tone = token.kind === 'fn' ? 'fn' : token.kind === 'number' ? 'num' : token.kind === 'text' ? 'bad' : '';
+  const tone = token.kind === 'fn' ? 'fn' : token.kind === 'number' || token.kind === 'string' ? 'num' : token.kind === 'text' ? 'bad' : '';
   return (
     <span className={`calc-chip${tone ? ` ${tone}` : ''}`} title={hint || undefined} onMouseDown={hold}>
       <span className="calc-chip-code">{token.text}</span>
@@ -836,6 +890,10 @@ function isCalcIdent(value: string) {
 
 function isCalcNumber(value: string) {
   return /^(?:\d+(?:\.\d+)?|\.\d+)$/.test(value);
+}
+
+function isCalcString(value: string) {
+  return /^"(?:[^"\\]|\\.)*"$/.test(value);
 }
 
 function isCalcAtom(value: string) {

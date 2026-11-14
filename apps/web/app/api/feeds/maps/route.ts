@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { assignmentsFromMap, listReusableMaps } from '@/lib/feeds/import-instances';
-import { requireFeedUser } from '@/lib/feeds/require-user';
+import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
 import { feedMapFromAssignments } from '@/lib/feeds/suggest';
 
 export const dynamic = 'force-dynamic';
@@ -8,8 +8,10 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const user = await requireFeedUser();
   if (!user) return NextResponse.json({ error: 'Sign in to read import maps.' }, { status: 401 });
+  const clientId = await feedClientId();
+  if (!clientId) return NextResponse.json({ error: 'Choose a client before loading the file' }, { status: 400 });
   try {
-    const maps = await listReusableMaps();
+    const maps = await listReusableMaps(clientId);
     return NextResponse.json({
       maps: maps.map((map) => ({
         mapCode: map.mapCode,

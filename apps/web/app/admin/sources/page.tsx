@@ -173,7 +173,7 @@ export default function AdminSourcesPage() {
       field: 'sourceCode',
       headerName: 'Code',
       minWidth: 140,
-      cellRenderer: (params: any) => <code className="text-sm bg-gray-100 px-2 py-1 rounded">{params.value}</code>,
+      cellRenderer: (params: any) => <code className="text-[13px] bg-gray-100 px-2 py-1 rounded">{params.value}</code>,
     },
     { field: 'sourceType', headerName: 'Type', width: 130, cellRenderer: SourceTypeCell },
     { field: 'vendorName', headerName: 'Vendor', flex: 1, valueFormatter: (params) => params.value || '-' },
@@ -197,11 +197,16 @@ export default function AdminSourcesPage() {
 
   return (
     <div className="screen">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold mb-2">Source Registry</h1>
-        <p className="text-gray-600">
-          Manage the data sources that provide attribute values for entities. Manual Override is protected and cannot be removed.
-        </p>
+      <div className="page-header">
+        <div className="page-title-block">
+          <div style={{ width: '4px', height: '48px', background: 'var(--accent)' }}></div>
+          <div>
+            <div className="page-title">Source Registry</div>
+            <div className="page-meta">
+              Manage the data sources that provide attribute values for entities. Manual Override is protected and cannot be removed.
+            </div>
+          </div>
+        </div>
       </div>
 
       {error && (
@@ -242,13 +247,13 @@ export default function AdminSourcesPage() {
           <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
             <div className="p-6">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold">{editingSource ? 'Edit Source' : 'Add Source'}</h2>
-                <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                <h2 className="text-[18px] font-semibold">{editingSource ? 'Edit Source' : 'Add Source'}</h2>
+                <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600 text-[18px]">×</button>
               </div>
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-[13px] font-medium text-gray-700 mb-1">
                     Source Name <span className="text-red-500">*</span>
                   </label>
                   <input type="text" value={formData.sourceName}
@@ -262,7 +267,7 @@ export default function AdminSourcesPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-[13px] font-medium text-gray-700 mb-1">
                     Source Code <span className="text-red-500">*</span>
                   </label>
                   <input type="text" value={formData.sourceCode}
@@ -270,11 +275,11 @@ export default function AdminSourcesPage() {
                     disabled={!!editingSource}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="e.g., BLOOMBERG" />
-                  <p className="text-xs text-gray-500 mt-1">Auto-generated from name. Uppercase snake_case format.</p>
+                  <p className="text-[11px] text-gray-500 mt-1">Auto-generated from name. Uppercase snake_case format.</p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Source Type</label>
+                  <label className="block text-[13px] font-medium text-gray-700 mb-1">Source Type</label>
                   <select value={formData.sourceType} onChange={(e) => setFormData({ ...formData, sourceType: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
                     {SOURCE_TYPES.map((type) => (<option key={type} value={type}>{type}</option>))}
@@ -282,7 +287,7 @@ export default function AdminSourcesPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Vendor Name</label>
+                  <label className="block text-[13px] font-medium text-gray-700 mb-1">Vendor Name</label>
                   <input type="text" value={formData.vendorName}
                     onChange={(e) => setFormData({ ...formData, vendorName: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -291,14 +296,14 @@ export default function AdminSourcesPage() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Feed Format</label>
+                    <label className="block text-[13px] font-medium text-gray-700 mb-1">Feed Format</label>
                     <select value={formData.feedFormat} onChange={(e) => setFormData({ ...formData, feedFormat: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
                       {FEED_FORMATS.map((format) => (<option key={format} value={format}>{format}</option>))}
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Feed Frequency</label>
+                    <label className="block text-[13px] font-medium text-gray-700 mb-1">Feed Frequency</label>
                     <select value={formData.feedFrequency} onChange={(e) => setFormData({ ...formData, feedFrequency: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
                       {FEED_FREQUENCIES.map((freq) => (<option key={freq} value={freq}>{freq}</option>))}
@@ -307,15 +312,15 @@ export default function AdminSourcesPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Precedence Rank</label>
+                  <label className="block text-[13px] font-medium text-gray-700 mb-1">Precedence Rank</label>
                   <input type="number" value={formData.precedenceRank}
                     onChange={(e) => setFormData({ ...formData, precedenceRank: parseInt(e.target.value) || 100 })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" min="1" />
-                  <p className="text-xs text-gray-500 mt-1">Lower numbers have higher priority</p>
+                  <p className="text-[11px] text-gray-500 mt-1">Lower numbers have higher priority</p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Color</label>
+                  <label className="block text-[13px] font-medium text-gray-700 mb-1">Color</label>
                   <div className="flex items-center gap-3">
                     <input type="color" value={formData.color}
                       onChange={(e) => setFormData({ ...formData, color: e.target.value })}
@@ -331,7 +336,7 @@ export default function AdminSourcesPage() {
                   <div className="flex items-center gap-2">
                     <input type="checkbox" id="isActive" checked={formData.isActive}
                       onChange={(e) => setFormData({ ...formData, isActive: e.target.checked })} className="w-4 h-4" />
-                    <label htmlFor="isActive" className="text-sm font-medium text-gray-700">Active</label>
+                    <label htmlFor="isActive" className="text-[13px] font-medium text-gray-700">Active</label>
                   </div>
                 )}
               </div>
@@ -373,7 +378,7 @@ function SourceTypeCell(props: any) {
     : sourceType === 'INTERNAL' ? 'bg-green-100 text-green-800'
     : sourceType === 'MANUAL' ? 'bg-yellow-100 text-yellow-800'
     : 'bg-gray-100 text-gray-800';
-  return <span className={`px-2 py-1 text-xs font-medium rounded ${tone}`}>{sourceType}</span>;
+  return <span className={`px-2 py-1 text-[11px] font-medium rounded ${tone}`}>{sourceType}</span>;
 }
 
 function SourceStatusCell(props: any) {
@@ -384,7 +389,7 @@ function SourceStatusCell(props: any) {
       type="button"
       onClick={() => actions.handleToggleActive(source)}
       disabled={source.isProtected && source.isActive}
-      className={`px-3 py-1 text-xs font-medium rounded ${
+      className={`px-3 py-1 text-[11px] font-medium rounded ${
         source.isActive ? 'bg-green-100 text-green-800 hover:bg-green-200' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
       } ${source.isProtected && source.isActive ? 'cursor-not-allowed opacity-50' : ''}`}
     >

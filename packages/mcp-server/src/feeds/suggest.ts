@@ -1,6 +1,6 @@
 import { POSITION_FILE_MAP } from './position-file-map';
 import type { ColumnTransform, FeedMap, TransformKind } from './types';
-import { applyTransform } from './values';
+import { applyTransform, isBlankToken, numberText, parseUsDate } from './values';
 
 export type AssignmentRole = 'ignore' | 'filter' | 'as_of' | 'source' | 'identity' | 'name' | 'attribute' | 'parent';
 
@@ -90,7 +90,8 @@ const DOMAIN_PREFIX: Record<string, string> = {
 
 export function domainLabel(code: string | null | undefined): string {
   if (!code) return 'File';
-  return DOMAIN_LABELS[code] || code.charAt(0) + code.slice(1).toLowerCase();
+  const plain = code.replace(/_/g, ' ').toLowerCase();
+  return DOMAIN_LABELS[code] || plain.charAt(0).toUpperCase() + plain.slice(1);
 }
 
 const TEMPLATE_BY_DOMAIN: Record<string, string> = {
@@ -118,6 +119,39 @@ function tokens(value: string): string[] {
     .filter((token) => token && !['the', 'of', 'a', 'an'].includes(token));
 }
 
+/** Up to `limit` non-empty values of a column, for judging what kind of data it holds. */
+function valuesFor(rows: Record<string, string>[], column: string, limit = 30): string[] {
+  const values: string[] = [];
+  for (const row of rows) {
+    const value = (row[column] || '').trim();
+    if (!value || isBlankToken(value)) continue;
+    values.push(value);
+    if (values.length >= limit) break;
+  }
+  return values;
+}
+
+const NUMERIC_TYPES = new Set(['NUMBER', 'INTEGER', 'DECIMAL', 'CURRENCY', 'PERCENTAGE']);
+
+/**
+ * How well a column's values fit a field's data type, from 0 to 1. A column of loan
+ * names does not fit a money amount however alike the two names are.
+ */
+export function sampleFit(values: string[], dataType?: string | null): number {
+  if (values.length === 0 || !dataType) return 1;
+  const share = (test: (value: string) => boolean) => values.filter(test).length / values.length;
+  if (NUMERIC_TYPES.has(dataType)) return share((value) => numberText(value.replace(/%$/, '')) !== null);
+  if (dataType === 'DATE') return share((value) => parseUsDate(value) !== null);
+  if (dataType === 'BOOLEAN') return share((value) => /^(true|false|yes|no|y|n|0|1)$/i.test(value));
+  return 1;
+}
+
+/** Below this, a field is not offered for the column at all. Below the next, it needs the user's decision. */
+const FIT_REJECT = 0.5;
+const FIT_CONFIRM = 0.9;
+/** The most a suggestion can claim when it needs a person to look at it. Under the confirmation threshold. */
+const NEEDS_LOOK = 0.7;
+
 function samplesFor(rows: Record<string, string>[], column: string): string[] {
   const seen = new Set<string>();
   const samples: string[] = [];
@@ -140,7 +174,7 @@ function distinctFor(rows: Record<string, string>[], column: string): { count: n
   }
   const values = [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 40)
+    .slice(0, 50)
     .map(([value, count]) => ({ value, count }));
   return { count: counts.size, values };
 }
@@ -292,6 +326,34 @@ function splitHeader(column: string): { domain: string | null; field: string } {
   return { domain: null, field: column };
 }
 
+/**
+ * A column named for a record type, holding names that mostly differ from row to row,
+ * identifies those records. "Issuer" with Acme, Beta, Gamma is the issuer, not a field of it.
+ * This runs before any field is matched, so the other columns can be placed on these records.
+ */
+function detectHeaderIdentities(headers: string[], rows: Record<string, string>[], domainCodes: Set<string>): Map<string, string> {
+  const found = new Map<string, string>();
+  const taken = new Set<string>();
+  for (const column of headers.filter(Boolean)) {
+    const words = tokens(column);
+    if (words.length === 0 || words.some((word) => ['name', 'id', 'code', 'number', 'no'].includes(word))) continue;
+    const values = valuesFor(rows, column);
+    if (values.length === 0) continue;
+    if (sampleFit(values, 'NUMBER') >= 0.5 || sampleFit(values, 'DATE') >= 0.5) continue;
+    if (new Set(values).size / values.length < 0.5) continue;
+    const matches = [...domainCodes].filter((code) => {
+      const parts = tokens(code.replace(/_/g, ' '));
+      return words.every((word) => parts.includes(word)) && parts[parts.length - 1] === words[words.length - 1];
+    });
+    const exact = matches.filter((code) => tokens(code.replace(/_/g, ' ')).join(' ') === words.join(' '));
+    const domain = exact.length === 1 ? exact[0] : matches.length === 1 ? matches[0] : null;
+    if (!domain || taken.has(domain)) continue;
+    taken.add(domain);
+    found.set(column, domain);
+  }
+  return found;
+}
+
 function parentsOf(domainCode: string): string[] {
   return IDENTITY_LINKS.filter((link) => link.child === domainCode).map((link) => link.parent);
 }
@@ -341,7 +403,9 @@ function qualifiedAssignment(
       if (attribute.domainCode && attribute.domainCode !== domainCode) continue;
       const key = `${domainCode}:${attribute.attributeCode}`;
       if (usedAttributes.has(key)) continue;
-      const score = scoreAttribute(split.field, attribute, domainCode);
+      const fit = sampleFit(valuesFor(rows, column), attribute.dataType);
+      if (fit < FIT_REJECT) continue;
+      const score = fit < FIT_CONFIRM ? Math.min(scoreAttribute(split.field, attribute, domainCode), NEEDS_LOOK) : scoreAttribute(split.field, attribute, domainCode);
       if (!best || score > best.score) best = { score, domainCode, attribute, hopped: domainCode !== split.domain };
     }
   }
@@ -422,6 +486,9 @@ export function suggestAssignments(
 ): ColumnAssignment[] {
   const hintByColumn = new Map(hints.map((hint) => [hint.sourceColumn, hint]));
   const usedAttributes = new Set<string>();
+  const domainCodes = new Set(attributes.map((attribute) => attribute.domainCode).filter((code): code is string => Boolean(code)));
+  const headerIdentities = detectHeaderIdentities(headers.filter((column) => !hintByColumn.has(column) && !knownAssignment(column, rows)), rows, domainCodes);
+  const identified = new Set<string>([...headerIdentities.values(), ...hints.filter((hint) => hint.role === 'identity' && hint.domainCode).map((hint) => hint.domainCode as string)]);
   const assignments = headers.filter(Boolean).map((column) => {
     const known = knownAssignment(column, rows);
     if (known) {
@@ -440,6 +507,12 @@ export function suggestAssignments(
       return withDistinct(assignment, rows);
     }
 
+    const identityDomain = headerIdentities.get(column);
+    if (identityDomain) {
+      const label = domainLabel(identityDomain).toLowerCase();
+      return withDistinct(structural(column, samplesFor(rows, column), 'identity', identityDomain, `${column} holds a different ${label} on most rows, so it identifies each ${label}.`, 0.9), rows);
+    }
+
     const qualified = qualifiedAssignment(column, rows, attributes, usedAttributes);
     if (qualified) return withDistinct(qualified, rows);
 
@@ -447,19 +520,36 @@ export function suggestAssignments(
     if (bare) return withDistinct(bare, rows);
 
     const samples = samplesFor(rows, column);
-    let best: { score: number; domainCode: string; attribute: AttributeChoice } | null = null;
+    const values = valuesFor(rows, column);
+    let best: { score: number; ranked: number; domainCode: string; attribute: AttributeChoice; fit: number } | null = null;
     for (const attribute of attributes) {
+      const fit = sampleFit(values, attribute.dataType);
+      if (fit < FIT_REJECT) continue;
       const domains = attribute.domainCode ? [attribute.domainCode] : LOAD_DOMAINS;
       for (const domainCode of domains) {
         const key = `${domainCode}:${attribute.attributeCode}`;
         if (usedAttributes.has(key)) continue;
         const score = scoreAttribute(column, attribute, domainCode);
-        if (!best || score > best.score) best = { score, domainCode, attribute };
+        if (score < 0.45) continue;
+        // A field on a record this file identifies wins over a slightly better name match on one it does not.
+        const ranked = score + (identified.has(domainCode) ? 0.12 : 0);
+        if (!best || ranked > best.ranked) best = { score, ranked, domainCode, attribute, fit };
       }
     }
 
-    if (best && best.score >= 0.45) {
+    if (best) {
       usedAttributes.add(`${best.domainCode}:${best.attribute.attributeCode}`);
+      const homeless = identified.size > 0 && !identified.has(best.domainCode);
+      const notes: string[] = [];
+      let confidence = Number(best.score.toFixed(2));
+      if (best.fit < FIT_CONFIRM) {
+        confidence = Math.min(confidence, NEEDS_LOOK);
+        notes.push(`Only ${Math.round(best.fit * 100)}% of the values look like ${best.attribute.dataType === 'DATE' ? 'dates' : 'numbers'}.`);
+      }
+      if (homeless) {
+        confidence = Math.min(confidence, NEEDS_LOOK);
+        notes.push(`This file has no identity column for the ${domainLabel(best.domainCode).toLowerCase()}, so check where it belongs.`);
+      }
       return withDistinct({
         sourceColumn: column,
         samples,
@@ -471,8 +561,8 @@ export function suggestAssignments(
         transform: suggestTransform(samples, best.attribute.dataType, best.attribute.referenceListCode),
         suggestion: {
           method: 'name',
-          confidence: Number(best.score.toFixed(2)),
-          reason: `${column} matches ${best.attribute.attributeName} on the ${domainLabel(best.domainCode).toLowerCase()}.`,
+          confidence,
+          reason: [`${column} matches ${best.attribute.attributeName} on the ${domainLabel(best.domainCode).toLowerCase()}.`, ...notes].join(' '),
         },
       }, rows);
     }
@@ -495,6 +585,11 @@ export function suggestAssignments(
     }, rows);
   });
 
+  return promoteNamesToIdentity(assignments);
+}
+
+/** A file with a name for a record type but no code uses the name to tell its records apart. */
+export function promoteNamesToIdentity(assignments: ColumnAssignment[]): ColumnAssignment[] {
   const identityDomains = new Set(assignments.filter((assignment) => assignment.role === 'identity' && assignment.domainCode).map((assignment) => assignment.domainCode));
   return assignments.map((assignment) => {
     if (assignment.role !== 'name' || !assignment.domainCode || identityDomains.has(assignment.domainCode)) return assignment;
@@ -651,6 +746,36 @@ export interface FeedMapIdentity {
   sourceCode: string;
   name: string;
   description: string;
+}
+
+export interface OrphanColumn {
+  column: string;
+  domainCode: string;
+}
+
+/**
+ * Columns pointed at a record type that has no identity column. Such a record
+ * type is never created, so its columns would be dropped without a word.
+ */
+export function orphanColumns(assignments: ColumnAssignment[]): OrphanColumn[] {
+  const identified = new Set(
+    assignments.filter((assignment) => assignment.role === 'identity' && assignment.domainCode).map((assignment) => assignment.domainCode as string),
+  );
+  return assignments
+    .filter((assignment) => (
+      (assignment.role === 'attribute' || assignment.role === 'name' || assignment.role === 'parent')
+      && assignment.domainCode
+      && !identified.has(assignment.domainCode)
+    ))
+    .map((assignment) => ({ column: assignment.sourceColumn, domainCode: assignment.domainCode as string }));
+}
+
+export function describeOrphans(orphans: OrphanColumn[]): string {
+  const byDomain = new Map<string, string[]>();
+  for (const orphan of orphans) byDomain.set(orphan.domainCode, [...(byDomain.get(orphan.domainCode) || []), orphan.column]);
+  return [...byDomain.entries()]
+    .map(([domain, columns]) => `${columns.map((column) => `"${column}"`).join(', ')} ${columns.length === 1 ? 'belongs' : 'belong'} to ${domain}, which has no identity column`)
+    .join('; ');
 }
 
 export function feedMapFromAssignments(

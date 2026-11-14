@@ -1,18 +1,20 @@
 ﻿'use client';
 
-import { useEffect, useState, type CSSProperties } from 'react';
-import Link from 'next/link';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { EntityData } from './types';
 import { SourceAttributedFieldRow, type FieldData } from './SourceAttributedFieldRow';
-import { sources, type SourceKey } from '@/lib/data';
+import { type SourceKey } from '@/lib/data';
 import { useTemporalStore } from '@/lib/store';
-import { ATTRIBUTE_SECTIONS_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
-import { DisplayLayoutView, type ResolvedLayoutView } from './DisplayLayoutView';
+import { ATTRIBUTE_SECTIONS_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
+import { DisplayLayoutView, type DisplayCellData, type ResolvedLayoutView } from './DisplayLayoutView';
 import { EntityReports } from '@/components/reporting/EntityReports';
 import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard';
-import { domainHref } from '@/lib/domain-routes';
-import { ParentEntities } from './ParentEntities';
-import { groupForDisplay, type AttributeSectionOrder } from '@/lib/attribute-layout';
+import { RelationshipEntityGrids } from './RelationshipEntityGrids';
+import { classifyRecordRelationships, singularRelatedRefs } from '@/lib/relationship-grids';
+import { definingParentDomains, toParentLinkCounts, type ParentLinkCount, type ParentRelationshipType } from '@/lib/parent-entities';
+import { supabaseBrowserClient } from '@/lib/supabase-browser';
+import { attributeSectionLinks, groupForDisplay, type AttributeSectionOrder } from '@/lib/attribute-layout';
+import { decompileCalcExpression } from '@/lib/calc-expression';
 
 export interface TemplateAttribute {
   attributeCode: string;
@@ -25,6 +27,7 @@ export interface TemplateAttribute {
   dataType?: string;
   isDerived?: boolean;
   derivationFormula?: string | null;
+  isEditable?: boolean;
 }
 
 export interface LineageData {
@@ -58,32 +61,10 @@ interface GoldenRecordSectionsProps {
   lineageLoaded?: boolean;
 }
 
-const FORMULA_OPS: Record<string, string> = { add: '+', sub: '−', mul: '×', div: '÷' };
-
 function formulaLabel(formula: string | null | undefined): string {
   if (!formula) return 'Calculated';
-  const text = formula.replace(/^CALC_SPEC:/, '');
-  try {
-    return formatFormula(JSON.parse(text)) || text;
-  } catch {
-    return text;
-  }
-}
-
-function formatFormula(expr: any): string {
-  if (expr == null) return '';
-  if (typeof expr === 'string' || typeof expr === 'number') return String(expr);
-  if (typeof expr.ref === 'string') return expr.ref.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (letter: string) => letter.toUpperCase());
-  if (typeof expr.attributeCode === 'string') return expr.attributeCode;
-  if (typeof expr.op === 'string' && Array.isArray(expr.args)) {
-    const op = FORMULA_OPS[expr.op] || expr.op;
-    return expr.args.map(formatFormula).filter(Boolean).join(` ${op} `);
-  }
-  if (typeof expr.fn === 'string') {
-    const args = Array.isArray(expr.args) ? expr.args.map(formatFormula).filter(Boolean).join(', ') : '';
-    return `${expr.fn}(${args})`;
-  }
-  return '';
+  const shown = decompileCalcExpression(formula.replace(/^CALC_SPEC:/, ''));
+  return shown || 'Calculated';
 }
 
 const ENTITY_DISPLAY_QUERY = `
@@ -141,12 +122,33 @@ export function GoldenRecordSections({
     .map((row) => `${row.attributeCode}:${row.currentValue ?? ''}:${row.lastUpdated ?? ''}`)
     .join('|');
   const [tab, setTab] = useState<'attributes' | 'dashboards' | 'quality' | 'relationships'>('attributes');
-  const [layouts, setLayouts] = useState<ResolvedLayoutView[]>([]);
+  const [relationshipCatalog, setRelationshipCatalog] = useState<{
+    types: ParentRelationshipType[];
+    linkCounts: ParentLinkCount[];
+    parentDomains: string[];
+  } | null>(null);
   const [controls, setControls] = useState<Record<string, string> | null>(null);
   const [displayVersion, setDisplayVersion] = useState(0);
   const [derivedFormulas, setDerivedFormulas] = useState<Record<string, string>>({});
-  const [sections, setSections] = useState<AttributeSectionOrder[]>([]);
   const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+  const domainCode = entity.domainCode || '';
+  const [sectionState, setSectionState] = useState<{ domainCode: string; sections: AttributeSectionOrder[] | null }>({
+    domainCode,
+    sections: domainCode ? null : [],
+  });
+  if (sectionState.domainCode !== domainCode) {
+    setSectionState({ domainCode, sections: domainCode ? null : [] });
+  }
+  const sections = sectionState.domainCode === domainCode ? sectionState.sections : null;
+  const layoutKey = `${entity.id}\0${asOfDate ?? ''}\0${knowledgeDate ?? ''}`;
+  const [layoutState, setLayoutState] = useState<{ key: string; layouts: ResolvedLayoutView[] | null }>({
+    key: layoutKey,
+    layouts: null,
+  });
+  if (layoutState.key !== layoutKey) {
+    setLayoutState({ key: layoutKey, layouts: null });
+  }
+  const layouts = layoutState.key === layoutKey ? layoutState.layouts : null;
 
   useEffect(() => {
     const domainCode = entity.domainCode;
@@ -168,7 +170,6 @@ export function GoldenRecordSections({
   }, [entity.domainCode]);
 
   useEffect(() => {
-    const domainCode = entity.domainCode;
     if (!domainCode) return;
     let cancelled = false;
     graphqlQuery<{ attributeSections: AttributeSectionOrder[] }, { domainCode: string }>(
@@ -176,14 +177,46 @@ export function GoldenRecordSections({
       { domainCode },
       'network-only',
     ).then((result) => {
-      if (!cancelled) setSections(result.data?.attributeSections || []);
+      if (cancelled) return;
+      const next = result.data?.attributeSections || [];
+      setSectionState((current) => (current.domainCode === domainCode ? { domainCode, sections: next } : current));
+    }).catch(() => {
+      if (cancelled) return;
+      setSectionState((current) => (current.domainCode === domainCode ? { domainCode, sections: [] } : current));
     });
     return () => { cancelled = true; };
-  }, [entity.domainCode]);
+  }, [domainCode]);
 
   useEffect(() => {
     setControls(null);
   }, [entity.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRelationshipCatalog(null);
+    Promise.all([
+      graphqlQuery<{ relationshipTypes: ParentRelationshipType[] }, Record<string, never>>(
+        RELATIONSHIP_TYPES_QUERY,
+        {},
+        'network-only',
+      ),
+      graphqlQuery<
+        { intersectionTypes: Array<{ intersectionCode: string; isActive: boolean; members: Array<{ domainCode: string }> }> },
+        Record<string, never>
+      >(INTERSECTION_TYPES_QUERY, {}, 'network-only'),
+      supabaseBrowserClient().rpc('relationship_link_counts'),
+    ]).then(([relationships, intersections, counts]) => {
+      if (cancelled) return;
+      setRelationshipCatalog({
+        types: relationships.data?.relationshipTypes || [],
+        linkCounts: counts.error ? [] : toParentLinkCounts((counts.data || []) as Array<Record<string, unknown>>),
+        parentDomains: definingParentDomains(entity.domainCode, intersections.data?.intersectionTypes || []),
+      });
+    }).catch(() => {
+      if (!cancelled) setRelationshipCatalog({ types: [], linkCounts: [], parentDomains: [] });
+    });
+    return () => { cancelled = true; };
+  }, [entity.domainCode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -193,16 +226,18 @@ export function GoldenRecordSections({
       'network-only',
     ).then((result) => {
       if (cancelled) return;
-      setLayouts(result.error ? [] : (result.data?.entityDisplay?.layouts ?? []));
+      const next = result.error ? [] : (result.data?.entityDisplay?.layouts ?? []);
+      setLayoutState((current) => (current.key === layoutKey ? { key: layoutKey, layouts: next } : current));
     }).catch(() => {
-      if (!cancelled) setLayouts([]);
+      if (cancelled) return;
+      setLayoutState((current) => (current.key === layoutKey ? { key: layoutKey, layouts: [] } : current));
     });
     return () => { cancelled = true; };
-  }, [entity.id, asOfDate, knowledgeDate, controls, displayVersion]);
+  }, [entity.id, asOfDate, knowledgeDate, controls, displayVersion, layoutKey]);
 
   const attributes = entity.attributes || {};
   const assignedCodes = new Set(templateAttributes.map((attribute) => attribute.attributeCode));
-  const layoutCodes = new Set(layouts.flatMap((layout) => layout.rows.map((row) => row.attributeCode)));
+  const layoutCodes = new Set((layouts ?? []).flatMap((layout) => layout.rows.map((row) => row.attributeCode)));
   // Stored values can exist for attributes owned by another entity type. Once the
   // assignment catalog is loaded, only show attributes assigned to this entity.
   const attributeEntries = Object.entries(attributes).filter(([key]) =>
@@ -248,11 +283,31 @@ export function GoldenRecordSections({
 
   const parentRelationships = entity.parentRelationships || [];
   const childRelationships = entity.childRelationships || [];
-  const relationshipCount = parentRelationships.length + childRelationships.length;
+  const related = classifyRecordRelationships(
+    entity.domainCode,
+    parentRelationships.map((rel) => ({
+      entityId: rel.parentEntityId,
+      domainCode: rel.parentDomainCode,
+      relationshipCode: rel.relationshipCode,
+      members: rel.members,
+    })),
+    childRelationships.map((rel) => ({
+      entityId: rel.childEntityId,
+      domainCode: rel.childDomainCode,
+      relationshipCode: rel.relationshipCode,
+      members: rel.members,
+    })),
+  );
+  const shown = relationshipCatalog
+    ? {
+        parents: singularRelatedRefs(entity.domainCode, related.parents, relationshipCatalog.types, relationshipCatalog.linkCounts, relationshipCatalog.parentDomains),
+        children: singularRelatedRefs(entity.domainCode, related.children, relationshipCatalog.types, relationshipCatalog.linkCounts, relationshipCatalog.parentDomains),
+      }
+    : null;
+  const relationshipCount = shown ? shown.parents.length + shown.children.length : null;
 
   return (
     <div>
-      <ParentEntities domainCode={entity.domainCode} parents={parentRelationships} children={childRelationships} />
       <div style={{ display: 'flex', gap: '4px', borderBottom: '2px solid var(--line)', marginBottom: '16px' }}>
         <SectionTab
           label={`Attributes (${displayEntries.length})`}
@@ -270,7 +325,7 @@ export function GoldenRecordSections({
           onClick={() => setTab('quality')}
         />
         <SectionTab
-          label={`Relationships (${relationshipCount})`}
+          label={relationshipCount == null ? 'Relationships' : `Relationships (${relationshipCount})`}
           active={tab === 'relationships'}
           onClick={() => setTab('relationships')}
         />
@@ -281,75 +336,50 @@ export function GoldenRecordSections({
       ) : tab === 'quality' ? (
         <DataQualityDashboard embedded domainCode={entity.domainCode} entityId={entity.id} />
       ) : tab === 'relationships' ? (
-        <div>
-          <RelationshipList
-            title="Parent Relationships"
-            count={parentRelationships.length}
-            emptyText="No parent relationships."
-            rows={parentRelationships.map((rel, index) => ({
-              key: `${rel.relationshipCode}-${rel.parentEntityCode}-${index}`,
-              type: rel.relationshipType || rel.relationshipCode,
-              domain: rel.parentDomainCode,
-              name: rel.parentEntityName,
-              code: rel.parentEntityCode,
-              entityId: rel.parentEntityId,
-              members: rel.members || [],
-            }))}
+        !shown ? (
+          <div className="field-section" aria-busy="true">
+            <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>Loading…</div>
+          </div>
+        ) : (
+          <RelationshipEntityGrids
+            entityId={entity.id}
+            asOfDate={asOfDate}
+            parents={shown.parents}
+            children={shown.children}
           />
-          <RelationshipList
-            title="Child Relationships"
-            count={childRelationships.length}
-            emptyText="No child relationships."
-            rows={childRelationships.map((rel, index) => ({
-              key: `${rel.relationshipCode}-${rel.childEntityCode}-${index}`,
-              type: rel.relationshipType || rel.relationshipCode,
-              domain: rel.childDomainCode,
-              name: rel.childEntityName,
-              code: rel.childEntityCode,
-              entityId: rel.childEntityId,
-              members: rel.members || [],
-            }))}
-          />
-        </div>
-      ) : (
-      <div>
-        {layouts.map((layout) => (
-          <DisplayLayoutView
-            key={layout.id}
-            layout={layout}
-            controls={controls ?? {}}
-            onControlsChange={setControls}
-            onSaveCell={async (attributeCode, cell, value) => {
-              const result = await graphqlMutation<{ saveDisplayValue: { success: boolean; errors: Array<{ message: string }> } }, { input: Record<string, string | null> }>(
-                SAVE_DISPLAY_VALUE_MUTATION,
-                {
-                  input: {
-                    entityId: cell.entityId || entity.id,
-                    attributeCode,
-                    value,
-                    periodStart: cell.periodStart,
-                    periodEnd: cell.periodEnd,
-                    periodGrain: cell.periodGrain || null,
-                    statementBasis: cell.basis || null,
-                  },
-                },
-              );
-              const saveError = result.error?.message || result.data?.saveDisplayValue?.errors?.[0]?.message;
-              if (saveError || !result.data?.saveDisplayValue?.success) throw new Error(saveError || 'Save failed');
-              setDisplayVersion((version) => version + 1);
-            }}
-          />
-        ))}
-      {listedAttributes.length === 0 && (
-        <div className="field-section">
+        )
+      ) : !sections || !layouts ? (
+        <div className="field-section" aria-busy="true">
           <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>
-            No attribute values yet.
+            Loading…
           </div>
         </div>
-      )}
-
-      {groupForDisplay([
-        ...listedAttributes.map((templateAttr) => {
+      ) : (
+        <AttributeSections
+          layouts={layouts}
+          sections={sections}
+          controls={controls ?? {}}
+          onControlsChange={setControls}
+          onSaveCell={async (attributeCode, cell, value) => {
+            const result = await graphqlMutation<{ saveDisplayValue: { success: boolean; errors: Array<{ message: string }> } }, { input: Record<string, string | null> }>(
+              SAVE_DISPLAY_VALUE_MUTATION,
+              {
+                input: {
+                  entityId: cell.entityId || entity.id,
+                  attributeCode,
+                  value,
+                  periodStart: cell.periodStart,
+                  periodEnd: cell.periodEnd,
+                  periodGrain: cell.periodGrain || null,
+                  statementBasis: cell.basis || null,
+                },
+              },
+            );
+            const saveError = result.error?.message || result.data?.saveDisplayValue?.errors?.[0]?.message;
+            if (saveError || !result.data?.saveDisplayValue?.success) throw new Error(saveError || 'Save failed');
+            setDisplayVersion((version) => version + 1);
+          }}
+          items={listedAttributes.map((templateAttr) => {
           const key = templateAttr.attributeCode;
           const lineage = lineageMap.get(key);
           const stored = attributes[key];
@@ -416,6 +446,7 @@ export function GoldenRecordSections({
               })
               : (lineageLoaded ? [] : undefined),
             resolutionRule: formula || lineage?.resolutionRule,
+            editable: templateAttr.isEditable !== false,
           };
 
           return {
@@ -432,14 +463,120 @@ export function GoldenRecordSections({
                 onAddSourceValue={onAddSourceValue}
                 onDeleteSourceValue={onDeleteSourceValue}
                 asOfDate={asOfDate}
+                knowledgeDate={knowledgeDate}
                 entityId={entity.id}
                 calcRefreshKey={calcRefreshKey}
               />
             ),
           };
-        }),
-      ], sections).map((group) => (
-        <div className="field-section" key={group.section}>
+        })}
+        />
+      )}
+    </div>
+  );
+}
+
+function scrollParent(node: HTMLElement): HTMLElement | Window {
+  let parent = node.parentElement;
+  while (parent) {
+    const overflow = getComputedStyle(parent).overflowY;
+    if ((overflow === 'auto' || overflow === 'scroll') && parent.scrollHeight > parent.clientHeight + 1) return parent;
+    parent = parent.parentElement;
+  }
+  return window;
+}
+
+interface AttributeDisplayNode {
+  key: string;
+  section: string;
+  sortOrder: number;
+  name: string;
+  node: ReactNode;
+}
+
+function AttributeSections({
+  layouts,
+  sections,
+  controls,
+  onControlsChange,
+  onSaveCell,
+  items,
+}: {
+  layouts: ResolvedLayoutView[];
+  sections: AttributeSectionOrder[];
+  controls: Record<string, string>;
+  onControlsChange: (next: Record<string, string>) => void;
+  onSaveCell: (attributeCode: string, cell: DisplayCellData, value: string) => Promise<void>;
+  items: AttributeDisplayNode[];
+}) {
+  const groups = groupForDisplay(items, sections);
+  const links = attributeSectionLinks(groups.map((group) => group.section));
+  const sectionNav = [
+    ...layouts.map((layout) => ({
+      id: `attr-layout-${layout.id}`,
+      label: layout.layoutName?.trim() || 'Statement',
+    })),
+    ...links,
+  ];
+  const sectionNavKey = sectionNav.map((item) => encodeURIComponent(item.id)).join('\n');
+  const [activeSection, setActiveSection] = useState('');
+  const jumpLock = useRef(0);
+  const active = sectionNav.some((item) => item.id === activeSection) ? activeSection : (sectionNav[0]?.id || '');
+  const showNav = sectionNav.length > 1;
+
+  useEffect(() => {
+    const ids = sectionNavKey ? sectionNavKey.split('\n').map((id) => decodeURIComponent(id)) : [];
+    const nodes = ids
+      .map((id) => document.getElementById(id))
+      .filter((node): node is HTMLElement => Boolean(node));
+    if (!nodes.length) return undefined;
+    const scroller = scrollParent(nodes[0]);
+    const update = () => {
+      if (performance.now() < jumpLock.current) return;
+      const edge = scroller instanceof HTMLElement ? scroller.getBoundingClientRect().top : 0;
+      const line = edge + 24;
+      let current = nodes[0];
+      for (const node of nodes) {
+        if (node.getBoundingClientRect().top <= line) current = node;
+      }
+      let atBottom = false;
+      if (scroller instanceof HTMLElement && scroller.scrollHeight > scroller.clientHeight + 1) {
+        atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4;
+      }
+      setActiveSection((atBottom ? nodes[nodes.length - 1] : current).id);
+    };
+    update();
+    scroller.addEventListener('scroll', update, { passive: true });
+    return () => scroller.removeEventListener('scroll', update);
+  }, [sectionNavKey]);
+
+  const jump = (id: string) => {
+    jumpLock.current = performance.now() + 800;
+    setActiveSection(id);
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const body = (
+    <>
+      {layouts.map((layout) => (
+        <DisplayLayoutView
+          key={layout.id}
+          anchorId={`attr-layout-${layout.id}`}
+          layout={layout}
+          controls={controls}
+          onControlsChange={onControlsChange}
+          onSaveCell={onSaveCell}
+        />
+      ))}
+      {items.length === 0 && (
+        <div className="field-section">
+          <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>
+            No attribute values yet.
+          </div>
+        </div>
+      )}
+      {groups.map((group, index) => (
+        <div className="field-section" id={links[index]?.id} key={links[index]?.id || group.section}>
           <div className="field-section-head">
             <div className="field-section-name">{group.section}</div>
             <div className="field-section-count">{group.items.length}</div>
@@ -449,8 +586,27 @@ export function GoldenRecordSections({
           ))}
         </div>
       ))}
-      </div>
-      )}
+    </>
+  );
+
+  if (!showNav) return body;
+
+  return (
+    <div className="attr-sections">
+      <nav className="attr-sections-nav" aria-label="Attribute sections">
+        {sectionNav.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={active === item.id ? 'on' : ''}
+            aria-current={active === item.id ? 'location' : undefined}
+            onClick={() => jump(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      <div>{body}</div>
     </div>
   );
 }
@@ -481,90 +637,3 @@ function SectionTab({ label, active, onClick }: { label: string; active: boolean
     </button>
   );
 }
-
-function RelationshipList({
-  title,
-  count,
-  emptyText,
-  rows,
-}: {
-  title: string;
-  count: number;
-  emptyText: string;
-  rows: Array<{
-    key: string;
-    type: string;
-    domain: string;
-    name: string;
-    code: string;
-    entityId?: string;
-    members: Array<{ entityId: string; entityCode: string; entityName: string; domainCode: string }>;
-  }>;
-}) {
-  return (
-    <div className="field-section" style={{ marginBottom: '16px' }}>
-      <div className="field-section-head">
-        <div className="field-section-name">{title}</div>
-        <div className="field-section-count">{count}</div>
-      </div>
-      {rows.length === 0 ? (
-        <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>{emptyText}</div>
-      ) : (
-        <>
-          <div style={relationshipGridStyle}>
-            <span style={relationshipHeadStyle}>Entity</span>
-            <span style={relationshipHeadStyle}>Relationship</span>
-            <span style={relationshipHeadStyle}>Type</span>
-          </div>
-          {rows.map((row) => (
-            <div key={row.key} style={{ ...relationshipGridStyle, borderTop: '1px solid var(--line)' }}>
-              <span style={{ fontSize: '13px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                {row.entityId ? (
-                  <Link href={entityPageHref(row.domain, row.entityId)} className="relationship-entity-link">
-                    {row.name} <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}>({row.code})</span>
-                  </Link>
-                ) : (
-                  <span>{row.name} <span style={{ color: 'var(--ink-3)' }}>({row.code})</span></span>
-                )}
-                {row.members.length > 0 && (
-                  <span style={{ fontSize: '12px', color: 'var(--ink-3)' }}>
-                    {row.members.map((member, index) => (
-                      <span key={member.entityId}>
-                        {index > 0 && ' · '}
-                        <Link href={entityPageHref(member.domainCode, member.entityId)} className="entity-link" style={{ fontSize: '12px', fontWeight: 400 }}>
-                          {member.entityName}
-                        </Link>
-                      </span>
-                    ))}
-                  </span>
-                )}
-              </span>
-              <span style={{ fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.type}</span>
-              <span style={{ fontSize: '12px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{row.domain}</span>
-            </div>
-          ))}
-        </>
-      )}
-    </div>
-  );
-}
-
-function entityPageHref(domainCode: string, entityId: string): string {
-  return `${domainHref(domainCode || 'entity')}/${entityId}`;
-}
-
-const relationshipGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(320px, 2fr) minmax(220px, 1.1fr) minmax(120px, 160px)',
-  gap: '16px',
-  alignItems: 'center',
-  padding: '8px 20px',
-};
-
-const relationshipHeadStyle: CSSProperties = {
-  fontSize: '11px',
-  fontWeight: 600,
-  letterSpacing: '0.06em',
-  textTransform: 'none',
-  color: 'var(--ink-3)',
-};

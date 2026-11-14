@@ -19,6 +19,7 @@ interface AttributeSourcePanelProps {
   field: FieldData;
   entityId?: string;
   asOfDate?: string;
+  knowledgeDate?: string;
   calcRefreshKey?: string;
   onAddSourceValue?: (attributeCode: string, source: SourceKey, value: string) => void | Promise<void>;
   onDeleteSourceValue?: (attributeCode: string, sourceCode: string) => void;
@@ -31,6 +32,7 @@ export function AttributeSourcePanel({
   field,
   entityId,
   asOfDate,
+  knowledgeDate,
   calcRefreshKey,
   onAddSourceValue,
   onDeleteSourceValue,
@@ -167,6 +169,7 @@ export function AttributeSourcePanel({
           entityId={entityId}
           attributeCode={field.attributeCode}
           asOfDate={asOfDate}
+          knowledgeDate={knowledgeDate}
           refreshKey={calcRefreshKey}
           formula={field.formula}
           displayedValue={field.value}

@@ -1,10 +1,15 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { domainCodeFromRoute } from '@/lib/domain-routes';
-import { graphqlQuery, DOMAIN_TEMPLATES_QUERY, RELATIONSHIP_TYPES_QUERY, ENTITIES_QUERY } from '@/lib/graphql';
+import { graphqlQuery, DOMAIN_TYPES_QUERY, ENTITY_CREATE_TEMPLATES_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, ENTITIES_QUERY } from '@/lib/graphql';
 import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
-import { SchemaScopeField } from '@/components/admin/SchemaScopeField';
+import { CreateParentFields } from '@/components/forms/CreateParentFields';
+import { clampAttributeSpan, type AttributeSectionOrder } from '@/lib/attribute-layout';
+import { createParentSlots, createParentSummary, unfilledRequiredParents, type CreateIntersectionMember, type ParentSelection } from '@/lib/create-parents';
+import { groupCreateAttributes } from '@/lib/entity-create-layout';
+import { toParentLinkCounts, type ParentLinkCount } from '@/lib/parent-entities';
+import { supabaseBrowserClient } from '@/lib/supabase-browser';
 
 interface EntityFormProps {
   domain: string;
@@ -12,24 +17,42 @@ interface EntityFormProps {
   initialData?: any;
   onSubmit: (data: any) => void;
   onCancel: () => void;
+  formId?: string;
+  showActions?: boolean;
 }
 
 interface TemplateAttribute {
   attributeId: string;
-  attribute: { attributeCode: string; attributeName: string; dataType: string };
+  attribute: {
+    attributeCode: string;
+    attributeName: string;
+    dataType: string;
+    displaySection?: string | null;
+    displayGroup?: number | null;
+    displaySpanColumns?: number | null;
+    displaySpanRows?: number | null;
+    isVisible?: boolean | null;
+  };
   isRequired: boolean;
   displayOrder: number;
   displayLabel?: string;
+  sectionName?: string | null;
+}
+
+interface TemplateSection {
+  sectionCode: string;
+  sectionName: string;
+  displayOrder: number;
 }
 
 interface DomainTemplate {
   id: string;
   templateCode: string;
   templateName: string;
-  domainCode: string;
   description?: string;
   isActive: boolean;
   attributes: TemplateAttribute[];
+  sections?: TemplateSection[];
 }
 
 interface RelationshipType {
@@ -38,24 +61,21 @@ interface RelationshipType {
   relationshipName: string;
   parentDomainCode?: string;
   childDomainCode?: string;
+  cardinality?: string | null;
+  isRequired?: boolean | null;
 }
 
-interface RelationshipEntry {
-  entityId: string;
-  entityCode: string;
-  entityName: string;
-  domainCode: string;
-  relationshipCode: string;
-  relationshipName: string;
-  isPrimary: boolean;
-  validFrom: string;
-}
+type RelationshipEntry = ParentSelection;
 
-export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: EntityFormProps) {
+export function EntityForm({ domain, mode, initialData, onSubmit, onCancel, formId = 'entity-form', showActions = true }: EntityFormProps) {
   const domainCode = domainCodeFromRoute(domain);
 
   const [templates, setTemplates] = useState<DomainTemplate[]>([]);
+  const [attributeSections, setAttributeSections] = useState<AttributeSectionOrder[]>([]);
   const [relationshipTypes, setRelationshipTypes] = useState<RelationshipType[]>([]);
+  const [domainNames, setDomainNames] = useState<Record<string, string>>({});
+  const [intersectionMembers, setIntersectionMembers] = useState<CreateIntersectionMember[]>([]);
+  const [linkCounts, setLinkCounts] = useState<ParentLinkCount[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(true);
 
   const [formData, setFormData] = useState(initialData || {
@@ -67,7 +87,6 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
     sources: [] as string[],
     parentRelationships: [] as RelationshipEntry[],
     childRelationships: [] as RelationshipEntry[],
-    clientId: null as string | null,
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -75,10 +94,14 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
   useEffect(() => {
     let cancelled = false;
     setLoadingTemplates(true);
-    graphqlQuery<{ domainTemplates: DomainTemplate[] }, any>(DOMAIN_TEMPLATES_QUERY, { domainCode }).then(({ data }) => {
+    graphqlQuery<{ domainTemplates: DomainTemplate[]; attributeSections: AttributeSectionOrder[] }, { domainCode: string }>(
+      ENTITY_CREATE_TEMPLATES_QUERY,
+      { domainCode },
+    ).then(({ data }) => {
       if (cancelled) return;
       const list = data?.domainTemplates || [];
       setTemplates(list);
+      setAttributeSections(data?.attributeSections || []);
       if (!initialData?.template && list.length > 0) {
         setFormData((prev: any) => ({ ...prev, template: prev.template || list[0].templateCode }));
       }
@@ -88,29 +111,60 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
       if (cancelled) return;
       if (data?.relationshipTypes) setRelationshipTypes(data.relationshipTypes);
     });
+    graphqlQuery<{ domainTypes: Array<{ domainCode: string; domainName: string }> }, Record<string, never>>(DOMAIN_TYPES_QUERY, {}).then(({ data }) => {
+      if (cancelled) return;
+      const names: Record<string, string> = {};
+      for (const domainType of data?.domainTypes || []) names[domainType.domainCode] = domainType.domainName;
+      setDomainNames(names);
+    });
+    graphqlQuery<{ intersectionTypes: Array<{ intersectionCode: string; isActive: boolean; members: CreateIntersectionMember[] }> }, Record<string, never>>(
+      INTERSECTION_TYPES_QUERY,
+      {},
+    ).then(({ data }) => {
+      if (cancelled) return;
+      const match = (data?.intersectionTypes || []).find((intersection) => intersection.isActive && intersection.intersectionCode.toUpperCase() === domainCode);
+      setIntersectionMembers(match?.members || []);
+    });
+    void Promise.resolve(supabaseBrowserClient().rpc('relationship_link_counts')).then(({ data }) => {
+      if (cancelled) return;
+      setLinkCounts(toParentLinkCounts((data || []) as Array<Record<string, unknown>>));
+    }).catch(() => {
+      if (!cancelled) setLinkCounts([]);
+    });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [domainCode]);
 
   const handleChange = (field: string, value: any) => {
-    setFormData({ ...formData, [field]: value });
+    setFormData((prev: typeof formData) => ({ ...prev, [field]: value }));
     if (errors[field]) {
-      setErrors({ ...errors, [field]: '' });
+      setErrors((prev) => ({ ...prev, [field]: '' }));
     }
   };
 
   const handleAttributeChange = (attrCode: string, value: any) => {
-    setFormData({
-      ...formData,
-      attributes: { ...formData.attributes, [attrCode]: value }
-    });
+    setFormData((prev: typeof formData) => ({
+      ...prev,
+      attributes: { ...prev.attributes, [attrCode]: value },
+    }));
   };
+
+  const parentSlots = useMemo(
+    () => createParentSlots(domainCode, relationshipTypes, { names: domainNames, linkCounts, intersectionMembers }),
+    [domainCode, relationshipTypes, domainNames, linkCounts, intersectionMembers],
+  );
+  const parentSummary = createParentSummary(parentSlots);
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
     if (!formData.code) newErrors.code = 'Entity code is required';
     if (!formData.name) newErrors.name = 'Entity name is required';
     if (!formData.template) newErrors.template = 'Template is required';
+    if (mode === 'create') {
+      for (const slot of unfilledRequiredParents(parentSlots, formData.parentRelationships, formData.childRelationships)) {
+        newErrors[slot.key] = `${slot.label} is required`;
+      }
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -122,47 +176,63 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
   };
 
   const selectedTemplate = templates.find(t => t.templateCode === formData.template);
-  const templateAttributes = (selectedTemplate?.attributes || []).slice().sort((a, b) => a.displayOrder - b.displayOrder);
+  const templateAttributes = (selectedTemplate?.attributes || []).filter((attribute) => attribute.attribute.isVisible !== false);
+  const attributeGroups = groupCreateAttributes(
+    templateAttributes.map((attribute) => ({
+      ...attribute,
+      name: attribute.displayLabel || attribute.attribute.attributeName,
+      templateSection: attribute.sectionName,
+      displaySection: attribute.attribute.displaySection,
+      displayOrder: attribute.displayOrder,
+      displayGroup: attribute.attribute.displayGroup,
+    })),
+    (selectedTemplate?.sections || []).map((section) => ({
+      sectionName: section.sectionName,
+      displayOrder: section.displayOrder,
+    })),
+    attributeSections,
+  );
 
   // A blank parent or child domain means the relationship can connect any entity type,
   // so beneficial-ownership, counterparty, and facility edges are offered everywhere.
+  const slottedCodes = new Set(parentSlots.map((slot) => slot.relationshipCode.toUpperCase()));
+  const memberDomains = new Set(intersectionMembers.map((member) => member.domainCode.trim().toUpperCase()).filter(Boolean));
   const relevantRelationshipTypes = relationshipTypes.filter((r) => {
+    if (slottedCodes.has(r.relationshipCode.toUpperCase())) return false;
     if (!r.parentDomainCode || !r.childDomainCode) return true;
-    return r.parentDomainCode === domainCode || r.childDomainCode === domainCode;
+    const parent = r.parentDomainCode.toUpperCase();
+    const child = r.childDomainCode.toUpperCase();
+    if (parent !== domainCode && child !== domainCode) return false;
+    if (memberDomains.size === 0) return true;
+    const other = parent === domainCode ? child : parent;
+    return memberDomains.has(other);
   });
 
   return (
-    <div className="builder-card">
-      <div className="builder-card-head">
-        <div className="builder-step">
-          <div className="step-number">{mode === 'create' ? '1' : 'E'}</div>
-          <div className="step-title">{mode === 'create' ? 'Basic Information' : 'Edit Entity'}</div>
-        </div>
+    <form id={formId} onSubmit={(event) => { event.preventDefault(); handleSubmit(); }}>
+    <CreateParentFields
+      slots={parentSlots}
+      summary={parentSummary}
+      parents={formData.parentRelationships}
+      children={formData.childRelationships}
+      errors={errors}
+      onChange={(next) => {
+        setFormData((prev: typeof formData) => ({ ...prev, ...next }));
+        setErrors((prev) => {
+          const cleared = { ...prev };
+          for (const slot of parentSlots) delete cleared[slot.key];
+          return cleared;
+        });
+      }}
+    />
+    <div className="field-section">
+      <div className="field-section-head">
+        <div className="field-section-name">Entity information</div>
       </div>
       <div className="builder-body">
-        <div className="form-grid">
-          {mode === 'create' && (
-            <div className="field" style={{ gridColumn: '1 / -1' }}>
-              <SchemaScopeField
-                value={formData.clientId}
-                allowGlobal={false}
-                onChange={(clientId) => handleChange('clientId', clientId)}
-              />
-            </div>
-          )}
+        <div className="entity-identity">
           <div className="field">
-            <label>Entity Code *</label>
-            <input
-              className={`text-input ${errors.code ? 'error' : ''}`}
-              value={formData.code}
-              onChange={(e) => handleChange('code', e.target.value)}
-              placeholder={`${domainCode}-001`}
-              disabled={mode === 'edit'}
-            />
-            {errors.code && <span style={{ color: 'var(--red)', fontSize: '11px', marginTop: '4px' }}>{errors.code}</span>}
-          </div>
-          <div className="field">
-            <label>Entity Name *</label>
+            <label>Entity name *</label>
             <input
               className={`text-input ${errors.name ? 'error' : ''}`}
               value={formData.name}
@@ -171,16 +241,16 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
             />
             {errors.name && <span style={{ color: 'var(--red)', fontSize: '11px', marginTop: '4px' }}>{errors.name}</span>}
           </div>
-          <div className="field" style={{ gridColumn: '1 / -1' }}>
-            <label>Description</label>
-            <textarea
-              className="text-input"
-              value={formData.description}
-              onChange={(e) => handleChange('description', e.target.value)}
-              placeholder="Brief description of this entity"
-              rows={3}
-              style={{ resize: 'vertical' }}
+          <div className="field">
+            <label>Code *</label>
+            <input
+              className={`text-input ${errors.code ? 'error' : ''}`}
+              value={formData.code}
+              onChange={(e) => handleChange('code', e.target.value)}
+              placeholder={`${domainCode}-001`}
+              disabled={mode === 'edit'}
             />
+            {errors.code && <span style={{ color: 'var(--red)', fontSize: '11px', marginTop: '4px' }}>{errors.code}</span>}
           </div>
           <div className="field">
             <label>Template *</label>
@@ -202,71 +272,115 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel }: En
               </div>
             )}
           </div>
+          <div className="field entity-identity-description">
+            <label>Description</label>
+            <input
+              className="text-input"
+              value={formData.description}
+              onChange={(e) => handleChange('description', e.target.value)}
+              placeholder="Brief description of this entity"
+            />
+          </div>
         </div>
-
-        {/* Template Attributes */}
-        {templateAttributes.length > 0 && (
-          <div style={{ marginTop: '24px' }}>
-            <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
-              Template Attributes
-            </div>
-            <div className="form-grid">
-              {templateAttributes.map(tplAttr => (
-                <div key={tplAttr.attributeId} className="field">
-                  <label>
-                    {tplAttr.displayLabel || tplAttr.attribute.attributeName}
-                    {tplAttr.isRequired && <span style={{ color: 'var(--red)', marginLeft: '4px' }}>*</span>}
-                  </label>
-                  <AttributeValueInput
-                    attributeCode={tplAttr.attribute.attributeCode}
-                    dataType={tplAttr.attribute.dataType}
-                    value={formData.attributes[tplAttr.attribute.attributeCode] || ''}
-                    onChange={(value) => handleAttributeChange(tplAttr.attribute.attributeCode, value)}
-                    placeholder={`Enter ${(tplAttr.displayLabel || tplAttr.attribute.attributeName).toLowerCase()}`}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        
-        {/* Parent Relationships Section */}
-        <div style={{ marginTop: '24px' }}>
-          <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
-            Parent Relationships
-          </div>
-          <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginBottom: '10px' }}>
-            e.g. the Issuer/Borrower a Security belongs to, or the Fund a Position is held in
-          </div>
-          <RelationshipEditor
-            entries={formData.parentRelationships}
-            relationshipTypes={relevantRelationshipTypes}
-            onChange={(entries) => handleChange('parentRelationships', entries)}
-          />
-        </div>
-        
-        {/* Child Relationships Section */}
-        <div style={{ marginTop: '18px' }}>
-          <div style={{ fontSize: '11px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-3)', fontWeight: 600, marginBottom: '10px' }}>
-            Child Relationships
-          </div>
-          <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginBottom: '10px' }}>
-            e.g. Deals or Positions that belong to this entity
-          </div>
-          <RelationshipEditor
-            entries={formData.childRelationships}
-            relationshipTypes={relevantRelationshipTypes}
-            onChange={(entries) => handleChange('childRelationships', entries)}
-          />
-        </div>
-      </div>
-      <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', padding: '16px 0 0' }}>
-        <button type="button" className="btn" onClick={onCancel}>Cancel</button>
-        <button type="button" className="btn btn-primary" onClick={handleSubmit}>
-          {mode === 'create' ? 'Create' : 'Save'}
-        </button>
       </div>
     </div>
+
+        {attributeGroups.map((group) => (
+          <div className="field-section" key={group.section}>
+            <div className="field-section-head">
+              <div className="field-section-name">{group.section}</div>
+              <div className="field-section-count">{group.items.length}</div>
+            </div>
+            <div className="create-section-grid" style={{ ['--section-columns' as string]: String(group.columnCount) }}>
+              {group.items.map((tplAttr) => {
+                const span = clampAttributeSpan(
+                  tplAttr.attribute.displaySpanColumns,
+                  tplAttr.attribute.displaySpanRows,
+                  group.columnCount,
+                );
+                const label = tplAttr.displayLabel || tplAttr.attribute.attributeName;
+                return (
+                  <div key={tplAttr.attributeId} className={`field attr-span-cols-${span.columns} attr-span-rows-${span.rows}`}>
+                    <label>
+                      {label}
+                      {tplAttr.isRequired && <span style={{ color: 'var(--red)', marginLeft: '4px' }}>*</span>}
+                    </label>
+                    <AttributeValueInput
+                      attributeCode={tplAttr.attribute.attributeCode}
+                      dataType={tplAttr.attribute.dataType}
+                      value={formData.attributes[tplAttr.attribute.attributeCode] || ''}
+                      onChange={(value) => handleAttributeChange(tplAttr.attribute.attributeCode, value)}
+                      placeholder={`Enter ${label.toLowerCase()}`}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        {relevantRelationshipTypes.length > 0 && (
+          <>
+            <div className="field-section">
+              <div className="field-section-head">
+                <div className="field-section-name">{parentSlots.length > 0 ? 'Other parent relationships' : 'Parent relationships'}</div>
+              </div>
+              <div className="builder-body">
+                <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginBottom: '10px' }}>
+                  {parentSlots.length > 0
+                    ? 'Additional records this one belongs to.'
+                    : 'The issuer a security belongs to, or the fund a position is held in.'}
+                </div>
+                <RelationshipEditor
+                  entries={formData.parentRelationships.filter((entry: RelationshipEntry) => !slottedCodes.has(entry.relationshipCode.toUpperCase()))}
+                  relationshipTypes={relevantRelationshipTypes}
+                  onChange={(entries) => {
+                    setFormData((prev: typeof formData) => ({
+                      ...prev,
+                      parentRelationships: [
+                        ...prev.parentRelationships.filter((entry: RelationshipEntry) => slottedCodes.has(entry.relationshipCode.toUpperCase())),
+                        ...entries.filter((entry: RelationshipEntry) => !slottedCodes.has(entry.relationshipCode.toUpperCase())),
+                      ],
+                    }));
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="field-section">
+              <div className="field-section-head">
+                <div className="field-section-name">Child relationships</div>
+              </div>
+              <div className="builder-body">
+                <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginBottom: '10px' }}>
+                  Deals or positions that belong to this record.
+                </div>
+                <RelationshipEditor
+                  entries={formData.childRelationships.filter((entry: RelationshipEntry) => !slottedCodes.has(entry.relationshipCode.toUpperCase()))}
+                  relationshipTypes={relevantRelationshipTypes}
+                  onChange={(entries) => {
+                    setFormData((prev: typeof formData) => ({
+                      ...prev,
+                      childRelationships: [
+                        ...prev.childRelationships.filter((entry: RelationshipEntry) => slottedCodes.has(entry.relationshipCode.toUpperCase())),
+                        ...entries.filter((entry: RelationshipEntry) => !slottedCodes.has(entry.relationshipCode.toUpperCase())),
+                      ],
+                    }));
+                  }}
+                />
+              </div>
+            </div>
+          </>
+        )}
+      {showActions && (
+        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', padding: '4px 0 16px' }}>
+          <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+          <button type="submit" className="btn btn-primary">
+            {mode === 'create' ? 'Create' : 'Save'}
+          </button>
+        </div>
+      )}
+    </form>
   );
 }
 
@@ -392,6 +506,9 @@ function RelationshipEditor({
                 placeholder="Search entities by name..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.preventDefault();
+                }}
               />
               {searching && <div style={{ fontSize: '11px', color: 'var(--ink-3)' }}>Searching...</div>}
               {results.length > 0 && (

@@ -71,18 +71,18 @@ export function TemplateChainEditor({ templateId, templateCode, attributes, onCh
           <div key={attr.code} className="border border-gray-200 rounded-lg p-4 bg-white">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <h3 className="text-sm font-semibold text-gray-900">{attr.name}</h3>
-                <p className="text-xs text-gray-500 font-mono">{attr.code} · v{attr.chainVersion}</p>
+                <h3 className="text-[13px] font-semibold text-gray-900">{attr.name}</h3>
+                <p className="text-[11px] text-gray-500 font-mono">{attr.code} · v{attr.chainVersion}</p>
               </div>
               {!isEditing ? (
                 <button onClick={() => startEditing(attr.code, attr.currentChain)}
-                  className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 rounded-md hover:bg-blue-100">Edit Chain</button>
+                  className="px-3 py-1.5 text-[11px] font-medium text-blue-700 bg-blue-50 rounded-md hover:bg-blue-100">Edit Chain</button>
               ) : (
                 <div className="flex gap-2">
                   <button onClick={() => { setEditingAttr(null); setSaveResult(null); }}
-                    className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200">Cancel</button>
+                    className="px-3 py-1.5 text-[11px] font-medium text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200">Cancel</button>
                   <button onClick={() => saveChain(attr.code)} disabled={saving || draftChain.length === 0}
-                    className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50">
+                    className="px-3 py-1.5 text-[11px] font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50">
                     {saving ? "Saving..." : "Save & Re-resolve"}
                   </button>
                 </div>
@@ -92,7 +92,7 @@ export function TemplateChainEditor({ templateId, templateCode, attributes, onCh
               <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border-2 border-dashed"
                 style={{ borderColor: sources.manual.hex + "60", background: sources.manual.hex + "08" }}>
                 <span className="w-2 h-2 rounded-full" style={{ background: sources.manual.hex }} />
-                <span className="text-xs font-semibold" style={{ color: sources.manual.hex }}>Manual Override</span>
+                <span className="text-[11px] font-semibold" style={{ color: sources.manual.hex }}>Manual Override</span>
                 <span className="text-[9px] uppercase tracking-wider text-gray-400 ml-1">always #1</span>
               </div>
               <span className="text-gray-300">?</span>
@@ -115,7 +115,7 @@ export function TemplateChainEditor({ templateId, templateCode, attributes, onCh
                         </div>
                       )}
                       <span className="w-2 h-2 rounded-full" style={{ background: src.hex }} />
-                      <span className="text-xs font-medium" style={{ color: src.hex }}>{src.name}</span>
+                      <span className="text-[11px] font-medium" style={{ color: src.hex }}>{src.name}</span>
                       <span className="text-[9px] text-gray-400">#{idx + 2}</span>
                     </div>
                     {idx < chain.length - 1 && <span className="text-gray-300">?</span>}
@@ -125,21 +125,21 @@ export function TemplateChainEditor({ templateId, templateCode, attributes, onCh
             </div>
             {isEditing && availableSources.length > 0 && (
               <div className="flex items-center gap-2 mt-2">
-                <span className="text-xs text-gray-500">Add source:</span>
+                <span className="text-[11px] text-gray-500">Add source:</span>
                 {availableSources.map(srcCode => {
                   const srcKey = SOURCE_CODE_MAP[srcCode];
                   const src = srcKey ? sources[srcKey] : null;
                   if (!src) return null;
                   return (
                     <button key={srcCode} onClick={() => addSource(srcCode)}
-                      className="px-2 py-1 text-xs rounded border border-dashed hover:border-solid transition-all"
+                      className="px-2 py-1 text-[11px] rounded border border-dashed hover:border-solid transition-all"
                       style={{ borderColor: src.hex + "40", color: src.hex }}>+ {src.name}</button>
                   );
                 })}
               </div>
             )}
             {saveResult && (
-              <div className={`mt-3 px-3 py-2 rounded text-xs ${saveResult.success ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+              <div className={`mt-3 px-3 py-2 rounded text-[11px] ${saveResult.success ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
                 {saveResult.message}
               </div>
             )}

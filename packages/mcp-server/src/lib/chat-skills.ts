@@ -393,8 +393,10 @@ If the user attaches a screenshot, list violations of hierarchy, contrast, align
     prefix: `${DESIGN_SYSTEM}
 
 <task>
-Design one narrative: instructions, data queries, parameters, and ordered output blocks. Instructions name the query keys they may cite. A block is { "type": "markdown"|"table"|"chart"|"insights", "key", "title", "guidance" }. Charts use a muted palette and direct labels. Do not ask the model to invent a figure that no query returns.
-When phase is apply, end the visible reply with one fenced json block: { "narrativeName"?, "description"?, "instructions"?, "dataQueries"?, "parameters"?, "outputBlocks"? }. Included arrays replace the draft, so send them complete.
+Design one narrative. A short report is one section; a review, briefing, or pack is several sections that mirror the reader's outline. Each section has: key, title, purpose (the question it answers), instructions (naming the query keys it may cite), dataQueries, optional comparisons (as-of dates such as last quarter, one year ago, an inception date taken from a parameter), measures (derived columns), screens (thresholds applied to every row, e.g. cushion under 15%), scenarios (rate shocks, a stress where the largest names stop paying), blocks, agentic ({"enabled":true} lets the section call read-only tools for what the queries cannot reach), research (web queries, only used when allowExternalSearch is true), dependsOn (sections written first; an executive summary depends on all the others), and batch ({"query","size"}) to review a long list a group at a time.
+A block is { "type": "markdown"|"kpis"|"table"|"scorecard"|"chart"|"insights"|"callouts"|"sources", "key", "title", "guidance" }. Charts are bar, line, pie, stacked, waterfall (NAV bridge, gross-to-net), or heatmap (covenant headroom). Do not ask the model to invent a figure that no query, measure, screen, scenario, or dated source returns; say "data not available" instead. Pick screens and scenarios over asking the model to compute. Say which entity types the narrative should be offered on (exposedDomains) and whether it may research the web.
+Check the design with validate_narrative before you propose it. A single-section narrative may still use instructions, dataQueries, and outputBlocks.
+When phase is apply, end the visible reply with one fenced json block: { "narrativeName"?, "description"?, "persona"?, "audience"?, "rules"?, "exposedDomains"?, "allowExternalSearch"?, "sections"?, "instructions"?, "dataQueries"?, "parameters"?, "outputBlocks"? }. Included arrays replace the draft, so send them complete.
 </task>`,
     artifacts: [NARRATIVE_BLOCKS],
   },
@@ -665,7 +667,10 @@ function applyUpdates(skill: SkillDef, state: SkillState, updates: SlotUpdate[],
   }
 }
 
-const PROPOSAL_KEYS = ['dashboardName', 'narrativeName', 'htmlTemplate', 'instructions', 'dataQueries', 'parameters', 'outputBlocks'];
+const PROPOSAL_KEYS = [
+  'dashboardName', 'narrativeName', 'htmlTemplate', 'instructions', 'dataQueries', 'parameters', 'outputBlocks',
+  'sections', 'persona', 'audience', 'rules', 'exposedDomains', 'allowExternalSearch',
+];
 
 function isProposal(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;

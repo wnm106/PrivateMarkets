@@ -1,7 +1,9 @@
 /**
  * Project a borrower's statements from attribute definitions.
- * Labels, order, sign, and formulas live on the attributes. This module
- * only evaluates them across quarters, months, and a trailing-twelve-month column.
+ * Labels, order, and sign live on the attributes. The formula is the
+ * calculation expression, synced from the calculation row. This module
+ * evaluates that expression across quarters, months, and a trailing column.
+ * PRIOR, TRAIL, CUMSUM, and WHEN_PRIOR read the period series.
  */
 
 export type StatementRollup = 'SUM' | 'PERIOD_END' | 'NONE';
@@ -118,6 +120,23 @@ function parseExpr(value: unknown): StatementExpr | null {
   const args = Array.isArray(record.args) ? record.args.map(parseExpr) : [];
   if (args.some((arg) => arg == null)) return null;
   const parsed = args as StatementExpr[];
+  const fn = typeof record.fn === 'string' ? record.fn.toUpperCase() : '';
+  if (fn === 'NEG' || fn === 'PRIOR' || fn === 'CUMSUM' || fn === 'WHEN_PRIOR') {
+    if (parsed.length !== 1) return null;
+    const op = fn === 'NEG' ? 'neg' : fn === 'PRIOR' ? 'prior' : fn === 'CUMSUM' ? 'cumsum' : 'when_prior';
+    return { op, args: [parsed[0]] };
+  }
+  if (fn === 'TRAIL') {
+    if (parsed.length < 1) return null;
+    const count = parsed[1] && 'const' in parsed[1] ? parsed[1].const : 4;
+    const periods = count > 0 ? count : 4;
+    return { op: 'trail', args: [parsed[0]], periods };
+  }
+  if (fn === 'ADD' || fn === 'SUB' || fn === 'MUL' || fn === 'DIV') {
+    if (parsed.length !== 2) return null;
+    const op = fn === 'ADD' ? 'add' : fn === 'SUB' ? 'sub' : fn === 'MUL' ? 'mul' : 'div';
+    return { op, args: [parsed[0], parsed[1]] };
+  }
   if (record.op === 'neg' || record.op === 'prior' || record.op === 'cumsum' || record.op === 'when_prior') {
     if (parsed.length !== 1) return null;
     return { op: record.op, args: [parsed[0]] };

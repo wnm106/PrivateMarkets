@@ -30,7 +30,7 @@ type Query {
   attributeSections(domainCode: String!): [AttributeSection!]!
   domainTemplates(domainCode: String): [Template!]!
   calcDefinitions: [CalcDefinition!]!
-  calcBreakdown(entityId: ID!, attributeCode: String!, asOfDate: Date): CalcBreakdown
+  calcBreakdown(entityId: ID!, attributeCode: String!, asOfDate: Date, knowledgeDate: DateTime): CalcBreakdown
   calculatedAttributeStates(entityId: ID!): [CalculatedAttributeState!]!
   expressionFunctions(category: String): [ExpressionFunction!]!
   # Entity Management queries
@@ -81,6 +81,7 @@ type Query {
   complianceEvaluationRuns(ruleId: ID, first: Int): [ComplianceEvaluationRun!]!
   complianceEvaluationRun(id: ID!): ComplianceEvaluationRun
   complianceResults(filter: ComplianceResultFilter, pagination: PaginationInput): ComplianceEvaluationResultConnection!
+  complianceResultContributors(resultId: ID!): ComplianceResultContributors!
   compliancePopulationPreview(input: CompliancePopulationPreviewInput!): CompliancePopulationPreview!
   complianceFundBoard: ComplianceFundBoard!
 
@@ -94,7 +95,8 @@ type Query {
   dashboard(id: ID, dashboardCode: String): Dashboard
   narratives(domainCode: String, isActive: Boolean): [Narrative!]!
   narrative(id: ID, narrativeCode: String): Narrative
-  narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
+  narrativeRuns(narrativeId: ID!, entityId: ID, first: Int, statuses: [String!]): [NarrativeRun!]!
+  narrativeRun(id: ID!): NarrativeRun
   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON, asOfDate: String, knowledgeDate: String): DataQueryResponse!
   gridQuery(input: GridQueryInput!): GridResult!
 
@@ -233,6 +235,8 @@ type Mutation {
   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
   deleteNarrative(id: ID!): DeleteNarrativeResult!
+  publishNarrativeRun(id: ID!, label: String): NarrativeRun!
+  unpublishNarrativeRun(id: ID!): NarrativeRun!
 
   openReconciliationRun(input: OpenReconciliationRunInput!): ReconciliationRunResult!
   resolveReconciliationLine(input: ResolveReconciliationLineInput!): ReconciliationRunResult!

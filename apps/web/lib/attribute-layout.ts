@@ -31,6 +31,107 @@ export function sectionKey(name?: string | null) {
   return (name || 'General').trim().toLowerCase() || 'general';
 }
 
+/** DOM id slug for an attribute section. Blank and punctuation-only names become `general`. */
+export function sectionAnchor(name?: string | null) {
+  const slug = sectionKey(name).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || 'general';
+}
+
+/** Stable nav targets for attribute sections, with a suffix when two names share a slug. */
+export function attributeSectionLinks(names: string[]): Array<{ id: string; label: string }> {
+  const used = new Set<string>();
+  return names.map((label) => {
+    const base = `attr-${sectionAnchor(label)}`;
+    let id = base;
+    let suffix = 2;
+    while (used.has(id)) {
+      id = `${base}-${suffix}`;
+      suffix += 1;
+    }
+    used.add(id);
+    return { id, label };
+  });
+}
+
+export interface DisplaySection<T> {
+  section: string;
+  displayOrder: number;
+  columnCount: number;
+  items: T[];
+}
+
+/** Sections in display order, including sections that do not have an attribute yet. */
+export function sectionsForDisplay<T extends AttributeDisplayItem>(
+  items: T[],
+  sections: AttributeSectionOrder[],
+): DisplaySection<T>[] {
+  const grouped = groupForDisplay(items, sections);
+  const rank = new Map(sections.map((section) => [sectionKey(section.sectionName), section]));
+  const seen = new Set(grouped.map((group) => sectionKey(group.section)));
+  const filled: DisplaySection<T>[] = grouped.map((group) => ({
+    ...group,
+    columnCount: sectionColumnCount(rank.get(sectionKey(group.section))?.columnCount),
+  }));
+  const empty: DisplaySection<T>[] = sections
+    .filter((section) => !seen.has(sectionKey(section.sectionName)))
+    .map((section) => ({
+      section: section.sectionName,
+      displayOrder: section.displayOrder,
+      columnCount: sectionColumnCount(section.columnCount),
+      items: [],
+    }));
+  return [...filled, ...empty].sort(
+    (a, b) => a.displayOrder - b.displayOrder || a.section.localeCompare(b.section),
+  );
+}
+
+export interface MovableAttribute {
+  id: string;
+  owned: boolean;
+}
+
+export type AttributeDropTarget =
+  | { kind: 'section'; section: string }
+  | { kind: 'before' | 'after'; attributeId: string };
+
+/**
+ * Where an owned attribute lands after a drop.
+ * The returned ids are the destination section's owned attributes, in order.
+ * A drop that does not change that order returns null.
+ */
+export function planAttributeMove(
+  groups: Array<{ section: string; items: MovableAttribute[] }>,
+  attributeId: string,
+  target: AttributeDropTarget,
+): { section: string; attributeIds: string[] } | null {
+  const source = groups.find((group) => group.items.some((item) => item.id === attributeId));
+  const moving = source?.items.find((item) => item.id === attributeId);
+  if (!source || !moving?.owned) return null;
+  if (target.kind !== 'section' && target.attributeId === attributeId) return null;
+
+  const destination = target.kind === 'section'
+    ? groups.find((group) => sectionKey(group.section) === sectionKey(target.section))
+      ?? { section: target.section, items: [] as MovableAttribute[] }
+    : groups.find((group) => group.items.some((item) => item.id === target.attributeId));
+  if (!destination) return null;
+
+  const sameSection = sectionKey(source.section) === sectionKey(destination.section);
+  const base = sameSection ? source.items.filter((item) => item.id !== attributeId) : [...destination.items];
+  let index = base.length;
+  if (target.kind !== 'section') {
+    const at = base.findIndex((item) => item.id === target.attributeId);
+    if (at < 0) return null;
+    index = target.kind === 'before' ? at : at + 1;
+  }
+  const nextItems = [...base.slice(0, index), moving, ...base.slice(index)];
+  const unchanged = sameSection && nextItems.every((item, position) => item.id === source.items[position]?.id);
+  if (unchanged) return null;
+  return {
+    section: destination.section,
+    attributeIds: nextItems.filter((item) => item.owned).map((item) => item.id),
+  };
+}
+
 export function groupForDisplay<T extends AttributeDisplayItem>(
   items: T[],
   sections: AttributeSectionOrder[],

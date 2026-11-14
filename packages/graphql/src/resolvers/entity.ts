@@ -1,9 +1,11 @@
 import { Context } from '../context';
 import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePosition, storedRuleLabel } from '../lib/attribute-sequence';
 import { fetchEntitySearchHits } from '../lib/entity-search';
+import { fillBlankOnReadAttributes, loadOnReadValues, mergeOnReadLineage } from '../lib/on-read-values';
 import { needsTemporalRead, overlayTemporalAttributes } from '../lib/temporal-attributes';
 import { dirtyAttributeCodes } from './calculation';
-import { resolveSchemaClientId, withClientNames } from './schema-scope';
+import { ensureAttributeSection } from './metadata';
+import { resolveEntityClientId, resolveSchemaClientId, withClientNames } from './schema-scope';
 
 function normalizePrecedenceChain(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -273,6 +275,7 @@ export const entityResolvers = {
         args.knowledgeDate,
         entity.domainCode,
       );
+      await fillBlankOnReadAttributes(context.supabase, entity, args.asOfDate, args.knowledgeDate);
       return entity;
     },
 
@@ -491,7 +494,7 @@ export const entityResolvers = {
       const sequences = await loadAttributeSequences(context.supabase, entity.id, [...byAttribute.keys()]);
       const dirty = await dirtyAttributeCodes(context, entity.id);
 
-      return Array.from(byAttribute.entries()).map(([code, values]) => {
+      const built = Array.from(byAttribute.entries()).map(([code, values]) => {
         const sequence = sequences.get(code) ?? { chain: [], tier: 'source' as const };
         const winningRecord = pickPersistedWinner(values);
         const ordered = [
@@ -525,6 +528,9 @@ export const entityResolvers = {
           calcDirty: dirty.has(code),
         };
       });
+      const asOf = new Date().toISOString().slice(0, 10);
+      const reads = await loadOnReadValues(context.supabase, entity.id, asOf);
+      return mergeOnReadLineage(built, reads, asOf);
     },
   },
   
@@ -549,7 +555,7 @@ export const entityResolvers = {
           templateId = template?.id;
         }
         
-        const clientId = await resolveSchemaClientId(context, input.clientId, { required: true });
+        const clientId = await resolveEntityClientId(context, input.clientId);
 
         // Insert into master_entities
         const { data: entity, error: entityError } = await context.supabase
@@ -983,7 +989,28 @@ export const entityResolvers = {
       const { input } = args;
       
       try {
+        const domainCode = String(input.domainCode || '').trim();
+        if (!domainCode) {
+          return {
+            attribute: null,
+            errors: [{ field: 'domainCode', message: 'Choose an entity type.', code: 'DOMAIN_REQUIRED' }],
+          };
+        }
         const clientId = await resolveSchemaClientId(context, input.clientId, { required: false });
+        const displaySection = String(input.displaySection || '').trim() || 'General';
+        const requestedGroup = Number(input.displayGroup);
+        let displayGroup = Number.isFinite(requestedGroup) ? Math.round(requestedGroup) : null;
+        if (displayGroup == null) {
+          const { data: peers } = await context.supabase
+            .from('attribute_register')
+            .select('display_group, display_section')
+            .eq('domain_code', domainCode);
+          const key = displaySection.toLowerCase();
+          const highest = (peers || [])
+            .filter((row) => String(row.display_section || 'General').trim().toLowerCase() === key)
+            .reduce((max, row) => Math.max(max, Number(row.display_group) || 0), 0);
+          displayGroup = highest + 10;
+        }
         const { data, error } = await context.supabase
           .from('attribute_register')
           .insert({
@@ -996,13 +1023,16 @@ export const entityResolvers = {
             is_required: input.isRequired ?? false,
             is_multi_valued: input.isMultiValued ?? false,
             reference_domain_code: input.referenceDomainCode,
-            domain_code: input.domainCode,
+            domain_code: domainCode,
+            display_section: displaySection,
+            display_group: displayGroup ?? 10,
             client_id: clientId,
           })
           .select()
           .single();
         
         if (error) throw error;
+        await ensureAttributeSection(context.supabase, domainCode, displaySection, clientId);
         
         return {
           attribute: {

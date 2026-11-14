@@ -1,5 +1,6 @@
-import { DataSpecialist } from '@/components/feeds/DataSpecialist';
+import { redirect } from 'next/navigation';
 
+/** Every file now goes through one queue. The data specialist's questions appear on the review screen. */
 export default function LoadPage() {
-  return <DataSpecialist />;
+  redirect('/imports');
 }

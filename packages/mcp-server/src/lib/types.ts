@@ -11,6 +11,7 @@ export type ToolCategory =
   | 'import'             // Import map tools
   | 'compliance'         // Compliance rules
   | 'reporting'          // Dashboard / narrative design
+  | 'narrative'          // Running narratives: evidence, composing, saving runs
   | 'intersection';      // Intersection tools
 
 export interface ToolDefinition {

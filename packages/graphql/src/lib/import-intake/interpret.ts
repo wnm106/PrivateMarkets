@@ -503,7 +503,9 @@ function statementScore(rows: string[][]): number {
   const lexicon = filled.reduce((sum, row) => sum + (NAV_CUES.test(row.join(' ')) || FINANCIAL_CUES.test(row.join(' ')) ? 1 : 0), 0);
   let score = 0;
   if (narrow / filled.length >= 0.55) score += 2;
-  if (labelValue >= 3) score += 3;
+  // Rows of a label and a number are what any table of companies and amounts looks like. They count toward a
+  // statement only when the sheet is also narrow, like a statement, or uses statement words.
+  if (labelValue >= 3 && (narrow / filled.length >= 0.55 || lexicon >= 1)) score += 3;
   if (lexicon >= 1) score += 2;
   if (lexicon >= 3) score += 2;
   return score;

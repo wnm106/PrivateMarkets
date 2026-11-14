@@ -26,6 +26,8 @@ interface ExpressionBoxProps {
   disabled?: boolean;
   /** Typed text is read as a list (a, b, c), so suggestions and parsing are off. */
   plain?: boolean;
+  /** Skip the plain-words line under the box. */
+  quiet?: boolean;
 }
 
 const TOKEN = /[A-Za-z0-9_.]*$/;
@@ -34,7 +36,7 @@ const AFTER_OPERATOR = /(^|[+\-*/(,])\s*$/;
 // One box for every operand. Click it to pick a field from the list, type to narrow
 // the list, or keep typing to build an expression: NAV * 0.1, ROUND(COST / 2, 1),
 // END_OF_MONTH(CURRENT_DATE), POSITION.MARKET_VALUE + CASH.
-export function ExpressionBox({ value, onChange, context, placeholder, error, loading, disabled, plain }: ExpressionBoxProps) {
+export function ExpressionBox({ value, onChange, context, placeholder, error, loading, disabled, plain, quiet }: ExpressionBoxProps) {
   const [open, setOpen] = useState(false);
   const [functionsOnly, setFunctionsOnly] = useState(false);
   const [caret, setCaret] = useState(value.length);
@@ -133,7 +135,7 @@ export function ExpressionBox({ value, onChange, context, placeholder, error, lo
   const message = error || compiled.error;
   const suggesting = open && suggestions.length > 0;
   const described = !message && compiled.ast ? describeOperand(compiled.ast, context) : '';
-  const showDescription = described && described !== value.trim();
+  const showDescription = !quiet && described && described !== value.trim();
 
   let lastGroup = '';
   return (

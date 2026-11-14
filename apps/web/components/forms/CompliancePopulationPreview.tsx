@@ -18,6 +18,14 @@ const PREVIEW_QUERY = `
         entityCode
         entityName
         values
+        parents {
+          domainCode
+          entityId
+          entityCode
+          entityName
+          relationshipCode
+          isCompositeMember
+        }
       }
     }
   }
@@ -28,7 +36,18 @@ interface PreviewRow {
   entityCode: string;
   entityName?: string | null;
   values: Record<string, string | null>;
+  parents: Array<{
+    domainCode: string;
+    entityId: string;
+    entityCode?: string | null;
+    entityName?: string | null;
+    isCompositeMember: boolean;
+  }>;
 }
+
+const domainTitle = (code: string) =>
+  code.toLowerCase().split('_').filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+const parentLabel = (parent: PreviewRow['parents'][number]) => parent.entityName || parent.entityCode || '—';
 
 interface PreviewResult {
   total: number;
@@ -64,7 +83,8 @@ function conditionInput(cond: ComplianceCondition, order: number) {
   };
 }
 
-export function CompliancePopulationPreview({
+/** The button belongs in the conditions box header; the panel goes under the box. */
+export function usePopulationPreview({
   domainCode,
   domainLabel,
   conditions,
@@ -74,7 +94,7 @@ export function CompliancePopulationPreview({
   domainLabel: string;
   conditions: ComplianceCondition[];
   options: TreeAttributeOption[];
-}) {
+}): { button: React.ReactNode; panel: React.ReactNode } {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -90,9 +110,39 @@ export function CompliancePopulationPreview({
     return match ? `${match.groupLabel} · ${match.attributeName}` : cond.attributeCode;
   };
 
+  // One column per kind of parent record found in this page, composite members first.
+  const parentDomains = useMemo(() => {
+    const seen = new Map<string, boolean>();
+    for (const row of result?.rows || []) {
+      for (const parent of row.parents) seen.set(parent.domainCode, (seen.get(parent.domainCode) || false) || parent.isCompositeMember);
+    }
+    return [...seen.entries()].sort((a, b) => Number(b[1]) - Number(a[1]) || a[0].localeCompare(b[0]));
+  }, [result]);
+  const hasComposite = parentDomains.some(([, member]) => member);
+
   const columns = useMemo<ColDef[]>(() => [
     { field: 'entityCode', headerName: 'ID', minWidth: 140, flex: 1, cellClass: 'mono' },
     { field: 'entityName', headerName: 'Name', minWidth: 180, flex: 1.2, valueFormatter: (params) => params.value || '—' },
+    ...(hasComposite ? [{
+      colId: '__composite',
+      headerName: 'Composite of',
+      flex: 1.6,
+      minWidth: 220,
+      valueGetter: (params: any) => {
+        const names = (params.data?.parents || []).filter((p: PreviewRow['parents'][number]) => p.isCompositeMember).map(parentLabel);
+        return names.length ? names.join(' · ') : '—';
+      },
+    }] : []),
+    ...parentDomains.map(([domain]) => ({
+      colId: `__parent_${domain}`,
+      headerName: domainTitle(domain),
+      flex: 1,
+      minWidth: 160,
+      valueGetter: (params: any) => {
+        const match = (params.data?.parents || []).filter((p: PreviewRow['parents'][number]) => p.domainCode === domain);
+        return match.length ? match.map(parentLabel).join(', ') : '—';
+      },
+    })),
     ...active.map((cond) => {
       const key = attributeValueKey(cond.attributePath, cond.attributeCode);
       return {
@@ -103,7 +153,7 @@ export function CompliancePopulationPreview({
         valueGetter: (params: any) => params.data?.values?.[key] ?? '—',
       };
     }),
-  ], [active, options]);
+  ], [active, options, parentDomains, hasComposite]);
 
   const load = async (nextPage: number) => {
     if (!domainCode) return;
@@ -134,21 +184,20 @@ export function CompliancePopulationPreview({
 
   const pageCount = result ? Math.max(1, Math.ceil(result.total / pageSize)) : 1;
 
-  return (
-    <div style={{ marginTop: '12px' }}>
-      <button
-        type="button"
-        className="add-cond"
-        onClick={() => load(0)}
-        disabled={!domainCode || loading}
-      >
-        {loading ? 'Looking up records…' : 'Show matching records'}
-      </button>
-      <span className="field-hint" style={{ marginLeft: '10px' }}>
-        {domainCode
-          ? `Lists every ${domainLabel || domainCode} record that qualifies under the conditions above.`
-          : 'Choose the entity type being measured to drill into matching records.'}
-      </span>
+  const button = (
+    <button
+      type="button"
+      className="add-cond cg-preview-btn"
+      onClick={() => load(0)}
+      disabled={!domainCode || loading}
+      title={domainCode ? `Lists every ${domainLabel || domainCode} record that qualifies under these conditions` : 'Choose the entity type being measured first'}
+    >
+      {loading ? 'Looking up records…' : 'Show matching records'}
+    </button>
+  );
+
+  const panel = (
+    <div>
       {error && <div className="field-hint" style={{ color: 'var(--red)', marginTop: '8px' }}>{error}</div>}
       {open && result && (
         <div style={{ marginTop: '10px', border: '1px solid var(--line)', borderRadius: '6px', overflow: 'auto' }}>
@@ -175,4 +224,5 @@ export function CompliancePopulationPreview({
       )}
     </div>
   );
+  return { button, panel };
 }

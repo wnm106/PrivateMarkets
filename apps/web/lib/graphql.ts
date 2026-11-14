@@ -362,6 +362,45 @@ export const REORDER_SECTION_ATTRIBUTES_MUTATION = `
   }
 `;
 
+export const ENTITY_CREATE_TEMPLATES_QUERY = `
+  query EntityCreateTemplates($domainCode: String!) {
+    domainTemplates(domainCode: $domainCode) {
+      id
+      templateCode
+      templateName
+      description
+      isActive
+      sections {
+        sectionCode
+        sectionName
+        displayOrder
+      }
+      attributes {
+        attributeId
+        isRequired
+        displayOrder
+        displayLabel
+        sectionName
+        attribute {
+          attributeCode
+          attributeName
+          dataType
+          displaySection
+          displayGroup
+          displaySpanColumns
+          displaySpanRows
+          isVisible
+        }
+      }
+    }
+    attributeSections(domainCode: $domainCode) {
+      sectionName
+      displayOrder
+      columnCount
+    }
+  }
+`;
+
 export const DOMAIN_TEMPLATES_QUERY = `
   query DomainTemplates($domainCode: String) {
     domainTemplates(domainCode: $domainCode) {
@@ -520,6 +559,7 @@ export const RELATIONSHIP_TYPES_QUERY = `
       parentDomainCode
       childDomainCode
       cardinality
+      isRequired
       compositeKey
       description
       isActive
@@ -2022,6 +2062,30 @@ const COMPLIANCE_CONDITION_FIELDS = `
   logicOperator
 `;
 
+const COMPLIANCE_MEASURE_LINE_FIELDS = `
+  id
+  side
+  lineOrder
+  label
+  kind
+  sign
+  attributeCode
+  expression
+  dimension { ${COMPLIANCE_DIMENSION_FIELDS} }
+  path { ${COMPLIANCE_ROLLUP_HOP_FIELDS} }
+  weightAttributeCode
+  valuePath { ${COMPLIANCE_ROLLUP_HOP_FIELDS} }
+  transform
+  priceAttributeCode
+  pct
+  pctAttributeCode
+  pctPath { ${COMPLIANCE_ROLLUP_HOP_FIELDS} }
+  totalPath { ${COMPLIANCE_ROLLUP_HOP_FIELDS} }
+  required
+  conditions { ${COMPLIANCE_CONDITION_FIELDS} }
+  totalConditions { ${COMPLIANCE_CONDITION_FIELDS} }
+`;
+
 const COMPLIANCE_VERSION_FIELDS = `
   id
   ruleId
@@ -2057,6 +2121,7 @@ const COMPLIANCE_VERSION_FIELDS = `
   defaultSourceScope
   isActive
   conditions { ${COMPLIANCE_CONDITION_FIELDS} }
+  measureLines { ${COMPLIANCE_MEASURE_LINE_FIELDS} }
   metadata
   createdAt
   createdBy
@@ -2203,7 +2268,7 @@ export const COMPLIANCE_FUND_BOARD_QUERY = `
     complianceFundBoard {
       funds { entityId entityCode entityName parentEntityId }
       rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode consolidateDescendants isActive }
-      thresholds { id ruleId ruleCode ruleName entityId groupValue rankFrom rankTo softLimitValue hardLimitValue applies notes }
+      thresholds { id ruleId ruleCode ruleName entityId groupValue rankFrom rankTo limitDirection softLimitValue hardLimitValue applies notes }
       results { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
     }
   }
@@ -2281,6 +2346,19 @@ export const COMPLIANCE_EVALUATION_RUN_QUERY = `
         breachAmount
         contributingCount
       }
+    }
+  }
+`;
+
+export const COMPLIANCE_RESULT_CONTRIBUTORS_QUERY = `
+  query ComplianceResultContributors($resultId: ID!) {
+    complianceResultContributors(resultId: $resultId) {
+      resultId
+      baseDomainCode
+      numeratorAggregation
+      total
+      columns { code label role }
+      rows { entityId entityCode entityName numeratorValue sharePercent values amountLabel amountSide }
     }
   }
 `;

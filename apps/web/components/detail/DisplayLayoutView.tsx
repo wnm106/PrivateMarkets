@@ -78,11 +78,13 @@ export function DisplayLayoutView({
   controls,
   onControlsChange,
   onSaveCell,
+  anchorId,
 }: {
   layout: ResolvedLayoutView;
   controls: Record<string, string>;
   onControlsChange: (next: Record<string, string>) => void;
   onSaveCell: (attributeCode: string, cell: DisplayCellData, value: string) => Promise<void>;
+  anchorId?: string;
 }) {
   const active = { ...layout.effectiveControls, ...controls };
   const parameters = asParameters(layout.parameters);
@@ -100,7 +102,7 @@ export function DisplayLayoutView({
   };
 
   return (
-    <div className="statement-layout">
+    <div id={anchorId} className="statement-layout">
       <div className="statement-layout-name">{layout.layoutName}</div>
       {unplaced.length > 0 && (
         <div className="statement-toolbar">

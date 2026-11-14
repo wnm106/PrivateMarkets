@@ -126,6 +126,7 @@ interface SessionDetail extends SessionSummary {
 
 interface LibraryResponse {
   azureConfigured: boolean;
+  llamaParseConfigured?: boolean;
   maps: { mapCode: string; name: string; sourceCode: string; description: string; domains: string[] }[];
   sessions: SessionSummary[];
 }
@@ -282,9 +283,11 @@ export function DataSpecialist() {
         Drop in a CSV, workbook, JSON extract, or a PDF. I map columns onto the entities you already track, reuse a map when I recognize one, and ask only when a date, a source, or an entity id could go more than one way. If the data has nowhere to live, I will say so and wait for you to add the attribute or entity.
       </p>
       <p className="page-meta" style={{ marginTop: 0 }}>
-        {library?.azureConfigured
-          ? 'Azure Document Intelligence is available for PDFs and scans.'
-          : 'Azure Document Intelligence is not configured. Structured files still load. Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY to read PDFs and scans.'}
+        {library?.llamaParseConfigured
+          ? 'LlamaParse is on. Scans, Word files, and long or table-heavy PDFs are sent to LlamaParse to be read; short statements with a text layer are read on this server and are not sent.'
+          : library?.azureConfigured
+            ? 'Azure Document Intelligence is available for PDFs and scans.'
+            : 'No document reader is configured. Structured files still load. Set LLAMA_CLOUD_API_KEY, or AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY, to read PDFs and scans.'}
         {' '}The position file remains available on <Link href="/imports">its own queue</Link>.
       </p>
       {error && <div className="filter-bar" style={{ color: '#b42318' }}>{error}</div>}

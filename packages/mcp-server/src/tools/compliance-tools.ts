@@ -14,7 +14,7 @@ const listComplianceRules: ToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
-      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'FORTY_ACT', 'OTHER'], description: 'Filter by rule category' },
+      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'FORTY_ACT', 'COVERAGE', 'COLLATERAL_QUALITY', 'OTHER'], description: 'Filter by rule category' },
       anchorDomainCode: { type: 'string', description: 'Filter by the entity level the rule is assigned to (e.g. FUND, ISSUER)' },
       isActive: { type: 'boolean', description: 'Filter by active status' },
     },
@@ -259,7 +259,7 @@ const createComplianceRule: ToolDefinition = {
     properties: {
       ruleCode: { type: 'string', description: 'Unique code for the rule (e.g. "FUND_CONC_5PCT")' },
       ruleName: { type: 'string', description: 'Human-readable name (e.g. "Fund Concentration 5% Limit")' },
-      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'FORTY_ACT', 'OTHER'], description: 'Category of the rule' },
+      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'FORTY_ACT', 'COVERAGE', 'COLLATERAL_QUALITY', 'OTHER'], description: 'Category of the rule' },
       anchorDomainCode: { type: 'string', description: 'The domain code this rule anchors to (e.g. "FUND", "ISSUER"). Must be a valid domain_type.' },
       appliesToAll: { type: 'boolean', description: 'If true, applies to all entities of anchor domain by default. If false, only explicitly assigned entities. Default: true.' },
       isActive: { type: 'boolean', description: 'Whether the rule is active. Default: true.' },
@@ -306,7 +306,7 @@ const updateComplianceRule: ToolDefinition = {
       id: { type: 'string', description: 'The rule UUID to update' },
       ruleCode: { type: 'string', description: 'The rule_code to look up (alternative to id)' },
       ruleName: { type: 'string', description: 'New rule name' },
-      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'FORTY_ACT', 'OTHER'] },
+      ruleCategory: { type: 'string', enum: ['CONCENTRATION', 'EXPOSURE', 'DIVERSIFICATION', 'ELIGIBILITY', 'LEVERAGE', 'LIQUIDITY', 'FORTY_ACT', 'COVERAGE', 'COLLATERAL_QUALITY', 'OTHER'] },
       appliesToAll: { type: 'boolean' },
       isActive: { type: 'boolean' },
       description: { type: 'string' },
@@ -421,7 +421,7 @@ const createComplianceRuleVersion: ToolDefinition = {
       groupByDimension: { type: 'object' },
       resultTransform: { type: 'string', enum: ['NONE', 'DIFFERENCE', 'ABS_DIFFERENCE', 'PCT_CHANGE', 'ABS_PCT_CHANGE'], description: 'Default: NONE' },
       resultUnit: { type: 'string', enum: ['PERCENTAGE', 'RATIO', 'CURRENCY', 'COUNT'] },
-      limitDirection: { type: 'string', enum: ['MAX', 'MIN'], description: 'MAX breaches above the limit. MIN breaches below it.' },
+      limitDirection: { type: 'string', enum: ['MAX', 'MIN'], description: 'Legacy only. A fund sets each limit as a maximum (breach above) or a minimum (breach below). Omit this on the rule.' },
       hardLimitAttributeCode: { type: 'string', description: 'Attribute on the anchor that supplies the hard limit. Falls back to hardLimitValue.' },
       softLimitFactor: { type: 'number', description: 'Warning threshold as a fraction of the anchor hard limit, from 0 to 1.' },
       softLimitValue: { type: 'number', description: 'Soft limit (warning)' },
@@ -448,7 +448,7 @@ const createComplianceRuleVersion: ToolDefinition = {
         description: 'Eligibility conditions filtering entities',
       },
     },
-    required: ['baseDomainCode', 'numeratorAttributeCode', 'numeratorAggregation', 'limitDirection'],
+    required: ['baseDomainCode', 'numeratorAttributeCode', 'numeratorAggregation'],
   },
   execute: async (args, supabase) => {
     let ruleId = args.ruleId;
@@ -488,7 +488,7 @@ const createComplianceRuleVersion: ToolDefinition = {
       result_unit: args.resultUnit || 'PERCENTAGE',
       hard_limit_attribute_code: args.hardLimitAttributeCode || null,
       soft_limit_factor: args.softLimitFactor ?? null,
-      limit_direction: args.limitDirection,
+      limit_direction: args.limitDirection || null,
       soft_limit_value: args.softLimitValue ?? null,
       hard_limit_value: args.hardLimitValue ?? null,
       default_source_scope: args.defaultSourceScope || 'GOLDEN',

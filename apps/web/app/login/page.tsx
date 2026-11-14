@@ -1,15 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { nextPathCookie, safeNextPath } from '@/lib/safe-next-path';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
 import { BrandLogo } from '@/components/layout/BrandLogo';
 
 export default function LoginPage() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const redirectedFrom = searchParams.get('redirectedFrom') || '/';
-
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState<'password' | 'azure' | null>(null);
@@ -26,8 +22,11 @@ export default function LoginPage() {
         setError(signInError.message);
         return;
       }
-      router.replace(redirectedFrom);
-      router.refresh();
+      // Read the live URL. The rendered search params can still be empty
+      // on the first client pass, and that fallback is the home page.
+      const next = safeNextPath(new URLSearchParams(window.location.search).get('redirectedFrom'));
+      document.cookie = nextPathCookie(next);
+      window.location.replace(next);
     } finally {
       setLoading(null);
     }
@@ -36,11 +35,16 @@ export default function LoginPage() {
   const handleAzureSignIn = async () => {
     setError(null);
     setLoading('azure');
+    const next = safeNextPath(new URLSearchParams(window.location.search).get('redirectedFrom'));
+    document.cookie = nextPathCookie(next);
     const supabase = supabaseBrowserClient();
     const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: 'azure',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback?redirectedFrom=${encodeURIComponent(redirectedFrom)}`,
+        // The callback path itself has to match the allow list. A query
+        // string on redirectTo is dropped, and Supabase then sends the
+        // browser to the site root.
+        redirectTo: `${window.location.origin}/auth/callback`,
         scopes: 'email openid profile',
       },
     });

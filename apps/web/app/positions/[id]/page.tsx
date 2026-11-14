@@ -156,6 +156,7 @@ export default function PositionDetailPage() {
               spanRows: a.displaySpanRows,
               isDerived: a.isDerived === true,
               derivationFormula: a.derivationFormula,
+              isEditable: a.isEditable !== false,
             }));
           setTemplateAttributes(mappedAttributes);
         }
@@ -192,6 +193,7 @@ export default function PositionDetailPage() {
             spanRows: a.displaySpanRows,
             isDerived: a.isDerived === true,
             derivationFormula: a.derivationFormula,
+            isEditable: a.isEditable !== false,
           }));
         setTemplateAttributes(mappedAttributes);
       }

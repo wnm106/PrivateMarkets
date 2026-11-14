@@ -5,9 +5,9 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 ENVIRONMENT = "development"
-SUPABASE_URL = "https://yxougybcfuignxydipes.supabase.co"
-SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl4b3VneWJjZnVpZ254eWRpcGVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk5OTMyNDAsImV4cCI6MjEwNTU2OTI0MH0.EdKBD3Pkr868UiwLPrAQkuNsEGFkKx4CTkfBfSqBgZI"
-SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl4b3VneWJjZnVpZ254eWRpcGVzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTk5MzI0MCwiZXhwIjoyMTA1NTY5MjQwfQ.93G7ItESVHCeeSfAjfdr_DVCpU5xF9FHc_bOZ_QFy9U"
+# SUPABASE_URL, SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY are secrets.
+# Local: put them in apps/api/.dev.vars (gitignored).
+# Deployed: `wrangler secret put <NAME>` for each one.
 
 [dev]
 port = 4000

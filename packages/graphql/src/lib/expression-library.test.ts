@@ -43,7 +43,8 @@ describe('expression function library', () => {
     expect(rows.map((row) => `${row.category}:${row.code}`)).toEqual([
       'ROW:ABS', 'ROW:ROUND', 'ROW:FLOOR', 'ROW:CEIL', 'ROW:MIN', 'ROW:MAX',
       'ROW:COALESCE', 'ROW:CONCAT', 'ROW:UPPER', 'ROW:LOWER', 'ROW:TRIM',
-      'ROW:LEFT', 'ROW:LENGTH', 'ROW:ADD', 'ROW:SUB', 'ROW:MUL', 'ROW:DIV', 'ROW:NEG',
+      'ROW:LEFT', 'ROW:LENGTH', 'ROW:ADD', 'ROW:SUB', 'ROW:MUL', 'ROW:DIV',
+      'ROW:PRIOR', 'ROW:TRAIL', 'ROW:CUMSUM', 'ROW:WHEN_PRIOR', 'ROW:NEG', 'ROW:LATEST',
       'ROW:CURRENT_DATE', 'ROW:PREVIOUS_DAY', 'ROW:START_OF_MONTH', 'ROW:END_OF_MONTH',
       'ROW:START_OF_QUARTER', 'ROW:END_OF_QUARTER', 'ROW:START_OF_YEAR', 'ROW:END_OF_YEAR',
       'GROUP:SUM', 'GROUP:WAVG', 'GROUP:MIN', 'GROUP:MAX',

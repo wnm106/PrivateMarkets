@@ -2,6 +2,7 @@ import { Context } from '../context';
 import {
   runDataQueries, validateDataQueries, runGrid, bindFilters, resolveEntityId, GridRequest,
 } from '../lib/data-query-engine';
+import { validateNarrative } from '../lib/narrative-engine';
 
 const err = (field: string, message: string, code = 'DATABASE_ERROR') => ({ field, message, code });
 
@@ -33,6 +34,12 @@ function mapNarrative(r: any) {
     dataQueries: r.data_queries ?? [],
     parameters: r.parameters ?? [],
     outputBlocks: r.output_blocks ?? [],
+    sections: r.sections ?? [],
+    persona: r.persona,
+    audience: r.audience,
+    rules: r.rules ?? [],
+    exposedDomains: r.exposed_domains ?? [],
+    allowExternalSearch: !!r.allow_external_search,
     model: r.model,
     isActive: r.is_active,
     metadata: r.metadata ?? {},
@@ -53,6 +60,34 @@ function mapRun(r: any) {
     model: r.model,
     createdAt: r.created_at,
     createdBy: r.created_by,
+    asOfDate: r.as_of_date,
+    sources: r.sources ?? [],
+    verification: r.verification ?? {},
+    plan: r.plan ?? [],
+    origin: r.origin ?? 'APP',
+    createdByLabel: r.created_by_label ?? null,
+    publishedAt: r.published_at ?? null,
+    publishedBy: r.published_by ?? null,
+    publishedByLabel: r.published_by_label ?? null,
+    publishedLabel: r.published_label ?? null,
+  };
+}
+
+function mapRunSection(r: any) {
+  return {
+    id: r.id,
+    runId: r.run_id,
+    sectionKey: r.section_key,
+    ord: r.ord,
+    title: r.title,
+    status: r.status,
+    blocks: r.blocks ?? [],
+    research: r.research ?? {},
+    verification: r.verification ?? {},
+    notes: r.notes ?? [],
+    errorMessage: r.error_message,
+    model: r.model,
+    updatedAt: r.updated_at,
   };
 }
 
@@ -86,17 +121,41 @@ const NARRATIVE_COLUMNS = {
   dataQueries: 'data_queries',
   parameters: 'parameters',
   outputBlocks: 'output_blocks',
+  sections: 'sections',
+  persona: 'persona',
+  audience: 'audience',
+  rules: 'rules',
+  exposedDomains: 'exposed_domains',
+  allowExternalSearch: 'allow_external_search',
   model: 'model',
   isActive: 'is_active',
   metadata: 'metadata',
 };
 
 function validationErrors(input: any): Array<ReturnType<typeof err>> {
-  if (input.dataQueries === undefined) return [];
-  return validateDataQueries(input.dataQueries).map((m) => err('dataQueries', m, 'VALIDATION_ERROR'));
+  const errors: Array<ReturnType<typeof err>> = [];
+  if (input.dataQueries !== undefined) {
+    errors.push(...validateDataQueries(input.dataQueries).map((m) => err('dataQueries', m, 'VALIDATION_ERROR')));
+  }
+  if (Array.isArray(input.sections) && input.sections.length) {
+    errors.push(...validateNarrative({ ...input, sections: input.sections }).map((m) => err('sections', m, 'VALIDATION_ERROR')));
+  }
+  return errors;
 }
 
 export const reportingResolvers = {
+  NarrativeRun: {
+    sections: async (run: { id: string }, _args: unknown, { supabase }: Context) => {
+      const { data, error } = await supabase
+        .from('narrative_run_sections')
+        .select('*')
+        .eq('run_id', run.id)
+        .order('ord', { ascending: true });
+      if (error) throw new Error(`Failed to fetch run sections: ${error.message}`);
+      return (data || []).map(mapRunSection);
+    },
+  },
+
   Query: {
     dashboards: async (_: any, args: { domainCode?: string; isActive?: boolean }, { supabase }: Context) => {
       let q = supabase.from('dashboard_templates').select('*').order('dashboard_name');
@@ -119,7 +178,11 @@ export const reportingResolvers = {
 
     narratives: async (_: any, args: { domainCode?: string; isActive?: boolean }, { supabase }: Context) => {
       let q = supabase.from('narrative_templates').select('*').order('narrative_name');
-      if (args.domainCode) q = q.eq('domain_code', args.domainCode);
+      if (args.domainCode) {
+        // Offered on its own entity type and on every type it is exposed to.
+        const code = args.domainCode.replace(/[^A-Za-z0-9_]/g, '');
+        q = q.or(`domain_code.eq.${code},exposed_domains.cs.{${code}}`);
+      }
       if (args.isActive !== undefined) q = q.eq('is_active', args.isActive);
       const { data, error } = await q;
       if (error) throw new Error(`Failed to fetch narratives: ${error.message}`);
@@ -136,7 +199,10 @@ export const reportingResolvers = {
       return data ? mapNarrative(data) : null;
     },
 
-    narrativeRuns: async (_: any, args: { narrativeId: string; entityId?: string; first?: number }, { supabase }: Context) => {
+    narrativeRuns: async (_: any, args: { narrativeId: string; entityId?: string; first?: number; statuses?: string[] }, { supabase }: Context) => {
+      // Runs that stopped reporting progress are closed so they are never offered as the latest report.
+      // Best effort: a failure here must not hide the runs.
+      await Promise.resolve(supabase.rpc('close_stale_narrative_runs', { p_minutes: 30 })).catch(() => undefined);
       let q = supabase
         .from('narrative_runs')
         .select('*')
@@ -144,9 +210,16 @@ export const reportingResolvers = {
         .order('created_at', { ascending: false })
         .limit(Math.min(args.first ?? 10, 50));
       if (args.entityId) q = q.eq('entity_id', args.entityId);
+      if (args.statuses?.length) q = q.in('status', args.statuses);
       const { data, error } = await q;
       if (error) throw new Error(`Failed to fetch narrative runs: ${error.message}`);
       return (data || []).map(mapRun);
+    },
+
+    narrativeRun: async (_: any, args: { id: string }, { supabase }: Context) => {
+      const { data, error } = await supabase.from('narrative_runs').select('*').eq('id', args.id).maybeSingle();
+      if (error) throw new Error(`Failed to fetch narrative run: ${error.message}`);
+      return data ? mapRun(data) : null;
     },
 
     runDataQueries: async (
@@ -249,6 +322,18 @@ export const reportingResolvers = {
       const { data, error } = await supabase.from('narrative_templates').update(row).eq('id', args.id).select().single();
       if (error) return { narrative: null, errors: [err('general', error.message)] };
       return { narrative: mapNarrative(data), errors: [] };
+    },
+
+    publishNarrativeRun: async (_: any, args: { id: string; label?: string }, { supabase }: Context) => {
+      const { data, error } = await supabase.rpc('publish_narrative_run', { p_run_id: args.id, p_label: args.label ?? null });
+      if (error) throw new Error(error.message);
+      return mapRun(data);
+    },
+
+    unpublishNarrativeRun: async (_: any, args: { id: string }, { supabase }: Context) => {
+      const { data, error } = await supabase.rpc('unpublish_narrative_run', { p_run_id: args.id });
+      if (error) throw new Error(error.message);
+      return mapRun(data);
     },
 
     deleteNarrative: async (_: any, args: { id: string }, { supabase }: Context) => {

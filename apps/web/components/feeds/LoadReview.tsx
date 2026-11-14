@@ -3,6 +3,10 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { dependencyLoadWaves } from '@/lib/feeds/load-order';
+import { describeOrphans, orphanColumns } from '@/lib/feeds/suggest';
+import { SourceViewer, type SourceTarget } from '@/components/feeds/SourceViewer';
+import { IntakePanel, SourcePicker, TrackAttribute, type IntakeInfo, type TableChoice } from '@/components/feeds/LoadIntake';
+import { IssueList, LoadPreview, LoadStepper, type LoadPreviewResult, type PreviewReject, type StepState } from '@/components/feeds/LoadPreview';
 import {
   TRANSFORM_OPTIONS,
   applyTarget,
@@ -130,8 +134,17 @@ export function LoadReview({
   targets,
   lists,
   resultText,
+  lastIssues,
   errorMessage,
   mapNote,
+  intake,
+  tables,
+  tableId,
+  onSelectTable,
+  sources,
+  sourceCode,
+  onSourceChange,
+  onTrackAttribute,
   loading,
   reloading,
   asOfMode,
@@ -141,6 +154,7 @@ export function LoadReview({
   onAsOfDate,
   onChange,
   onLoad,
+  onPreview,
   onReload,
   onClose,
 }: {
@@ -152,6 +166,15 @@ export function LoadReview({
   targets: MappingTarget[];
   lists: ReferenceListCatalog[];
   resultText: string | null;
+  lastIssues?: { rejects: PreviewReject[]; total: number } | null;
+  intake?: IntakeInfo | null;
+  tables?: TableChoice[];
+  tableId?: string | null;
+  onSelectTable?: (id: string) => void;
+  sources?: { code: string; name: string }[];
+  sourceCode?: string | null;
+  onSourceChange?: (code: string | null) => void;
+  onTrackAttribute?: (input: { domainCode: string; attributeName: string; dataType: string; column: string }) => Promise<string>;
   errorMessage: string | null;
   mapNote?: string | null;
   loading: boolean;
@@ -163,6 +186,7 @@ export function LoadReview({
   onAsOfDate: (value: string) => void;
   onChange: (index: number, next: ColumnAssignment) => void;
   onLoad: () => void;
+  onPreview: () => Promise<LoadPreviewResult>;
   onReload: () => void;
   onClose: () => void;
 }) {
@@ -171,6 +195,15 @@ export function LoadReview({
   const baselineRevision = useRef(mappingRevision);
   const baselineStore = useRef<Record<string, ColumnAssignment>>({});
   const [fundHint, setFundHint] = useState(false);
+  const [viewing, setViewing] = useState<SourceTarget | null>(null);
+  const hasDocument = /\.(pdf|png|jpe?g)$/i.test(fileName);
+  const showInDocument = hasDocument
+    ? (item: PreviewReject) => setViewing({ row: item.row, column: item.column, label: [item.entityCode, item.attributeCode, item.value].filter(Boolean).join(' - ') })
+    : undefined;
+  const [preview, setPreview] = useState<LoadPreviewResult | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewKey, setPreviewKey] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const [editKey, setEditKey] = useState('');
   const [drafts, setDrafts] = useState<Record<string, { choice: 'suggested' | 'other' | 'skip'; otherKey: string }>>({});
@@ -201,6 +234,17 @@ export function LoadReview({
       if (!separateName) domains.add(assignment.domainCode);
     }
     return domains;
+  }, [assignments]);
+
+  const trackDomains = useMemo(() => {
+    const seen = new Set<string>();
+    const list: { code: string; label: string }[] = [];
+    for (const assignment of assignments) {
+      if (assignment.role !== 'identity' || !assignment.domainCode || seen.has(assignment.domainCode)) continue;
+      seen.add(assignment.domainCode);
+      list.push({ code: assignment.domainCode, label: domainLabel(assignment.domainCode) });
+    }
+    return list;
   }, [assignments]);
 
   const targetsByGroup = useMemo(() => {
@@ -240,7 +284,40 @@ export function LoadReview({
 
   const pending = assignments.filter(needsDecision);
   const confident = assignments.length - pending.length;
-  const ready = pending.length === 0 && plan.steps.length > 0;
+  const orphans = useMemo(() => orphanColumns(assignments), [assignments]);
+  const mappingReady = pending.length === 0 && plan.steps.length > 0 && orphans.length === 0;
+  const currentKey = useMemo(() => JSON.stringify([fileId, chosenDate, assignments.map((item) => [item.sourceColumn, item.role, item.domainCode, item.attributeCode, item.transform])]), [fileId, chosenDate, assignments]);
+  const reviewed = Boolean(preview) && previewKey === currentKey;
+  const ready = mappingReady && reviewed;
+  const stale = Boolean(preview) && !reviewed;
+  const stepState = (done: boolean, attention: boolean, current: boolean): StepState => (done ? 'done' : attention ? 'attention' : current ? 'current' : 'waiting');
+  const steps: { label: string; state: StepState; note?: string }[] = [
+    { label: 'File read', state: 'done', note: `${rowCount.toLocaleString()} rows` },
+    {
+      label: 'Map columns',
+      state: stepState(mappingReady, pending.length > 0 || orphans.length > 0, true),
+      note: pending.length > 0 ? `${pending.length} to decide` : orphans.length > 0 ? 'identity missing' : plan.steps.length === 0 ? 'no code or name yet' : undefined,
+    },
+    { label: 'As-of date', state: mappingReady ? 'done' : 'waiting', note: mappingReady ? chosenDate : undefined },
+    {
+      label: 'Review',
+      state: stepState(reviewed, stale, mappingReady),
+      note: stale ? 'changed since review' : undefined,
+    },
+    { label: 'Load', state: ready ? 'current' : 'waiting' },
+  ];
+  async function runPreview() {
+    setPreviewing(true);
+    setPreviewError(null);
+    try {
+      setPreview(await onPreview());
+      setPreviewKey(currentKey);
+    } catch (err: any) {
+      setPreviewError(err?.message || 'The review could not be run');
+    } finally {
+      setPreviewing(false);
+    }
+  }
   const recordTotal = plan.steps.reduce((sum, step) => sum + step.count, 0);
   const loadCount = recordTotal > 0 ? recordTotal : rowCount;
   const maxCount = Math.max(1, ...plan.steps.map((step) => step.count));
@@ -352,10 +429,19 @@ export function LoadReview({
           </div>
           <p className="load-sub">{rowCount.toLocaleString()} rows. Three steps: check what’s in the file, confirm where each column goes, then load. Reload file reads the stored copy again and replaces this mapping.</p>
           {mapNote && <p className="load-sub" style={{ marginTop: 8 }}>{mapNote}</p>}
+          <IntakePanel intake={intake || null} tables={tables || []} tableId={tableId || null} disabled={loading || reloading} onSelectTable={(id) => onSelectTable?.(id)} onViewOriginal={hasDocument ? () => setViewing({}) : undefined} />
+          <LoadStepper steps={steps} />
+          {viewing && <SourceViewer instanceId={fileId} fileName={fileName} target={viewing} onClose={() => setViewing(null)} />}
           {resultText && (
             <p className="load-sub" style={{ marginTop: -8 }}>
               Last load: {resultText}{errorMessage ? ` ${errorMessage}` : ''}
             </p>
+          )}
+          {lastIssues && lastIssues.total > 0 && (
+            <details style={{ marginBottom: 12 }}>
+              <summary>Last load: {lastIssues.total.toLocaleString()} {lastIssues.total === 1 ? 'issue' : 'issues'} to look at</summary>
+              <IssueList rejects={lastIssues.rejects} total={lastIssues.total} onShow={showInDocument} />
+            </details>
           )}
 
           <section className="load-section">
@@ -437,6 +523,11 @@ export function LoadReview({
                     onDraft={(next) => setDrafts((current) => ({ ...current, [assignment.sourceColumn]: next }))}
                     onConfirm={() => confirmDecision(index, assignment)}
                     onChange={(next) => onChange(index, next)}
+                    trackDomains={trackDomains}
+                    onTrack={onTrackAttribute ? async (input) => {
+                      const key = await onTrackAttribute(input);
+                      setDrafts((current) => ({ ...current, [assignment.sourceColumn]: { choice: 'other', otherKey: key } }));
+                    } : undefined}
                   />
                 );
               }
@@ -515,8 +606,14 @@ export function LoadReview({
                 onChange={(event) => onAsOfDate(event.target.value)}
               />
               <span className="load-sub">Values will be stored as of {formatLongDate(chosenDate)}.</span>
+              {onSourceChange && (
+                <SourcePicker sources={sources || []} value={sourceCode || null} fallbackLabel="The map’s own source" disabled={loading || reloading} onChange={onSourceChange} />
+              )}
             </div>
           </section>
+          {mappingReady && (
+            <LoadPreview preview={preview} running={previewing} error={previewError} stale={Boolean(preview) && !reviewed} onRun={runPreview} onShow={showInDocument} />
+          )}
         </div>
       </div>
 
@@ -528,8 +625,12 @@ export function LoadReview({
                 <><b>{confident} of {assignments.length}</b> columns confirmed · {pending.length} need{pending.length === 1 ? 's' : ''} a decision</>
               ) : plan.steps.length === 0 ? (
                 <>Map a code or a name before loading</>
+              ) : orphans.length > 0 ? (
+                <>{describeOrphans(orphans)}. Pick an identity column or set it to do not load.</>
+              ) : !reviewed ? (
+                <><b>{assignments.length} of {assignments.length}</b> columns confirmed · review what will happen before loading</>
               ) : (
-                <><b>{assignments.length} of {assignments.length}</b> columns confirmed · ready to load</>
+                <><b>{assignments.length} of {assignments.length}</b> columns confirmed · reviewed · ready to load</>
               )}
             </p>
             <div className="load-pb"><i style={{ width: `${assignments.length === 0 ? 0 : (confident / assignments.length) * 100}%` }} /></div>
@@ -539,9 +640,15 @@ export function LoadReview({
               {reloading ? 'Reading file…' : 'Reload file'}
             </button>
             <button type="button" className="load-btn sec" disabled={loading || reloading} onClick={onClose}>Cancel</button>
-            <button type="button" className="load-btn" disabled={!ready || loading || reloading} onClick={onLoad}>
-              {loading ? 'Loading…' : `Load ${loadCount.toLocaleString()} records`}
-            </button>
+            {mappingReady && !reviewed ? (
+              <button type="button" className="load-btn" disabled={previewing || loading || reloading} onClick={runPreview}>
+                {previewing ? 'Reviewing…' : 'Review before loading'}
+              </button>
+            ) : (
+              <button type="button" className="load-btn" disabled={!ready || loading || reloading} onClick={onLoad}>
+                {loading ? 'Loading…' : `Load ${loadCount.toLocaleString()} records`}
+              </button>
+            )}
           </span>
         </div>
       </div>
@@ -596,7 +703,11 @@ function DecisionCard({
   onDraft,
   onConfirm,
   onChange,
+  trackDomains,
+  onTrack,
 }: {
+  trackDomains: { code: string; label: string }[];
+  onTrack?: (input: { domainCode: string; attributeName: string; dataType: string; column: string }) => Promise<void>;
   assignment: ColumnAssignment;
   targets: MappingTarget[];
   targetsByGroup: [string, MappingTarget[]][];
@@ -640,6 +751,9 @@ function DecisionCard({
                 onChange={(otherKey) => onDraft({ choice: 'other', otherKey })}
               />
             </small>
+            {onTrack && (
+              <TrackAttribute column={assignment.sourceColumn} samples={assignment.samples || []} domains={trackDomains} onTrack={onTrack} />
+            )}
           </span>
         </label>
         <label className="load-opt">

@@ -22,11 +22,13 @@ import { registerSpecialistTools } from './tools/specialist-tools';
 import { registerComplianceTools } from './tools/compliance-tools';
 import { registerReportingTools } from './tools/reporting-tools';
 import { registerQueryTools } from './tools/query-data';
+import { registerNarrativeTools } from './tools/narrative-tools';
+import { SERVER_INSTRUCTIONS } from './lib/narrative-guide';
 import { ToolRegistry } from './lib/tool-registry';
 import { listResources, readResource } from './resources';
 import { PROMPTS, getPromptMessages } from './prompts';
 
-const supabaseUrl = process.env.SUPABASE_URL || 'https://yxougybcfuignxydipes.supabase.co';
+const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || '';
 
 /**
@@ -102,6 +104,8 @@ const server = new Server(
       resources: {},
       prompts: {},
     },
+    // Sent to every client on connect: how to answer a large analytical request from these tools.
+    instructions: SERVER_INSTRUCTIONS,
   }
 );
 
@@ -118,6 +122,7 @@ registerSpecialistTools(toolRegistry);
 registerComplianceTools(toolRegistry);
 registerReportingTools(toolRegistry);
 registerQueryTools(toolRegistry);
+registerNarrativeTools(toolRegistry);
 
 // Handle tool listing
 server.setRequestHandler(ListToolsRequestSchema, async () => {

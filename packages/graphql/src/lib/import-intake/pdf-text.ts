@@ -3,7 +3,8 @@
  * baseline are separated with tabs so a statement keeps its label and amount.
  */
 
-export async function extractPdfText(bytes: Uint8Array): Promise<string> {
+/** The text of each page, in order. A scan has empty pages. */
+export async function extractPdfPages(bytes: Uint8Array): Promise<string[]> {
   const unpdf = await import('unpdf');
   const pdf = await unpdf.getDocumentProxy(bytes);
   const pages: string[] = [];
@@ -12,7 +13,55 @@ export async function extractPdfText(bytes: Uint8Array): Promise<string> {
     const content = await page.getTextContent();
     pages.push(itemsToLines(content.items || []));
   }
-  return pages.filter(Boolean).join('\n');
+  return pages;
+}
+
+/** A run of text and where it sits on its page. Points, measured from the top left. */
+export interface PdfFragment {
+  text: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface PdfPageFragments {
+  page: number;
+  width: number;
+  height: number;
+  fragments: PdfFragment[];
+}
+
+/** Every text run on every page with its position. A scan has none. */
+export async function extractPdfFragments(bytes: Uint8Array): Promise<PdfPageFragments[]> {
+  const unpdf = await import('unpdf');
+  const pdf = await unpdf.getDocumentProxy(bytes);
+  const pages: PdfPageFragments[] = [];
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1 });
+    const content = await page.getTextContent();
+    const fragments: PdfFragment[] = [];
+    for (const item of (content.items || []) as { str?: string; transform?: number[]; width?: number; height?: number }[]) {
+      const text = String(item.str || '');
+      if (!text.trim()) continue;
+      const transform = item.transform || [];
+      const h = Number(item.height || Math.abs(Number(transform[3] || 0)) || 8);
+      fragments.push({
+        text,
+        x: Number(transform[4] || 0),
+        y: viewport.height - Number(transform[5] || 0) - h,
+        w: Number(item.width || Math.max(text.length * 4, 4)),
+        h,
+      });
+    }
+    pages.push({ page: pageNumber, width: viewport.width, height: viewport.height, fragments });
+  }
+  return pages;
+}
+
+export async function extractPdfText(bytes: Uint8Array): Promise<string> {
+  return (await extractPdfPages(bytes)).filter(Boolean).join('\n');
 }
 
 interface PlacedText {

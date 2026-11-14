@@ -15,6 +15,7 @@ import {
   saveSourceMap,
   startLoadSession,
 } from '../feeds/load-sessions';
+import { sessionClientId } from '../feeds/session-client';
 import { ToolRegistry } from '../lib/tool-registry.js';
 import { ToolDefinition } from '../lib/types.js';
 
@@ -23,7 +24,7 @@ const listSourceMapsTool: ToolDefinition = {
   description: 'List reusable source maps, including the Position File map. A map can load one entity or several, with parents before dependents.',
   category: 'import',
   inputSchema: { type: 'object', properties: {} },
-  execute: async (_args, supabase) => ({ maps: await listSourceMaps(supabase) }),
+  execute: async (_args, supabase) => ({ maps: await listSourceMaps(await sessionClientId(supabase)) }),
 };
 
 const listLoadSessionsTool: ToolDefinition = {
@@ -31,7 +32,7 @@ const listLoadSessionsTool: ToolDefinition = {
   description: 'List guided data loads. Each session keeps the original file, the specialist\'s questions, and the map it produced.',
   category: 'import',
   inputSchema: { type: 'object', properties: {} },
-  execute: async (_args, supabase) => ({ sessions: await listLoadSessions(supabase) }),
+  execute: async (_args, supabase) => ({ sessions: await listLoadSessions(await sessionClientId(supabase)) }),
 };
 
 const startLoadSessionTool: ToolDefinition = {
@@ -50,10 +51,11 @@ const startLoadSessionTool: ToolDefinition = {
   } as JSONSchema7,
   execute: async (args, supabase) => {
     if (!args.contentBase64 && !args.csvText) throw new Error('Provide contentBase64 or csvText');
+    const clientId = await sessionClientId(supabase);
     const bytes = args.contentBase64
       ? Buffer.from(String(args.contentBase64), 'base64')
       : Buffer.from(String(args.csvText), 'utf8');
-    return startLoadSession(String(args.fileName), String(args.mediaType || 'text/csv'), bytes, supabase);
+    return startLoadSession(String(args.fileName), String(args.mediaType || 'text/csv'), bytes, clientId);
   },
 };
 
@@ -66,7 +68,7 @@ const readLoadSessionTool: ToolDefinition = {
     properties: { sessionId: { type: 'string' } },
     required: ['sessionId'],
   } as JSONSchema7,
-  execute: async (args, supabase) => getLoadSession(String(args.sessionId), supabase),
+  execute: async (args, supabase) => getLoadSession(String(args.sessionId), await sessionClientId(supabase)),
 };
 
 const answerLoadSessionTool: ToolDefinition = {
@@ -88,7 +90,7 @@ const answerLoadSessionTool: ToolDefinition = {
     (args.answers || {}) as Record<string, string>,
     Array.isArray(args.acceptedRecommendationIds) ? args.acceptedRecommendationIds.map(String) : undefined,
     Array.isArray(args.dismissedRecommendationIds) ? args.dismissedRecommendationIds.map(String) : undefined,
-    supabase
+    await sessionClientId(supabase)
   ),
 };
 
@@ -101,7 +103,7 @@ const refreshLoadSessionTool: ToolDefinition = {
     properties: { sessionId: { type: 'string' } },
     required: ['sessionId'],
   } as JSONSchema7,
-  execute: async (args, supabase) => refreshLoadSession(String(args.sessionId), supabase),
+  execute: async (args, supabase) => refreshLoadSession(String(args.sessionId), await sessionClientId(supabase)),
 };
 
 const saveSourceMapTool: ToolDefinition = {
@@ -116,7 +118,7 @@ const saveSourceMapTool: ToolDefinition = {
     },
     required: ['sessionId'],
   } as JSONSchema7,
-  execute: async (args, supabase) => saveSourceMap(String(args.sessionId), args.name ? String(args.name) : undefined, supabase),
+  execute: async (args, supabase) => saveSourceMap(String(args.sessionId), args.name ? String(args.name) : undefined, await sessionClientId(supabase)),
 };
 
 const runLoadSessionTool: ToolDefinition = {
@@ -128,7 +130,7 @@ const runLoadSessionTool: ToolDefinition = {
     properties: { sessionId: { type: 'string' } },
     required: ['sessionId'],
   } as JSONSchema7,
-  execute: async (args, supabase) => runLoadSession(String(args.sessionId), supabase),
+  execute: async (args, supabase) => runLoadSession(String(args.sessionId), await sessionClientId(supabase)),
 };
 
 export function registerSpecialistTools(registry: ToolRegistry): void {

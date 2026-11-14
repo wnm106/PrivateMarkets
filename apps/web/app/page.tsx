@@ -458,7 +458,7 @@ export default function LandingPage() {
         <div className="home-panel">
           <div className="home-section-title">
             <h2>
-              Exception Queue
+              Data Quality Queue
               {!loading && stats.openExceptions > 0 && <span className="home-count">{stats.openExceptions}</span>}
             </h2>
             <Link href="/quality">View all</Link>

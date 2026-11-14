@@ -33,8 +33,14 @@ interface Draft {
   dataQueries: any[];
   parameters: any[];
   htmlTemplate: string; // dashboard
-  instructions: string; // narrative
-  outputBlocks: any[]; // narrative
+  instructions: string; // narrative (single-section form)
+  outputBlocks: any[]; // narrative (single-section form)
+  sections: any[]; // narrative
+  persona: string; // narrative
+  audience: string; // narrative
+  rules: string[]; // narrative
+  exposedDomains: string[]; // narrative: further entity types that offer it
+  allowExternalSearch: boolean; // narrative
 }
 
 interface ReportDesignerProps {
@@ -56,6 +62,12 @@ function toDraft(kind: Kind, t: DashboardTemplate | NarrativeTemplate): Draft {
     htmlTemplate: isDash ? d.htmlTemplate || '' : '',
     instructions: isDash ? '' : n.instructions || '',
     outputBlocks: isDash ? [] : n.outputBlocks || [],
+    sections: isDash ? [] : n.sections || [],
+    persona: isDash ? '' : n.persona || '',
+    audience: isDash ? '' : n.audience || '',
+    rules: isDash ? [] : n.rules || [],
+    exposedDomains: isDash ? [] : n.exposedDomains || [],
+    allowExternalSearch: isDash ? false : !!n.allowExternalSearch,
   };
 }
 
@@ -95,6 +107,12 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
       if (Array.isArray(p.dataQueries)) next.dataQueries = p.dataQueries;
       if (Array.isArray(p.parameters)) next.parameters = p.parameters;
       if (kind === 'narrative' && Array.isArray(p.outputBlocks)) next.outputBlocks = p.outputBlocks;
+      if (kind === 'narrative' && Array.isArray(p.sections)) next.sections = p.sections;
+      if (kind === 'narrative' && typeof p.persona === 'string') next.persona = p.persona;
+      if (kind === 'narrative' && typeof p.audience === 'string') next.audience = p.audience;
+      if (kind === 'narrative' && Array.isArray(p.rules)) next.rules = p.rules.map(String);
+      if (kind === 'narrative' && Array.isArray(p.exposedDomains)) next.exposedDomains = p.exposedDomains.map(String);
+      if (kind === 'narrative' && typeof p.allowExternalSearch === 'boolean') next.allowExternalSearch = p.allowExternalSearch;
       patch(next);
       setMessage({ type: 'ok', text: 'Applied assistant changes to the draft. Review the preview, then Save.' });
     },
@@ -124,6 +142,12 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
               dataQueries: draft.dataQueries,
               parameters: draft.parameters,
               outputBlocks: draft.outputBlocks,
+              sections: draft.sections,
+              persona: draft.persona,
+              audience: draft.audience,
+              rules: draft.rules,
+              exposedDomains: draft.exposedDomains,
+              allowExternalSearch: draft.allowExternalSearch,
             },
     });
   }, [
@@ -136,6 +160,12 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
     draft.dataQueries,
     draft.parameters,
     draft.outputBlocks,
+    draft.sections,
+    draft.persona,
+    draft.audience,
+    draft.rules,
+    draft.exposedDomains,
+    draft.allowExternalSearch,
     sample?.entityCode,
   ]);
 
@@ -195,7 +225,18 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
             })
           : await graphqlMutation<{ updateNarrative: { errors: any[] } }, any>(UPDATE_NARRATIVE_MUTATION, {
               id: initial.id,
-              input: { ...common, narrativeName: draft.name, instructions: draft.instructions, outputBlocks: draft.outputBlocks },
+              input: {
+                ...common,
+                narrativeName: draft.name,
+                instructions: draft.instructions,
+                outputBlocks: draft.outputBlocks,
+                sections: draft.sections,
+                persona: draft.persona || null,
+                audience: draft.audience || null,
+                rules: draft.rules,
+                exposedDomains: draft.exposedDomains.filter((d) => d !== draft.domainCode),
+                allowExternalSearch: draft.allowExternalSearch,
+              },
             });
       const result: any = kind === 'dashboard' ? (res.data as any)?.updateDashboard : (res.data as any)?.updateNarrative;
       const errors = result?.errors || [];
@@ -257,6 +298,12 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
     outputBlocks: draft.outputBlocks,
     narrativeName: draft.name,
     domainCode: draft.domainCode,
+    sections: draft.sections,
+    persona: draft.persona || undefined,
+    audience: draft.audience || undefined,
+    rules: draft.rules,
+    allowExternalSearch: draft.allowExternalSearch,
+    parameters: draft.parameters,
   };
 
   return (
@@ -302,7 +349,7 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
         <div>
           <div style={{ display: 'flex', borderBottom: '1px solid var(--line)', marginBottom: '14px' }}>
             <button style={tabBtn(leftTab === 'content')} onClick={() => setLeftTab('content')}>
-              {kind === 'dashboard' ? 'HTML' : 'Instructions & output'}
+              {kind === 'dashboard' ? 'HTML' : draft.sections.length ? `Sections (${draft.sections.length})` : 'Instructions & output'}
             </button>
             <button style={tabBtn(leftTab === 'data')} onClick={() => setLeftTab('data')}>Data queries ({draft.dataQueries.length})</button>
             <button style={tabBtn(leftTab === 'params')} onClick={() => setLeftTab('params')}>Filter inputs ({draft.parameters.length})</button>
@@ -326,6 +373,44 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
                 <input type="checkbox" checked={draft.isActive} onChange={(e) => patch({ isActive: e.target.checked })} />
                 Active (shown on {draft.domainCode} pages)
               </label>
+              {kind === 'narrative' && (
+                <>
+                  {fieldLabel('Also offered on these entity types')}
+                  <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginBottom: '6px' }}>
+                    The narrative appears on the record page of {draft.domainCode} and each type ticked here, and runs against the record being viewed. Its queries start at that record, so write them to make sense on every type you tick.
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', maxHeight: '180px', overflowY: 'auto', padding: '8px 10px', border: '1px solid var(--line)', background: 'white' }}>
+                    {domains.filter((d) => d.domainCode !== draft.domainCode).map((d) => (
+                      <label key={d.domainCode} style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '12px' }}>
+                        <input
+                          type="checkbox"
+                          checked={draft.exposedDomains.includes(d.domainCode)}
+                          onChange={(e) => patch({
+                            exposedDomains: e.target.checked
+                              ? [...draft.exposedDomains, d.domainCode]
+                              : draft.exposedDomains.filter((x) => x !== d.domainCode),
+                          })}
+                        />
+                        {d.domainName}
+                      </label>
+                    ))}
+                  </div>
+                  <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginTop: '16px', fontSize: '13px' }}>
+                    <input
+                      type="checkbox"
+                      style={{ marginTop: '3px' }}
+                      checked={draft.allowExternalSearch}
+                      onChange={(e) => patch({ allowExternalSearch: e.target.checked })}
+                    />
+                    <span>
+                      Allow web research
+                      <span style={{ display: 'block', fontSize: '11px', color: 'var(--ink-3)' }}>
+                        Sections that ask for news or market sentiment send company and industry names to a web search provider. Leave this off to keep portfolio names inside the platform; those sections then say sentiment was not researched.
+                      </span>
+                    </span>
+                  </label>
+                </>
+              )}
             </div>
           )}
 
@@ -350,15 +435,38 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
 
           {leftTab === 'content' && kind === 'narrative' && (
             <div>
-              {fieldLabel('Analysis instructions')}
+              {fieldLabel('Persona')}
+              <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginBottom: '6px' }}>
+                Who is writing, and in whose voice. Applies to every section.
+              </div>
+              <textarea style={{ ...inputStyle, resize: 'vertical' }} rows={3} value={draft.persona} onChange={(e) => patch({ persona: e.target.value })} />
+              {fieldLabel('Audience')}
+              <input style={inputStyle} value={draft.audience} onChange={(e) => patch({ audience: e.target.value })} />
+              <div style={{ height: '14px' }} />
+              <JsonField
+                label="Rules"
+                hint="Extra rules every section must follow, as a list of sentences. The framework already enforces: only use supplied figures, say 'data not available' for gaps, state as-of dates, cite dated sources, lead with the insight, pair weaknesses with actions."
+                value={draft.rules}
+                onChange={(v) => patch({ rules: Array.isArray(v) ? v.map(String) : [] })}
+                rows={6}
+              />
+              <JsonField
+                label="Sections"
+                hint='Ordered sections: { "key", "title", "purpose", "instructions", "dataQueries", "comparisons", "measures", "screens", "scenarios", "blocks", "agentic": {"enabled":true}, "research": {"queries":[...]}, "dependsOn": [keys], "batch": {"query","size"} }. Block types: markdown, kpis, table, scorecard, chart, insights, callouts, sources. Leave empty to use the single-section form below.'
+                value={draft.sections}
+                onChange={(v) => patch({ sections: Array.isArray(v) ? v : [] })}
+                rows={26}
+              />
+              <div style={{ height: '8px' }} />
+              {fieldLabel(draft.sections.length ? 'Analysis instructions (used only when there are no sections)' : 'Analysis instructions')}
               <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginBottom: '6px' }}>
                 Tell the model exactly what to analyse and how. Refer to data sets by their query key.
               </div>
               <textarea style={{ ...inputStyle, resize: 'vertical' }} rows={10} value={draft.instructions} onChange={(e) => patch({ instructions: e.target.value })} />
               <div style={{ height: '14px' }} />
               <JsonField
-                label="Output blocks"
-                hint='Ordered list of { "type": "markdown" | "table" | "chart" | "insights", "key", "title", "guidance" }.'
+                label="Output blocks (single-section form)"
+                hint='Ordered list of { "type": "markdown" | "kpis" | "table" | "scorecard" | "chart" | "insights" | "callouts" | "sources", "key", "title", "guidance" }.'
                 value={draft.outputBlocks}
                 onChange={(v) => patch({ outputBlocks: v })}
                 rows={14}

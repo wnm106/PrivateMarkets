@@ -81,7 +81,7 @@ export function GlobalSearch() {
     const timer = window.setTimeout(async () => {
       const result = await graphqlQuery<{ searchEntities: SearchHit[] }, { query: string; limit: number }>(
         SEARCH_ENTITIES,
-        { query: trimmed, limit: 20 },
+        { query: trimmed, limit: 40 },
         'network-only',
         controller.signal,
       );
@@ -104,10 +104,14 @@ export function GlobalSearch() {
   }, [trimmed]);
 
   const rows = useMemo(() => groupHits(hits), [hits]);
+  const listed = useMemo(
+    () => rows.flatMap((row) => (row.kind === 'hit' ? [row.hit] : [])),
+    [rows],
+  );
 
   function move(delta: number) {
-    if (!hits.length) return;
-    setActive((current) => (current + delta + hits.length) % hits.length);
+    if (!listed.length) return;
+    setActive((current) => (current + delta + listed.length) % listed.length);
     setOpen(true);
   }
 
@@ -133,7 +137,7 @@ export function GlobalSearch() {
           aria-autocomplete="list"
           aria-expanded={showPanel}
           aria-controls={listId}
-          aria-activedescendant={showPanel && hits[active] ? optionId(hits[active].id) : undefined}
+          aria-activedescendant={showPanel && listed[active] ? optionId(listed[active].id) : undefined}
           spellCheck={false}
           onChange={(event) => {
             setQuery(event.target.value);
@@ -148,9 +152,9 @@ export function GlobalSearch() {
             } else if (event.key === 'ArrowUp') {
               event.preventDefault();
               move(-1);
-            } else if (event.key === 'Enter' && showPanel && hits[active]) {
+            } else if (event.key === 'Enter' && showPanel && listed[active]) {
               event.preventDefault();
-              const hit = hits[active];
+              const hit = listed[active];
               router.push(`${domainHref(hit.domainCode)}/${hit.id}`);
               closeSearch();
             } else if (event.key === 'Escape') {
@@ -195,7 +199,6 @@ export function GlobalSearch() {
                   <span className="topbar-search-name">{highlight(row.hit.entityName, trimmed)}</span>
                   {captionText && <span className="topbar-search-meta">{captionText}</span>}
                 </span>
-                <span className="topbar-search-domain">{row.hit.domainName}</span>
               </Link>
             );
           })}
@@ -210,24 +213,37 @@ type SearchRow =
   | { kind: 'hit'; hit: SearchHit; index: number };
 
 function groupHits(hits: SearchHit[]): SearchRow[] {
+  const byId = new Map<string, SearchHit>();
+  for (const hit of hits) {
+    const id = hit.id.toLowerCase();
+    const previous = byId.get(id);
+    if (!previous || (previous.match !== 'NAME' && hit.match === 'NAME')) byId.set(id, hit);
+  }
+  const ordered = [...byId.values()].sort((a, b) => (
+    a.depth - b.depth
+    || a.domainName.localeCompare(b.domainName)
+    || a.entityName.localeCompare(b.entityName, undefined, { sensitivity: 'base' })
+    || a.id.localeCompare(b.id)
+  ));
   const rows: SearchRow[] = [];
   let last = '';
-  hits.forEach((hit, index) => {
-    const label = hit.depth === 0 ? 'Parent entities' : 'Child entities';
+  let index = 0;
+  for (const hit of ordered) {
+    const label = hit.domainName || 'Record';
     if (label !== last) {
       rows.push({ kind: 'label', label });
       last = label;
     }
     rows.push({ kind: 'hit', hit, index });
-  });
+    index += 1;
+  }
   return rows;
 }
 
 function matchCaption(hit: SearchHit) {
   if (!hit.matchedName || hit.match === 'NAME') return null;
-  if (hit.match === 'PARENT') return `Parent ${hit.matchedName}`;
-  const kind = hit.matchedDomainName ? hit.matchedDomainName.toLowerCase() : 'record';
-  return `Related ${kind} ${hit.matchedName}`;
+  if (hit.matchedName.localeCompare(hit.entityName, undefined, { sensitivity: 'base' }) === 0) return null;
+  return `via ${hit.matchedName}`;
 }
 
 function highlight(name: string, query: string) {

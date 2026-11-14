@@ -9,17 +9,16 @@ export const maxDuration = 300;
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const user = await requireFeedUser();
   if (!user) return NextResponse.json({ error: 'Sign in to load a file' }, { status: 401 });
-  const { id } = await context.params;
-  const body = await request.json().catch(() => ({}));
   const clientId = await feedClientId();
   if (!clientId) return NextResponse.json({ error: 'Choose a client before loading the file' }, { status: 400 });
+  const { id } = await context.params;
+  const body = await request.json().catch(() => ({}));
   try {
     const instance = await processImportInstance(
       id,
+      clientId,
       Array.isArray(body.columnMappings) ? body.columnMappings as ColumnAssignment[] : undefined,
-      body.asOfDate ? String(body.asOfDate) : undefined,
-      undefined,
-      clientId
+      body.asOfDate ? String(body.asOfDate) : undefined
     );
     return NextResponse.json(instance);
   } catch (error: any) {

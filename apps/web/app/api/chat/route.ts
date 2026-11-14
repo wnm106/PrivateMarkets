@@ -11,6 +11,8 @@ import { registerSpecialistTools } from '@tapestrai/mcp-server/src/tools/special
 import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/compliance-tools';
 import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
 import { QUERY_DATA_GUIDE, registerQueryTools } from '@tapestrai/mcp-server/src/tools/query-data';
+import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrative-tools';
+import { NARRATIVE_COMPOSE_GUIDE } from '@tapestrai/mcp-server/src/lib/narrative-guide';
 import { formatLessons, lessonFromRow, matchLessons } from '@tapestrai/mcp-server/src/lib/chat-lessons';
 import { presentAnswer } from '@tapestrai/mcp-server/src/lib/chat-answer';
 import { getContextProfile } from '@tapestrai/mcp-server/src/lib/context-profiles';
@@ -49,7 +51,10 @@ const geminiApiKey =
   process.env.NEXT_PUBLIC_GEMINI_API_KEY ||
   '';
 const geminiModel = 'gemini-3.8-flash';
-const MAX_TOOL_ROUNDS = 6;
+const MAX_TOOL_ROUNDS = 10;
+
+/** Requests that ask for a report, briefing, or review get the composition method. */
+const REPORT_REQUEST = /\b(review|report|briefing|narrative|memo|presentation|pack|prepare|prep|lp|limited partner|write[- ]?up|attribution|outlook)\b/i;
 /** Cap the stored turn so a huge tool payload can't bloat the transcript. */
 const MAX_STORED_CONTENT = 20000;
 
@@ -67,6 +72,7 @@ registerSpecialistTools(toolRegistry);
 registerComplianceTools(toolRegistry);
 registerReportingTools(toolRegistry);
 registerQueryTools(toolRegistry);
+registerNarrativeTools(toolRegistry);
 
 async function callGemini(body: Record<string, any>) {
   const response = await fetch(
@@ -360,6 +366,9 @@ export async function POST(request: NextRequest) {
         }
       }
     }
+    if (tools.some((tool) => tool.name === 'start_narrative_run') && (userText.length > 600 || REPORT_REQUEST.test(userText))) {
+      systemInstruction += `\n\n${NARRATIVE_COMPOSE_GUIDE}\nIn this chat you have a limited number of tool steps. For a full multi-section report, prefer a saved narrative: tell the user it can be generated from the record's page (Dashboards & Narratives), and answer the parts you can with the tools.`;
+    }
     const executedCalls: Array<{ name: string; args: any }> = [];
     const successfulTools = new Set<string>();
     /** Results already produced this turn, so an identical repeat is not re-run. */
@@ -525,8 +534,9 @@ export async function POST(request: NextRequest) {
           {
             role: 'user',
             parts: [{
-              text: 'That is all the data available. Using only what you have already retrieved, '
-                + 'answer my original question now. Do not request any more tools.',
+              text: 'No further tools are available. Answer from the rows already retrieved. '
+                + 'If an amount the question needs was never returned, say it was not retrieved. '
+                + 'Do not substitute a facility size, original principal, or record count for that amount.',
             }],
           },
         ],

@@ -20,17 +20,36 @@ export function decompileCalcExpression(expr: unknown): string {
     if (node.asOf) return `${node.ref} AS OF ${decompileCalcExpression(node.asOf)}`;
     return node.ref;
   }
-  if ('const' in node) return String(node.const);
-  if (node.op === 'neg' && Array.isArray(node.args)) return `-${decompileCalcExpression(node.args[0])}`;
+  if ('const' in node) return typeof node.const === 'string' ? JSON.stringify(node.const) : String(node.const);
+  if (node.op === 'neg' && Array.isArray(node.args)) return `-${wrapped(node.args[0])}`;
+  if (node.op === 'prior' && Array.isArray(node.args)) return `PRIOR(${wrapped(node.args[0])})`;
+  if (node.op === 'cumsum' && Array.isArray(node.args)) return `CUMSUM(${wrapped(node.args[0])})`;
+  if (node.op === 'when_prior' && Array.isArray(node.args)) return `WHEN_PRIOR(${wrapped(node.args[0])})`;
+  if (node.op === 'trail' && Array.isArray(node.args)) {
+    const periods = typeof node.periods === 'number' && node.periods > 0 ? node.periods : 4;
+    return `TRAIL(${wrapped(node.args[0])}, ${periods})`;
+  }
   if (typeof node.op === 'string' && Array.isArray(node.args) && node.args.length === 2) {
     const symbol = node.op === 'add' ? '+' : node.op === 'sub' ? '-' : node.op === 'mul' ? '*' : node.op === 'div' ? '/' : node.op;
-    return `${decompileCalcExpression(node.args[0])} ${symbol} ${decompileCalcExpression(node.args[1])}`;
+    return `${wrapped(node.args[0])} ${symbol} ${wrapped(node.args[1])}`;
   }
   if (typeof node.fn === 'string' && Array.isArray(node.args)) {
     if (node.args.length === 0) return node.fn;
-    return `${node.fn}(${node.args.map((arg) => decompileCalcExpression(arg)).join(', ')})`;
+    return `${node.fn}(${node.args.map((arg) => wrapped(arg)).join(', ')})`;
   }
   return JSON.stringify(expr);
+}
+
+/** Arithmetic needs parentheses inside another operator. A period function is already a call. */
+function compound(expr: unknown): boolean {
+  if (!expr || typeof expr !== 'object') return false;
+  const op = (expr as { op?: unknown }).op;
+  return op === 'neg' || op === 'add' || op === 'sub' || op === 'mul' || op === 'div';
+}
+
+function wrapped(expr: unknown): string {
+  const text = decompileCalcExpression(expr);
+  return compound(expr) ? `(${text})` : text;
 }
 
 /** Attribute codes referenced by a compiled expression, in first-seen order. */
@@ -148,6 +167,12 @@ class InfixParser {
       this.index += 1;
       return inner;
     }
+    if (char === '"') {
+      const match = /^"((?:[^"\\]|\\.)*)"/.exec(this.source.slice(this.index));
+      if (!match) throw new Error('Missing closing quote');
+      this.index += match[0].length;
+      return { const: match[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\') };
+    }
     if ((char >= '0' && char <= '9') || char === '.') {
       const match = /^[0-9]+(\.[0-9]+)?/.exec(this.source.slice(this.index));
       if (!match) throw new Error('Invalid number');
@@ -192,7 +217,7 @@ class InfixParser {
 }
 
 export interface CalcDraftToken {
-  kind: 'field' | 'fn' | 'number' | 'op' | 'paren' | 'comma' | 'keyword' | 'text';
+  kind: 'field' | 'fn' | 'number' | 'string' | 'op' | 'paren' | 'comma' | 'keyword' | 'text';
   text: string;
   start: number;
   end: number;
@@ -222,6 +247,14 @@ export function tokenizeCalcDraft(source: string, nullary: ReadonlySet<string> =
       tokens.push({ kind: 'op', text: char, start: index, end: index + 1 });
       index += 1;
       continue;
+    }
+    if (char === '"') {
+      const match = /^"(?:[^"\\]|\\.)*"/.exec(source.slice(index));
+      if (match) {
+        tokens.push({ kind: 'string', text: match[0], start: index, end: index + match[0].length });
+        index += match[0].length;
+        continue;
+      }
     }
     if ((char >= '0' && char <= '9') || (char === '.' && source[index + 1] >= '0' && source[index + 1] <= '9')) {
       const match = /^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)/.exec(source.slice(index));
@@ -301,4 +334,39 @@ export function deleteCalcDraft(source: string, start: number, end: number): { n
 export function caretToGap(tokens: CalcDraftToken[], caret: number): number {
   const index = tokens.findIndex((token) => token.start >= caret);
   return index < 0 ? tokens.length : index;
+}
+
+/** Text inserted for a field that lives on a related record. */
+export function relatedFieldText(attributeCode: string): string {
+  return `LATEST(${attributeCode})`;
+}
+
+/** True when the caret sits inside a call to name, such as LATEST(. */
+export function enclosingCall(tokens: CalcDraftToken[], gap: number, name: string): boolean {
+  let depth = 0;
+  const target = name.toUpperCase();
+  for (let index = Math.min(gap, tokens.length) - 1; index >= 0; index -= 1) {
+    const token = tokens[index];
+    if (token.kind === 'paren' && token.text === ')') depth += 1;
+    else if (token.kind === 'paren' && token.text === '(') {
+      if (depth === 0) {
+        const previous = tokens[index - 1];
+        return Boolean(previous && previous.kind === 'fn' && previous.text.toUpperCase() === target);
+      }
+      depth -= 1;
+    }
+  }
+  return false;
+}
+
+/** True when a LATEST call reads this attribute from a related record. */
+export function exprPullsLatest(expr: unknown, attributeCode: string): boolean {
+  if (!expr || typeof expr !== 'object' || Array.isArray(expr)) return false;
+  const node = expr as Record<string, unknown>;
+  if (typeof node.fn === 'string' && node.fn.toUpperCase() === 'LATEST' && Array.isArray(node.args)) {
+    if (node.args.some((arg) => Boolean(arg) && typeof arg === 'object' && (arg as { ref?: unknown }).ref === attributeCode)) return true;
+  }
+  if (Array.isArray(node.args) && node.args.some((arg) => exprPullsLatest(arg, attributeCode))) return true;
+  if (node.asOf && exprPullsLatest(node.asOf, attributeCode)) return true;
+  return false;
 }

@@ -43,10 +43,8 @@ export const metadataResolvers = {
         const withChains = await attachPrecedenceMetadata(supabase, fallbackData || []);
         let attributes = withChains.map(mapAttributeDefinition);
         
-        // If domainCode is specified, filter to show:
-        // 1. Attributes with matching domain_code, OR
-        // 2. Attributes with null domain_code (global/shared), OR
-        // 3. Attributes assigned to templates in this domain
+        // An attribute belongs to one entity type. Template assignments can
+        // still place another entity's attribute on this screen.
         if (args.domainCode) {
           // Get all templates for this domain
           const { data: domainTemplates } = await supabase
@@ -69,9 +67,8 @@ export const metadataResolvers = {
             );
           }
           
-          attributes = attributes.filter((attr: any) => 
-            attr.domainCode === args.domainCode || 
-            attr.domainCode === null ||
+          attributes = attributes.filter((attr: any) =>
+            attr.domainCode === args.domainCode ||
             assignedAttributeIds.has(attr.id)
           );
         }
@@ -88,10 +85,8 @@ export const metadataResolvers = {
       // value such as position market value still appears on the entity.
       let filtered = await withDerivedAttributes(supabase, allAttributes);
 
-      // If domainCode is specified, filter to show:
-      // 1. Attributes with matching domain_code, OR
-      // 2. Attributes with null domain_code (global/shared), OR
-      // 3. Attributes assigned to templates in this domain
+      // An attribute belongs to one entity type. Template assignments can
+      // still place another entity's attribute on this screen.
       if (args.domainCode) {
         console.log('[attributeRegister] Filtering by domainCode:', args.domainCode);
         
@@ -130,8 +125,7 @@ export const metadataResolvers = {
         console.log('[attributeRegister] Before filtering, attributes count:', filtered.length);
         
         filtered = filtered.filter((attr: any) => {
-          const matches = attr.domain_code === args.domainCode || 
-            attr.domain_code === null ||
+          const matches = attr.domain_code === args.domainCode ||
             assignedAttributeIds.has(attr.id);
           if (matches) {
             console.log('[attributeRegister] Attribute matches:', attr.attribute_code, 'domain_code:', attr.domain_code);
@@ -769,12 +763,27 @@ export const metadataResolvers = {
     reorderSectionAttributes: async (
       _: any,
       args: { domainCode: string; sectionName: string; attributeIds: string[] },
-      { supabase }: Context,
+      context: Context,
     ) => {
+      const { supabase } = context;
       const domainCode = String(args.domainCode || '').trim();
       const sectionName = String(args.sectionName || '').trim() || 'General';
       const attributeIds = Array.isArray(args.attributeIds) ? args.attributeIds.filter(Boolean) : [];
       if (!domainCode) return sectionError('domainCode', 'Choose an entity type.');
+      if (attributeIds.length === 0) return { success: true, section: null, sections: null, errors: [] };
+      const { data: existing, error: existingError } = await supabase
+        .from('attribute_register')
+        .select('id, domain_code')
+        .in('id', attributeIds);
+      if (existingError) return sectionError('general', existingError.message);
+      const allowed = new Set(
+        (existing || [])
+          .filter((row) => row.domain_code === domainCode)
+          .map((row) => row.id),
+      );
+      if (attributeIds.some((id) => !allowed.has(id))) {
+        return sectionError('attributeIds', 'One or more attributes are not part of this entity type.');
+      }
       const updates = await Promise.all(attributeIds.map((id, index) => (
         supabase
           .from('attribute_register')
@@ -784,14 +793,19 @@ export const metadataResolvers = {
             updated_at: new Date().toISOString(),
           })
           .eq('id', id)
-          .eq('domain_code', domainCode)
           .select('id')
       )));
       const failed = updates.find((result) => result.error);
       if (failed?.error) return sectionError('general', failed.error.message);
       const updated = updates.reduce((sum, result) => sum + (result.data?.length || 0), 0);
       if (updated !== attributeIds.length) {
-        return sectionError('attributeIds', 'One or more attributes are not part of this entity type.');
+        const impersonating = await supportModeIsOn(context);
+        return sectionError(
+          'attributeIds',
+          impersonating
+            ? 'Leave support mode to reorder these attributes. A client view cannot change the shared catalog.'
+            : 'These attributes could not be reordered from this session.',
+        );
       }
       await ensureAttributeSection(supabase, domainCode, sectionName);
       return { success: true, section: null, sections: null, errors: [] };
@@ -834,7 +848,20 @@ async function sectionNameTaken(
   return (data || []).some((row) => row.id !== exceptId && String(row.section_name || '').toLowerCase() === key);
 }
 
-async function ensureAttributeSection(
+async function supportModeIsOn(context: Context): Promise<boolean> {
+  if (!context.user?.id || !context.supabaseAdmin) return false;
+  const { data, error } = await context.supabaseAdmin
+    .schema('tenancy')
+    .from('impersonation_sessions')
+    .select('client_id')
+    .eq('admin_user_id', context.user.id)
+    .is('ended_at', null)
+    .limit(1);
+  if (error) return false;
+  return (data || []).length > 0;
+}
+
+export async function ensureAttributeSection(
   supabase: SupabaseClient,
   domainCode: string,
   sectionName: string,

@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import {
+  COMPLIANCE_RULES_QUERY,
+  DQ_RULES_QUERY,
   DATA_SOURCES_QUERY,
   graphqlClient,
   graphqlQuery,
@@ -51,8 +53,32 @@ interface ReferenceListOpt {
 }
 
 
+type PanelTab = 'general' | 'dq' | 'compliance';
+
+interface DqRuleRef {
+  id: string; ruleCode: string; ruleName: string; domainCode?: string | null; attributeCode?: string | null;
+  ruleType?: string; severity?: string; ruleDescription?: string | null; isActive?: boolean;
+}
+interface ComplianceRuleRef {
+  id: string; ruleCode: string; ruleName: string; ruleCategory?: string; isActive?: boolean;
+  currentVersion?: any;
+}
+
+function complianceUsage(rule: ComplianceRuleRef, code: string): string[] {
+  const v = rule.currentVersion;
+  if (!v) return [];
+  const uses: string[] = [];
+  if (v.numeratorAttributeCode === code) uses.push('Measured value');
+  if (v.denominatorAttributeCode === code) uses.push('Denominator');
+  if (v.groupByAttributeCode === code) uses.push('Group by');
+  if (v.hardLimitAttributeCode === code) uses.push('Limit value');
+  if ((v.conditions || []).some((c: any) => c.attributeCode === code)) uses.push('Filter condition');
+  return uses;
+}
+
 export function AttributeExpandPanel({
   attribute,
+  domainCode,
   weightAttributes,
   referenceLists,
   sectionNames = [],
@@ -60,6 +86,7 @@ export function AttributeExpandPanel({
   onCancel,
 }: {
   attribute: ExpandableAttribute;
+  domainCode?: string;
   weightAttributes: ExpandableAttribute[];
   referenceLists: ReferenceListOpt[];
   sectionNames?: string[];
@@ -92,6 +119,25 @@ export function AttributeExpandPanel({
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [calculation, setCalculation] = useState<CalculationSpec | null>(null);
+  const [tab, setTab] = useState<PanelTab>('general');
+  const [dqRules, setDqRules] = useState<DqRuleRef[] | null>(null);
+  const [complianceRules, setComplianceRules] = useState<ComplianceRuleRef[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDqRules(null);
+    setComplianceRules(null);
+    graphqlQuery<{ dqRules: DqRuleRef[] }, {}>(DQ_RULES_QUERY, {}, 'network-only').then((result) => {
+      if (cancelled) return;
+      setDqRules((result.data?.dqRules || []).filter((rule) =>
+        rule.attributeCode === attribute.attributeCode && (!domainCode || !rule.domainCode || rule.domainCode === domainCode)));
+    });
+    graphqlQuery<{ complianceRules: ComplianceRuleRef[] }, {}>(COMPLIANCE_RULES_QUERY, {}, 'network-only').then((result) => {
+      if (cancelled) return;
+      setComplianceRules((result.data?.complianceRules || []).filter((rule) => complianceUsage(rule, attribute.attributeCode).length > 0));
+    });
+    return () => { cancelled = true; };
+  }, [attribute.attributeCode, domainCode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -195,8 +241,71 @@ export function AttributeExpandPanel({
     ? sectionNames
     : [form.displaySection, ...sectionNames];
 
+  const tabs: Array<{ id: PanelTab; label: string; count?: number }> = [
+    { id: 'general', label: 'General' },
+    { id: 'dq', label: 'Data Quality', count: dqRules?.length },
+    { id: 'compliance', label: 'Compliance Rules', count: complianceRules?.length },
+  ];
+
   return (
-    <div className="attribute-editor-body" onClick={(event) => event.stopPropagation()}>
+    <div onClick={(event) => event.stopPropagation()}>
+      <div className="attribute-editor-header">
+        <span className="attribute-editor-name">{attribute.attributeName}</span>
+        <span className="mono">{attribute.attributeCode}</span>
+      </div>
+      <div className="attribute-editor-tabs" role="tablist">
+        {tabs.map((item) => (
+          <button key={item.id} type="button" role="tab" aria-selected={tab === item.id}
+            className={`attribute-editor-tab${tab === item.id ? ' is-active' : ''}`} onClick={() => setTab(item.id)}>
+            {item.label}{item.count !== undefined ? ` (${item.count})` : ''}
+          </button>
+        ))}
+      </div>
+      {tab === 'dq' && (
+        <div>
+          {dqRules === null ? <div className="attribute-editor-empty">Loading…</div>
+            : dqRules.length === 0 ? <div className="attribute-editor-empty">No data quality rules reference this attribute.</div>
+            : (
+              <table className="section-table attribute-rules-table">
+                <thead><tr><th>Rule</th><th>Code</th><th>Type</th><th>Severity</th><th>Status</th></tr></thead>
+                <tbody>
+                  {dqRules.map((rule) => (
+                    <tr key={rule.id}>
+                      <td><a href="/admin/dq-rules">{rule.ruleName}</a>{rule.ruleDescription && <div className="attribute-editor-empty" style={{ padding: 0 }}>{rule.ruleDescription}</div>}</td>
+                      <td className="mono">{rule.ruleCode}</td>
+                      <td>{rule.ruleType}</td>
+                      <td>{rule.severity}</td>
+                      <td>{rule.isActive ? 'Active' : 'Inactive'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+        </div>
+      )}
+      {tab === 'compliance' && (
+        <div>
+          {complianceRules === null ? <div className="attribute-editor-empty">Loading…</div>
+            : complianceRules.length === 0 ? <div className="attribute-editor-empty">No compliance rules reference this attribute.</div>
+            : (
+              <table className="section-table attribute-rules-table">
+                <thead><tr><th>Rule</th><th>Code</th><th>Category</th><th>Used as</th><th>Status</th></tr></thead>
+                <tbody>
+                  {complianceRules.map((rule) => (
+                    <tr key={rule.id}>
+                      <td><a href={`/admin/compliance/${encodeURIComponent(rule.ruleCode)}`}>{rule.ruleName}</a></td>
+                      <td className="mono">{rule.ruleCode}</td>
+                      <td>{rule.ruleCategory}</td>
+                      <td>{complianceUsage(rule, attribute.attributeCode).join(', ')}</td>
+                      <td>{rule.isActive ? 'Active' : 'Inactive'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+        </div>
+      )}
+    <div className="attribute-editor-body" style={{ display: tab === 'general' ? undefined : 'none' }}>
       <label className="span-2">
         Attribute name
         <input className="text-input" value={form.attributeName} onChange={(e) => setForm({ ...form, attributeName: e.target.value })} />
@@ -344,6 +453,7 @@ export function AttributeExpandPanel({
         <button className="btn" type="button" onClick={onCancel} disabled={saving}>Close</button>
         {message && <span style={{ fontSize: '12px', color: 'var(--ink-2)' }}>{message}</span>}
       </div>
+    </div>
     </div>
   );
 }

@@ -39,14 +39,14 @@ const links: SearchLinkRow[] = [
 ];
 
 describe('entity search ranking', () => {
-  it('lists parent domains before child domains and keeps a direct name ahead of a related name', () => {
+  it('lists each entity once, parent types before child types, and names in alphabetical order within a type', () => {
     const hits = rankEntitySearch({ query: 'Brightwater', entities, links, domains });
-    expect(hits.map((hit) => hit.entityName)).toEqual([
-      'Brightwater Holdings',
-      'Project Brightwater',
-      'Brightwater Delayed Draw',
-      'Brightwater TLB',
-      'Lane stake',
+    expect(hits.map((hit) => `${hit.domainName}: ${hit.entityName}`)).toEqual([
+      'Deal: Project Brightwater',
+      'Issuer: Brightwater Holdings',
+      'Position: Lane stake',
+      'Security: Brightwater TLB',
+      'Tranche: Brightwater Delayed Draw',
     ]);
     expect(hits.slice(0, 2).every((hit) => hit.depth === 0 && hit.match === 'NAME')).toBe(true);
     expect(hits.find((hit) => hit.id === 'p1')).toMatchObject({
@@ -76,6 +76,50 @@ describe('entity search ranking', () => {
     expect(rankEntitySearch({ query: 'a', entities, links, domains })).toEqual([]);
   });
 
+  it('keeps later entity types in the list when one type has more matching names', () => {
+    const bench: SearchEntityRow[] = [
+      ...Array.from({ length: 30 }, (_, index) => ({
+        id: `bench-fund-${index}`,
+        entityCode: `BF${index}`,
+        entityName: `Bench Fund ${index}`,
+        domainCode: 'FUND',
+        isActive: true,
+      })),
+      ...Array.from({ length: 10 }, (_, index) => ({
+        id: `bench-issuer-${index}`,
+        entityCode: `BI${index}`,
+        entityName: `Bench Issuer ${index}`,
+        domainCode: 'ISSUER',
+        isActive: true,
+      })),
+      ...Array.from({ length: 10 }, (_, index) => ({
+        id: `bench-position-${index}`,
+        entityCode: `BP${index}`,
+        entityName: `Bench Position ${index}`,
+        domainCode: 'POSITION',
+        isActive: true,
+      })),
+      ...Array.from({ length: 10 }, (_, index) => ({
+        id: `bench-security-${index}`,
+        entityCode: `BS${index}`,
+        entityName: `Bench Security ${index}`,
+        domainCode: 'SECURITY',
+        isActive: true,
+      })),
+    ];
+    const roots: SearchDomainRow[] = [
+      { domainCode: 'FUND', domainName: 'Fund', parentDomainCode: null },
+      { domainCode: 'ISSUER', domainName: 'Issuer', parentDomainCode: null },
+      { domainCode: 'POSITION', domainName: 'Position', parentDomainCode: null },
+      { domainCode: 'SECURITY', domainName: 'Security', parentDomainCode: null },
+    ];
+    const hits = rankEntitySearch({ query: 'Bench', entities: bench, links: [], domains: roots, limit: 20 });
+    expect(hits.filter((hit) => hit.domainCode === 'FUND')).toHaveLength(5);
+    expect(hits.filter((hit) => hit.domainCode === 'ISSUER')).toHaveLength(5);
+    expect(hits.filter((hit) => hit.domainCode === 'POSITION')).toHaveLength(5);
+    expect(hits.filter((hit) => hit.domainCode === 'SECURITY')).toHaveLength(5);
+  });
+
   it('leaves room for child entities when many parent names match', () => {
     const many: SearchEntityRow[] = [
       ...Array.from({ length: 30 }, (_, index) => ({
@@ -94,9 +138,19 @@ describe('entity search ranking', () => {
       })),
     ];
     const hits = rankEntitySearch({ query: 'fund', entities: many, links: [], domains, limit: 20 });
-    expect(hits.filter((hit) => hit.depth === 0)).toHaveLength(14);
-    expect(hits.filter((hit) => hit.depth > 0)).toHaveLength(6);
-    expect(hits.findIndex((hit) => hit.depth > 0)).toBe(14);
+    expect(hits.filter((hit) => hit.depth === 0)).toHaveLength(12);
+    expect(hits.filter((hit) => hit.depth > 0)).toHaveLength(8);
+  });
+
+  it('returns one hit when the same entity id is supplied twice', () => {
+    const fund = entities.find((entity) => entity.id === 'f1')!;
+    const hits = rankEntitySearch({
+      query: 'Alpha',
+      entities: [fund, { ...fund, id: 'F1' }],
+      links: [],
+      domains,
+    });
+    expect(hits.map((hit) => hit.entityName)).toEqual(['Alpha Fund']);
   });
 
   it('keeps a parent that only matched through a child ahead of that child when the list is short', () => {
@@ -140,7 +194,7 @@ describe('entity search catalog helpers', () => {
 });
 
 describe('fetchEntitySearchHits', () => {
-  it('asks for parent-domain names separately and still returns the parent before the child', async () => {
+  it('returns the parent before the child and still includes a type that sorts later', async () => {
     const tables: Record<string, Record<string, unknown>[]> = {
       domain_types: domains.map((domain) => ({
         domain_code: domain.domainCode,
@@ -174,11 +228,57 @@ describe('fetchEntitySearchHits', () => {
     const hits = await fetchEntitySearchHits(fakeClient(tables), 'stake', 20);
     expect(hits.map((hit) => hit.entityName)).toEqual(['Alpha Fund', 'Lane stake', 'Brightwater TLB']);
     expect(hits.some((hit) => hit.id === 'o1')).toBe(false);
+
+    const crowded = await fetchEntitySearchHits(fakeClient({
+      domain_types: [
+        { domain_code: 'FUND', domain_name: 'Fund', parent_domain_code: null, is_active: true },
+        { domain_code: 'POSITION', domain_name: 'Position', parent_domain_code: null, is_active: true },
+      ],
+      master_entities: [
+        ...Array.from({ length: 70 }, (_, index) => ({
+          id: `bf${index}`,
+          entity_code: `BF${index}`,
+          entity_name: `Bench Fund ${index}`,
+          domain_code: 'FUND',
+          is_active: true,
+        })),
+        {
+          id: 'bp',
+          entity_code: 'BP',
+          entity_name: 'Bench Position 1',
+          domain_code: 'POSITION',
+          is_active: true,
+        },
+      ],
+      entity_relationships: [],
+    }), 'Bench', 20);
+    expect(crowded.some((hit) => hit.domainCode === 'FUND')).toBe(true);
+    expect(crowded.some((hit) => hit.id === 'bp')).toBe(true);
+    expect(crowded.filter((hit) => hit.domainCode === 'FUND').length).toBeLessThanOrEqual(8);
   });
 });
 
 function fakeClient(tables: Record<string, Record<string, unknown>[]>) {
   return {
+    rpc(fn: string, args?: Record<string, unknown>) {
+      if (fn !== 'search_entity_names') {
+        return Promise.resolve({ data: [], error: { message: `Unknown function ${fn}` } });
+      }
+      const needle = String(args?.p_query || '').trim().toLowerCase();
+      const perDomain = Number(args?.p_per_domain || 8);
+      const matches = (tables.master_entities || [])
+        .filter((row) => row.is_active !== false && String(row.entity_name || '').toLowerCase().includes(needle))
+        .sort((a, b) => String(a.entity_name).localeCompare(String(b.entity_name)) || String(a.id).localeCompare(String(b.id)));
+      const counts = new Map<string, number>();
+      const data = matches.filter((row) => {
+        const domain = String(row.domain_code || '');
+        const used = counts.get(domain) || 0;
+        if (used >= perDomain) return false;
+        counts.set(domain, used + 1);
+        return true;
+      });
+      return Promise.resolve({ data, error: null });
+    },
     from(table: string) {
       const filters: Array<(row: Record<string, unknown>) => boolean> = [];
       let orderColumn: string | null = null;

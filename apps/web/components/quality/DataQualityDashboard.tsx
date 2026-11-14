@@ -12,6 +12,7 @@ import { STALE_AFTER_DAYS, formatReceipt } from '@/lib/receipt-freshness';
 import { domainHref } from '@/lib/domain-routes';
 import { AttributeValueInput, listDisplayLabel, useAttributeDisplay, useAttributeListOptions } from '@/components/forms/AttributeValueInput';
 import { attributeDisplayKind, formatAttributeDisplay } from '@/lib/attribute-display';
+import { groupByEntityType, splitAvailabilityByEntityType, splitChangesByEntityType, splitRulesByEntityType } from '@/lib/dq-groups';
 
 type Section = 'availability' | 'quality' | 'trajectory' | 'handoff' | 'freshness';
 type Period = 'day' | 'week' | 'month' | 'quarter' | 'custom';
@@ -187,6 +188,16 @@ interface Dashboard {
 const PAGE_SIZE = 40;
 const DETAIL_PAGE = 25;
 
+function slicePage<T>(items: readonly T[], page: number) {
+  const pageCount = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const current = Math.min(Math.max(0, page), pageCount - 1);
+  return {
+    rows: items.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE),
+    page: current,
+    pageCount,
+  };
+}
+
 function isoDate(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
@@ -222,6 +233,29 @@ function formatDay(iso: string) {
 function domainLabel(code?: string | null) {
   if (!code) return '—';
   return code.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function TypeHead({ code, count, singular, plural }: { code: string; count: number; singular: string; plural?: string }) {
+  const noun = count === 1 ? singular : (plural ?? `${singular}s`);
+  return (
+    <div className="dq-type-head">
+      <h2>{code ? domainLabel(code) : 'All types'}</h2>
+      <span>{count.toLocaleString()} {noun}</span>
+    </div>
+  );
+}
+
+function GroupPager({ page, pageCount, onPage }: { page: number; pageCount: number; onPage: (page: number) => void }) {
+  if (pageCount <= 1) return null;
+  return (
+    <div className="dq-head">
+      <span className="dq-sub">Page {page + 1} of {pageCount}</span>
+      <div className="dq-seg">
+        <button type="button" disabled={page === 0} onClick={() => onPage(Math.max(0, page - 1))}>Previous</button>
+        <button type="button" disabled={page + 1 >= pageCount} onClick={() => onPage(page + 1)}>Next</button>
+      </div>
+    </div>
+  );
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -324,7 +358,7 @@ export function DataQualityDashboard({
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [detailLimit, setDetailLimit] = useState(DETAIL_PAGE);
   const [entityQuery, setEntityQuery] = useState('');
-  const [entityPage, setEntityPage] = useState(0);
+  const [entityPages, setEntityPages] = useState<Record<string, number>>({});
   const [refreshToken, setRefreshToken] = useState(0);
   const [handoffScope, setHandoffScope] = useState<'ready' | 'all'>('ready');
   const [staleDays, setStaleDays] = useState(STALE_AFTER_DAYS);
@@ -475,7 +509,7 @@ export function DataQualityDashboard({
   useEffect(() => {
     setOpenKey(null);
     setDetailLimit(DETAIL_PAGE);
-    setEntityPage(0);
+    setEntityPages({});
   }, [domainCode, fromDate, toDate, section, view]);
 
   useEffect(() => {
@@ -507,21 +541,42 @@ export function DataQualityDashboard({
     );
   }, [dashboard, entityQuery, handoffScope, section]);
 
-  const entitySlice = filteredEntities.slice(entityPage * PAGE_SIZE, (entityPage + 1) * PAGE_SIZE);
-  const entityPageCount = Math.max(1, Math.ceil(filteredEntities.length / PAGE_SIZE));
-
-  const handoffMeasures = useMemo(() => {
-    const groups = new Map<string, { attributeCode: string; attributeName: string; matches: OverrideMatch[] }>();
-    for (const match of dashboard?.overrideMatches ?? []) {
-      if (handoffScope === 'ready' && !match.ready) continue;
-      const existing = groups.get(match.attributeCode);
-      if (existing) existing.matches.push(match);
-      else groups.set(match.attributeCode, { attributeCode: match.attributeCode, attributeName: match.attributeName, matches: [match] });
-    }
-    return [...groups.values()].sort((a, b) => b.matches.length - a.matches.length || a.attributeName.localeCompare(b.attributeName));
+  const entityGroups = useMemo(
+    () => groupByEntityType(filteredEntities, (entity) => entity.domainCode, domainLabel),
+    [filteredEntities],
+  );
+  const availabilityGroups = useMemo(
+    () => groupByEntityType(
+      splitAvailabilityByEntityType(dashboard?.availability ?? []),
+      (row) => row.domainCode,
+      domainLabel,
+    ),
+    [dashboard],
+  );
+  const qualityGroups = useMemo(
+    () => groupByEntityType(
+      splitRulesByEntityType(dashboard?.quality ?? []),
+      (rule) => rule.domainCode,
+      domainLabel,
+    ),
+    [dashboard],
+  );
+  const trajectoryGroups = useMemo(
+    () => groupByEntityType(
+      splitChangesByEntityType(dashboard?.trajectory ?? []),
+      (row) => row.domainCode,
+      domainLabel,
+    ),
+    [dashboard],
+  );
+  const handoffGroups = useMemo(() => {
+    const matches = (dashboard?.overrideMatches ?? []).filter((match) => handoffScope === 'all' || match.ready);
+    return groupByEntityType(matches, (match) => match.domainCode, domainLabel).map((group) => ({
+      ...group,
+      attributes: groupMatchesByAttribute(group.items),
+    }));
   }, [dashboard, handoffScope]);
 
-  const freshnessMeasures = useMemo(() => groupStaleByAttribute(staleReport?.attributes ?? []), [staleReport]);
   const freshnessEntities = useMemo(() => {
     const query = entityQuery.trim().toLowerCase();
     return groupStaleByEntity(staleReport?.attributes ?? []).filter((entity) =>
@@ -531,8 +586,18 @@ export function DataQualityDashboard({
       entity.domainCode.toLowerCase().includes(query)
     );
   }, [entityQuery, staleReport]);
-  const freshnessEntitySlice = freshnessEntities.slice(entityPage * PAGE_SIZE, (entityPage + 1) * PAGE_SIZE);
-  const freshnessEntityPageCount = Math.max(1, Math.ceil(freshnessEntities.length / PAGE_SIZE));
+  const freshnessGroups = useMemo(
+    () => groupByEntityType(staleReport?.attributes ?? [], (row) => row.domainCode, domainLabel).map((group) => ({
+      ...group,
+      attributes: groupStaleByAttribute(group.items),
+    })),
+    [staleReport],
+  );
+  const freshnessEntityGroups = useMemo(
+    () => groupByEntityType(freshnessEntities, (entity) => entity.domainCode, domainLabel),
+    [freshnessEntities],
+  );
+  const pageFor = (code: string) => entityPages[code] ?? 0;
 
   const toggle = (key: string) => {
     setDetailLimit(DETAIL_PAGE);
@@ -555,12 +620,14 @@ export function DataQualityDashboard({
 
       <header className="da-ribbon">
         <div className="da-title">
-          <span className="da-chip">{entityId ? 'Record' : 'Book'}</span>
+          <span className="da-chip">{entityId ? 'Record' : fixedDomain ? domainLabel(fixedDomain) : 'Book'}</span>
           <h1>Data quality</h1>
           <p>
             {entityId
               ? 'Availability, rule results, and how those measures moved for this record.'
-              : 'Availability, rule results, and how those measures moved since the prior date.'}
+              : fixedDomain
+                ? `Availability, rule results, and how those measures moved across every ${domainLabel(fixedDomain)}.`
+                : 'Availability, rule results, and how those measures moved since the prior date.'}
           </p>
         </div>
         <div className="da-facts">
@@ -647,8 +714,8 @@ export function DataQualityDashboard({
         <div className="dq-field">
           <label>View</label>
           <div className="dq-seg" role="group" aria-label="Dashboard view">
-            <button type="button" className={view === 'measures' ? 'active' : ''} onClick={() => setView('measures')}>By measure</button>
-            <button type="button" className={view === 'entities' ? 'active' : ''} onClick={() => setView('entities')}>By entity</button>
+            <button type="button" className={view === 'measures' ? 'active' : ''} onClick={() => setView('measures')}>{section === 'quality' ? 'Rule' : 'Attribute'}</button>
+            <button type="button" className={view === 'entities' ? 'active' : ''} onClick={() => setView('entities')}>Entity</button>
           </div>
         </div>
       </div>
@@ -754,21 +821,23 @@ export function DataQualityDashboard({
               <p>Required attributes come from the entity template. Resolved means a gap on {formatDay(fromDate)} now has a value. Introduced means a value then is missing on {formatDay(toDate)}.</p>
             </div>
           </div>
-          <div className="dq-grid dq-avail">
-            <div />
-            <div>Attribute</div>
-            <div>Domain</div>
-            <div>Required</div>
-            <div>Missing</div>
-            <div>Change</div>
-            <div>Availability</div>
-          </div>
           {loading && !dashboard && <div className="dq-empty">Loading availability…</div>}
-          {dashboard && dashboard.availability.length === 0 && (
+          {dashboard && availabilityGroups.length === 0 && (
             <div className="dq-empty">No required attributes are defined for this selection. Mark attributes required on the template or the attribute register.</div>
           )}
-          {dashboard?.availability.map((row) => {
-            const key = `avail-${row.attributeCode}`;
+          {availabilityGroups.map((group) => (
+            <div className="dq-type" key={group.code || 'all'}>
+              <TypeHead code={group.code} count={group.items.length} singular="attribute" />
+              <div className="dq-grid dq-avail">
+                <div />
+                <div>Attribute</div>
+                <div>Required</div>
+                <div>Missing</div>
+                <div>Change</div>
+                <div>Availability</div>
+              </div>
+              {group.items.map((row) => {
+            const key = `avail-${group.code}-${row.attributeCode}`;
             const open = openKey === key;
             return (
               <div className="dq-line" key={key}>
@@ -778,7 +847,6 @@ export function DataQualityDashboard({
                     {row.attributeName}
                     {comparing && <span className="dq-sub">Comparing the prior date</span>}
                   </span>
-                  <span>{domainLabel(row.domainCode)}</span>
                   <span className="dq-num">{row.requiredCount.toLocaleString()}</span>
                   <span className="dq-num" style={{ color: row.missingCount ? 'var(--red)' : 'var(--green)' }}>{row.missingCount.toLocaleString()}</span>
                   <DirectionMark up={row.resolvedCount} down={row.introducedCount} pending={comparing} upLabel="filled in" downLabel="now missing" />
@@ -825,7 +893,9 @@ export function DataQualityDashboard({
                 )}
               </div>
             );
-          })}
+              })}
+            </div>
+          ))}
         </section>
       )}
 
@@ -837,19 +907,21 @@ export function DataQualityDashboard({
               <p>Each active rule is checked as of {formatDay(toDate)}{knownAt ? `, using what was known at ${new Date(knownAt).toLocaleString()}` : ''}. Resolved means it failed on {formatDay(fromDate)} and passes on {formatDay(toDate)}. Introduced means it passed then and fails on {formatDay(toDate)}. Waived results stay off the failing list.</p>
             </div>
           </div>
-          <div className="dq-grid dq-qual">
-            <div />
-            <div>Rule</div>
-            <div>Severity</div>
-            <div>Domain</div>
-            <div>Checked</div>
-            <div>Failing</div>
-            <div>Change</div>
-          </div>
           {loading && !dashboard && <div className="dq-empty">Loading rules…</div>}
-          {dashboard && dashboard.quality.length === 0 && <div className="dq-empty">No active data quality rules match this selection.</div>}
-          {dashboard?.quality.map((rule) => {
-            const key = `rule-${rule.ruleId}`;
+          {dashboard && qualityGroups.length === 0 && <div className="dq-empty">No active data quality rules match this selection.</div>}
+          {qualityGroups.map((group) => (
+            <div className="dq-type" key={group.code || 'all'}>
+              <TypeHead code={group.code} count={group.items.length} singular="rule" />
+              <div className="dq-grid dq-qual">
+                <div />
+                <div>Rule</div>
+                <div>Severity</div>
+                <div>Checked</div>
+                <div>Failing</div>
+                <div>Change</div>
+              </div>
+              {group.items.map((rule) => {
+            const key = `rule-${group.code}-${rule.ruleId}`;
             const open = openKey === key;
             return (
               <div className="dq-line" key={key}>
@@ -860,8 +932,7 @@ export function DataQualityDashboard({
                     {comparing && <span className="dq-sub">Comparing the prior date</span>}
                   </span>
                   <span><span className={`sev-dot ${severityClass(rule.severity)}`} />{rule.severity}</span>
-                  <span>{rule.domainCode ? domainLabel(rule.domainCode) : 'All'}</span>
-                  <span className="dq-num">{rule.entityCount.toLocaleString()}</span>
+                  <span className="dq-num" title={rule.checkedKnown === false ? 'This rule covers more than one entity type, so the checked total stays with the whole book.' : undefined}>{rule.checkedKnown === false ? '—' : rule.entityCount.toLocaleString()}</span>
                   <span className="dq-num" style={{ color: rule.failingCount ? 'var(--red)' : 'var(--green)' }}>
                     {rule.evaluated ? rule.failingCount.toLocaleString() : '—'}
                   </span>
@@ -927,7 +998,9 @@ export function DataQualityDashboard({
                 )}
               </div>
             );
-          })}
+              })}
+            </div>
+          ))}
         </section>
       )}
 
@@ -939,18 +1012,20 @@ export function DataQualityDashboard({
               <p>Golden values that differ between {formatDay(fromDate)} and {formatDay(toDate)}. The count is the number of entities whose value changed.</p>
             </div>
           </div>
-          <div className="dq-grid dq-traj">
-            <div />
-            <div>Attribute</div>
-            <div>Domain</div>
-            <div>Entities changed</div>
-            <div>Change</div>
-          </div>
           {loading && !dashboard && <div className="dq-empty">Loading the current date…</div>}
-          {comparing && dashboard && dashboard.trajectory.length === 0 && <div className="dq-empty">Comparing {formatDay(fromDate)} to {formatDay(toDate)}…</div>}
-          {!comparing && dashboard && dashboard.trajectory.length === 0 && <div className="dq-empty">No attribute values changed in this period.</div>}
-          {dashboard?.trajectory.map((row) => {
-            const key = `traj-${row.attributeCode}`;
+          {comparing && dashboard && trajectoryGroups.length === 0 && <div className="dq-empty">Comparing {formatDay(fromDate)} to {formatDay(toDate)}…</div>}
+          {!comparing && dashboard && trajectoryGroups.length === 0 && <div className="dq-empty">No attribute values changed in this period.</div>}
+          {trajectoryGroups.map((group) => (
+            <div className="dq-type" key={group.code || 'all'}>
+              <TypeHead code={group.code} count={group.items.length} singular="attribute" />
+              <div className="dq-grid dq-traj">
+                <div />
+                <div>Attribute</div>
+                <div>Entities changed</div>
+                <div>Change</div>
+              </div>
+              {group.items.map((row) => {
+            const key = `traj-${group.code}-${row.attributeCode}`;
             const open = openKey === key;
             return (
               <div className="dq-line" key={key}>
@@ -959,7 +1034,6 @@ export function DataQualityDashboard({
                   <span className="dq-name">
                     {row.attributeName}
                   </span>
-                  <span>{domainLabel(row.domainCode)}</span>
                   <span className="dq-num">{row.changeCount.toLocaleString()}</span>
                   <ValueDirection changes={row.changes} />
                 </button>
@@ -982,7 +1056,9 @@ export function DataQualityDashboard({
                 )}
               </div>
             );
-          })}
+              })}
+            </div>
+          ))}
         </section>
       )}
 
@@ -997,35 +1073,38 @@ export function DataQualityDashboard({
                   : `Every manual override in effect as of ${formatDay(toDate)}. Ready rows match the highest-ranked system source and can be cleared. The others still differ from that source, or have no other source.`}
               </p>
             </div>
-            <HandoffScopeToggle value={handoffScope} onChange={(next) => { setHandoffScope(next); setEntityPage(0); }} />
-          </div>
-          <div className="dq-grid dq-hand-attr">
-            <div />
-            <div>Attribute</div>
-            <div>{handoffScope === 'ready' ? 'Ready' : 'Overrides'}</div>
+            <HandoffScopeToggle value={handoffScope} onChange={(next) => { setHandoffScope(next); setEntityPages({}); }} />
           </div>
           {loading && !dashboard && <div className="dq-empty">Comparing overrides…</div>}
-          {dashboard && handoffMeasures.length === 0 && (
+          {dashboard && handoffGroups.length === 0 && (
             <div className="dq-empty">
               {handoffScope === 'ready'
                 ? 'No manual override currently matches its priority source.'
                 : `No manual override is in effect as of ${formatDay(toDate)}.`}
             </div>
           )}
-          {handoffMeasures.map((group) => {
-            const key = `hand-${group.attributeCode}`;
+          {handoffGroups.map((group) => (
+            <div className="dq-type" key={group.code || 'all'}>
+              <TypeHead code={group.code} count={group.attributes.length} singular="attribute" />
+              <div className="dq-grid dq-hand-attr">
+                <div />
+                <div>Attribute</div>
+                <div>{handoffScope === 'ready' ? 'Ready' : 'Overrides'}</div>
+              </div>
+              {group.attributes.map((attribute) => {
+            const key = `hand-${group.code}-${attribute.attributeCode}`;
             const open = isBranchOpen(openKey, key);
             return (
               <div className="dq-line" key={key}>
                 <button type="button" className="dq-open dq-hand-attr" aria-expanded={open} onClick={() => toggle(key)}>
                   <span>{open ? '▾' : '▸'}</span>
                   <span className="dq-name">
-                    {group.attributeName}
+                    {attribute.attributeName}
                   </span>
                   <span className="dq-num">
-                    {group.matches.length.toLocaleString()}
+                    {attribute.matches.length.toLocaleString()}
                     {handoffScope === 'all' && (
-                      <span className="dq-sub">{group.matches.filter((match) => match.ready).length.toLocaleString()} ready</span>
+                      <span className="dq-sub">{attribute.matches.filter((match) => match.ready).length.toLocaleString()} ready</span>
                     )}
                   </span>
                 </button>
@@ -1041,7 +1120,7 @@ export function DataQualityDashboard({
                       {handoffScope === 'all' && <div>Source</div>}
                       <div />
                     </div>
-                    {group.matches.slice(0, detailLimit).map((match) => {
+                    {attribute.matches.slice(0, detailLimit).map((match) => {
                       const matchKey = `${key}::${match.id}`;
                       return (
                         <HandoffMatch
@@ -1055,16 +1134,18 @@ export function DataQualityDashboard({
                         />
                       );
                     })}
-                    {group.matches.length > detailLimit && (
+                    {attribute.matches.length > detailLimit && (
                       <button type="button" className="dq-more" onClick={() => setDetailLimit((count) => count + DETAIL_PAGE)}>
-                        Show more ({group.matches.length - detailLimit} remaining)
+                        Show more ({attribute.matches.length - detailLimit} remaining)
                       </button>
                     )}
                   </div>
                 )}
               </div>
             );
-          })}
+              })}
+            </div>
+          ))}
         </section>
       )}
 
@@ -1090,32 +1171,35 @@ export function DataQualityDashboard({
               </select>
             </div>
           </div>
-          <div className="dq-grid dq-fresh">
-            <div />
-            <div>Attribute</div>
-            <div>Stale</div>
-            <div>Oldest</div>
-          </div>
           {loading && !staleReport && <div className="dq-empty">Checking receipts…</div>}
-          {staleReport && freshnessMeasures.length === 0 && (
+          {staleReport && freshnessGroups.length === 0 && (
             <div className="dq-empty">No prevailing value is older than {staleDays} days.</div>
           )}
-          {freshnessMeasures.map((group) => {
-            const key = `fresh-${group.attributeCode}`;
+          {freshnessGroups.map((group) => (
+            <div className="dq-type" key={group.code || 'all'}>
+              <TypeHead code={group.code} count={group.attributes.length} singular="attribute" />
+              <div className="dq-grid dq-fresh">
+                <div />
+                <div>Attribute</div>
+                <div>Stale</div>
+                <div>Oldest</div>
+              </div>
+              {group.attributes.map((attribute) => {
+            const key = `fresh-${group.code}-${attribute.attributeCode}`;
             const open = openKey === key;
             return (
               <div className="dq-line" key={key}>
                 <button type="button" className="dq-open dq-fresh" aria-expanded={open} onClick={() => toggle(key)}>
                   <span>{open ? '▾' : '▸'}</span>
                   <span className="dq-name">
-                    {group.attributeName}
+                    {attribute.attributeName}
                   </span>
-                  <span className="dq-num">{group.rows.length.toLocaleString()}</span>
-                  <span className="dq-num">{oldestAge(group.rows)}d</span>
+                  <span className="dq-num">{attribute.rows.length.toLocaleString()}</span>
+                  <span className="dq-num">{oldestAge(attribute.rows)}d</span>
                 </button>
                 {open && (
                   <StaleTable
-                    rows={group.rows}
+                    rows={attribute.rows}
                     limit={detailLimit}
                     showEntity
                     onMore={() => setDetailLimit((count) => count + DETAIL_PAGE)}
@@ -1124,7 +1208,9 @@ export function DataQualityDashboard({
                 )}
               </div>
             );
-          })}
+              })}
+            </div>
+          ))}
         </section>
       )}
 
@@ -1146,7 +1232,7 @@ export function DataQualityDashboard({
                 className="text-input"
                 placeholder="Search entities"
                 value={entityQuery}
-                onChange={(event) => { setEntityQuery(event.target.value); setEntityPage(0); }}
+                onChange={(event) => { setEntityQuery(event.target.value); setEntityPages({}); }}
                 aria-label="Search entities"
               />
               <div className="dq-field">
@@ -1160,19 +1246,24 @@ export function DataQualityDashboard({
               </div>
             </div>
           </div>
-          <div className="dq-grid dq-fresh">
-            <div />
-            <div>Entity</div>
-            <div>Stale</div>
-            <div>Oldest</div>
-          </div>
           {loading && !staleReport && <div className="dq-empty">Checking receipts…</div>}
-          {staleReport && freshnessEntities.length === 0 && (
+          {staleReport && freshnessEntityGroups.length === 0 && (
             <div className="dq-empty">
               {entityQuery.trim() ? 'No entities match that search.' : `No prevailing value is older than ${staleDays} days.`}
             </div>
           )}
-          {freshnessEntitySlice.map((entity) => {
+          {freshnessEntityGroups.map((group) => {
+            const slice = slicePage(group.items, pageFor(group.code));
+            return (
+            <div className="dq-type" key={group.code || 'all'}>
+              <TypeHead code={group.code} count={group.items.length} singular="entity" plural="entities" />
+              <div className="dq-grid dq-fresh">
+                <div />
+                <div>Entity</div>
+                <div>Stale</div>
+                <div>Oldest</div>
+              </div>
+              {slice.rows.map((entity) => {
             const key = `fresh-ent-${entity.entityId}`;
             const open = openKey === key;
             return (
@@ -1197,16 +1288,11 @@ export function DataQualityDashboard({
                 )}
               </div>
             );
-          })}
-          {freshnessEntities.length > PAGE_SIZE && (
-            <div className="dq-head">
-              <span className="dq-sub">Page {entityPage + 1} of {freshnessEntityPageCount}</span>
-              <div className="dq-seg">
-                <button type="button" disabled={entityPage === 0} onClick={() => setEntityPage((page) => Math.max(0, page - 1))}>Previous</button>
-                <button type="button" disabled={entityPage + 1 >= freshnessEntityPageCount} onClick={() => setEntityPage((page) => page + 1)}>Next</button>
-              </div>
+              })}
+              <GroupPager page={slice.page} pageCount={slice.pageCount} onPage={(page) => setEntityPages((current) => ({ ...current, [group.code]: page }))} />
             </div>
-          )}
+            );
+          })}
         </section>
       )}
 
@@ -1226,29 +1312,20 @@ export function DataQualityDashboard({
             </div>
             <div className="dq-head-tools">
               {section === 'handoff' && (
-                <HandoffScopeToggle value={handoffScope} onChange={(next) => { setHandoffScope(next); setEntityPage(0); }} />
+                <HandoffScopeToggle value={handoffScope} onChange={(next) => { setHandoffScope(next); setEntityPages({}); }} />
               )}
               <input
                 className="text-input"
                 placeholder="Search entities"
                 value={entityQuery}
-                onChange={(event) => { setEntityQuery(event.target.value); setEntityPage(0); }}
+                onChange={(event) => { setEntityQuery(event.target.value); setEntityPages({}); }}
                 aria-label="Search entities"
               />
             </div>
           </div>
-          <div className={`dq-grid ${section === 'handoff' ? 'dq-ent-hand' : 'dq-ent-one'}`}>
-            <div />
-            <div>Entity</div>
-            <div>Domain</div>
-            {section === 'handoff' && <div>{handoffScope === 'ready' ? 'Ready' : 'Overrides'}</div>}
-            {section === 'availability' && <div>Missing</div>}
-            {section === 'quality' && <div>Failing</div>}
-            {section === 'trajectory' && <div>Changes</div>}
-          </div>
           {loading && !dashboard && <div className="dq-empty">Loading entities…</div>}
-          {comparing && filteredEntities.length === 0 && section === 'trajectory' && <div className="dq-empty">Comparing {formatDay(fromDate)} to {formatDay(toDate)}…</div>}
-          {!comparing && dashboard && filteredEntities.length === 0 && (
+          {comparing && entityGroups.length === 0 && section === 'trajectory' && <div className="dq-empty">Comparing {formatDay(fromDate)} to {formatDay(toDate)}…</div>}
+          {!comparing && dashboard && entityGroups.length === 0 && (
             <div className="dq-empty">
               {section === 'availability' && 'No required-attribute gaps opened or closed in this period.'}
               {section === 'quality' && 'No rule results opened or closed in this period.'}
@@ -1258,7 +1335,20 @@ export function DataQualityDashboard({
                 : `No manual override is in effect as of ${formatDay(toDate)}.`)}
             </div>
           )}
-          {entitySlice.map((entity) => {
+          {entityGroups.map((group) => {
+            const slice = slicePage(group.items, pageFor(`ent-${group.code}`));
+            return (
+            <div className="dq-type" key={group.code || 'all'}>
+              <TypeHead code={group.code} count={group.items.length} singular="entity" plural="entities" />
+              <div className={`dq-grid ${section === 'handoff' ? 'dq-ent-hand' : 'dq-ent-one'}`}>
+                <div />
+                <div>Entity</div>
+                {section === 'handoff' && <div>{handoffScope === 'ready' ? 'Ready' : 'Overrides'}</div>}
+                {section === 'availability' && <div>Missing</div>}
+                {section === 'quality' && <div>Failing</div>}
+                {section === 'trajectory' && <div>Changes</div>}
+              </div>
+              {slice.rows.map((entity) => {
             const key = `ent-${entity.id}`;
             const open = openKey === key;
             return (
@@ -1268,7 +1358,6 @@ export function DataQualityDashboard({
                   <span className="dq-name">
                     {entity.entityName}
                   </span>
-                  <span>{domainLabel(entity.domainCode)}</span>
                   {section === 'handoff' && (
                     <span className="dq-num">
                       {(handoffScope === 'all' ? entity.overrideCount : entity.overrideMatchCount).toLocaleString()}
@@ -1359,16 +1448,11 @@ export function DataQualityDashboard({
                 )}
               </div>
             );
-          })}
-          {filteredEntities.length > PAGE_SIZE && (
-            <div className="dq-head">
-              <span className="dq-sub">Page {entityPage + 1} of {entityPageCount}</span>
-              <div className="dq-seg">
-                <button type="button" disabled={entityPage === 0} onClick={() => setEntityPage((page) => Math.max(0, page - 1))}>Previous</button>
-                <button type="button" disabled={entityPage + 1 >= entityPageCount} onClick={() => setEntityPage((page) => page + 1)}>Next</button>
-              </div>
+              })}
+              <GroupPager page={slice.page} pageCount={slice.pageCount} onPage={(page) => setEntityPages((current) => ({ ...current, [`ent-${group.code}`]: page }))} />
             </div>
-          )}
+            );
+          })}
         </section>
       )}
     </div>
@@ -1381,6 +1465,16 @@ function isBranchOpen(openKey: string | null, key: string) {
 
 function oldestAge(rows: Array<{ ageDays: number }>) {
   return rows.reduce((oldest, row) => Math.max(oldest, row.ageDays), 0);
+}
+
+function groupMatchesByAttribute(matches: OverrideMatch[]) {
+  const groups = new Map<string, { attributeCode: string; attributeName: string; matches: OverrideMatch[] }>();
+  for (const match of matches) {
+    const existing = groups.get(match.attributeCode);
+    if (existing) existing.matches.push(match);
+    else groups.set(match.attributeCode, { attributeCode: match.attributeCode, attributeName: match.attributeName, matches: [match] });
+  }
+  return [...groups.values()].sort((a, b) => b.matches.length - a.matches.length || a.attributeName.localeCompare(b.attributeName));
 }
 
 function groupStaleByAttribute(rows: StaleAttribute[]) {
@@ -2111,7 +2205,6 @@ function AvailabilityTable({ rows, total, missingCount, attributeCode, attribute
               </div>
             ),
           },
-          { field: 'domainCode', headerName: 'Domain', minWidth: 120, valueFormatter: (params) => domainLabel(params.value) },
           {
             colId: 'value',
             headerName: 'Value',
@@ -2298,7 +2391,6 @@ function trajectoryChangeColumns(fromDate: string, toDate: string): ColDef[] {
         </div>
       ),
     },
-    { field: 'domainCode', headerName: 'Domain', minWidth: 120, valueFormatter: (params) => domainLabel(params.value) },
     { colId: 'from', headerName: formatDay(fromDate), minWidth: 130, cellClass: 'dq-num', valueGetter: (params) => displayValue(params.data?.previousValue) },
     { colId: 'to', headerName: formatDay(toDate), minWidth: 130, cellClass: 'dq-num', valueGetter: (params) => displayValue(params.data?.currentValue) },
     { colId: 'direction', headerName: '', width: 90, sortable: false, filter: false, cellRenderer: (params: any) => <ValueDirection changes={[params.data]} /> },

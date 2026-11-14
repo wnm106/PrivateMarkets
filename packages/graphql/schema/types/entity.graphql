@@ -208,6 +208,9 @@ input CreateAttributeInput {
   isRequired: Boolean
   isMultiValued: Boolean
   referenceDomainCode: String
+  domainCode: String
+  displaySection: String
+  displayGroup: Int
   clientId: ID
 }
 

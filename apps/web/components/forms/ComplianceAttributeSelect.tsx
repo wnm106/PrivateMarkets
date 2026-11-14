@@ -123,34 +123,49 @@ export function useRelationshipAttributes(
     }
     setLoading(true);
     const groups = buildGroups(rootDomainCode, relationshipTypes, domains);
-    Promise.all(
-      groups.map(async (group) => {
-        let attributes = attributeCache.get(group.domainCode);
-        if (!attributes) {
-          const result = await graphqlQuery<{ attributeRegister: AttributeOpt[] }, { domainCode: string }>(
-            ATTRIBUTE_REGISTER_QUERY,
-            { domainCode: group.domainCode },
-          );
-          attributes = result.data?.attributeRegister || [];
-          attributeCache.set(group.domainCode, attributes);
+    const loaded = new Map<number, TreeAttributeOption[]>();
+    const publish = () => {
+      if (cancelled) return;
+      // Keep the nearest entities first however the requests finish.
+      setOptions([...loaded.entries()].sort((x, y) => x[0] - y[0]).flatMap(([, list]) => list));
+    };
+    const loadGroup = async (group: TreeGroup, index: number) => {
+      let attributes = attributeCache.get(group.domainCode);
+      if (!attributes) {
+        const result = await graphqlQuery<{ attributeRegister: AttributeOpt[] }, { domainCode: string }>(
+          ATTRIBUTE_REGISTER_QUERY,
+          { domainCode: group.domainCode },
+        );
+        attributes = result.data?.attributeRegister || [];
+        attributeCache.set(group.domainCode, attributes);
+      }
+      loaded.set(index, attributes.map((attribute) => ({
+        attributeCode: attribute.attributeCode,
+        attributeName: attribute.attributeName,
+        dataType: attribute.dataType,
+        path: group.path,
+        domainCode: group.domainCode,
+        groupLabel: group.label,
+        valueKey: attributeValueKey(group.path, attribute.attributeCode),
+      })));
+      publish();
+    };
+    // A handful of requests at a time, nearest entities first, so the list is
+    // usable straight away and fills in as the rest arrive.
+    let next = 0;
+    const worker = async () => {
+      while (!cancelled && next < groups.length) {
+        const index = next++;
+        try {
+          await loadGroup(groups[index], index);
+        } catch {
+          // A failed entity just contributes no fields.
         }
-        return attributes.map((attribute) => ({
-          attributeCode: attribute.attributeCode,
-          attributeName: attribute.attributeName,
-          dataType: attribute.dataType,
-          path: group.path,
-          domainCode: group.domainCode,
-          groupLabel: group.label,
-          valueKey: attributeValueKey(group.path, attribute.attributeCode),
-        }));
-      }),
-    )
-      .then((lists) => {
-        if (!cancelled) setOptions(lists.flat());
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      }
+    };
+    Promise.all(Array.from({ length: Math.min(6, groups.length) }, worker)).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
     return () => {
       cancelled = true;
     };

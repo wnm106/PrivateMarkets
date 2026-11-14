@@ -41,7 +41,7 @@ export interface OperandFunction {
   insert: string;
   signature: string;
   description: string;
-  group: 'Math' | 'Text' | 'Dates';
+  group: 'Math' | 'Text' | 'Dates' | 'Reads';
   min: number;
   max: number;
 }
@@ -57,6 +57,9 @@ const fn = (name: string, signature: string, description: string, group: Operand
 });
 
 export const OPERAND_FUNCTIONS: OperandFunction[] = [
+  fn('SOURCE', "SOURCE(field, 'CODE')", 'Read the field from one named source, such as WSO, BLOOMBERG or MANUAL, instead of the golden record', 'Reads', 2),
+  fn('AS_OF', "AS_OF(field, -1, 'MONTH')", "Read the field at an offset from the run date. Units: DAY, WEEK, MONTH, QUARTER, YEAR. Add 'MONTH_END', 'QUARTER_END' or 'YEAR_END' as a fourth value to snap to a period end", 'Reads', 2, 4),
+  fn('KNOWN_AT', "KNOWN_AT(field, -1, 'MONTH')", 'Read the value as it was known at that date, before later restatements. With only a field, it uses the date of the enclosing AS_OF', 'Reads', 1, 3),
   fn('ABS', 'ABS(number)', 'Distance from zero', 'Math', 1),
   fn('ROUND', 'ROUND(number, places)', 'Round to a number of decimal places', 'Math', 1, 2),
   fn('FLOOR', 'FLOOR(number)', 'Round down to a whole number', 'Math', 1),
@@ -163,6 +166,29 @@ function resolveField(ctx: OperandContext, name: string, qualifier?: string): st
   return hit.valueKey;
 }
 
+export const READ_FUNCTIONS = new Set(['SOURCE', 'AS_OF', 'KNOWN_AT']);
+export const READ_UNITS = ['DAY', 'WEEK', 'MONTH', 'QUARTER', 'YEAR'];
+export const READ_SNAPS = ['MONTH_END', 'QUARTER_END', 'YEAR_END'];
+
+function containsField(expr: Expr): boolean {
+  if ('ref' in expr) return expr.ref !== 'CURRENT_DATE';
+  if ('args' in expr) return expr.args.some(containsField);
+  return false;
+}
+
+function checkReadFunction(name: string, args: Expr[]): void {
+  if (!containsField(args[0])) throw new ParseError(`${name} wraps a field, like ${name}(Funded Par Amount, …)`);
+  const text = (arg: Expr | undefined) => (arg && 'const' in arg && typeof arg.const === 'string' ? arg.const.toUpperCase() : null);
+  const whole = (arg: Expr | undefined) => (arg && 'const' in arg && typeof arg.const === 'number' && Number.isInteger(arg.const) ? arg.const : null);
+  if (name === 'SOURCE') {
+    if (!text(args[1])) throw new ParseError("SOURCE needs the source in quotes, like SOURCE(field, 'WSO')");
+    return;
+  }
+  if (args.length > 1 && whole(args[1]) === null) throw new ParseError(`${name} needs a whole number of periods, like ${name}(field, -1, 'MONTH')`);
+  if (args.length > 2 && !READ_UNITS.includes(text(args[2]) || '')) throw new ParseError(`The unit is one of ${READ_UNITS.join(', ')}, in quotes`);
+  if (name === 'AS_OF' && args.length > 3 && !READ_SNAPS.includes(text(args[3]) || '')) throw new ParseError(`Snap to one of ${READ_SNAPS.join(', ')}, in quotes`);
+}
+
 // ---- Parser: expr := term (('+'|'-') term)* ; term := unary (('*'|'/') unary)* ----
 
 export function parseExpression(text: string, ctx: OperandContext): Expr {
@@ -240,6 +266,7 @@ export function parseExpression(text: string, ctx: OperandContext): Expr {
         if (args.length < def.min || args.length > def.max) {
           throw new ParseError(`${upper} takes ${def.min === def.max ? def.min : `${def.min} to ${def.max === 99 ? 'any number of' : def.max}`} argument${def.max === 1 ? '' : 's'}`);
         }
+        if (READ_FUNCTIONS.has(upper)) checkReadFunction(upper, args);
         return { fn: upper, args };
       }
       if (upper === 'CURRENT_DATE' || upper === 'AS_OF_DATE') return { ref: 'CURRENT_DATE' };
@@ -289,7 +316,11 @@ function domainAtEnd(path: PathHop[], ctx: OperandContext): string {
 
 export function printRef(path: PathHop[], code: string, ctx: OperandContext): string {
   if (!path.length) return code;
-  const hit = ctx.fields.find((f) => f.valueKey === refKey(path, code));
+  // Stored hops sometimes point the other way from the field list. The same relationships
+  // in the same order reach the same record, so match on those when the exact route is missing.
+  const route = path.map((h) => h.relationshipCode).join('|');
+  const hit = ctx.fields.find((f) => f.valueKey === refKey(path, code))
+    || ctx.fields.find((f) => f.attributeCode === code && f.path.length === path.length && f.path.map((h) => h.relationshipCode).join('|') === route);
   const domain = hit?.domainCode || domainAtEnd(path, ctx);
   return domain ? `${domain}.${code}` : code;
 }
@@ -418,4 +449,99 @@ export function rightTextOf(
     return printRef(cond.compareAttributePath, cond.compareAttributeCode, ctx);
   }
   return comparisonText(cond.value, cond.compareAttributeCode);
+}
+
+// ---- Amounts: one field, optionally wrapped in read functions ----
+
+/** Where and when a field is read. Matches the form's dimension state. */
+export interface ReadSettings {
+  sourceScope: string;
+  offsetAmount: string;
+  offsetUnit: string;
+  snapTo: string;
+  knowledgeMode: string;
+}
+
+export const emptyReadSettings = (): ReadSettings => ({ sourceScope: '', offsetAmount: '', offsetUnit: 'DAY', snapTo: '', knowledgeMode: 'RUN' });
+
+export interface MeasureOperand {
+  attributeCode: string;
+  path: PathHop[];
+  dimension: ReadSettings;
+  /** Set when the amount is a formula over the record's fields. Refs are bare attribute codes. */
+  expression: Expr | null;
+  error?: string;
+}
+
+const constText = (arg: Expr | undefined) => (arg && 'const' in arg && typeof arg.const === 'string' ? arg.const.toUpperCase() : '');
+const constNumber = (arg: Expr | undefined) => (arg && 'const' in arg && typeof arg.const === 'number' ? arg.const : null);
+
+function exprRefs(expr: Expr, out: string[] = []): string[] {
+  if ('ref' in expr) {
+    if (expr.ref !== 'CURRENT_DATE') out.push(expr.ref);
+  } else if ('args' in expr) expr.args.forEach((arg) => exprRefs(arg, out));
+  return out;
+}
+
+function stripRefs(expr: Expr): Expr {
+  if ('ref' in expr) return expr.ref === 'CURRENT_DATE' ? expr : { ref: pathFromKey(expr.ref).code };
+  if ('op' in expr) return { ...expr, args: expr.args.map(stripRefs) } as Expr;
+  if ('fn' in expr) return { fn: expr.fn, args: expr.args.map(stripRefs) };
+  return expr;
+}
+
+/**
+ * An amount is one field, optionally inside SOURCE, AS_OF or KNOWN_AT, or a formula over the
+ * fields of one record, such as ROUND(SOURCE(PRICE, 'WSO') * PAR, 2).
+ */
+export function applyMeasureText(text: string, ctx: OperandContext): MeasureOperand {
+  const none = (error?: string): MeasureOperand => ({ attributeCode: '', path: [], dimension: emptyReadSettings(), expression: null, error });
+  if (!text.trim()) return none();
+  const { ast, error } = compileExpression(text, ctx);
+  if (error) return none(error);
+  if (!ast) return none();
+  const dimension = emptyReadSettings();
+  let node: Expr = ast;
+  while ('fn' in node && READ_FUNCTIONS.has(node.fn)) {
+    const args = node.args;
+    if (node.fn === 'SOURCE') dimension.sourceScope = constText(args[1]);
+    else if (node.fn === 'AS_OF') {
+      dimension.offsetAmount = String(constNumber(args[1]) ?? 0);
+      dimension.offsetUnit = constText(args[2]) || 'DAY';
+      dimension.snapTo = constText(args[3]);
+    } else {
+      dimension.knowledgeMode = 'AT_OFFSET_DATE';
+      const amount = constNumber(args[1]);
+      if (amount !== null) {
+        dimension.offsetAmount = String(amount);
+        dimension.offsetUnit = constText(args[2]) || 'DAY';
+      }
+    }
+    node = args[0];
+  }
+  if ('ref' in node && node.ref !== 'CURRENT_DATE') {
+    const { path, code } = pathFromKey(node.ref);
+    return { attributeCode: code, path, dimension, expression: null };
+  }
+  const refs = exprRefs(ast);
+  if (!refs.length) return none('Name at least one field to measure');
+  const paths = new Set(refs.map((ref) => pathFromKey(ref).path.map((h) => `${h.direction}:${h.relationshipCode}`).join('|')));
+  if (paths.size > 1) return none('A formula uses fields from one record. These fields belong to different records');
+  const first = pathFromKey(refs[0]);
+  return { attributeCode: first.code, path: first.path, dimension: emptyReadSettings(), expression: stripRefs(ast) };
+}
+
+/** The text that shows a stored amount: its field, wrapped in the functions its read settings call for. */
+export function measureTextOf(attributeCode: string, path: PathHop[], d: ReadSettings, ctx: OperandContext, expression?: Expr | null): string {
+  if (!attributeCode) return '';
+  if (expression) return printExpression(expression, ctx, (code) => printRef(path || [], code, ctx));
+  let node: Expr = { ref: refKey(path || [], attributeCode) };
+  if (d.offsetAmount !== '' || d.snapTo) {
+    const args: Expr[] = [node, { const: Number(d.offsetAmount) || 0 }, { const: d.offsetUnit || 'DAY' }];
+    if (d.snapTo) args.push({ const: d.snapTo });
+    node = { fn: 'AS_OF', args };
+  }
+  if (d.knowledgeMode === 'AT_OFFSET_DATE') node = { fn: 'KNOWN_AT', args: [node] };
+  if (d.sourceScope) node = { fn: 'SOURCE', args: [node, { const: d.sourceScope }] };
+  return printExpression(node, ctx);
 }

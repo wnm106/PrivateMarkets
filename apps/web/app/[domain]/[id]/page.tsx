@@ -159,7 +159,7 @@ export default function DynamicEntityDetailPage() {
 
           const entityDomainCode = data.entity.domainCode;
           const attrResult = await graphqlQuery<
-            { attributeRegister: Array<{ attributeCode: string; attributeName: string; dataType: string; isRequired: boolean; displaySection: string; displayGroup: number; displaySpanColumns?: number | null; displaySpanRows?: number | null; isVisible: boolean; isDerived?: boolean; derivationFormula?: string | null }> },
+            { attributeRegister: Array<{ attributeCode: string; attributeName: string; dataType: string; isRequired: boolean; displaySection: string; displayGroup: number; displaySpanColumns?: number | null; displaySpanRows?: number | null; isVisible: boolean; isDerived?: boolean; derivationFormula?: string | null; isEditable?: boolean }> },
             { domainCode: string }
           >(
             ATTRIBUTE_REGISTER_QUERY,
@@ -179,6 +179,7 @@ export default function DynamicEntityDetailPage() {
                 spanRows: a.displaySpanRows,
                 isDerived: a.isDerived === true,
                 derivationFormula: a.derivationFormula,
+                isEditable: a.isEditable !== false,
               }));
             setTemplateAttributes(mappedAttributes);
           }
@@ -257,21 +258,24 @@ export default function DynamicEntityDetailPage() {
   };
 
   const handleValueChange = async (attributeCode: string, newValue: string) => {
-    if (!entity) return;
+    if (!entity) throw new Error('Record is still loading');
     const existingAttr = entity.attributes[attributeCode];
     const updatedAttributes = {
       ...entity.attributes,
-      [attributeCode]: { ...(typeof existingAttr === 'object' ? existingAttr : { value: existingAttr }), value: newValue },
+      [attributeCode]: { ...(typeof existingAttr === 'object' ? existingAttr : { value: existingAttr }), value: newValue, sourceCode: 'MANUAL' },
     };
-    try {
-      await graphqlMutation(UPDATE_ENTITY_MUTATION, { input: { id: entity.id, attributes: updatedAttributes, asOfDate } });
-      setEntity({ ...entity, attributes: updatedAttributes });
-      await loadActivity(entity.id);
-    } catch (err) { console.error('Failed to update value:', err); }
+    const result = await graphqlMutation<{ updateEntity: { errors: Array<{ message: string }> } }, { input: { id: string; attributes: Record<string, unknown>; asOfDate: string } }>(
+      UPDATE_ENTITY_MUTATION,
+      { input: { id: entity.id, attributes: updatedAttributes, asOfDate } },
+    );
+    const saveError = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
+    if (saveError) throw new Error(saveError);
+    setEntity({ ...entity, attributes: updatedAttributes });
+    await refreshLineage(entity.id);
   };
 
   const handleAddSourceValue = async (attributeCode: string, source: SourceKey, value: string) => {
-    if (!entity) return;
+    if (!entity) throw new Error('Record is still loading');
     
     try {
       // Get the source ID from the database
@@ -286,10 +290,7 @@ export default function DynamicEntityDetailPage() {
       console.log('Source lookup result:', sourceResult);
       const sourceId = sourceResult.data?.dataSource?.id;
       
-      if (!sourceId) {
-        console.error(`Source ${sourceCode} not found in database.`);
-        return;
-      }
+      if (!sourceId) throw new Error(`Source ${sourceCode} is not registered`);
 
       // Call addCompetingSource mutation - use asOfDate so retroactive values are visible at that point in time
       console.log('Adding competing source value:', { entityId: entity.id, attributeCode, sourceId, sourceCode, value, validFrom: asOfDate });
@@ -308,8 +309,8 @@ export default function DynamicEntityDetailPage() {
       
       console.log('Add competing source result:', result);
       
-      if (!result.data?.addCompetingSource?.success) {
-        const message = result.data?.addCompetingSource?.errors?.[0]?.message || 'Could not save the value';
+      if (result.error || !result.data?.addCompetingSource?.success) {
+        const message = result.error?.message || result.data?.addCompetingSource?.errors?.[0]?.message || 'Could not save the value';
         throw new Error(message);
       }
 

@@ -54,9 +54,32 @@ export interface FeedMap {
   transforms?: Record<string, ColumnTransform>;
 }
 
+/**
+ * Where a value sits on a page of the original document. Points, measured from
+ * the top left of the page. `precision` says how tight the box is: the value
+ * itself, the row it is in, or only the table that holds it.
+ */
+export interface CellLocation {
+  page: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  precision: 'cell' | 'row' | 'table';
+}
+
+export interface PageSize {
+  page: number;
+  width: number;
+  height: number;
+}
+
 export interface ParsedTable {
   headers: string[];
   rows: Record<string, string>[];
+  /** Same shape as `rows` by `headers`. Present for tables read from a document. */
+  locations?: (CellLocation | null)[][];
+  pages?: PageSize[];
 }
 
 export interface NormalizationHit {
@@ -102,6 +125,18 @@ export interface DomainLoadStats {
   errors: string[];
 }
 
+export interface LoadReject {
+  kind: 'record' | 'value' | 'link';
+  domainCode: string;
+  entityCode: string;
+  attributeCode?: string;
+  value?: string;
+  message: string;
+  /** Row in the source table, starting at 0, and the column it came from. */
+  row?: number;
+  column?: string;
+}
+
 export interface FeedLoadResult {
   mapCode: string;
   sourceCode: string;
@@ -115,4 +150,9 @@ export interface FeedLoadResult {
   normalizations: NormalizationHit[];
   warnings: string[];
   errors: string[];
+  /** True when nothing was written. The counts say what a real load would do. */
+  dryRun?: boolean;
+  /** Rows or values that were skipped or refused, capped at 500. */
+  rejects?: LoadReject[];
+  rejectCount?: number;
 }

@@ -182,6 +182,26 @@ describe('statement attributes', () => {
     expect(book.columns.map((column) => column.values.CASH)).toEqual([1, 1, 1]);
   });
 
+  it('evaluates calculation functions the same way as the operator form', () => {
+    const switched = statementAttributesFromRegister(income.map((row) => {
+      if (row.attributeCode === 'GP') return { ...row, derivationFormula: '{"fn":"SUB","args":[{"ref":"REV"},{"ref":"COGS"}]}' };
+      if (row.attributeCode === 'BEGIN') return { ...row, derivationFormula: '{"fn":"PRIOR","args":[{"ref":"CASH"}]}' };
+      if (row.attributeCode === 'LTM_REV') return { ...row, derivationFormula: '{"fn":"TRAIL","args":[{"ref":"REV"},{"const":4}]}' };
+      if (row.attributeCode === 'CF_DA') return { ...row, derivationFormula: '{"fn":"WHEN_PRIOR","args":[{"ref":"DA"}]}' };
+      if (row.attributeCode === 'RETAINED') return { ...row, derivationFormula: '{"fn":"CUMSUM","args":[{"ref":"NI"}]}' };
+      return row;
+    }));
+    const book = projectStatementBook(periods(), switched, '2025-03-31', 'quarter');
+    expect(book.columns[4].values.GP).toBe(160);
+    expect(book.columns[0].values.BEGIN).toBeNull();
+    expect(book.columns[1].values.BEGIN).toBe(1);
+    expect(book.columns[3].values.LTM_REV).toBe(400);
+    expect(book.columns[0].values.CF_DA).toBeNull();
+    expect(book.columns[1].values.CF_DA).toBe(4);
+    expect(book.columns[4].values.RETAINED).toBe(150);
+  });
+
+
   it('keeps the statement period on each column so a cell can open that record', () => {
     const sourced = periods().map((period, index) => ({ ...period, entityId: `period-${index}`, entityName: period.end }));
     const quarter = projectStatementBook(sourced, catalog, '2025-03-31', 'quarter');

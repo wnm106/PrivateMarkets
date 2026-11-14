@@ -36,6 +36,8 @@ export interface EvaluateRuleOptions {
     triggeredBy?: string;
     /** When set, only this fund (or other anchor) is scored. Child positions still roll into it. */
     anchorEntityId?: string;
+    /** Score every fund, including funds with no threshold for the rule. For tests while a rule is being built. */
+    allFunds?: boolean;
     /** When set, the book plus hypothetical positions for this deal code. A blank scenario is the booked book only. */
     scenarioCode?: string | null;
 }
@@ -100,7 +102,7 @@ export class ComplianceEngine {
         run: ComplianceEvaluationRun;
         results: ComplianceEvaluationResult[];
     }> {
-        const { data: runId, error } = await this.cx().rpc('evaluate_rule', {
+        const { data: runId, error } = await this.cx().rpc(options.allFunds ? 'evaluate_rule_all_funds' : 'evaluate_rule', {
             p_rule_code: options.ruleCode,
             p_as_of_date: options.asOfDate,
             p_knowledge_date: options.knowledgeDate ?? new Date().toISOString(),

@@ -1,5 +1,6 @@
 import { Context } from '../context';
 import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePosition, storedRuleLabel } from '../lib/attribute-sequence';
+import { knowledgeCutoff, loadOnReadValues, mergeOnReadLineage } from '../lib/on-read-values';
 import { dirtyAttributeCodes } from './calculation';
 
 const OPEN_SYSTEM_TO = '9999-12-31 23:59:59';
@@ -13,20 +14,6 @@ function dayBefore(isoDate: string): string {
   const date = new Date(Date.UTC(year, month - 1, day));
   date.setUTCDate(date.getUTCDate() - 1);
   return date.toISOString().slice(0, 10);
-}
-
-/** A past knowledge date or timestamp. Today, or a time that has not arrived, means current knowledge. */
-function knowledgeCutoff(knowledgeDate?: string | null): string | null {
-  if (!knowledgeDate) return null;
-  const trimmed = knowledgeDate.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    const today = new Date().toISOString().slice(0, 10);
-    if (trimmed >= today) return null;
-    return `${trimmed}T23:59:59.999Z`;
-  }
-  const parsed = new Date(trimmed);
-  if (Number.isNaN(parsed.getTime()) || parsed.getTime() >= Date.now() - 1000) return null;
-  return parsed.toISOString();
 }
 
 /** Refresh calculations for the record that just changed. The shared queue can
@@ -97,7 +84,7 @@ export const lineageResolvers = {
       const sequences = await loadAttributeSequences(context.supabase, args.entityId, [...byAttribute.keys()]);
       const dirty = await dirtyAttributeCodes(context, args.entityId);
 
-      return Array.from(byAttribute.entries()).map(([code, values]) => {
+      const built = Array.from(byAttribute.entries()).map(([code, values]) => {
         const sequence = sequences.get(code) ?? { chain: [], tier: 'source' as const };
         const winningRecord = pickPersistedWinner(values);
         const ordered = [
@@ -132,6 +119,9 @@ export const lineageResolvers = {
           calcDirty: dirty.has(code),
         };
       });
+
+      const reads = await loadOnReadValues(context.supabase, args.entityId, asOf, args.knowledgeDate);
+      return mergeOnReadLineage(built, reads, asOf);
     },
 
     entityActivity: async (

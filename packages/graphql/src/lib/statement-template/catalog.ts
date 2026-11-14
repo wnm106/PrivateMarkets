@@ -8,7 +8,7 @@ export async function loadStatementCatalog(supabase: SupabaseClient, domainCode:
     .select('id, attribute_code, attribute_name, data_type, domain_code');
   if (error) throw new Error(error.message);
 
-  const rows = (attributes || []).filter((row: { domain_code?: string | null }) => !row.domain_code || row.domain_code === code);
+  const rows = (attributes || []).filter((row: { domain_code?: string | null }) => row.domain_code === code);
   const ids = rows.map((row: { id: string }) => row.id);
   const aliasesByAttribute = new Map<string, string[]>();
 

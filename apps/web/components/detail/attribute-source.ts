@@ -44,6 +44,8 @@ export interface FieldData {
   formula?: string;
   /** Source that supplied the number currently shown, when it is not the formula result. */
   storedSourceName?: string;
+  /** False when the attribute register marks the field read-only. */
+  editable?: boolean;
 }
 
 export interface LineageField {

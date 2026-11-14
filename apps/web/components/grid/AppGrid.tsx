@@ -7,6 +7,7 @@ import {
   ModuleRegistry,
   themeQuartz,
   type CellContextMenuEvent,
+  type CellValueChangedEvent,
   type ColDef,
   type GetRowIdParams,
   type GridApi,
@@ -119,6 +120,9 @@ export interface AppGridProps<T> {
   onRowClicked?: (row: T) => void;
   onRowDoubleClicked?: (row: T) => void;
   onCellContextMenu?: (event: CellContextMenuEvent<T>) => void;
+  onCellValueChanged?: (event: CellValueChangedEvent<T>) => void;
+  /** A click in an editable cell opens the editor instead of the row action. */
+  singleClickEdit?: boolean;
   getRowClass?: (params: RowClassParams<T>) => string | string[] | undefined;
   className?: string;
   headerHeight?: number;
@@ -156,6 +160,8 @@ export function AppGrid<T>({
   onRowClicked,
   onRowDoubleClicked,
   onCellContextMenu,
+  onCellValueChanged,
+  singleClickEdit = false,
   getRowClass,
   className,
   headerHeight,
@@ -208,6 +214,7 @@ export function AppGrid<T>({
   const handleRowClicked = (event: RowClickedEvent<T>) => {
     if (!onRowClicked || !event.data) return;
     if (interactiveTarget(event.event?.target)) return;
+    if (clickedCellIsEditable(event)) return;
     onRowClicked(event.data);
   };
 
@@ -246,6 +253,8 @@ export function AppGrid<T>({
         onRowClicked={onRowClicked ? handleRowClicked : undefined}
         onRowDoubleClicked={onRowDoubleClicked ? handleRowDoubleClicked : undefined}
         onCellContextMenu={onCellContextMenu}
+        onCellValueChanged={onCellValueChanged}
+        singleClickEdit={singleClickEdit}
         getRowClass={getRowClass}
         pinnedTopRowData={pinnedTopRowData}
         isFullWidthRow={isFullWidthRow}
@@ -263,4 +272,12 @@ export function AppGrid<T>({
   );
 }
 
-export type { CellContextMenuEvent, ColDef, FilterChangedEvent, GridApi, SortChangedEvent };
+function clickedCellIsEditable<T>(event: RowClickedEvent<T>): boolean {
+  const target = event.event?.target;
+  const cell = target instanceof Element ? target.closest('.ag-cell') : null;
+  const colId = cell?.getAttribute('col-id');
+  if (!colId || !event.node) return false;
+  return Boolean(event.api.getColumn(colId)?.isCellEditable(event.node));
+}
+
+export type { CellContextMenuEvent, CellValueChangedEvent, ColDef, FilterChangedEvent, GridApi, SortChangedEvent };

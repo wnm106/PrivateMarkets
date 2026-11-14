@@ -93,3 +93,13 @@ describe('readImportFile', () => {
     expect(assignments.find((column) => column.sourceColumn === 'issuer lei')?.attributeCode).toBe('LEI');
   });
 });
+
+describe('a plain table is not mistaken for a statement', () => {
+  it('reads companies with amounts and dates as a table', async () => {
+    const csv = 'Borrower,Sponsor,Commitment ($),Close Date,Sector\nAcme Corp,Apollo,"$12,500,000",3/31/2026,Software\nBeta LLC,KKR,"$3,000,000",4/15/2026,Healthcare\nGamma Inc,Blackstone,"$8,250,000",5/30/2026,Industrials\n';
+    const read = await readImportFile('deals.csv', Buffer.from(csv));
+    expect(read.kind).toBe('TABULAR');
+    expect(read.table.headers).toEqual(['Borrower', 'Sponsor', 'Commitment ($)', 'Close Date', 'Sector']);
+    expect(read.table.rows).toHaveLength(3);
+  });
+});

@@ -268,6 +268,36 @@ type ExpressionFunction {
 # File: dataquality.graphql
 # Data Quality Types
 
+input DQRulePreviewInput {
+  domainCode: String
+  ruleExpression: String!
+  attributeCode: String
+  "Attributes whose values are returned with each record."
+  columns: [String!]
+  asOfDate: Date
+  "FAIL, PASS or ALL. FAIL when blank."
+  outcome: String
+  offset: Int
+  limit: Int
+}
+
+type DQRulePreviewRow {
+  entityId: ID!
+  entityCode: String!
+  entityName: String
+  passed: Boolean!
+  message: String
+  actualValue: String
+  values: JSON
+}
+
+type DQRulePreview {
+  total: Int!
+  passed: Int!
+  failed: Int!
+  rows: [DQRulePreviewRow!]!
+}
+
 type DQRule {
   id: ID!
   ruleCode: String!
@@ -673,6 +703,8 @@ enum ComplianceRuleCategory {
   LEVERAGE
   LIQUIDITY
   FORTY_ACT
+  COVERAGE
+  COLLATERAL_QUALITY
   OTHER
 }
 
@@ -748,6 +780,24 @@ enum ComplianceResultTransform {
 enum ComplianceConditionScope {
   BASE
   ANCHOR
+  LINE
+}
+
+enum ComplianceMeasureSide {
+  NUMERATOR
+  DENOMINATOR
+  LIMIT
+}
+
+enum ComplianceMeasureKind {
+  SUM
+  COUNT
+  MIN
+  MAX
+  AVG
+  VALUE
+  WAVG
+  EXCESS_OVER_PCT
 }
 
 enum ComplianceScopeType {
@@ -833,8 +883,8 @@ type ComplianceRuleVersion {
   denominatorSource: String!
   denominatorConstantValue: Float
   resultUnit: ComplianceResultUnit!
-  # Limits
-  limitDirection: ComplianceLimitDirection!
+  # Legacy fallback. The direction that is enforced lives on the fund limit.
+  limitDirection: ComplianceLimitDirection
   softLimitValue: Float
   hardLimitValue: Float
   hardLimitAttributeCode: String
@@ -843,9 +893,33 @@ type ComplianceRuleVersion {
   consolidateDescendants: Boolean!
   isActive: Boolean!
   conditions: [ComplianceRuleCondition!]!
+  measureLines: [ComplianceMeasureLine!]!
   metadata: JSON
   createdAt: DateTime!
   createdBy: String
+}
+
+# One amount in the formula. Filters on the line count only that amount's records.
+type ComplianceMeasureLine {
+  id: ID!
+  side: ComplianceMeasureSide!
+  lineOrder: Int!
+  label: String
+  kind: ComplianceMeasureKind!
+  sign: Int!
+  attributeCode: String
+  path: [ComplianceRollupHop!]!
+  weightAttributeCode: String
+  valuePath: [ComplianceRollupHop!]!
+  transform: String
+  priceAttributeCode: String
+  pct: Float
+  pctAttributeCode: String
+  pctPath: [ComplianceRollupHop!]!
+  totalPath: [ComplianceRollupHop!]!
+  required: Boolean!
+  conditions: [ComplianceRuleCondition!]!
+  totalConditions: [ComplianceRuleCondition!]!
 }
 
 type ComplianceRuleCondition {
@@ -935,6 +1009,8 @@ type ComplianceThreshold {
   groupValue: String
   rankFrom: Int
   rankTo: Int
+  # MAX breaches when the result is above the limit. MIN breaches when it is below.
+  limitDirection: ComplianceLimitDirection
   softLimitValue: Float
   hardLimitValue: Float
   applies: Boolean!
@@ -974,6 +1050,8 @@ input UpsertComplianceThresholdInput {
   groupValue: String
   rankFrom: Int
   rankTo: Int
+  # MAX is a ceiling. MIN is a floor. Omitted on update leaves the stored direction.
+  limitDirection: ComplianceLimitDirection
   softLimitValue: Float
   hardLimitValue: Float
   applies: Boolean
@@ -995,6 +1073,34 @@ type DealComplianceScore {
   rules: [ComplianceFundRule!]!
   results: [ComplianceEvaluationResult!]!
   errors: [MutationError!]!
+}
+
+# One record that fed a fund's result, with the values the rule read from it.
+type ComplianceContributorColumn {
+  code: String!
+  label: String!
+  # NUMERATOR | DENOMINATOR | GROUP
+  role: String!
+}
+
+type ComplianceContributor {
+  entityId: ID!
+  entityCode: String!
+  entityName: String
+  # What this record added to the numerator (1 per record when counting).
+  numeratorValue: Float
+  # Share of the numerator total, 0 to 100.
+  sharePercent: Float
+  values: JSON!
+}
+
+type ComplianceResultContributors {
+  resultId: ID!
+  baseDomainCode: String
+  numeratorAggregation: String
+  columns: [ComplianceContributorColumn!]!
+  rows: [ComplianceContributor!]!
+  total: Int!
 }
 
 type ComplianceEvaluationResultConnection {
@@ -1075,14 +1181,36 @@ input CreateComplianceRuleVersionInput {
   denominatorSource: String
   denominatorConstantValue: Float
   resultUnit: ComplianceResultUnit
-  limitDirection: ComplianceLimitDirection!
+  limitDirection: ComplianceLimitDirection
   softLimitValue: Float
   hardLimitValue: Float
   hardLimitAttributeCode: String
   softLimitFactor: Float
   defaultSourceScope: String
   conditions: [ComplianceRuleConditionInput!]
+  measureLines: [ComplianceMeasureLineInput!]
   metadata: JSON
+}
+
+input ComplianceMeasureLineInput {
+  side: ComplianceMeasureSide!
+  lineOrder: Int
+  label: String
+  kind: ComplianceMeasureKind!
+  sign: Int
+  attributeCode: String
+  path: [ComplianceRollupHopInput!]
+  weightAttributeCode: String
+  valuePath: [ComplianceRollupHopInput!]
+  transform: String
+  priceAttributeCode: String
+  pct: Float
+  pctAttributeCode: String
+  pctPath: [ComplianceRollupHopInput!]
+  totalPath: [ComplianceRollupHopInput!]
+  required: Boolean
+  conditions: [ComplianceRuleConditionInput!]
+  totalConditions: [ComplianceRuleConditionInput!]
 }
 
 input ComplianceRuleConditionInput {
@@ -1114,6 +1242,8 @@ input EvaluateComplianceRuleInput {
   knowledgeDate: DateTime
   sourceScope: String
   entityId: ID
+  # Proforma: add this deal's proposed positions to the booked book.
+  scenarioCode: String
 }
 
 # Draft filter drill-down: which records of a domain qualify before the rule is saved.
@@ -1387,6 +1517,8 @@ input CreateAttributeInput {
   isMultiValued: Boolean
   referenceDomainCode: String
   domainCode: String
+  displaySection: String
+  displayGroup: Int
   clientId: ID
 }
 
@@ -2640,7 +2772,7 @@ type Query {
   domainTemplates(domainCode: String): [Template!]!
   previewStatementTemplate(input: PreviewStatementTemplateInput!): PreviewStatementTemplateResult!
   calcDefinitions: [CalcDefinition!]!
-  calcBreakdown(entityId: ID!, attributeCode: String!, asOfDate: Date): CalcBreakdown
+  calcBreakdown(entityId: ID!, attributeCode: String!, asOfDate: Date, knowledgeDate: DateTime): CalcBreakdown
   calculatedAttributeStates(entityId: ID!): [CalculatedAttributeState!]!
   expressionFunctions(category: String): [ExpressionFunction!]!
   matchRules: [MatchRule!]!
@@ -2669,6 +2801,8 @@ type Query {
   
   # DQ queries
   dqRule(id: ID!): DQRule
+  "Applies a rule expression to current records without saving it."
+  dqRulePreview(input: DQRulePreviewInput!): DQRulePreview!
   dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
   dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
   dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date, knowledgeDate: DateTime, entityId: ID): DataQualityDashboard!
@@ -2725,6 +2859,7 @@ type Query {
   complianceEvaluationRuns(ruleId: ID, first: Int): [ComplianceEvaluationRun!]!
   complianceEvaluationRun(id: ID!): ComplianceEvaluationRun
   complianceResults(filter: ComplianceResultFilter, pagination: PaginationInput): ComplianceEvaluationResultConnection!
+  complianceResultContributors(resultId: ID!): ComplianceResultContributors!
   compliancePopulationPreview(input: CompliancePopulationPreviewInput!): CompliancePopulationPreview!
   complianceFundBoard: ComplianceFundBoard!
 
@@ -2742,7 +2877,8 @@ type Query {
   dashboard(id: ID, dashboardCode: String): Dashboard
   narratives(domainCode: String, isActive: Boolean): [Narrative!]!
   narrative(id: ID, narrativeCode: String): Narrative
-  narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
+  narrativeRuns(narrativeId: ID!, entityId: ID, first: Int, statuses: [String!]): [NarrativeRun!]!
+  narrativeRun(id: ID!): NarrativeRun
   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON, asOfDate: String, knowledgeDate: String): DataQueryResponse!
   gridQuery(input: GridQueryInput!): GridResult!
 
@@ -2916,6 +3052,8 @@ type Mutation {
   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
   deleteNarrative(id: ID!): DeleteNarrativeResult!
+  publishNarrativeRun(id: ID!, label: String): NarrativeRun!
+  unpublishNarrativeRun(id: ID!): NarrativeRun!
 
   openReconciliationRun(input: OpenReconciliationRunInput!): ReconciliationRunResult!
   resolveReconciliationLine(input: ResolveReconciliationLineInput!): ReconciliationRunResult!
@@ -4057,6 +4195,12 @@ type Narrative {
   dataQueries: JSON!
   parameters: JSON!
   outputBlocks: JSON!
+  sections: JSON!
+  persona: String
+  audience: String
+  rules: JSON!
+  exposedDomains: [String!]!
+  allowExternalSearch: Boolean!
   model: String
   isActive: Boolean!
   metadata: JSON
@@ -4075,6 +4219,33 @@ type NarrativeRun {
   model: String
   createdAt: DateTime!
   createdBy: ID
+  asOfDate: String
+  sources: JSON!
+  verification: JSON!
+  plan: JSON!
+  origin: String!
+  createdByLabel: String
+  publishedAt: DateTime
+  publishedBy: ID
+  publishedByLabel: String
+  publishedLabel: String
+  sections: [NarrativeRunSection!]!
+}
+
+type NarrativeRunSection {
+  id: ID!
+  runId: ID!
+  sectionKey: String!
+  ord: Int!
+  title: String
+  status: String!
+  blocks: JSON!
+  research: JSON!
+  verification: JSON!
+  notes: JSON!
+  errorMessage: String
+  model: String
+  updatedAt: DateTime!
 }
 
 type DataQueryResponse {
@@ -4165,6 +4336,12 @@ input CreateNarrativeInput {
   dataQueries: JSON
   parameters: JSON
   outputBlocks: JSON
+  sections: JSON
+  persona: String
+  audience: String
+  rules: JSON
+  exposedDomains: [String!]
+  allowExternalSearch: Boolean
   model: String
   isActive: Boolean
   metadata: JSON
@@ -4178,6 +4355,12 @@ input UpdateNarrativeInput {
   dataQueries: JSON
   parameters: JSON
   outputBlocks: JSON
+  sections: JSON
+  persona: String
+  audience: String
+  rules: JSON
+  exposedDomains: [String!]
+  allowExternalSearch: Boolean
   model: String
   isActive: Boolean
   metadata: JSON
@@ -4218,7 +4401,7 @@ type DeleteNarrativeResult {
 #   dashboard(id: ID, dashboardCode: String): Dashboard
 #   narratives(domainCode: String, isActive: Boolean): [Narrative!]!
 #   narrative(id: ID, narrativeCode: String): Narrative
-#   narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
+#   narrativeRuns(narrativeId: ID!, entityId: ID, first: Int, statuses: [String!]): [NarrativeRun!]!
 #   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON): DataQueryResponse!
 #
 # Mutation fields (add to type Mutation):
@@ -4228,6 +4411,8 @@ type DeleteNarrativeResult {
 #   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
 #   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
 #   deleteNarrative(id: ID!): DeleteNarrativeResult!
+#   publishNarrativeRun(id: ID!, label: String): NarrativeRun!
+#   unpublishNarrativeRun(id: ID!): NarrativeRun!
 
 
 # File: surface.graphql

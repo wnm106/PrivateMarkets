@@ -4,8 +4,8 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard';
 import { EntityReports } from '@/components/reporting/EntityReports';
-import { DOMAIN_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, graphqlQuery } from '@/lib/graphql';
-import { mergeParentColumns, parentEntityColumns, type ParentEntityColumn, type ParentLinkCount } from '@/lib/parent-entities';
+import { DOMAIN_TYPES_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, graphqlQuery } from '@/lib/graphql';
+import { definingParentDomains, mergeParentColumns, parentEntityColumns, toParentLinkCounts, type ParentEntityColumn } from '@/lib/parent-entities';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
 import { EntityAttributeTable, type RelatedAttributeColumn } from './EntityAttributeTable';
 
@@ -55,19 +55,19 @@ export function EntityHome({
         { domainTypes: Array<{ domainCode: string; domainName: string }> },
         Record<string, never>
       >(DOMAIN_TYPES_QUERY, {}, 'network-only'),
+      graphqlQuery<
+        { intersectionTypes: Array<{ intersectionCode: string; isActive: boolean; members: Array<{ domainCode: string }> }> },
+        Record<string, never>
+      >(INTERSECTION_TYPES_QUERY, {}, 'network-only'),
       supabaseBrowserClient().rpc('relationship_link_counts'),
-    ]).then(([relationships, domains, counts]) => {
+    ]).then(([relationships, domains, intersections, counts]) => {
       if (cancelled) return;
       const names: Record<string, string> = {};
       for (const domain of domains.data?.domainTypes || []) names[domain.domainCode] = domain.domainName;
-      const linkCounts: ParentLinkCount[] = ((counts.data || []) as Array<Record<string, unknown>>).map((row) => ({
-        relationshipCode: String(row.relationship_code || ''),
-        parentDomainCode: String(row.parent_domain_code || ''),
-        childDomainCode: String(row.child_domain_code || ''),
-        linkCount: Number(row.link_count) || 0,
-      }));
+      const linkCounts = toParentLinkCounts((counts.data || []) as Array<Record<string, unknown>>);
       const types = relationships.data?.relationshipTypes || [];
-      setDiscovered(parentEntityColumns(domainCode, types, names, linkCounts));
+      const parents = definingParentDomains(domainCode, intersections.data?.intersectionTypes || []);
+      setDiscovered(parentEntityColumns(domainCode, types, names, linkCounts, parents));
     }).catch(() => {
       if (!cancelled) setDiscovered([]);
     });
@@ -94,7 +94,9 @@ export function EntityHome({
           </button>
         </div>
         <div className="entity-home-scope">
-          {selected ? (
+          {tab === 'quality' ? (
+            <span>Every record of this type</span>
+          ) : selected ? (
             <>
               <span>Selected record</span>
               <strong>{selected.name || selected.code}</strong>
@@ -102,7 +104,7 @@ export function EntityHome({
               <Link href={`/${domainKey}/${selected.id}`}>Open record</Link>
             </>
           ) : (
-            <span>Select a row. Dashboards and Data Quality use that record.</span>
+            <span>Select a row. Dashboards use that record.</span>
           )}
         </div>
       </div>
@@ -130,11 +132,7 @@ export function EntityHome({
       )}
 
       {tab === 'quality' && (
-        selected ? (
-          <DataQualityDashboard embedded domainCode={domainCode} entityId={selected.id} />
-        ) : (
-          <NeedsSelection onChoose={() => setTab('records')} />
-        )
+        <DataQualityDashboard embedded domainCode={domainCode} />
       )}
     </div>
   );
@@ -143,7 +141,7 @@ export function EntityHome({
 function NeedsSelection({ onChoose }: { onChoose: () => void }) {
   return (
     <div className="entity-home-empty">
-      <p>Select a record first. Dashboards and data quality run for that record.</p>
+      <p>Select a record first. Dashboards run for that record.</p>
       <button type="button" className="btn" onClick={onChoose}>Choose a record</button>
     </div>
   );

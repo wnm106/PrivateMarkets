@@ -11,6 +11,7 @@ import {
   DELETE_COMPLIANCE_THRESHOLD_MUTATION,
   EVALUATE_COMPLIANCE_RULE_MUTATION,
 } from '@/lib/graphql';
+import { fundUsesRule } from '@/lib/fund-enrollment';
 
 interface FundNode {
   entityId: string;
@@ -38,6 +39,7 @@ interface Threshold {
   groupValue?: string | null;
   rankFrom?: number | null;
   rankTo?: number | null;
+  limitDirection?: string | null;
   softLimitValue?: number | null;
   hardLimitValue?: number | null;
   applies: boolean;
@@ -50,6 +52,7 @@ interface FundResult {
   anchorEntityId: string;
   groupByValue?: string | null;
   computedValue?: number | null;
+  limitDirection?: string | null;
   softLimitValue?: number | null;
   hardLimitValue?: number | null;
   status: string;
@@ -68,6 +71,7 @@ function unitWord(unit?: string | null) {
   if (unit === 'PERCENTAGE') return 'Percentage';
   if (unit === 'CURRENCY') return 'Currency';
   if (unit === 'COUNT') return 'Count';
+  if (unit === 'RATIO') return 'Ratio';
   return 'Value';
 }
 
@@ -109,6 +113,7 @@ export default function FundThresholdsPage() {
     setError('');
     try {
       const result = await graphqlQuery<{ complianceFundBoard: Board }, {}>(COMPLIANCE_FUND_BOARD_QUERY, {}, 'network-only');
+      if (result.error) throw result.error;
       const next = result.data?.complianceFundBoard;
       if (next) {
         setBoard(next);
@@ -201,14 +206,16 @@ export default function FundThresholdsPage() {
     }
   };
 
-  const ruleStats = board && selected ? board.rules.map((rule) => {
-    const fundDefault = board.thresholds.find((item) => item.ruleId === rule.id && item.entityId === selected.entityId && !item.groupValue && item.rankFrom == null) || null;
-    return fundDefault ? fundDefault.applies : true;
-  }) : [];
+  const ruleStats = board && selected
+    ? board.rules.map((rule) => fundUsesRule(board.thresholds, rule.id, selected.entityId))
+    : [];
   const appliedCount = ruleStats.filter(Boolean).length;
   const appliedShare = ruleStats.length ? Math.round((appliedCount / ruleStats.length) * 100) : 0;
   const childCount = selected ? (tree.children.get(selected.entityId) || []).length : 0;
-  const openRule = board?.rules.find((rule) => rule.id === openRuleId) || board?.rules[0] || null;
+  const appliedRule = board && selected
+    ? board.rules.find((rule) => fundUsesRule(board.thresholds, rule.id, selected.entityId))
+    : null;
+  const openRule = board?.rules.find((rule) => rule.id === openRuleId) || appliedRule || board?.rules[0] || null;
 
   return (
     <div className="view-fade da">
@@ -224,7 +231,9 @@ export default function FundThresholdsPage() {
         <div className="da-title">
           <span className="da-chip">Fund limits</span>
           <h1>{selected?.entityName || 'Thresholds'}</h1>
-          <p>{childCount ? `${childCount} child funds. A parent includes the positions of its children when the rule consolidates.` : 'Each fund can use a rule, skip it, or set its own limit by industry and by rank.'}</p>
+          <p>{childCount
+            ? `${childCount} child funds. A fund is scored only for a rule that has a threshold here. A parent includes the positions of its children when the rule consolidates.`
+            : 'A fund is scored only for a rule that has a threshold here. The test itself can still apply to every fund.'}</p>
         </div>
         <div className="da-facts">
           <div className="da-fact big"><span>Rules on the book</span><strong>{board ? board.rules.length : '—'}</strong></div>
@@ -282,8 +291,11 @@ export default function FundThresholdsPage() {
                     </thead>
                     <tbody>
                       {board.rules.map((rule) => {
-                        const fundDefault = board.thresholds.find((item) => item.ruleId === rule.id && item.entityId === selected.entityId && !item.groupValue && item.rankFrom == null) || null;
-                        const applied = fundDefault ? fundDefault.applies : true;
+                        const applied = fundUsesRule(board.thresholds, rule.id, selected.entityId);
+                        const scored = board.results.filter((item) => item.ruleId === rule.id && item.anchorEntityId === selected.entityId && item.status !== 'NO_DATA');
+                        const outcome = scored.some((item) => item.status === 'HARD_BREACH') ? 'HARD_BREACH'
+                          : scored.some((item) => item.status === 'SOFT_BREACH') ? 'SOFT_BREACH'
+                          : scored[0]?.status || null;
                         const active = (openRule?.id || null) === rule.id;
                         return (
                           <tr key={rule.id} className={active ? 'sel' : ''} onClick={() => setOpenRuleId(rule.id)}>
@@ -295,7 +307,7 @@ export default function FundThresholdsPage() {
                               <b>{unitWord(rule.resultUnit)}</b>
                               <small>{rule.groupByAttributeCode ? `By ${groupWord(rule.groupByAttributeCode)}` : 'Fund total'}</small>
                             </td>
-                            <td><span className={`da-st ${applied ? 'ok' : 'na'}`}>{applied ? 'Applied' : 'Not used'}</span></td>
+                            <td><span className={`da-st ${!applied ? 'na' : outcome ? statusTone(outcome) : 'ok'}`}>{!applied ? 'Not used' : outcome ? statusLabel(outcome, rule.limitDirection) : 'Applied'}</span></td>
                           </tr>
                         );
                       })}
@@ -338,15 +350,16 @@ function RuleLimit({ rule, fund, thresholds, results, busy, onSave, onDelete }: 
   const groups = rows.filter((item) => item.groupValue);
   const ranks = rows.filter((item) => !item.groupValue && item.rankFrom != null);
   const scored = results.filter((item) => item.ruleId === rule.id && item.anchorEntityId === fund.entityId);
-  const applied = fundDefault ? fundDefault.applies : true;
+  const applied = fundUsesRule(thresholds, rule.id, fund.entityId);
   const headline = fundDefault?.hardLimitValue ?? fundDefault?.softLimitValue;
+  const way = fundDefault?.limitDirection || rule.limitDirection || 'MAX';
   return (
     <>
       <div className="da-ph">
         <small>{rule.resultUnit || 'Value'}</small>
         <h3>{rule.ruleName}</h3>
         <div className="da-big">{headline != null ? formatValue(headline, rule.resultUnit) : '—'}</div>
-        <p className="da-note">{applied ? 'This fund uses the rule.' : 'This fund skips the rule.'}</p>
+        <p className="da-note">{applied ? `${directionWord(way)}. A result outside it is a breach.` : 'This fund skips the rule.'}</p>
         <span className={`da-st ${applied ? 'ok' : 'na'}`}>{applied ? 'Applied' : 'Not used'}</span>
       </div>
       <section>
@@ -361,6 +374,7 @@ function RuleLimit({ rule, fund, thresholds, results, busy, onSave, onDelete }: 
               ruleId: rule.id,
               entityId: fund.entityId,
               applies: event.target.checked,
+              limitDirection: way,
               softLimitValue: fundDefault?.softLimitValue,
               hardLimitValue: fundDefault?.hardLimitValue,
             })}
@@ -370,16 +384,18 @@ function RuleLimit({ rule, fund, thresholds, results, busy, onSave, onDelete }: 
         {applied && (
           <LimitEditor
             label="Fund limit"
-            hint={fundDefault ? 'Overrides the rule for every group that does not have its own row.' : 'No fund-level number yet. The rule default is used until you save one.'}
+            hint="A maximum is breached when the result is higher. A minimum is breached when the result is lower."
+            direction={way}
             soft={fundDefault?.softLimitValue}
             hard={fundDefault?.hardLimitValue}
             unit={rule.resultUnit}
             disabled={busy}
-            onSave={(soft, hard) => onSave({
+            onSave={(direction, soft, hard) => onSave({
               id: fundDefault?.id,
               ruleId: rule.id,
               entityId: fund.entityId,
               applies: true,
+              limitDirection: direction,
               softLimitValue: soft,
               hardLimitValue: hard,
             })}
@@ -390,22 +406,24 @@ function RuleLimit({ rule, fund, thresholds, results, busy, onSave, onDelete }: 
             label={`Limits by ${rule.groupByAttributeCode}`}
             rows={groups}
             suggestions={[...new Set(scored.map((item) => item.groupByValue).filter(Boolean) as string[])]}
-            unit={rule.resultUnit}
+            direction={way}
             disabled={busy}
-            onSave={(row, soft, hard, applies) => onSave({
+            onSave={(row, direction, soft, hard, applies) => onSave({
               id: row?.id,
               ruleId: rule.id,
               entityId: fund.entityId,
               groupValue: row?.groupValue,
               applies,
+              limitDirection: direction,
               softLimitValue: soft,
               hardLimitValue: hard,
             })}
-            onCreate={(groupValue, soft, hard) => onSave({
+            onCreate={(groupValue, direction, soft, hard) => onSave({
               ruleId: rule.id,
               entityId: fund.entityId,
               groupValue,
               applies: true,
+              limitDirection: direction,
               softLimitValue: soft,
               hardLimitValue: hard,
             })}
@@ -415,13 +433,15 @@ function RuleLimit({ rule, fund, thresholds, results, busy, onSave, onDelete }: 
         {applied && rule.groupByAttributeCode && (
           <RankEditor
             rows={ranks}
+            direction={way}
             disabled={busy}
-            onCreate={(rankFrom, rankTo, soft, hard) => onSave({
+            onCreate={(rankFrom, rankTo, direction, soft, hard) => onSave({
               ruleId: rule.id,
               entityId: fund.entityId,
               rankFrom,
               rankTo,
               applies: true,
+              limitDirection: direction,
               softLimitValue: soft,
               hardLimitValue: hard,
             })}
@@ -431,7 +451,8 @@ function RuleLimit({ rule, fund, thresholds, results, busy, onSave, onDelete }: 
       </section>
       <section>
         <h4>Latest results</h4>
-        {scored.length === 0 ? <p className="da-note">No result for this fund. Recalculate to score it.</p> : (
+        {!applied ? <p className="da-note">This fund is not scored for this rule until it has a threshold.</p>
+          : scored.length === 0 ? <p className="da-note">No result for this fund. Recalculate to score it.</p> : (
           <table className="da-mini">
             <thead>
               <tr>
@@ -444,11 +465,11 @@ function RuleLimit({ rule, fund, thresholds, results, busy, onSave, onDelete }: 
                 <tr key={result.id}>
                   <td>
                     <b>{result.groupByValue || 'Fund total'}</b>
-                    <small>Soft {formatValue(result.softLimitValue, rule.resultUnit)} · hard {formatValue(result.hardLimitValue, rule.resultUnit)}</small>
+                    <small>{directionWord(result.limitDirection)} · soft {formatValue(result.softLimitValue, rule.resultUnit)} · hard {formatValue(result.hardLimitValue, rule.resultUnit)}</small>
                   </td>
                   <td className="num">
                     {formatValue(result.computedValue, rule.resultUnit)}
-                    <small><span className={`da-st ${statusTone(result.status)}`}>{statusLabel(result.status)}</span></small>
+                    <small><span className={`da-st ${statusTone(result.status)}`}>{statusLabel(result.status, result.limitDirection)}</span></small>
                   </td>
                 </tr>
               ))}
@@ -467,10 +488,14 @@ function statusTone(status: string) {
   return 'na';
 }
 
-function statusLabel(status: string) {
+function directionWord(direction?: string | null) {
+  return direction === 'MIN' ? 'Minimum' : 'Maximum';
+}
+
+function statusLabel(status: string, direction?: string | null) {
   if (status === 'PASS') return 'Within limit';
-  if (status === 'SOFT_BREACH') return 'Near limit';
-  if (status === 'HARD_BREACH') return 'Over limit';
+  if (status === 'SOFT_BREACH') return direction === 'MIN' ? 'Near minimum' : 'Near maximum';
+  if (status === 'HARD_BREACH') return direction === 'MIN' ? 'Below minimum' : 'Above maximum';
   if (status === 'NO_DATA') return 'No data';
   return status.replaceAll('_', ' ');
 }
@@ -501,27 +526,31 @@ function FundBranch({ fund, childrenOf, selectedId, onSelect }: {
   );
 }
 
-function LimitEditor({ label, hint, soft, hard, unit, disabled, onSave }: {
+function LimitEditor({ label, hint, direction, soft, hard, unit, disabled, onSave }: {
   label: string;
   hint: string;
+  direction?: string | null;
   soft?: number | null;
   hard?: number | null;
   unit?: string | null;
   disabled: boolean;
-  onSave: (soft: number | null, hard: number | null) => void;
+  onSave: (direction: string, soft: number | null, hard: number | null) => void;
 }) {
+  const [way, setWay] = useState(direction === 'MIN' ? 'MIN' : 'MAX');
   const [softText, setSoftText] = useState(soft != null ? String(soft) : '');
   const [hardText, setHardText] = useState(hard != null ? String(hard) : '');
   useEffect(() => {
+    setWay(direction === 'MIN' ? 'MIN' : 'MAX');
     setSoftText(soft != null ? String(soft) : '');
     setHardText(hard != null ? String(hard) : '');
-  }, [soft, hard]);
+  }, [direction, soft, hard]);
   const parse = (value: string) => value.trim() === '' ? null : Number(value);
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ fontSize: 12, fontWeight: 600 }}>{label}{unit ? ` (${unit.toLowerCase()})` : ''}</div>
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 6 }}>{hint}</div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'end' }}>
+        <DirectionSelect value={way} disabled={disabled} onChange={setWay} />
         <div className="field" style={{ margin: 0 }}>
           <label>Soft</label>
           <input className="text-input mono" value={softText} onChange={(event) => setSoftText(event.target.value)} />
@@ -530,30 +559,44 @@ function LimitEditor({ label, hint, soft, hard, unit, disabled, onSave }: {
           <label>Hard</label>
           <input className="text-input mono" value={hardText} onChange={(event) => setHardText(event.target.value)} />
         </div>
-        <button className="btn" disabled={disabled} onClick={() => onSave(parse(softText), parse(hardText))}>Save</button>
+        <button className="btn" disabled={disabled} onClick={() => onSave(way, parse(softText), parse(hardText))}>Save</button>
       </div>
     </div>
   );
 }
 
-function GroupEditor({ label, rows, suggestions, unit, disabled, onSave, onCreate, onDelete }: {
+function DirectionSelect({ value, disabled, onChange }: { value: string; disabled?: boolean; onChange: (value: string) => void }) {
+  return (
+    <div className="field" style={{ margin: 0 }}>
+      <label>Limit</label>
+      <select className="select" aria-label="Minimum or maximum" value={value === 'MIN' ? 'MIN' : 'MAX'} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+        <option value="MAX">Maximum</option>
+        <option value="MIN">Minimum</option>
+      </select>
+    </div>
+  );
+}
+
+function GroupEditor({ label, rows, suggestions, direction, disabled, onSave, onCreate, onDelete }: {
   label: string;
   rows: Threshold[];
   suggestions: string[];
-  unit?: string | null;
+  direction?: string | null;
   disabled: boolean;
-  onSave: (row: Threshold, soft: number | null, hard: number | null, applies: boolean) => void;
-  onCreate: (groupValue: string, soft: number | null, hard: number | null) => void;
+  onSave: (row: Threshold, direction: string, soft: number | null, hard: number | null, applies: boolean) => void;
+  onCreate: (groupValue: string, direction: string, soft: number | null, hard: number | null) => void;
   onDelete: (id: string) => void;
 }) {
   const [name, setName] = useState(suggestions[0] || '');
+  const [way, setWay] = useState(direction === 'MIN' ? 'MIN' : 'MAX');
   const [soft, setSoft] = useState('');
   const [hard, setHard] = useState('');
+  useEffect(() => { setWay(direction === 'MIN' ? 'MIN' : 'MAX'); }, [direction]);
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{label}</div>
       {rows.map((row) => (
-        <GroupRow key={row.id} row={row} unit={unit} disabled={disabled} onSave={onSave} onDelete={onDelete} />
+        <GroupRow key={row.id} row={row} disabled={disabled} onSave={onSave} onDelete={onDelete} />
       ))}
       <div style={{ display: 'flex', gap: 8, alignItems: 'end', marginTop: 8 }}>
         <div className="field" style={{ margin: 0, flex: 1 }}>
@@ -563,6 +606,7 @@ function GroupEditor({ label, rows, suggestions, unit, disabled, onSave, onCreat
             {suggestions.map((item) => <option key={item} value={item} />)}
           </datalist>
         </div>
+        <DirectionSelect value={way} disabled={disabled} onChange={setWay} />
         <div className="field" style={{ margin: 0 }}>
           <label>Soft</label>
           <input className="text-input mono" value={soft} onChange={(event) => setSoft(event.target.value)} />
@@ -571,7 +615,7 @@ function GroupEditor({ label, rows, suggestions, unit, disabled, onSave, onCreat
           <label>Hard</label>
           <input className="text-input mono" value={hard} onChange={(event) => setHard(event.target.value)} />
         </div>
-        <button className="btn" disabled={disabled || !name.trim()} onClick={() => onCreate(name.trim(), soft.trim() === '' ? null : Number(soft), hard.trim() === '' ? null : Number(hard))}>Add</button>
+        <button className="btn" disabled={disabled || !name.trim()} onClick={() => onCreate(name.trim(), way, soft.trim() === '' ? null : Number(soft), hard.trim() === '' ? null : Number(hard))}>Add</button>
       </div>
     </div>
   );
@@ -579,42 +623,56 @@ function GroupEditor({ label, rows, suggestions, unit, disabled, onSave, onCreat
 
 function GroupRow({ row, disabled, onSave, onDelete }: {
   row: Threshold;
-  unit?: string | null;
   disabled: boolean;
-  onSave: (row: Threshold, soft: number | null, hard: number | null, applies: boolean) => void;
+  onSave: (row: Threshold, direction: string, soft: number | null, hard: number | null, applies: boolean) => void;
   onDelete: (id: string) => void;
 }) {
+  const [way, setWay] = useState(row.limitDirection === 'MIN' ? 'MIN' : 'MAX');
   const [soft, setSoft] = useState(row.softLimitValue != null ? String(row.softLimitValue) : '');
   const [hard, setHard] = useState(row.hardLimitValue != null ? String(row.hardLimitValue) : '');
+  useEffect(() => {
+    setWay(row.limitDirection === 'MIN' ? 'MIN' : 'MAX');
+    setSoft(row.softLimitValue != null ? String(row.softLimitValue) : '');
+    setHard(row.hardLimitValue != null ? String(row.hardLimitValue) : '');
+  }, [row.limitDirection, row.softLimitValue, row.hardLimitValue]);
   return (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6, fontSize: 12 }}>
-      <span style={{ minWidth: 180 }}>{row.groupValue}</span>
-      <input className="text-input mono" style={{ maxWidth: 90 }} value={soft} onChange={(event) => setSoft(event.target.value)} />
-      <input className="text-input mono" style={{ maxWidth: 90 }} value={hard} onChange={(event) => setHard(event.target.value)} />
-      <button className="btn" disabled={disabled} onClick={() => onSave(row, soft.trim() === '' ? null : Number(soft), hard.trim() === '' ? null : Number(hard), true)}>Save</button>
+      <span style={{ minWidth: 140 }}>{row.groupValue}</span>
+      <select className="select" aria-label={`Minimum or maximum for ${row.groupValue}`} value={way} disabled={disabled} onChange={(event) => setWay(event.target.value)} style={{ maxWidth: 120 }}>
+        <option value="MAX">Maximum</option>
+        <option value="MIN">Minimum</option>
+      </select>
+      <input className="text-input mono" aria-label="Soft" style={{ maxWidth: 90 }} value={soft} onChange={(event) => setSoft(event.target.value)} />
+      <input className="text-input mono" aria-label="Hard" style={{ maxWidth: 90 }} value={hard} onChange={(event) => setHard(event.target.value)} />
+      <button className="btn" disabled={disabled} onClick={() => onSave(row, way, soft.trim() === '' ? null : Number(soft), hard.trim() === '' ? null : Number(hard), true)}>Save</button>
       <button className="btn" disabled={disabled} onClick={() => onDelete(row.id)}>Remove</button>
     </div>
   );
 }
 
-function RankEditor({ rows, disabled, onCreate, onDelete }: {
+function RankEditor({ rows, direction, disabled, onCreate, onDelete }: {
   rows: Threshold[];
+  direction?: string | null;
   disabled: boolean;
-  onCreate: (rankFrom: number, rankTo: number | null, soft: number | null, hard: number | null) => void;
+  onCreate: (rankFrom: number, rankTo: number | null, direction: string, soft: number | null, hard: number | null) => void;
   onDelete: (id: string) => void;
 }) {
   const [from, setFrom] = useState('1');
   const [to, setTo] = useState('1');
+  const [way, setWay] = useState(direction === 'MIN' ? 'MIN' : 'MAX');
   const [soft, setSoft] = useState('');
   const [hard, setHard] = useState('');
+  useEffect(() => { setWay(direction === 'MIN' ? 'MIN' : 'MAX'); }, [direction]);
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ fontSize: 12, fontWeight: 600 }}>Limits by rank</div>
-      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 6 }}>Rank 1 is the largest group. Leave the end rank blank for every rank after the start.</div>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 6 }}>
+        {direction === 'MIN' ? 'Rank 1 is the smallest group.' : 'Rank 1 is the largest group.'} Leave the end rank blank for every rank after the start.
+      </div>
       {rows.map((row) => (
         <div key={row.id} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6, fontSize: 12 }}>
           <span style={{ minWidth: 160 }}>{rankLabel(row)}</span>
-          <span className="mono">soft {row.softLimitValue ?? '—'} / hard {row.hardLimitValue ?? '—'}</span>
+          <span className="mono">{directionWord(row.limitDirection)} · soft {row.softLimitValue ?? '—'} / hard {row.hardLimitValue ?? '—'}</span>
           <button className="btn" disabled={disabled} onClick={() => onDelete(row.id)}>Remove</button>
         </div>
       ))}
@@ -627,6 +685,7 @@ function RankEditor({ rows, disabled, onCreate, onDelete }: {
           <label>To</label>
           <input className="text-input mono" style={{ maxWidth: 70 }} value={to} onChange={(event) => setTo(event.target.value)} placeholder="open" />
         </div>
+        <DirectionSelect value={way} disabled={disabled} onChange={setWay} />
         <div className="field" style={{ margin: 0 }}>
           <label>Soft</label>
           <input className="text-input mono" style={{ maxWidth: 90 }} value={soft} onChange={(event) => setSoft(event.target.value)} />
@@ -635,7 +694,7 @@ function RankEditor({ rows, disabled, onCreate, onDelete }: {
           <label>Hard</label>
           <input className="text-input mono" style={{ maxWidth: 90 }} value={hard} onChange={(event) => setHard(event.target.value)} />
         </div>
-        <button className="btn" disabled={disabled || !from.trim()} onClick={() => onCreate(Number(from), to.trim() === '' ? null : Number(to), soft.trim() === '' ? null : Number(soft), hard.trim() === '' ? null : Number(hard))}>Add band</button>
+        <button className="btn" disabled={disabled || !from.trim()} onClick={() => onCreate(Number(from), to.trim() === '' ? null : Number(to), way, soft.trim() === '' ? null : Number(soft), hard.trim() === '' ? null : Number(hard))}>Add band</button>
       </div>
     </div>
   );

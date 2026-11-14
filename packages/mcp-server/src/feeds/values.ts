@@ -89,15 +89,7 @@ export function applyTransform(raw: string, transform?: { kind: string; find?: s
     case 'lowercase':
       return text.trim().toLowerCase();
     case 'number': {
-      let numeric = text.trim().replace(/[$€£\s]/g, '');
-      let negative = false;
-      if (/^\(.*\)$/.test(numeric)) {
-        negative = true;
-        numeric = numeric.slice(1, -1);
-      }
-      numeric = numeric.replace(/,/g, '');
-      if (negative && numeric && !numeric.startsWith('-')) numeric = `-${numeric}`;
-      return numeric;
+      return numberText(text) ?? text.trim();
     }
     case 'percent': {
       const trimmed = text.trim();
@@ -119,17 +111,33 @@ export function applyTransform(raw: string, transform?: { kind: string; find?: s
   }
 }
 
+function isoDate(year: number, month: number, day: number): string | null {
+  if (!Number.isInteger(year) || month < 1 || month > 12 || day < 1) return null;
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (day > last) return null;
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function fullYear(text: string): number {
+  const year = Number(text);
+  return text.length === 2 ? (year >= 70 ? 1900 + year : 2000 + year) : year;
+}
+
+/**
+ * Read a date as an ISO day. Only real calendar days are accepted.
+ * Slash dates are month first. When the first part cannot be a month
+ * (13/01/2025) the day-first reading is used, since it is the only valid one.
+ */
 export function parseUsDate(input: string): string | null {
   const text = input.trim();
-  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const us = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (us) {
-    const month = Number(us[1]);
-    const day = Number(us[2]);
-    const year = Number(us[3]);
-    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:$|[T\s])/);
+  if (iso) return isoDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+  const slash = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+  if (slash) {
+    const year = fullYear(slash[3]);
+    const first = Number(slash[1]);
+    const second = Number(slash[2]);
+    return isoDate(year, first, second) || (first > 12 ? isoDate(year, second, first) : null);
   }
   const months: Record<string, number> = {
     january: 1, jan: 1, february: 2, feb: 2, march: 3, mar: 3, april: 4, apr: 4,
@@ -138,14 +146,74 @@ export function parseUsDate(input: string): string | null {
   };
   const named = text.match(/^(\d{1,2})[-\s]([A-Za-z]{3,9})[-\s](\d{2,4})$/);
   if (named && months[named[2].toLowerCase()]) {
-    const year = named[3].length === 2 ? 2000 + Number(named[3]) : Number(named[3]);
-    return `${year}-${String(months[named[2].toLowerCase()]).padStart(2, '0')}-${named[1].padStart(2, '0')}`;
+    return isoDate(fullYear(named[3]), months[named[2].toLowerCase()], Number(named[1]));
   }
   const monthFirst = text.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/);
   if (monthFirst && months[monthFirst[1].toLowerCase()]) {
-    return `${monthFirst[3]}-${String(months[monthFirst[1].toLowerCase()]).padStart(2, '0')}-${monthFirst[2].padStart(2, '0')}`;
+    return isoDate(Number(monthFirst[3]), months[monthFirst[1].toLowerCase()], Number(monthFirst[2]));
   }
   return null;
+}
+
+const BLANK_TOKENS = new Set(['-', '--', '—', '–', 'n/a', 'na', 'n.a.', 'nan', 'null', 'none', 'nil', '#n/a']);
+
+/** A placeholder for "no value". Treated as blank so it never overwrites a stored value. */
+export function isBlankToken(text: string): boolean {
+  const trimmed = text.trim().toLowerCase();
+  return trimmed === '' || BLANK_TOKENS.has(trimmed);
+}
+
+/**
+ * Read a number from text. Handles currency symbols, accounting parentheses,
+ * a trailing minus, and both 1,234.56 and 1.234,56. A lone comma followed by
+ * exactly three digits is a thousands separator; any other lone comma is a decimal.
+ * Returns the plain digits with a leading minus if negative, or null when
+ * the text is not a number. The digits keep their original precision.
+ */
+export function numberText(input: string): string | null {
+  let text = input.trim().replace(/[$€£¥\s]/g, '');
+  if (!text) return null;
+  let negative = false;
+  if (/^\(.*\)$/.test(text)) {
+    negative = true;
+    text = text.slice(1, -1);
+  }
+  if (text.endsWith('-')) {
+    negative = !negative;
+    text = text.slice(0, -1);
+  }
+  if (text.startsWith('-')) {
+    negative = !negative;
+    text = text.slice(1);
+  } else if (text.startsWith('+')) {
+    text = text.slice(1);
+  }
+  if (!/^[\d.,]*(?:[eE][+-]?\d+)?$/.test(text) || !/\d/.test(text)) return null;
+  const lastDot = text.lastIndexOf('.');
+  const lastComma = text.lastIndexOf(',');
+  if (lastDot >= 0 && lastComma >= 0) {
+    const decimal = lastDot > lastComma ? '.' : ',';
+    const thousands = decimal === '.' ? ',' : '.';
+    if (text.split(decimal).length > 2) return null;
+    text = text.split(thousands).join('').replace(decimal, '.');
+  } else if (lastComma >= 0) {
+    const parts = text.split(',');
+    const grouped = parts.length > 1 && parts.slice(1).every((part) => /^\d{3}$/.test(part)) && /^\d{1,3}$/.test(parts[0]);
+    if (grouped) text = parts.join('');
+    else if (parts.length === 2) text = `${parts[0]}.${parts[1]}`;
+    else return null;
+  } else if (lastDot >= 0 && text.split('.').length > 2) {
+    const parts = text.split('.');
+    if (!parts.slice(1).every((part) => /^\d{3}$/.test(part))) return null;
+    text = parts.join('');
+  }
+  if (!Number.isFinite(Number(text))) return null;
+  return negative ? `-${text}` : text;
+}
+
+export function parseNumber(input: string): number | null {
+  const text = numberText(input);
+  return text === null ? null : Number(text);
 }
 
 export function dayBefore(isoDate: string): string {
@@ -153,6 +221,28 @@ export function dayBefore(isoDate: string): string {
   const date = new Date(Date.UTC(year, month - 1, day));
   date.setUTCDate(date.getUTCDate() - 1);
   return date.toISOString().slice(0, 10);
+}
+
+export interface Period {
+  id: string;
+  validFrom: string;
+  validTo: string;
+}
+
+/**
+ * Where a value that starts on `validFrom` fits among a source's existing periods.
+ * It ends where the period it falls inside ended, or the day before the next later
+ * period starts, or stays open. The period it falls inside is cut off the day
+ * before it starts, so no two periods overlap.
+ */
+export function planPeriod(periods: Period[], validFrom: string): { validTo: string; closeId: string | null; closeTo: string | null } {
+  const covering = periods.find((period) => period.validFrom < validFrom && period.validTo >= validFrom);
+  const nextLater = periods
+    .filter((period) => period.validFrom > validFrom)
+    .sort((a, b) => a.validFrom.localeCompare(b.validFrom))[0];
+  let validTo = covering ? covering.validTo : nextLater ? dayBefore(nextLater.validFrom) : '9999-12-31';
+  if (nextLater && validTo > dayBefore(nextLater.validFrom)) validTo = dayBefore(nextLater.validFrom);
+  return { validTo, closeId: covering ? covering.id : null, closeTo: covering ? dayBefore(validFrom) : null };
 }
 
 export interface CoercedValue {
@@ -166,10 +256,10 @@ export function coerceAttributeValue(raw: string, dataType: string): CoercedValu
   const text = raw.trim();
   if (!text) return null;
   if (NUMERIC_TYPES.has(dataType)) {
+    if (isBlankToken(text)) return null;
     const percent = text.endsWith('%');
-    const numericText = text.replace(/%$/, '').replace(/,/g, '').trim();
-    const parsed = Number(numericText);
-    if (!Number.isFinite(parsed)) return { error: `"${text}" is not a number` };
+    const parsed = parseNumber(percent ? text.slice(0, -1) : text);
+    if (parsed === null) return { error: `"${text}" is not a number` };
     const value = percent ? parsed / 100 : parsed;
     return {
       golden_value: String(value),
@@ -179,6 +269,7 @@ export function coerceAttributeValue(raw: string, dataType: string): CoercedValu
     };
   }
   if (dataType === 'DATE') {
+    if (isBlankToken(text)) return null;
     const iso = parseUsDate(text);
     if (!iso) return { error: `"${text}" is not a date` };
     return {

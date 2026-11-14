@@ -2,8 +2,6 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { graphqlMutation, CREATE_ENTITY_MUTATION, toRelationshipInputs } from '@/lib/graphql';
-import { EntityForm } from '@/components/forms/EntityForm';
 import { EntityHome } from '@/components/entities/EntityHome';
 import { useTemporalStore } from '@/lib/store';
 import { DomainKey } from '@/lib/mock-data';
@@ -11,32 +9,7 @@ import { DomainKey } from '@/lib/mock-data';
 export default function InvestorsPage() {
   const domain: DomainKey = 'investors';
   const [totalCount, setTotalCount] = useState(0);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [showCreateModal, setShowCreateModal] = useState(false);
   const asOfDate = useTemporalStore(state => state.asOfDate);
-
-  const handleCreate = async (formData: any) => {
-    const { data, error } = await graphqlMutation<{ createEntity: { entity: any; errors: any[] } }>(
-      CREATE_ENTITY_MUTATION,
-      {
-        input: {
-          entityCode: formData.code,
-          entityName: formData.name,
-          domainCode: 'INVESTOR',
-          templateCode: formData.template,
-          description: formData.description || '',
-          clientId: formData.clientId || null,
-          attributes: formData.attributes || {},
-          parentRelationships: toRelationshipInputs(formData.parentRelationships, 'parent'),
-          childRelationships: toRelationshipInputs(formData.childRelationships, 'child'),
-        },
-      }
-    );
-    if (data?.createEntity?.entity) {
-      setShowCreateModal(false);
-      setRefreshKey((k) => k + 1);
-    }
-  };
 
   return (
     <div className="view-fade">
@@ -57,7 +30,7 @@ export default function InvestorsPage() {
         <div className="page-actions">
           <button className="btn">Export</button>
           <button className="btn">Bulk Edit</button>
-          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>+ New Record</button>
+          <Link href="/investors/new" className="btn btn-primary">+ New Record</Link>
         </div>
       </div>
 
@@ -65,27 +38,9 @@ export default function InvestorsPage() {
         domainCode="INVESTOR"
         domainKey={domain}
         asOfDate={asOfDate}
-        refreshKey={refreshKey}
         emptyMessage="No investors found. Add investors via the generic entity API."
         onTotalChange={setTotalCount}
       />
-
-      {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px', maxHeight: '90vh', overflow: 'auto' }}>
-            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Create New Investor</h2>
-              <button onClick={() => setShowCreateModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer' }}>×</button>
-            </div>
-            <EntityForm
-              domain="investors"
-              mode="create"
-              onSubmit={handleCreate}
-              onCancel={() => setShowCreateModal(false)}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -31,11 +31,16 @@ export interface EntitySearchHit {
   matchedDomainName: string | null;
 }
 
-const NAME_CAP = 60;
+const PER_DOMAIN = 8;
 const CHILD_LINK_CAP = 80;
 const PARENT_LINK_CAP = 200;
 const NEIGHBOR_CAP = 80;
 const MIN_QUERY = 2;
+
+type SearchClient = {
+  from: (table: string) => any;
+  rpc: (fn: string, args?: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { message: string } | null }>;
+};
 
 /** LIKE pattern that matches the query as a substring. `%` and `_` in the query stay literal. */
 export function ilikeContainsPattern(query: string): string {
@@ -92,27 +97,41 @@ export function rankEntitySearch(input: {
     domainNames.set(code, domain.domainName || domain.domainCode);
   }
 
-  const entities = input.entities.filter((entity) => entity.isActive !== false && entity.id && entity.entityName);
-  const byId = new Map(entities.map((entity) => [entity.id, entity]));
+  const entities = dedupeEntities(
+    input.entities.filter((entity) => entity.isActive !== false && entity.id && entity.entityName),
+  );
+  const byId = new Map(entities.map((entity) => [entity.id.toLowerCase(), entity]));
   const nameHits = new Set(
-    entities.filter((entity) => contains(entity.entityName, query)).map((entity) => entity.id),
+    entities.filter((entity) => contains(entity.entityName, query)).map((entity) => entity.id.toLowerCase()),
   );
 
   const linksByEntity = new Map<string, SearchLinkRow[]>();
   for (const link of input.links) {
-    if (!byId.has(link.parentEntityId) || !byId.has(link.childEntityId)) continue;
-    pushLink(linksByEntity, link.parentEntityId, link);
-    pushLink(linksByEntity, link.childEntityId, link);
+    const parentId = link.parentEntityId.toLowerCase();
+    const childId = link.childEntityId.toLowerCase();
+    if (!byId.has(parentId) || !byId.has(childId)) continue;
+    const normalized = { parentEntityId: parentId, childEntityId: childId };
+    pushLink(linksByEntity, parentId, normalized);
+    pushLink(linksByEntity, childId, normalized);
   }
 
   const candidates = entities.filter((entity) => {
-    if (nameHits.has(entity.id)) return true;
-    return (linksByEntity.get(entity.id) || []).some((link) => nameHits.has(otherEnd(link, entity.id)));
+    const id = entity.id.toLowerCase();
+    if (nameHits.has(id)) return true;
+    return (linksByEntity.get(id) || []).some((link) => nameHits.has(otherEnd(link, id)));
   });
 
   const ranked = candidates.map((entity) => {
     const domainCode = entity.domainCode.toUpperCase();
-    const choice = chooseMatch(entity, query, nameHits, linksByEntity.get(entity.id) || [], byId, parentOf, domainNames);
+    const choice = chooseMatch(
+      entity,
+      query,
+      nameHits,
+      linksByEntity.get(entity.id.toLowerCase()) || [],
+      byId,
+      parentOf,
+      domainNames,
+    );
     return {
       hit: {
         id: entity.id,
@@ -125,43 +144,68 @@ export function rankEntitySearch(input: {
         matchedName: choice.matchedName,
         matchedDomainName: choice.matchedDomainName,
       } satisfies EntitySearchHit,
-      matchRank: choice.match === 'NAME' ? 0 : choice.match === 'PARENT' ? 1 : 2,
-      closeness: closeness(entity.entityName, query),
     };
   });
 
   ranked.sort((a, b) => (
     a.hit.depth - b.hit.depth
-    || a.matchRank - b.matchRank
-    || a.closeness - b.closeness
+    || a.hit.domainName.localeCompare(b.hit.domainName)
     || a.hit.entityName.localeCompare(b.hit.entityName)
     || a.hit.id.localeCompare(b.hit.id)
   ));
 
-  return balanceParentAndChild(ranked.map((row) => row.hit), limit);
+  return spreadAcrossDomains(ranked.map((row) => row.hit), limit);
 }
 
-/** Parents fill the list first, and a share of the list stays open for child domains. */
-function balanceParentAndChild(hits: EntitySearchHit[], limit: number): EntitySearchHit[] {
-  const parents = hits.filter((hit) => hit.depth === 0);
-  const children = hits.filter((hit) => hit.depth > 0);
-  if (parents.length === 0 || children.length === 0) return hits.slice(0, limit);
-  const childBudget = Math.min(children.length, Math.floor(limit / 3));
-  const parentBudget = Math.min(parents.length, limit - childBudget);
-  const childTake = Math.min(children.length, limit - parentBudget);
-  return [...parents.slice(0, parentBudget), ...children.slice(0, childTake)];
+/**
+ * Keep every entity type in the list. A single ordered slice would fill the
+ * limit with whichever type sorts first, and drop the rest.
+ */
+function spreadAcrossDomains(hits: EntitySearchHit[], limit: number): EntitySearchHit[] {
+  if (hits.length <= limit) return hits;
+  const groups: EntitySearchHit[][] = [];
+  let currentKey = '';
+  for (const hit of hits) {
+    const key = `${hit.depth}\0${hit.domainName}`;
+    if (key !== currentKey) {
+      groups.push([]);
+      currentKey = key;
+    }
+    groups[groups.length - 1].push(hit);
+  }
+  const chosen: EntitySearchHit[] = [];
+  const cursors = groups.map(() => 0);
+  let remaining = limit;
+  let progressed = true;
+  while (remaining > 0 && progressed) {
+    progressed = false;
+    for (let index = 0; index < groups.length && remaining > 0; index += 1) {
+      const cursor = cursors[index];
+      if (cursor >= groups[index].length) continue;
+      chosen.push(groups[index][cursor]);
+      cursors[index] = cursor + 1;
+      remaining -= 1;
+      progressed = true;
+    }
+  }
+  chosen.sort((a, b) => (
+    a.depth - b.depth
+    || a.domainName.localeCompare(b.domainName)
+    || a.entityName.localeCompare(b.entityName)
+    || a.id.localeCompare(b.id)
+  ));
+  return chosen;
 }
 
 /** Load a bounded candidate set and rank parent domains ahead of child domains. */
 export async function fetchEntitySearchHits(
-  supabase: { from: (table: string) => any },
+  supabase: SearchClient,
   query: string,
   limit?: number,
 ): Promise<EntitySearchHit[]> {
   const text = query.trim();
   if (text.length < MIN_QUERY) return [];
   const capped = clampLimit(limit);
-  const pattern = ilikeContainsPattern(text);
 
   const domainResult = await supabase
     .from('domain_types')
@@ -175,16 +219,7 @@ export async function fetchEntitySearchHits(
     parentDomainCode: row.parent_domain_code ? String(row.parent_domain_code) : null,
   })).filter((domain) => domain.domainCode);
 
-  const roots = new Set(rootDomainCodes(domains).map((code) => code.toUpperCase()));
-  const parentCodes = domains.filter((domain) => roots.has(domain.domainCode.toUpperCase())).map((domain) => domain.domainCode);
-  const childCodes = domains.filter((domain) => !roots.has(domain.domainCode.toUpperCase())).map((domain) => domain.domainCode);
-
-  const named = domains.length === 0
-    ? await loadNames(supabase, pattern, null)
-    : dedupeEntities([
-      ...await loadNames(supabase, pattern, parentCodes),
-      ...await loadNames(supabase, pattern, childCodes),
-    ]);
+  const named = await loadNamesByDomain(supabase, text);
 
   const links = named.length ? await loadLinks(supabase, named.map((entity) => entity.id)) : [];
   const neighborIds = preferParentNeighbors(named, links);
@@ -199,24 +234,14 @@ export async function fetchEntitySearchHits(
   });
 }
 
-async function loadNames(
-  supabase: { from: (table: string) => any },
-  pattern: string,
-  domainCodes: string[] | null,
-): Promise<SearchEntityRow[]> {
-  if (domainCodes && domainCodes.length === 0) return [];
-  let request = supabase
-    .from('master_entities')
-    .select('id, entity_code, entity_name, domain_code, is_active')
-    .eq('is_active', true)
-    .ilike('entity_name', pattern);
-  if (domainCodes) request = request.in('domain_code', domainCodes);
-  const result = await request.order('entity_name').limit(NAME_CAP);
+/** Top alphabetical name matches from each domain, so one type cannot crowd out the others. */
+async function loadNamesByDomain(supabase: SearchClient, query: string): Promise<SearchEntityRow[]> {
+  const result = await supabase.rpc('search_entity_names', { p_query: query, p_per_domain: PER_DOMAIN });
   if (result.error) throw new Error(result.error.message);
-  return ((result.data || []) as Record<string, unknown>[]).map(mapEntity);
+  return dedupeEntities(((result.data || []) as Record<string, unknown>[]).map(mapEntity));
 }
 
-async function loadByIds(supabase: { from: (table: string) => any }, ids: string[]): Promise<SearchEntityRow[]> {
+async function loadByIds(supabase: SearchClient, ids: string[]): Promise<SearchEntityRow[]> {
   const result = await supabase
     .from('master_entities')
     .select('id, entity_code, entity_name, domain_code, is_active')
@@ -229,7 +254,7 @@ async function loadByIds(supabase: { from: (table: string) => any }, ids: string
     .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 }
 
-async function loadLinks(supabase: { from: (table: string) => any }, nameIds: string[]): Promise<SearchLinkRow[]> {
+async function loadLinks(supabase: SearchClient, nameIds: string[]): Promise<SearchLinkRow[]> {
   const [asParent, asChild] = await Promise.all([
     supabase
       .from('entity_relationships')
@@ -308,19 +333,19 @@ function chooseMatch(
   parentOf: ReadonlyMap<string, string | null>,
   domainNames: ReadonlyMap<string, string>,
 ): MatchChoice {
-  if (nameHits.has(entity.id)) {
+  if (nameHits.has(entity.id.toLowerCase())) {
     return { match: 'NAME', matchedName: null, matchedDomainName: null, viaDepth: 0 };
   }
 
   let best: MatchChoice | null = null;
   for (const link of links) {
-    const otherId = otherEnd(link, entity.id);
+    const otherId = otherEnd(link, entity.id.toLowerCase());
     if (!nameHits.has(otherId)) continue;
     const other = byId.get(otherId);
     if (!other || !contains(other.entityName, query)) continue;
     const otherDomain = other.domainCode.toUpperCase();
     const entityDomain = entity.domainCode.toUpperCase();
-    const storedAsParent = link.parentEntityId === other.id && link.childEntityId === entity.id;
+    const storedAsParent = link.parentEntityId === other.id.toLowerCase() && link.childEntityId === entity.id.toLowerCase();
     const ancestor = isAncestor(otherDomain, entityDomain, parentOf);
     const choice: MatchChoice = {
       match: storedAsParent || ancestor ? 'PARENT' : 'RELATED',
@@ -366,29 +391,22 @@ function contains(name: string, query: string): boolean {
   return normalize(name).includes(query);
 }
 
-function closeness(name: string, query: string): number {
-  const value = normalize(name);
-  if (value === query) return 0;
-  if (value.startsWith(query)) return 1;
-  if (value.includes(query)) return 2;
-  return 3;
-}
-
 function normalize(value: string): string {
   return value.trim().toLowerCase();
 }
 
 function clampLimit(limit: number | undefined): number {
   if (!limit || !Number.isFinite(limit)) return 20;
-  return Math.min(Math.max(Math.trunc(limit), 1), 30);
+  return Math.min(Math.max(Math.trunc(limit), 1), 48);
 }
 
 function dedupeEntities(entities: readonly SearchEntityRow[]): SearchEntityRow[] {
   const seen = new Set<string>();
   const rows: SearchEntityRow[] = [];
   for (const entity of entities) {
-    if (!entity.id || seen.has(entity.id)) continue;
-    seen.add(entity.id);
+    const id = entity.id.toLowerCase();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
     rows.push(entity);
   }
   return rows;

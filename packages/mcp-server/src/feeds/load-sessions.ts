@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { assertLocalSupabase, executeParsedFeed, localSupabase } from './feed-loader';
+import { preferOwnMap, visibleToClient } from './load-maps';
 import type { IntakeTable } from './intake-file';
 import { intakeFile } from './intake-file';
 import {
@@ -52,17 +53,18 @@ function useClient(client?: SupabaseClient): SupabaseClient {
   return db;
 }
 
-async function specialistCatalog(client: SupabaseClient): Promise<SpecialistCatalog> {
+async function specialistCatalog(client: SupabaseClient, clientId: string): Promise<SpecialistCatalog> {
   const [attributes, domains, sources, relationships, maps] = await Promise.all([
-    client.schema('metadata_register').from('attribute_register').select('attribute_code, attribute_name, data_type, domain_code, reference_list_code').order('attribute_name'),
-    client.schema('metadata_register').from('domain_types').select('domain_code, domain_name').eq('is_active', true).order('domain_code'),
+    visibleToClient(client.schema('metadata_register').from('attribute_register').select('attribute_code, attribute_name, data_type, domain_code, reference_list_code'), clientId).order('attribute_name'),
+    visibleToClient(client.schema('metadata_register').from('domain_types').select('domain_code, domain_name').eq('is_active', true), clientId).order('domain_code'),
     client.schema('entity_instances').from('source_registry').select('source_code, source_name').eq('is_active', true).order('source_name'),
-    client.schema('metadata_register').from('relationship_types').select('relationship_code, relationship_name, parent_domain_code, child_domain_code').eq('is_active', true),
-    client.schema('entity_instances').from('feed_maps').select('map_code, column_mappings').eq('is_active', true),
+    visibleToClient(client.schema('metadata_register').from('relationship_types').select('relationship_code, relationship_name, parent_domain_code, child_domain_code').eq('is_active', true), clientId),
+    visibleToClient(client.schema('entity_instances').from('feed_maps').select('map_code, column_mappings, client_id').eq('is_active', true), clientId),
   ]);
   const failure = attributes.error || domains.error || sources.error || relationships.error || maps.error;
   if (failure) throw new Error(failure.message);
-  const stored = (maps.data || [])
+  const ownedFirst = [...(maps.data || [])].sort((a: any, b: any) => Number(b.client_id === clientId) - Number(a.client_id === clientId));
+  const stored = ownedFirst
     .map((row: any) => row.column_mappings as FeedMap)
     .filter((map) => map && map.mapCode && Array.isArray(map.domains));
   return {
@@ -118,11 +120,11 @@ function toSummary(row: any): LoadSessionSummary {
   };
 }
 
-async function readingFor(row: any, client: SupabaseClient): Promise<SpecialistReading> {
+async function readingFor(row: any, clientId: string, client: SupabaseClient): Promise<SpecialistReading> {
   const tables = storedTables(row.tables);
   const answers = (row.answers && typeof row.answers === 'object') ? row.answers : {};
   const table = activeTable(tables, answers.table);
-  const catalog = await specialistCatalog(client);
+  const catalog = await specialistCatalog(client, clientId);
   return readSource({
     fileName: row.file_name,
     headers: table?.headers || [],
@@ -140,7 +142,7 @@ async function readingFor(row: any, client: SupabaseClient): Promise<SpecialistR
   });
 }
 
-async function persist(client: SupabaseClient, id: string, row: any, reading: SpecialistReading, answers: Record<string, string>, dismissed: string[]) {
+async function persist(client: SupabaseClient, clientId: string, id: string, row: any, reading: SpecialistReading, answers: Record<string, string>, dismissed: string[]) {
   const table = activeTable(storedTables(row.tables), answers.table);
   const updated = await client.schema('entity_instances').from('load_sessions').update({
     status: statusFor(reading, row.extraction_method),
@@ -158,13 +160,13 @@ async function persist(client: SupabaseClient, id: string, row: any, reading: Sp
     source_code: reading.sourceCode,
     as_of_date: reading.asOfDate,
     updated_at: new Date().toISOString(),
-  }).eq('id', id);
+  }).eq('id', id).eq('client_id', clientId);
   if (updated.error) throw new Error(updated.error.message);
 }
 
-export async function listSourceMaps(client: SupabaseClient = useClient()): Promise<SourceMapSummary[]> {
+export async function listSourceMaps(clientId: string, client: SupabaseClient = useClient()): Promise<SourceMapSummary[]> {
   assertLocalSupabase(client);
-  const catalog = await specialistCatalog(client);
+  const catalog = await specialistCatalog(client, clientId);
   return catalog.maps.map((map) => ({
     mapCode: map.mapCode,
     name: map.name,
@@ -174,28 +176,29 @@ export async function listSourceMaps(client: SupabaseClient = useClient()): Prom
   }));
 }
 
-export async function listLoadSessions(client: SupabaseClient = useClient()): Promise<LoadSessionSummary[]> {
+export async function listLoadSessions(clientId: string, client: SupabaseClient = useClient()): Promise<LoadSessionSummary[]> {
   assertLocalSupabase(client);
   const rows = await client
     .schema('entity_instances')
     .from('load_sessions')
     .select('id, file_name, row_count, status, extraction_method, extraction_note, created_at, as_of_date, source_code, saved_map_code, error_message')
+    .eq('client_id', clientId)
     .order('created_at', { ascending: false })
     .limit(40);
   if (rows.error) throw new Error(rows.error.message);
   return (rows.data || []).map(toSummary);
 }
 
-export async function getLoadSession(id: string, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
+export async function getLoadSession(id: string, clientId: string, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
   assertLocalSupabase(client);
-  const row = await client.schema('entity_instances').from('load_sessions').select('*').eq('id', id).single();
+  const row = await client.schema('entity_instances').from('load_sessions').select('*').eq('id', id).eq('client_id', clientId).single();
   if (row.error || !row.data) throw new Error(row.error?.message || 'Load session not found');
-  const reading = await readingFor(row.data, client);
+  const reading = await readingFor(row.data, clientId, client);
   const dismissed = Array.isArray(row.data.dismissed_recommendations) ? row.data.dismissed_recommendations : [];
   return { ...toSummary(row.data), reading, result: row.data.result, dismissedRecommendationIds: dismissed };
 }
 
-export async function startLoadSession(fileName: string, mediaType: string, bytes: Buffer, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
+export async function startLoadSession(fileName: string, mediaType: string, bytes: Buffer, clientId: string, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
   assertLocalSupabase(client);
   const intake = await intakeFile(fileName, mediaType, bytes);
   const tables: StoredTable[] = intake.tables.map((table: IntakeTable) => ({
@@ -205,6 +208,7 @@ export async function startLoadSession(fileName: string, mediaType: string, byte
     rows: table.table.rows,
   }));
   const inserted = await client.schema('entity_instances').from('load_sessions').insert({
+    client_id: clientId,
     file_name: fileName,
     media_type: mediaType,
     source_base64: bytes.toString('base64'),
@@ -220,11 +224,11 @@ export async function startLoadSession(fileName: string, mediaType: string, byte
     dismissed_recommendations: [],
   }).select('id').single();
   if (inserted.error || !inserted.data) throw new Error(inserted.error?.message || 'The file could not be stored');
-  const detail = await getLoadSession(inserted.data.id, client);
-  await persist(client, detail.id, {
+  const detail = await getLoadSession(inserted.data.id, clientId, client);
+  await persist(client, clientId, detail.id, {
     ...{ tables, extraction_method: intake.method },
   }, detail.reading, {}, []);
-  return getLoadSession(detail.id, client);
+  return getLoadSession(detail.id, clientId, client);
 }
 
 export async function answerLoadSession(
@@ -232,23 +236,24 @@ export async function answerLoadSession(
   answers: Record<string, string>,
   acceptedRecommendationIds: string[] | undefined,
   dismissedRecommendationIds: string[] | undefined,
+  clientId: string,
   client: SupabaseClient = useClient()
 ): Promise<LoadSessionDetail> {
   assertLocalSupabase(client);
-  const row = await client.schema('entity_instances').from('load_sessions').select('*').eq('id', id).single();
+  const row = await client.schema('entity_instances').from('load_sessions').select('*').eq('id', id).eq('client_id', clientId).single();
   if (row.error || !row.data) throw new Error(row.error?.message || 'Load session not found');
   const mergedAnswers = { ...(row.data.answers || {}), ...(answers || {}) };
   const accepted = acceptedRecommendationIds ?? (Array.isArray(row.data.accepted_recommendations) ? row.data.accepted_recommendations : []);
   const dismissed = dismissedRecommendationIds ?? (Array.isArray(row.data.dismissed_recommendations) ? row.data.dismissed_recommendations : []);
-  const reading = await readingFor({ ...row.data, answers: mergedAnswers, accepted_recommendations: accepted, dismissed_recommendations: dismissed }, client);
-  await persist(client, id, row.data, reading, mergedAnswers, dismissed);
-  return getLoadSession(id, client);
+  const reading = await readingFor({ ...row.data, answers: mergedAnswers, accepted_recommendations: accepted, dismissed_recommendations: dismissed }, clientId, client);
+  await persist(client, clientId, id, row.data, reading, mergedAnswers, dismissed);
+  return getLoadSession(id, clientId, client);
 }
 
 /** Re-read the stored file and run the current mapping against it. Previous answers are kept. */
-export async function refreshLoadSession(id: string, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
+export async function refreshLoadSession(id: string, clientId: string, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
   assertLocalSupabase(client);
-  const row = await client.schema('entity_instances').from('load_sessions').select('*').eq('id', id).single();
+  const row = await client.schema('entity_instances').from('load_sessions').select('*').eq('id', id).eq('client_id', clientId).single();
   if (row.error || !row.data) throw new Error(row.error?.message || 'Load session not found');
   const current = row.data;
   let tables = storedTables(current.tables);
@@ -283,22 +288,22 @@ export async function refreshLoadSession(id: string, client: SupabaseClient = us
     accepted_recommendations: accepted,
     dismissed_recommendations: dismissed,
   };
-  const reading = await readingFor(nextRow, client);
+  const reading = await readingFor(nextRow, clientId, client);
   const stored = await client.schema('entity_instances').from('load_sessions').update({
     tables,
     extraction_method: method,
     extraction_note: note,
   }).eq('id', id);
   if (stored.error) throw new Error(stored.error.message);
-  await persist(client, id, nextRow, reading, answers, dismissed);
+  await persist(client, clientId, id, nextRow, reading, answers, dismissed);
   if (current.status === 'LOADED' || current.status === 'FAILED') {
     const kept = await client.schema('entity_instances').from('load_sessions').update({ status: current.status }).eq('id', id);
     if (kept.error) throw new Error(kept.error.message);
   }
-  return getLoadSession(id, client);
+  return getLoadSession(id, clientId, client);
 }
 
-async function ensureSource(client: SupabaseClient, code: string, name: string): Promise<string> {
+export async function ensureSource(client: SupabaseClient, code: string, name: string): Promise<string> {
   const existing = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', code).maybeSingle();
   if (existing.error) throw new Error(existing.error.message);
   if (existing.data?.id) return existing.data.id;
@@ -315,22 +320,35 @@ async function ensureSource(client: SupabaseClient, code: string, name: string):
   return inserted.data.id;
 }
 
-async function ensureDomain(client: SupabaseClient, code: string, name: string) {
-  const existing = await client.schema('metadata_register').from('domain_types').select('domain_code').eq('domain_code', code).maybeSingle();
+/**
+ * Schema codes are unique across clients. A code another client already owns
+ * cannot be reused or attached to, so the load stops instead of writing into it.
+ */
+function assertOwnOrShared(row: { client_id?: string | null } | null, clientId: string, kind: string, code: string) {
+  if (row?.client_id && row.client_id !== clientId) {
+    throw new Error(`The ${kind} code ${code} is already in use. Choose a different name.`);
+  }
+}
+
+async function ensureDomain(client: SupabaseClient, clientId: string, code: string, name: string) {
+  const existing = await client.schema('metadata_register').from('domain_types').select('domain_code, client_id').eq('domain_code', code).maybeSingle();
   if (existing.error) throw new Error(existing.error.message);
+  assertOwnOrShared(existing.data, clientId, 'record type', code);
   if (existing.data) return;
   const inserted = await client.schema('metadata_register').from('domain_types').insert({
     domain_code: code,
     domain_name: name,
     description: `Added while loading source data that did not fit an existing entity.`,
     is_active: true,
+    client_id: clientId,
   });
   if (inserted.error) throw new Error(inserted.error.message);
 }
 
-async function ensureTemplate(client: SupabaseClient, templateCode: string, domainCode: string, domainName: string): Promise<string | null> {
-  const existing = await client.schema('metadata_register').from('domain_templates').select('id').eq('template_code', templateCode).maybeSingle();
+async function ensureTemplate(client: SupabaseClient, clientId: string, templateCode: string, domainCode: string, domainName: string): Promise<string | null> {
+  const existing = await client.schema('metadata_register').from('domain_templates').select('id, client_id').eq('template_code', templateCode).maybeSingle();
   if (existing.error) throw new Error(existing.error.message);
+  assertOwnOrShared(existing.data, clientId, 'template', templateCode);
   if (existing.data?.id) return existing.data.id;
   const inserted = await client.schema('metadata_register').from('domain_templates').insert({
     template_code: templateCode,
@@ -338,17 +356,19 @@ async function ensureTemplate(client: SupabaseClient, templateCode: string, doma
     template_name: `${domainName} standard`,
     description: `Standard template for ${domainName}.`,
     is_active: true,
+    client_id: clientId,
   }).select('id').single();
   if (inserted.error || !inserted.data) throw new Error(inserted.error?.message || `Template ${templateCode} could not be created`);
   return inserted.data.id;
 }
 
-async function ensureAttribute(client: SupabaseClient, recommendation: SchemaRecommendation): Promise<string | null> {
+async function ensureAttribute(client: SupabaseClient, clientId: string, recommendation: SchemaRecommendation): Promise<string | null> {
   const code = recommendation.payload.attributeCode;
   const domainCode = recommendation.payload.domainCode;
   if (!code || !domainCode) return null;
-  const existing = await client.schema('metadata_register').from('attribute_register').select('id').eq('attribute_code', code).maybeSingle();
+  const existing = await client.schema('metadata_register').from('attribute_register').select('id, client_id').eq('attribute_code', code).maybeSingle();
   if (existing.error) throw new Error(existing.error.message);
+  assertOwnOrShared(existing.data, clientId, 'field', code);
   if (existing.data?.id) return existing.data.id;
   const inserted = await client.schema('metadata_register').from('attribute_register').insert({
     attribute_code: code,
@@ -358,6 +378,7 @@ async function ensureAttribute(client: SupabaseClient, recommendation: SchemaRec
     description: recommendation.rationale,
     is_time_varying: true,
     time_dimension: 'VALID_TIME',
+    client_id: clientId,
   }).select('id').single();
   if (inserted.error || !inserted.data) throw new Error(inserted.error?.message || `Attribute ${code} could not be created`);
   return inserted.data.id;
@@ -377,7 +398,7 @@ async function assignAttribute(client: SupabaseClient, templateId: string | null
   if (inserted.error) throw new Error(inserted.error.message);
 }
 
-async function materialize(client: SupabaseClient, recommendations: SchemaRecommendation[], acceptedIds: string[]) {
+export async function materialize(client: SupabaseClient, clientId: string, recommendations: SchemaRecommendation[], acceptedIds: string[]) {
   const accepted = new Set(acceptedIds);
   const chosen = recommendations.filter((item) => accepted.has(item.id));
   const templates = new Map<string, string | null>();
@@ -385,12 +406,12 @@ async function materialize(client: SupabaseClient, recommendations: SchemaRecomm
     const code = item.payload.domainCode;
     const name = item.payload.domainName || code;
     if (!code || !name) continue;
-    await ensureDomain(client, code, name);
-    const templateId = await ensureTemplate(client, item.payload.templateCode || `${code}_STANDARD`, code, name);
+    await ensureDomain(client, clientId, code, name);
+    const templateId = await ensureTemplate(client, clientId, item.payload.templateCode || `${code}_STANDARD`, code, name);
     templates.set(code, templateId);
     for (const column of item.payload.columns || []) {
       if (column.role !== 'attribute' || !column.attributeCode) continue;
-      const attributeId = await ensureAttribute(client, {
+      const attributeId = await ensureAttribute(client, clientId, {
         ...item,
         payload: {
           ...item.payload,
@@ -407,12 +428,13 @@ async function materialize(client: SupabaseClient, recommendations: SchemaRecomm
     const domainCode = item.payload.domainCode;
     if (!domainCode) continue;
     if (!templates.has(domainCode)) {
-      const domain = await client.schema('metadata_register').from('domain_types').select('domain_name').eq('domain_code', domainCode).maybeSingle();
+      const domain = await client.schema('metadata_register').from('domain_types').select('domain_name, client_id').eq('domain_code', domainCode).maybeSingle();
       if (domain.error) throw new Error(domain.error.message);
       if (!domain.data) continue;
-      templates.set(domainCode, await ensureTemplate(client, `${domainCode}_STANDARD`, domainCode, domain.data.domain_name));
+      assertOwnOrShared(domain.data, clientId, 'record type', domainCode);
+      templates.set(domainCode, await ensureTemplate(client, clientId, `${domainCode}_STANDARD`, domainCode, domain.data.domain_name));
     }
-    const attributeId = await ensureAttribute(client, item);
+    const attributeId = await ensureAttribute(client, clientId, item);
     await assignAttribute(client, templates.get(domainCode) || null, attributeId, item.payload.attributeName || item.payload.attributeCode || '');
   }
   for (const item of chosen.filter((recommendation) => recommendation.kind === 'relationship')) {
@@ -420,8 +442,9 @@ async function materialize(client: SupabaseClient, recommendations: SchemaRecomm
     const parent = item.payload.parentDomainCode;
     const child = item.payload.childDomainCode;
     if (!code || !parent || !child) continue;
-    const existing = await client.schema('metadata_register').from('relationship_types').select('id').eq('relationship_code', code).maybeSingle();
+    const existing = await client.schema('metadata_register').from('relationship_types').select('id, client_id').eq('relationship_code', code).maybeSingle();
     if (existing.error) throw new Error(existing.error.message);
+    assertOwnOrShared(existing.data, clientId, 'relationship', code);
     if (existing.data) continue;
     const inserted = await client.schema('metadata_register').from('relationship_types').insert({
       relationship_code: code,
@@ -432,13 +455,15 @@ async function materialize(client: SupabaseClient, recommendations: SchemaRecomm
       is_active: true,
       is_required: false,
       cardinality: 'MANY_TO_ONE',
+      client_id: clientId,
     });
     if (inserted.error) throw new Error(inserted.error.message);
   }
 }
 
-async function remember(client: SupabaseClient, map: FeedMap, sourceId: string) {
+async function remember(client: SupabaseClient, clientId: string, map: FeedMap, sourceId: string) {
   const payload = {
+    client_id: clientId,
     map_code: map.mapCode,
     source_id: sourceId,
     map_name: map.name,
@@ -447,7 +472,7 @@ async function remember(client: SupabaseClient, map: FeedMap, sourceId: string) 
     is_active: true,
     updated_at: new Date().toISOString(),
   };
-  const existing = await client.schema('entity_instances').from('feed_maps').select('id').eq('map_code', map.mapCode).maybeSingle();
+  const existing = await client.schema('entity_instances').from('feed_maps').select('id').eq('client_id', clientId).eq('map_code', map.mapCode).maybeSingle();
   if (existing.error) throw new Error(existing.error.message);
   const write = existing.data
     ? await client.schema('entity_instances').from('feed_maps').update(payload).eq('id', existing.data.id)
@@ -455,27 +480,27 @@ async function remember(client: SupabaseClient, map: FeedMap, sourceId: string) 
   if (write.error) throw new Error(write.error.message);
 }
 
-export async function saveSourceMap(id: string, name: string | undefined, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
+export async function saveSourceMap(id: string, name: string | undefined, clientId: string, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
   assertLocalSupabase(client);
-  const detail = await getLoadSession(id, client);
+  const detail = await getLoadSession(id, clientId, client);
   if (!detail.reading.map || !detail.reading.sourceCode) throw new Error(detail.reading.blockedReasons[0] || 'The map is not ready to save');
   const map = { ...detail.reading.map, name: name?.trim() || detail.reading.map.name };
   const sourceId = await ensureSource(client, map.sourceCode, detail.reading.sourceCode);
-  await remember(client, map, sourceId);
+  await remember(client, clientId, map, sourceId);
   const saved = await client.schema('entity_instances').from('load_sessions').update({
     saved_map_code: map.mapCode,
     map_draft: map,
     updated_at: new Date().toISOString(),
-  }).eq('id', id);
+  }).eq('id', id).eq('client_id', clientId);
   if (saved.error) throw new Error(saved.error.message);
-  return getLoadSession(id, client);
+  return getLoadSession(id, clientId, client);
 }
 
-export async function runLoadSession(id: string, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
+export async function runLoadSession(id: string, clientId: string, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
   assertLocalSupabase(client);
-  const row = await client.schema('entity_instances').from('load_sessions').select('*').eq('id', id).single();
+  const row = await client.schema('entity_instances').from('load_sessions').select('*').eq('id', id).eq('client_id', clientId).single();
   if (row.error || !row.data) throw new Error(row.error?.message || 'Load session not found');
-  const reading = await readingFor(row.data, client);
+  const reading = await readingFor(row.data, clientId, client);
   if (!reading.map || !reading.asOfDate || reading.blockedReasons.length > 0) {
     throw new Error(reading.blockedReasons[0] || 'This file is not ready to load');
   }
@@ -483,16 +508,16 @@ export async function runLoadSession(id: string, client: SupabaseClient = useCli
     status: 'LOADING',
     error_message: null,
     updated_at: new Date().toISOString(),
-  }).eq('id', id);
+  }).eq('id', id).eq('client_id', clientId);
   if (marked.error) throw new Error(marked.error.message);
   try {
     await ensureSource(client, reading.map.sourceCode, reading.sourceCode || reading.map.sourceCode);
-    await materialize(client, reading.recommendations, reading.acceptedRecommendationIds);
+    await materialize(client, clientId, reading.recommendations, reading.acceptedRecommendationIds);
     const table = activeTable(storedTables(row.data.tables), (row.data.answers || {}).table);
     const result = await executeParsedFeed(reading.map, row.data.file_name, {
       headers: table?.headers || [],
       rows: table?.rows || [],
-    }, reading.asOfDate, client);
+    }, reading.asOfDate, client, clientId);
     const failed = result.errors.length > 0 || result.domains.some((domain) => domain.failed > 0);
     const saved = await client.schema('entity_instances').from('load_sessions').update({
       status: failed ? 'FAILED' : 'LOADED',
@@ -500,15 +525,15 @@ export async function runLoadSession(id: string, client: SupabaseClient = useCli
       saved_map_code: reading.map.mapCode,
       error_message: failed ? result.errors.slice(0, 3).join(' ') : null,
       updated_at: new Date().toISOString(),
-    }).eq('id', id);
+    }).eq('id', id).eq('client_id', clientId);
     if (saved.error) throw new Error(saved.error.message);
-    return getLoadSession(id, client);
+    return getLoadSession(id, clientId, client);
   } catch (error: any) {
     await client.schema('entity_instances').from('load_sessions').update({
       status: 'FAILED',
       error_message: error?.message || 'Load failed',
       updated_at: new Date().toISOString(),
-    }).eq('id', id);
+    }).eq('id', id).eq('client_id', clientId);
     throw error;
   }
 }

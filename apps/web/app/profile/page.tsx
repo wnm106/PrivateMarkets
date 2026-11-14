@@ -93,22 +93,22 @@ export default function ProfilePage() {
   };
 
   const input =
-    'w-full px-3 py-2 bg-surface border border-line rounded text-sm text-ink';
-  const btn = 'px-4 py-2 rounded text-sm font-medium bg-[var(--accent-2)] text-white disabled:opacity-50 disabled:cursor-not-allowed';
+    'w-full px-3 py-2 bg-surface border border-line rounded text-[13px] text-ink';
+  const btn = 'px-4 py-2 rounded text-[13px] font-medium bg-[var(--accent-2)] text-white disabled:opacity-50 disabled:cursor-not-allowed';
 
   if (!me) return <div className="p-8 text-ink-3">Loading…</div>;
 
   return (
     <div className="max-w-xl mx-auto space-y-8 text-ink">
-      <h1 className="text-xl font-semibold">Manage profile</h1>
+      <div className="page-title">Manage profile</div>
       {msg && (
-        <div className={msg.kind === 'ok' ? 'text-green-600 text-sm' : 'text-red-600 text-sm'}>{msg.text}</div>
+        <div className={msg.kind === 'ok' ? 'text-green-600 text-[13px]' : 'text-red-600 text-[13px]'}>{msg.text}</div>
       )}
 
       <section className="space-y-3">
-        <label className="block text-xs text-ink-3">Email</label>
+        <label className="block text-[11px] text-ink-3">Email</label>
         <input className={input} value={me.email ?? ''} disabled />
-        <label className="block text-xs text-ink-3">Display name</label>
+        <label className="block text-[11px] text-ink-3">Display name</label>
         <input className={input} value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
         <button className={btn} onClick={saveName} disabled={saving}>
           {saving ? 'Saving…' : 'Save'}
@@ -116,20 +116,20 @@ export default function ProfilePage() {
       </section>
 
       <section className="space-y-2">
-        <div className="text-xs text-ink-3">Organizations</div>
+        <div className="text-[11px] text-ink-3">Organizations</div>
         {me.clients.length === 0 ? (
-          <div className="text-sm text-ink-2">None</div>
+          <div className="text-[13px] text-ink-2">None</div>
         ) : (
-          <ul className="text-sm text-ink-2 list-disc pl-5">
+          <ul className="text-[13px] text-ink-2 list-disc pl-5">
             {me.clients.map((c) => <li key={c.id}>{c.clientName}</li>)}
           </ul>
         )}
-        {me.isTenantAdmin && <div className="text-xs text-accent">tapestr.ai tenant admin</div>}
+        {me.isTenantAdmin && <div className="text-[11px] text-accent">tapestr.ai tenant admin</div>}
       </section>
 
       {provider === 'email' && (
         <section className="space-y-3">
-          <label className="block text-xs text-ink-3">New password</label>
+          <label className="block text-[11px] text-ink-3">New password</label>
           <input
             className={input}
             type="password"
@@ -143,7 +143,7 @@ export default function ProfilePage() {
         </section>
       )}
 
-      <button className="px-4 py-2 rounded text-sm border border-line text-ink-2 hover:bg-bg-alt transition-colors" onClick={signOutAndRedirect}>
+      <button className="px-4 py-2 rounded text-[13px] border border-line text-ink-2 hover:bg-bg-alt transition-colors" onClick={signOutAndRedirect}>
         Sign out
       </button>
     </div>

@@ -151,6 +151,9 @@ function applyFunction(code: string, args: ExprValue[]): ExprValue {
     const op = fn === 'ADD' ? 'add' : fn === 'SUB' ? 'sub' : fn === 'MUL' ? 'mul' : 'div';
     return applyNumericOp(op, asNumber(args[0], fn), asNumber(args[1], fn));
   }
+  if (fn === 'PRIOR' || fn === 'TRAIL' || fn === 'CUMSUM' || fn === 'WHEN_PRIOR') {
+    throw new Error(`${fn} is evaluated across periods, not on one row`);
+  }
   if (DATE_FN_TOKENS.has(fn)) {
     expectCount(fn, args.length, 1);
     const text = asText(args[0]);
@@ -180,6 +183,12 @@ export function evalExpression(expr: Expression, vars: Record<string, ExprValue>
     );
   }
   const fn = expr.fn.toUpperCase();
+  // Read functions choose where and when a field is read. The engine applies them;
+  // an in-memory preview only has one reading per field, so it passes the field through.
+  if (fn === 'SOURCE' || fn === 'AS_OF' || fn === 'KNOWN_AT') {
+    if (expr.args.length < 1) throw new Error(`${fn} expects a field to read`);
+    return evalExpression(expr.args[0], vars);
+  }
   if (fn === 'COALESCE') {
     if (expr.args.length < 1) throw new Error('COALESCE expects 1 or more arguments');
     for (const arg of expr.args) {
@@ -407,6 +416,66 @@ export const EXPRESSION_FUNCTIONS: ExpressionFunctionDef[] = [
     example: { op: 'neg', args: [{ ref: 'AMOUNT' }] },
     callable: true,
     sortOrder: 180,
+  },
+  {
+    id: 'ROW:PRIOR',
+    code: 'PRIOR',
+    name: 'Prior period',
+    category: 'ROW',
+    returnType: 'NUMBER',
+    description: 'The attribute on the previous period of this record. The first period stays blank. PRIOR(STATEMENT_CASH) is last quarter\'s cash.',
+    signature: 'PRIOR(attribute)',
+    example: { fn: 'PRIOR', args: [{ ref: 'STATEMENT_CASH' }] },
+    callable: true,
+    sortOrder: 172,
+  },
+  {
+    id: 'ROW:TRAIL',
+    code: 'TRAIL',
+    name: 'Trailing sum',
+    category: 'ROW',
+    returnType: 'NUMBER',
+    description: 'Sums the attribute over this period and the periods before it. The result stays blank until that many periods exist. TRAIL(STATEMENT_REVENUE, 4) is four quarters of revenue.',
+    signature: 'TRAIL(attribute, periods)',
+    example: { fn: 'TRAIL', args: [{ ref: 'STATEMENT_REVENUE' }, { const: 4 }] },
+    callable: true,
+    sortOrder: 174,
+  },
+  {
+    id: 'ROW:CUMSUM',
+    code: 'CUMSUM',
+    name: 'Cumulative sum',
+    category: 'ROW',
+    returnType: 'NUMBER',
+    description: 'Sums the attribute from the first period through this one. A blank period is skipped. CUMSUM(STATEMENT_NET_INCOME) is retained earnings.',
+    signature: 'CUMSUM(attribute)',
+    example: { fn: 'CUMSUM', args: [{ ref: 'STATEMENT_NET_INCOME' }] },
+    callable: true,
+    sortOrder: 176,
+  },
+  {
+    id: 'ROW:WHEN_PRIOR',
+    code: 'WHEN_PRIOR',
+    name: 'When a prior period exists',
+    category: 'ROW',
+    returnType: 'NUMBER',
+    description: 'The attribute on this period once a prior period exists. The first period stays blank. WHEN_PRIOR(STATEMENT_DA) keeps depreciation off the opening cash-flow column.',
+    signature: 'WHEN_PRIOR(attribute)',
+    example: { fn: 'WHEN_PRIOR', args: [{ ref: 'STATEMENT_DA' }] },
+    callable: true,
+    sortOrder: 178,
+  },
+  {
+    id: 'ROW:LATEST',
+    code: 'LATEST',
+    name: 'Latest related value',
+    category: 'ROW',
+    returnType: 'VALUE',
+    description: 'Reads an attribute on the latest related record. The record is the one whose period date is the latest on or before the as-of date, using the version known at the knowledge date. LATEST(PERIOD_EBITDA, PERIOD_LABEL, "LTM") keeps only records whose label is LTM, then takes the latest. The field\'s relationship path says which records are tied to this one.',
+    signature: 'LATEST(attribute)',
+    example: { fn: 'LATEST', args: [{ ref: 'PERIOD_EBITDA' }, { ref: 'PERIOD_LABEL' }, { const: 'LTM' }] },
+    callable: true,
+    sortOrder: 181,
   },
   {
     id: 'ROW:CURRENT_DATE',

@@ -29,6 +29,12 @@ type Narrative {
   dataQueries: JSON!
   parameters: JSON!
   outputBlocks: JSON!
+  sections: JSON!
+  persona: String
+  audience: String
+  rules: JSON!
+  exposedDomains: [String!]!
+  allowExternalSearch: Boolean!
   model: String
   isActive: Boolean!
   metadata: JSON
@@ -47,6 +53,33 @@ type NarrativeRun {
   model: String
   createdAt: DateTime!
   createdBy: ID
+  asOfDate: String
+  sources: JSON!
+  verification: JSON!
+  plan: JSON!
+  origin: String!
+  createdByLabel: String
+  publishedAt: DateTime
+  publishedBy: ID
+  publishedByLabel: String
+  publishedLabel: String
+  sections: [NarrativeRunSection!]!
+}
+
+type NarrativeRunSection {
+  id: ID!
+  runId: ID!
+  sectionKey: String!
+  ord: Int!
+  title: String
+  status: String!
+  blocks: JSON!
+  research: JSON!
+  verification: JSON!
+  notes: JSON!
+  errorMessage: String
+  model: String
+  updatedAt: DateTime!
 }
 
 type DataQueryResponse {
@@ -137,6 +170,12 @@ input CreateNarrativeInput {
   dataQueries: JSON
   parameters: JSON
   outputBlocks: JSON
+  sections: JSON
+  persona: String
+  audience: String
+  rules: JSON
+  exposedDomains: [String!]
+  allowExternalSearch: Boolean
   model: String
   isActive: Boolean
   metadata: JSON
@@ -150,6 +189,12 @@ input UpdateNarrativeInput {
   dataQueries: JSON
   parameters: JSON
   outputBlocks: JSON
+  sections: JSON
+  persona: String
+  audience: String
+  rules: JSON
+  exposedDomains: [String!]
+  allowExternalSearch: Boolean
   model: String
   isActive: Boolean
   metadata: JSON
@@ -190,7 +235,7 @@ type DeleteNarrativeResult {
 #   dashboard(id: ID, dashboardCode: String): Dashboard
 #   narratives(domainCode: String, isActive: Boolean): [Narrative!]!
 #   narrative(id: ID, narrativeCode: String): Narrative
-#   narrativeRuns(narrativeId: ID!, entityId: ID, first: Int): [NarrativeRun!]!
+#   narrativeRuns(narrativeId: ID!, entityId: ID, first: Int, statuses: [String!]): [NarrativeRun!]!
 #   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON): DataQueryResponse!
 #
 # Mutation fields (add to type Mutation):
@@ -200,3 +245,5 @@ type DeleteNarrativeResult {
 #   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
 #   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
 #   deleteNarrative(id: ID!): DeleteNarrativeResult!
+#   publishNarrativeRun(id: ID!, label: String): NarrativeRun!
+#   unpublishNarrativeRun(id: ID!): NarrativeRun!

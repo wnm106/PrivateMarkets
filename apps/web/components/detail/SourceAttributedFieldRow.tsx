@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { sources, type SourceKey } from '@/lib/data';
+import { inlineCommitValue, inlineDraft } from '@/lib/inline-field';
 import { formatReceipt, isStaleReceipt, receiptAgeDays } from '@/lib/receipt-freshness';
 import { graphqlQuery } from '@/lib/graphql';
 import { AttributeSourcePanel, type SourceOption } from './AttributeSourcePanel';
-import { listDisplayLabel, useAttributeListOptions } from '@/components/forms/AttributeValueInput';
-import { formatAttributeValue, type FieldData } from './attribute-source';
+import { AttributeValueInput, listDisplayLabel, useAttributeListOptions } from '@/components/forms/AttributeValueInput';
+import { formatAttributeValue, isNumericAttribute, type FieldData } from './attribute-source';
 
 export { formatAttributeValue, type FieldData };
 
@@ -14,17 +15,18 @@ interface SourceAttributedFieldRowProps {
   field: FieldData;
   onDrilldown?: (label: string) => void;
   onSourceChange?: (label: string, newSource: SourceKey) => void;
-  onValueChange?: (label: string, newValue: string) => void;
+  onValueChange?: (label: string, newValue: string) => void | Promise<void>;
   onAddSourceValue?: (attributeCode: string, source: SourceKey, value: string) => void | Promise<void>;
   onDeleteSourceValue?: (attributeCode: string, sourceCode: string) => void;
   asOfDate?: string;
+  knowledgeDate?: string;
   entityId?: string;
   calcRefreshKey?: string;
   presentation?: 'row' | 'card';
   spanRows?: number;
 }
 
-export function SourceAttributedFieldRow({ field, onDrilldown, onAddSourceValue, onDeleteSourceValue, asOfDate, entityId, calcRefreshKey, presentation = 'row', spanRows = 1 }: SourceAttributedFieldRowProps) {
+export function SourceAttributedFieldRow({ field, onDrilldown, onValueChange, onAddSourceValue, onDeleteSourceValue, asOfDate, knowledgeDate, entityId, calcRefreshKey, presentation = 'row', spanRows = 1 }: SourceAttributedFieldRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [availableSources, setAvailableSources] = useState<SourceOption[]>([]);
 
@@ -62,8 +64,6 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onAddSourceValue,
     fetchSources();
   }, []);
 
-  const listOptions = useAttributeListOptions(field.attributeCode);
-  const shownValue = listDisplayLabel(field.value, listOptions) || formatAttributeValue(field.value, field.dataType);
   const normalizedFieldSource = (field.source || '').toLowerCase() as SourceKey;
   const dbSource = availableSources.find((source) => source.key === normalizedFieldSource);
   const src = dbSource
@@ -90,10 +90,18 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onAddSourceValue,
           )}
           {field.standardized && <span className="std-icon" title="Standardized via list mapping">S</span>}
         </div>
-        <div className="sa-field-value-cell">
-          <span className={`sa-field-value ${field.conflict ? 'conflict' : ''}`}>
-            {shownValue}
-          </span>
+        <div
+          className="sa-field-value-cell"
+          onClick={field.editable === false ? undefined : (event) => event.stopPropagation()}
+        >
+          <InlineFieldValue
+            field={field}
+            onSave={field.editable === false ? undefined : (onAddSourceValue
+              ? (next) => onAddSourceValue(field.attributeCode || field.label, 'manual', next)
+              : (onValueChange
+                ? (next) => onValueChange(field.attributeCode || field.label, next)
+                : undefined))}
+          />
           {field.conflict && <span className="conflict-badge">CONFLICT</span>}
           {field.alt && field.alt > 0 && (
             <span className="alt-count" title={`${field.alt} alternative value(s) available`}>±{field.alt}</span>
@@ -143,6 +151,7 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onAddSourceValue,
           field={field}
           entityId={entityId}
           asOfDate={asOfDate}
+          knowledgeDate={knowledgeDate}
           calcRefreshKey={calcRefreshKey}
           onAddSourceValue={onAddSourceValue}
           onDeleteSourceValue={onDeleteSourceValue}
@@ -150,5 +159,122 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onAddSourceValue,
         />
       )}
     </>
+  );
+}
+
+function InlineFieldValue({
+  field,
+  onSave,
+}: {
+  field: FieldData;
+  onSave?: (value: string) => void | Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(() => inlineDraft(field.value));
+  const [pending, setPending] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const skipCommit = useRef(false);
+  const pendingRef = useRef<string | null>(null);
+  const options = useAttributeListOptions(field.attributeCode);
+  const numeric = isNumericAttribute(field.dataType);
+  const shown = pending ?? field.value;
+  const display = listDisplayLabel(shown, options) || formatAttributeValue(shown, field.dataType);
+
+  useEffect(() => {
+    if (!editing) setDraft(inlineDraft(pending ?? field.value));
+  }, [field.value, editing, pending]);
+
+  useEffect(() => {
+    if (pending == null) return;
+    const arrived = inlineCommitValue(field.value, '', numeric) ?? '';
+    if (arrived === pending) {
+      pendingRef.current = null;
+      setPending(null);
+    }
+  }, [field.value, pending, numeric]);
+
+  if (!onSave) {
+    return <span className={`sa-field-value ${field.conflict ? 'conflict' : ''}`}>{display}</span>;
+  }
+
+  const persist = (raw: string) => {
+    const next = inlineCommitValue(raw, pendingRef.current ?? field.value, numeric);
+    setEditing(false);
+    if (!next) return;
+    pendingRef.current = next;
+    setPending(next);
+    setError(null);
+    setSaving(true);
+    void Promise.resolve(onSave(next))
+      .catch((err: unknown) => {
+        pendingRef.current = null;
+        setPending(null);
+        setError(err instanceof Error ? err.message : 'Could not save');
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const commit = () => {
+    if (skipCommit.current) {
+      skipCommit.current = false;
+      return;
+    }
+    persist(draft);
+  };
+
+  return (
+    <span className="sa-source-value-wrap" onClick={(event) => event.stopPropagation()}>
+      {editing ? (
+        <AttributeValueInput
+          attributeCode={field.attributeCode}
+          dataType={field.dataType}
+          className="text-input sa-field-value-edit"
+          style={{ fontSize: '13px', padding: '2px 6px', minWidth: '8rem' }}
+          value={draft}
+          autoFocus
+          ariaLabel={field.label}
+          disabled={saving}
+          onClick={(event) => event.stopPropagation()}
+          onChange={setDraft}
+          onSelect={(next) => {
+            setDraft(next);
+            persist(next);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+            if (event.key === 'Escape') {
+              skipCommit.current = true;
+              setDraft(inlineDraft(shown));
+              setEditing(false);
+            }
+          }}
+          onBlur={commit}
+        />
+      ) : (
+        <button
+          type="button"
+          className={`field-edit sa-field-value-edit sa-field-value ${field.conflict ? 'conflict' : ''}`}
+          title="Edit the golden value. This saves a manual override."
+          disabled={saving}
+          onClick={(event) => {
+            event.stopPropagation();
+            setDraft(inlineDraft(shown));
+            setEditing(true);
+          }}
+        >
+          {display || '—'}
+        </button>
+      )}
+      {saving && (
+        <svg className="sa-save-spin" viewBox="0 0 16 16" width="14" height="14" role="status" aria-label="Saving">
+          <path
+            fill="currentColor"
+            d="M13.7 2.3A7 7 0 0 0 2.4 6.2l1.5.4a5.4 5.4 0 0 1 8.7-2.4L11 6h4V2l-1.3.3zM2.3 13.7A7 7 0 0 0 13.6 9.8l-1.5-.4a5.4 5.4 0 0 1-8.7 2.4L5 10H1v4l1.3-.3z"
+          />
+        </svg>
+      )}
+      {error && <span className="sa-field-error">{error}</span>}
+    </span>
   );
 }

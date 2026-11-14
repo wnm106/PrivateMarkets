@@ -3,6 +3,8 @@
  * and exploring the data model.
  */
 
+import { composeNarrativePrompt } from './lib/narrative-guide';
+
 export interface PromptDefinition {
   name: string;
   description: string;
@@ -15,6 +17,24 @@ export interface PromptMessage {
 }
 
 export const PROMPTS: PromptDefinition[] = [
+  {
+    name: 'compose_narrative',
+    description: 'Compose a sectioned, evidence-backed report for one record from a saved narrative (or a plan you build): portfolio review, LP briefing, credit review. Gathers evidence per section, verifies every figure, and ends with data gaps and dated sources.',
+    arguments: [
+      { name: 'entityCode', description: 'The record the report is about (for example a fund code)', required: false },
+      { name: 'asOfDate', description: 'Report as-of date, YYYY-MM-DD', required: false },
+      { name: 'narrativeCode', description: 'A saved narrative to run (from list_narratives). Omit to let the assistant choose or plan one.', required: false },
+      { name: 'request', description: 'The full request or outline, pasted as written', required: false },
+    ],
+  },
+  {
+    name: 'portfolio_review',
+    description: 'Candid portfolio review for a Portfolio Manager meeting a prospective LP: evolution, attribution, borrower credit review, risk call-outs, industry sentiment, compliance and liquidity, outlook, and LP Q&A. Runs the LP Portfolio Review narrative.',
+    arguments: [
+      { name: 'entityCode', description: 'The fund code', required: false },
+      { name: 'asOfDate', description: 'Report as-of date, YYYY-MM-DD', required: false },
+    ],
+  },
   {
     name: 'build_compliance_rule',
     description: 'Guided workflow for building a compliance rule from natural language. Walks through anchor, base, rollup path, grouping, numerator/denominator, limits, and conditions.',
@@ -47,6 +67,8 @@ export const PROMPTS: PromptDefinition[] = [
 
 export function getPromptMessages(name: string, args: Record<string, string> = {}): PromptMessage[] {
   switch (name) {
+    case 'compose_narrative': return composeNarrativePrompt(args);
+    case 'portfolio_review': return composeNarrativePrompt({ ...args, narrativeCode: 'FUND_LP_PORTFOLIO_REVIEW', request: 'Produce the full LP portfolio review: executive summary, portfolio evolution, performance attribution, borrower-by-borrower credit review and ranking, risk call-outs, industry exposure and sentiment, fund compliance and liquidity, forward outlook, and the ten toughest LP questions.' });
     case 'build_compliance_rule': return buildComplianceRulePrompt(args);
     case 'explore_data_model': return exploreDataModelPrompt(args);
     case 'interpret_compliance_results': return interpretComplianceResultsPrompt(args);

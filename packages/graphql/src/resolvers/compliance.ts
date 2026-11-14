@@ -10,6 +10,7 @@ import {
   type RelationshipHopRef,
   conditionExpressionReads,
 } from '../lib/compliance-population';
+import { parseFundBoardResultPayload, selectLatestFundResults } from '../lib/fund-board-results';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
 // through `.schema('compliance')` first (same convention as tenancy.ts /
@@ -104,6 +105,10 @@ export const complianceResolvers = {
       };
     },
 
+    complianceResultContributors: async (_: any, args: { resultId: string }, context: Context) => {
+      return loadResultContributors(context, args.resultId);
+    },
+
     compliancePopulationPreview: async (_: any, args: { input: any }, context: Context) => {
       return previewPopulation(context, args.input);
     },
@@ -187,6 +192,18 @@ export const complianceResolvers = {
 
         const nextVersionNumber = (existingVersions?.[0]?.version_number || 0) + 1;
 
+        // Direction is set on the fund limit. Keep the previous version's value only
+        // so a test that has not been given a fund limit yet still breaches the same way.
+        let limitDirection = input.limitDirection || null;
+        if (!limitDirection && existingVersions?.[0]?.id) {
+          const { data: previous } = await cx(context)
+            .from('rule_versions')
+            .select('limit_direction')
+            .eq('id', existingVersions[0].id)
+            .maybeSingle();
+          limitDirection = previous?.limit_direction || null;
+        }
+
         if (existingVersions?.[0]?.id) {
           await cx(context)
             .from('rule_versions')
@@ -221,7 +238,7 @@ export const complianceResolvers = {
             denominator_source: input.denominatorSource || 'BASE',
             denominator_constant_value: input.denominatorConstantValue,
             result_unit: input.resultUnit || 'RATIO',
-            limit_direction: input.limitDirection,
+            limit_direction: limitDirection,
             soft_limit_value: input.softLimitValue,
             hard_limit_value: input.hardLimitValue,
             hard_limit_attribute_code: input.hardLimitAttributeCode,
@@ -235,6 +252,7 @@ export const complianceResolvers = {
 
         if (error) throw error;
 
+        let storedConditions: any[] = [];
         if (input.conditions?.length) {
           const conditionsToInsert = input.conditions.map((cond: any, idx: number) => ({
             rule_version_id: data.id,
@@ -253,11 +271,13 @@ export const complianceResolvers = {
             ...(cond.rightExpression ? { right_expression: cond.rightExpression } : {}),
           }));
 
-          const { error: condError } = await cx(context).from('rule_conditions').insert(conditionsToInsert);
+          const { data: condRows, error: condError } = await cx(context).from('rule_conditions').insert(conditionsToInsert).select('*');
           if (condError) throw condError;
+          storedConditions = condRows || [];
         }
 
-        return { version: mapVersion(data, []), errors: [] };
+        const storedLines = await insertMeasureLines(context, data.id, input.measureLines || []);
+        return { version: mapVersion(data, storedConditions, storedLines), errors: [] };
       } catch (error: any) {
         console.error('Error creating compliance rule version:', error);
         return { version: null, errors: [{ field: 'general', message: error.message, code: 'CREATE_FAILED' }] };
@@ -291,7 +311,7 @@ export const complianceResolvers = {
     upsertComplianceThreshold: async (_: any, args: { input: any }, context: Context) => {
       try {
         const input = args.input;
-        const row = {
+        const row: Record<string, unknown> = {
           rule_id: input.ruleId,
           entity_id: input.entityId || null,
           group_value: input.groupValue ? String(input.groupValue).trim() : null,
@@ -303,6 +323,11 @@ export const complianceResolvers = {
           notes: input.notes || null,
           updated_at: new Date().toISOString(),
         };
+        if (input.limitDirection === 'MIN' || input.limitDirection === 'MAX') {
+          row.limit_direction = input.limitDirection;
+        } else if (!input.id) {
+          row.limit_direction = 'MAX';
+        }
         const query = input.id
           ? cx(context).from('rule_thresholds').update(row).eq('id', input.id)
           : cx(context).from('rule_thresholds').insert(row);
@@ -347,6 +372,8 @@ export const complianceResolvers = {
           sourceScope: args.input.sourceScope,
           triggeredBy: context.user?.id,
           anchorEntityId: args.input.entityId || undefined,
+          scenarioCode: args.input.scenarioCode || undefined,
+          allFunds: Boolean(args.input.allFunds),
         });
 
         const { data: ruleRow } = await cx(context).from('rules').select('*').eq('id', run.ruleId).maybeSingle();
@@ -481,7 +508,7 @@ export const complianceResolvers = {
         .select('*, conditions:rule_conditions(*)')
         .eq('rule_id', parent.id)
         .order('version_number', { ascending: false });
-      return (data || []).map((row: any) => mapVersion(row, row.conditions || []));
+      return withMeasureLines(context, data || []);
     },
 
     currentVersion: async (parent: any, args: { asOfDate?: string; knowledgeDate?: string }, context: Context) => {
@@ -495,7 +522,8 @@ export const complianceResolvers = {
       if (!data || !data.id) return null;
 
       const { data: conditions } = await cx(context).from('rule_conditions').select('*').eq('rule_version_id', data.id);
-      return mapVersion(data, conditions || []);
+      const [version] = await withMeasureLines(context, [{ ...data, conditions: conditions || [] }]);
+      return version;
     },
 
     scopeAssignments: async (parent: any, _: any, context: Context) => {
@@ -612,7 +640,142 @@ function mapRule(row: any) {
   };
 }
 
-function mapVersion(row: any, conditions: any[]) {
+function conditionRow(versionId: string, cond: any, extra: Record<string, unknown> = {}) {
+  return {
+    rule_version_id: versionId,
+    applies_to: cond.appliesTo,
+    condition_group: cond.conditionGroup ?? 1,
+    condition_order: cond.conditionOrder ?? 1,
+    attribute_code: cond.attributeCode,
+    attribute_dimension: toSnakeDim(cond.attributeDimension),
+    compare_attribute_code: cond.compareAttributeCode || null,
+    compare_dimension: toSnakeDim(cond.compareDimension),
+    operator: cond.operator,
+    value: cond.value ?? null,
+    logic_operator: cond.logicOperator ?? 'AND',
+    ...(cond.leftExpression ? { left_expression: cond.leftExpression } : {}),
+    ...(cond.rightExpression ? { right_expression: cond.rightExpression } : {}),
+    ...extra,
+  };
+}
+
+async function insertMeasureLines(context: Context, versionId: string, lines: any[]) {
+  const stored: any[] = [];
+  for (const side of ['NUMERATOR', 'DENOMINATOR', 'LIMIT']) {
+    const sideLines = (lines || []).filter((line) => line.side === side);
+    for (let index = 0; index < sideLines.length; index += 1) {
+      const line = sideLines[index];
+      const { data, error } = await cx(context)
+        .from('rule_measure_lines')
+        .insert({
+          rule_version_id: versionId,
+          side,
+          line_order: index + 1,
+          label: line.label || null,
+          kind: line.kind,
+          sign: line.sign === -1 ? -1 : 1,
+          attribute_code: line.attributeCode || null,
+          dimension: toSnakeDim(line.dimension),
+          expression: line.expression ?? null,
+          path: toSnakeHops(line.path),
+          weight_attribute_code: line.weightAttributeCode || null,
+          value_path: toSnakeHops(line.valuePath),
+          transform: line.transform || null,
+          price_attribute_code: line.priceAttributeCode || null,
+          pct: line.pct ?? null,
+          pct_attribute_code: line.pctAttributeCode || null,
+          pct_path: toSnakeHops(line.pctPath),
+          total_path: line.totalPath?.length ? toSnakeHops(line.totalPath) : null,
+          required: Boolean(line.required),
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+
+      const filters = [
+        ...(line.conditions || []).filter((cond: any) => cond.attributeCode).map((cond: any) => ({ ...cond, filterRole: 'WHERE' })),
+        ...(line.totalConditions || []).filter((cond: any) => cond.attributeCode).map((cond: any) => ({ ...cond, filterRole: 'TOTAL' })),
+      ];
+      let storedConditions: any[] = [];
+      if (filters.length) {
+        const rows = filters.map((cond, order) => conditionRow(versionId, cond, {
+          measure_line_id: data.id,
+          applies_to: 'LINE',
+          filter_role: cond.filterRole,
+          condition_group: 1,
+          condition_order: order + 1,
+        }));
+        const { data: condRows, error: condError } = await cx(context).from('rule_conditions').insert(rows).select('*');
+        if (condError) throw condError;
+        storedConditions = condRows || [];
+      }
+      stored.push({ ...data, conditions: storedConditions });
+    }
+  }
+  return stored;
+}
+
+async function withMeasureLines(context: Context, rows: any[]) {
+  const ids = rows.map((row) => row.id).filter(Boolean);
+  if (!ids.length) return rows.map((row) => mapVersion(row, row.conditions || [], []));
+
+  const { data: lineRows, error } = await cx(context)
+    .from('rule_measure_lines')
+    .select('*')
+    .in('rule_version_id', ids)
+    .order('line_order', { ascending: true });
+  if (error) throw error;
+  const lines = lineRows || [];
+  const lineIds = lines.map((line: any) => line.id);
+  let conditions: any[] = [];
+  if (lineIds.length) {
+    const { data: condRows, error: condError } = await cx(context)
+      .from('rule_conditions')
+      .select('*')
+      .in('measure_line_id', lineIds);
+    if (condError) throw condError;
+    conditions = condRows || [];
+  }
+  return rows.map((row) => mapVersion(
+    row,
+    row.conditions || [],
+    lines
+      .filter((line: any) => line.rule_version_id === row.id)
+      .map((line: any) => ({
+        ...line,
+        conditions: conditions.filter((cond) => cond.measure_line_id === line.id),
+      })),
+  ));
+}
+
+function mapMeasureLine(row: any) {
+  const conditions = row.conditions || [];
+  return {
+    id: row.id,
+    side: row.side,
+    lineOrder: row.line_order,
+    label: row.label,
+    kind: row.kind,
+    sign: row.sign,
+    attributeCode: row.attribute_code,
+    dimension: toCamelDim(row.dimension),
+    expression: row.expression ?? null,
+    path: toCamelHops(row.path),
+    weightAttributeCode: row.weight_attribute_code,
+    valuePath: toCamelHops(row.value_path),
+    transform: row.transform,
+    priceAttributeCode: row.price_attribute_code,
+    pct: row.pct == null ? null : Number(row.pct),
+    pctAttributeCode: row.pct_attribute_code,
+    pctPath: toCamelHops(row.pct_path),
+    totalPath: toCamelHops(row.total_path),
+    required: Boolean(row.required),
+    conditions: conditions.filter((cond: any) => cond.filter_role !== 'TOTAL').map(mapCondition),
+    totalConditions: conditions.filter((cond: any) => cond.filter_role === 'TOTAL').map(mapCondition),
+  };
+}
+
+function mapVersion(row: any, conditions: any[], lines: any[] = []) {
   return {
     id: row.id,
     ruleId: row.rule_id,
@@ -648,7 +811,8 @@ function mapVersion(row: any, conditions: any[]) {
     defaultSourceScope: row.default_source_scope,
     consolidateDescendants: Boolean(row.consolidate_descendants),
     isActive: row.is_active,
-    conditions: conditions.map(mapCondition),
+    conditions: conditions.filter((condition) => !condition.measure_line_id).map(mapCondition),
+    measureLines: lines.map(mapMeasureLine),
     metadata: row.metadata,
     createdAt: row.created_at,
     createdBy: row.created_by,
@@ -732,6 +896,7 @@ function mapThreshold(row: any, rule?: { rule_code?: string; rule_name?: string 
     groupValue: row.group_value,
     rankFrom: row.rank_from,
     rankTo: row.rank_to,
+    limitDirection: row.limit_direction || null,
     softLimitValue: row.soft_limit_value,
     hardLimitValue: row.hard_limit_value,
     applies: row.applies !== false,
@@ -740,86 +905,68 @@ function mapThreshold(row: any, rule?: { rule_code?: string; rule_name?: string 
 }
 
 async function loadFundBoard(context: Context) {
-  const { data: fundRows, error: fundError } = await context.supabase
-    .schema('entity_instances')
-    .from('master_entities')
-    .select('id, entity_code, entity_name')
-    .eq('domain_code', 'FUND')
-    .eq('is_active', true)
-    .order('entity_code');
-  if (fundError) throw new Error(fundError.message);
-  const funds = (fundRows || []).filter((row) => !String(row.entity_code).startsWith('BENCH-'));
-  const fundIds = funds.map((row) => row.id);
-
-  const { data: parentRows, error: parentError } = fundIds.length
-    ? await context.supabase
+  const [fundResult, ruleResult] = await Promise.all([
+    context.supabase
       .schema('entity_instances')
-      .from('entity_relationships')
-      .select('parent_entity_id, child_entity_id')
-      .eq('relationship_code', 'FUND_PARENT')
-      .in('child_entity_id', fundIds)
-    : { data: [], error: null };
-  if (parentError) throw new Error(parentError.message);
-  const parentOf = new Map((parentRows || []).map((row) => [row.child_entity_id, row.parent_entity_id]));
-
-  const { data: ruleRows, error: ruleError } = await cx(context)
-    .from('rules')
-    .select('*')
-    .eq('anchor_domain_code', 'FUND')
-    .eq('is_active', true)
-    .order('rule_name');
-  if (ruleError) throw new Error(ruleError.message);
-  const rules = ruleRows || [];
+      .from('master_entities')
+      .select('id, entity_code, entity_name')
+      .eq('domain_code', 'FUND')
+      .eq('is_active', true)
+      .order('entity_code'),
+    cx(context)
+      .from('rules')
+      .select('id, rule_code, rule_name, rule_category, is_active')
+      .eq('anchor_domain_code', 'FUND')
+      .eq('is_active', true)
+      .order('rule_name'),
+  ]);
+  if (fundResult.error) throw new Error(fundResult.error.message);
+  if (ruleResult.error) throw new Error(ruleResult.error.message);
+  const funds = (fundResult.data || []).filter((row) => !String(row.entity_code).startsWith('BENCH-'));
+  const fundIds = funds.map((row) => row.id);
+  const rules = ruleResult.data || [];
   const ruleIds = rules.map((row) => row.id);
 
-  const { data: versionRows, error: versionError } = ruleIds.length
-    ? await cx(context).from('rule_versions').select('*').in('rule_id', ruleIds).eq('is_active', true)
-    : { data: [], error: null };
-  if (versionError) throw new Error(versionError.message);
+  const [parentResult, versionResult, thresholdResult, latestResult] = await Promise.all([
+    fundIds.length
+      ? context.supabase
+        .schema('entity_instances')
+        .from('entity_relationships')
+        .select('parent_entity_id, child_entity_id')
+        .eq('relationship_code', 'FUND_PARENT')
+        .in('child_entity_id', fundIds)
+      : Promise.resolve({ data: [] as Array<{ parent_entity_id: string; child_entity_id: string }>, error: null }),
+    ruleIds.length
+      ? cx(context)
+        .from('rule_versions')
+        .select('rule_id, version_number, result_unit, limit_direction, group_by_attribute_code, consolidate_descendants')
+        .in('rule_id', ruleIds)
+        .eq('is_active', true)
+      : Promise.resolve({ data: [] as any[], error: null }),
+    ruleIds.length
+      ? cx(context)
+        .from('rule_thresholds')
+        .select('*')
+        .in('rule_id', ruleIds)
+        .eq('valid_to', '9999-12-31')
+      : Promise.resolve({ data: [] as any[], error: null }),
+    ruleIds.length
+      ? cx(context).rpc('latest_fund_board_results', { p_rule_ids: ruleIds })
+      : Promise.resolve({ data: [] as unknown[], error: null }),
+  ]);
+  if (parentResult.error) throw new Error(parentResult.error.message);
+  if (versionResult.error) throw new Error(versionResult.error.message);
+  if (thresholdResult.error) throw new Error(thresholdResult.error.message);
+  if (latestResult.error) throw new Error(latestResult.error.message);
+
+  const parentOf = new Map((parentResult.data || []).map((row) => [row.child_entity_id, row.parent_entity_id]));
   const versionByRule = new Map<string, any>();
-  for (const version of versionRows || []) {
+  for (const version of versionResult.data || []) {
     const current = versionByRule.get(version.rule_id);
     if (!current || version.version_number > current.version_number) versionByRule.set(version.rule_id, version);
   }
-
-  const { data: thresholdRows, error: thresholdError } = ruleIds.length
-    ? await cx(context).from('rule_thresholds').select('*').in('rule_id', ruleIds).eq('valid_to', '9999-12-31')
-    : { data: [], error: null };
-  if (thresholdError) throw new Error(thresholdError.message);
-
-  // A later run may score only one fund. Keep the newest result for each
-  // fund and group so that partial run does not hide the other funds.
-  const { data: scenarioRuns, error: scenarioError } = ruleIds.length
-    ? await cx(context).from('rule_evaluation_runs').select('id, metadata').in('rule_id', ruleIds)
-    : { data: [], error: null };
-  if (scenarioError) throw new Error(scenarioError.message);
-  const scenarioRunIds = new Set((scenarioRuns || []).filter((row) => row.metadata?.scenario_code).map((row) => row.id));
-
-  const latestResult = new Map<string, any>();
-  const pageSize = 1000;
-  for (let offset = 0; ruleIds.length && offset < 20000; offset += pageSize) {
-    const { data: page, error: resultError } = await cx(context)
-      .from('rule_evaluation_results')
-      .select('*')
-      .in('rule_id', ruleIds)
-      .order('evaluated_at', { ascending: false })
-      .range(offset, offset + pageSize - 1);
-    if (resultError) throw new Error(resultError.message);
-    const rows = page || [];
-    for (const row of rows) {
-      if (scenarioRunIds.has(row.run_id)) continue;
-      const key = `${row.rule_id}|${row.anchor_entity_id}|${row.group_by_value || ''}|${row.rank_position ?? ''}`;
-      if (!latestResult.has(key)) latestResult.set(key, row);
-    }
-    if (rows.length < pageSize) break;
-  }
-  const scored = new Set<string>();
-  for (const row of latestResult.values()) {
-    if (row.status !== 'NO_DATA') scored.add(`${row.rule_id}|${row.anchor_entity_id}`);
-  }
-  const resultRows = [...latestResult.values()].filter((row) => (
-    row.status !== 'NO_DATA' || !scored.has(`${row.rule_id}|${row.anchor_entity_id}`)
-  ));
+  const thresholdRows = thresholdResult.data;
+  const resultRows = selectLatestFundResults(parseFundBoardResultPayload(latestResult.data));
 
   const fundById = new Map(funds.map((row) => [row.id, row]));
   const ruleById = new Map(rules.map((row) => [row.id, row]));
@@ -963,12 +1110,61 @@ async function previewPopulation(context: Context, input: any) {
     }
   }
 
+  const page = matches.slice(offset, offset + limit);
   return {
     total: matches.length,
     scanned: rows.length,
     truncated,
-    rows: matches.slice(offset, offset + limit),
+    rows: await withParentRecords(context, domainCode, page),
   };
+}
+
+// The records each match belongs to, so a list of positions shows its funds and securities.
+// A composite (an intersection type such as a position) is the combination of its member records.
+async function withParentRecords<T extends { entityId: string }>(context: Context, domainCode: string, rows: T[]) {
+  if (!rows.length) return rows.map((row) => ({ ...row, parents: [] as any[] }));
+  const [{ data: related, error }, { data: types }] = await Promise.all([
+    context.supabase
+      .from('entity_master')
+      .select('entity_id, parent_relationships, child_relationships')
+      .in('entity_id', rows.map((row) => row.entityId)),
+    context.supabase
+      .from('intersection_types')
+      .select('intersection_code, intersection_type_members(domain_code)')
+      .eq('is_active', true),
+  ]);
+  if (error) throw new Error(`Failed to load parent records: ${error.message}`);
+  const members = new Set<string>();
+  for (const type of types || []) {
+    if (String(type.intersection_code).toUpperCase() !== String(domainCode).toUpperCase()) continue;
+    for (const member of (type as any).intersection_type_members || []) members.add(String(member.domain_code).toUpperCase());
+  }
+  const byEntity = new Map<string, any>((related || []).map((row: any) => [row.entity_id, row]));
+  return rows.map((row) => {
+    const source = byEntity.get(row.entityId);
+    const seen = new Set<string>();
+    const parents: any[] = [];
+    const add = (rel: any, side: 'parent' | 'child') => {
+      const id = rel?.[`${side}_entity_id`];
+      const domain = String(rel?.[`${side}_domain_code`] || '').toUpperCase();
+      if (!id || id === row.entityId || seen.has(id)) return;
+      const isCompositeMember = members.has(domain);
+      // Up the tree is always a parent. Down the tree counts only when it is a member of this composite.
+      if (side === 'child' && !isCompositeMember) return;
+      seen.add(id);
+      parents.push({
+        domainCode: domain,
+        entityId: id,
+        entityCode: rel[`${side}_entity_code`] ?? null,
+        entityName: rel[`${side}_entity_name`] ?? null,
+        relationshipCode: rel.relationship_code ?? null,
+        isCompositeMember,
+      });
+    };
+    for (const rel of source?.parent_relationships || []) add(rel, 'parent');
+    for (const rel of source?.child_relationships || []) add(rel, 'child');
+    return { ...row, parents };
+  });
 }
 
 async function fetchDomainEntities(supabase: Context['supabase'], domainCode: string) {
@@ -1089,4 +1285,108 @@ async function fetchAttributeValues(
       into.set(row.entity_id, bag);
     }
   }
+}
+
+async function loadResultContributors(context: Context, resultId: string) {
+  const { data: result, error } = await cx(context).from('rule_evaluation_results').select('*').eq('id', resultId).maybeSingle();
+  if (error || !result) throw new Error('Result not found');
+  const { data: version, error: versionError } = await cx(context).from('rule_versions').select('*').eq('id', result.rule_version_id).maybeSingle();
+  if (versionError || !version) throw new Error('Rule version not found');
+
+  // A rule built from amounts stores no contributor list. Rebuild it per amount.
+  const { count: amountCount } = await cx(context).from('rule_measure_lines').select('id', { count: 'exact', head: true }).eq('rule_version_id', result.rule_version_id);
+  if ((amountCount || 0) > 0) {
+    const { data: contributed, error: contributedError } = await cx(context).rpc('measure_line_contributors', { p_result_id: resultId });
+    if (contributedError) throw new Error(`Could not load the records: ${contributedError.message}`);
+    const rowsIn: any[] = contributed || [];
+    const entityIds = [...new Set(rowsIn.map((row) => row.entity_id as string))];
+    const info = new Map<string, { code: string; name: string | null }>();
+    for (let i = 0; i < entityIds.length; i += 200) {
+      const { data } = await context.supabase.schema('entity_instances').from('master_entities').select('id, entity_code, entity_name').in('id', entityIds.slice(i, i + 200));
+      for (const row of data || []) info.set(row.id, { code: row.entity_code, name: row.entity_name });
+    }
+    const totals = new Map<string, number>();
+    const amountKey = (row: any) => `${row.amount_side}:${row.amount_order}`;
+    const contribution = (row: any) => (row.amount_kind === 'COUNT' ? 1 : row.amount_value == null ? null : Number(row.amount_value) * (row.amount_sign === -1 ? -1 : 1));
+    for (const row of rowsIn) totals.set(amountKey(row), (totals.get(amountKey(row)) || 0) + (contribution(row) ?? 0));
+    const rows = rowsIn.map((row) => {
+      const value = contribution(row);
+      const total = totals.get(amountKey(row)) || 0;
+      const known = info.get(row.entity_id);
+      return {
+        entityId: row.entity_id,
+        entityCode: known?.code || row.entity_id,
+        entityName: known?.name ?? null,
+        numeratorValue: value,
+        sharePercent: total && value != null ? (value / total) * 100 : null,
+        values: {},
+        amountLabel: row.amount_label || (row.amount_side === 'DENOMINATOR' ? 'Denominator' : 'Amount'),
+        amountSide: row.amount_side,
+        order: `${row.amount_side === 'NUMERATOR' ? 0 : 1}:${String(row.amount_order).padStart(3, '0')}`,
+      };
+    });
+    rows.sort((a, b) => a.order.localeCompare(b.order) || (b.numeratorValue ?? -Infinity) - (a.numeratorValue ?? -Infinity));
+    return { resultId, baseDomainCode: null, numeratorAggregation: null, columns: [], rows, total: rows.length };
+  }
+
+  const ids: string[] = result.contributing_entity_ids || [];
+  const asOf = String(result.as_of_date).slice(0, 10);
+  const now = result.knowledge_date || new Date().toISOString();
+  const aggregation = version.numerator_aggregation || null;
+  const counting = aggregation === 'COUNT' || aggregation === 'COUNT_DISTINCT';
+
+  const numeratorPath = hopsFromDimension(toCamelDim(version.numerator_dimension));
+  const reads = [
+    { code: version.numerator_attribute_code as string | null, role: 'NUMERATOR', path: numeratorPath },
+    { code: version.denominator_attribute_code as string | null, role: 'DENOMINATOR', path: hopsFromDimension(toCamelDim(version.denominator_dimension)) },
+    { code: version.group_by_attribute_code as string | null, role: 'GROUP', path: hopsFromDimension(toCamelDim(version.group_by_dimension)) },
+  ].filter((read) => !!read.code);
+
+  const conditions: PopulationCondition[] = reads
+    .filter((read) => read.path.length)
+    .map((read) => ({ attributeCode: read.code as string, operator: 'equals', value: null, attributePath: read.path }) as PopulationCondition);
+  const hopMaps = await loadRelationshipMaps(context.supabase, conditions, asOf, now);
+  const targetsFor = (id: string, path: RelationshipHopRef[]) => (path.length ? targetsAlongPath(id, path, hopMaps) : [id]);
+
+  const needed = new Set<string>(ids);
+  for (const id of ids) for (const read of reads) for (const target of targetsFor(id, read.path)) needed.add(target);
+  const attributes = new Map<string, any>();
+  await fetchAttributeValues(context.supabase, [...needed], [...new Set(reads.map((r) => r.code as string))], attributes, asOf, now);
+
+  const entityInfo = new Map<string, { code: string; name: string | null }>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data } = await context.supabase.schema('entity_instances').from('master_entities').select('id, entity_code, entity_name').in('id', ids.slice(i, i + 200));
+    for (const row of data || []) entityInfo.set(row.id, { code: row.entity_code, name: row.entity_name });
+  }
+
+  const readValues = (id: string, read: { code: string | null; path: RelationshipHopRef[] }) => {
+    const texts = targetsFor(id, read.path).map((target) => textOfAttribute(attributes.get(target), read.code as string)).filter((t): t is string => t != null);
+    return texts.length ? texts.join(', ') : null;
+  };
+  const numeric = (text: string | null) => {
+    if (text == null) return null;
+    const parts = text.split(', ').map((part) => Number(part.replace(/,/g, ''))).filter((n) => Number.isFinite(n));
+    return parts.length ? parts.reduce((a, b) => a + b, 0) : null;
+  };
+
+  const numeratorRead = reads.find((read) => read.role === 'NUMERATOR');
+  const rows = ids.map((id) => {
+    const values: Record<string, string | null> = {};
+    for (const read of reads) values[read.code as string] = readValues(id, read);
+    const info = entityInfo.get(id);
+    const contribution = counting ? 1 : numeratorRead ? numeric(values[numeratorRead.code as string]) : null;
+    return { entityId: id, entityCode: info?.code || id, entityName: info?.name ?? null, numeratorValue: contribution, sharePercent: null as number | null, values };
+  });
+  const total = rows.reduce((sum, row) => sum + (row.numeratorValue ?? 0), 0);
+  for (const row of rows) row.sharePercent = total && row.numeratorValue != null ? (row.numeratorValue / total) * 100 : null;
+  rows.sort((a, b) => (b.numeratorValue ?? -Infinity) - (a.numeratorValue ?? -Infinity));
+
+  return {
+    resultId,
+    baseDomainCode: version.base_domain_code ?? null,
+    numeratorAggregation: aggregation,
+    columns: [...new Map(reads.map((read) => [read.code as string, { code: read.code as string, label: read.code as string, role: read.role }])).values()],
+    rows,
+    total: ids.length,
+  };
 }

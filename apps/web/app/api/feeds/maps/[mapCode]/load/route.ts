@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loadFileWithMap, MapMismatchError } from '@/lib/feeds/import-instances';
-import { requireFeedUser } from '@/lib/feeds/require-user';
+import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest, context: { params: Promise<{ mapCode: string }> }) {
   const user = await requireFeedUser();
   if (!user) return NextResponse.json({ error: 'Sign in to load a file with a saved map.' }, { status: 401 });
+  const clientId = await feedClientId();
+  if (!clientId) return NextResponse.json({ error: 'Choose a client before loading the file' }, { status: 400 });
   const { mapCode } = await context.params;
   const form = await request.formData();
   const file = form.get('file');
@@ -20,6 +22,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ma
       file.name,
       file.type || 'application/octet-stream',
       bytes,
+      clientId,
       typeof asOfDate === 'string' && asOfDate ? asOfDate : undefined,
       undefined,
       typeof source === 'string' && source ? source : undefined,

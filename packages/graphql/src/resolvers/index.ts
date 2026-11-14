@@ -104,6 +104,7 @@ export const resolvers = {
   },
   Template: statementTemplateResolvers.Template,
   DataConnection: dataConnectionResolvers.DataConnection,
+  NarrativeRun: reportingResolvers.NarrativeRun,
   ComplianceRule: complianceResolvers.ComplianceRule,
   ComplianceEvaluationRun: complianceResolvers.ComplianceEvaluationRun,
   AttributeDefinition: referenceListResolvers.AttributeDefinition,

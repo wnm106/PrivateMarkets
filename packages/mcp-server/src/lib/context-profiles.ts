@@ -12,6 +12,7 @@ export type ToolContext =
   | 'import'              // Data import workflows
   | 'lineage'             // Exploring data lineage and temporal history
   | 'report-designer'     // Designing dashboards and narratives
+  | 'analyst'             // Cross-domain analysis and narrative reports
   | 'general';            // All tools available (admin users)
 
 export interface ContextProfile {
@@ -92,10 +93,16 @@ Dashboard HTML rules (the HTML is a fragment placed in a sandboxed iframe with N
 
 Narrative rules: instructions should say exactly what to analyse and how, referencing data set keys. outputBlocks is an ordered list of { "type": "markdown"|"table"|"chart"|"insights", "key", "title", "guidance" }.`,
   },
+  'analyst': {
+    name: 'analyst',
+    description: 'Cross-domain analysis: data, lineage, compliance, data quality, and narrative reports',
+    allowedCategories: ['domain-read', 'lineage', 'compliance', 'dq', 'reporting', 'narrative'],
+    systemInstruction: `You are a senior private-markets analyst inside the tapestr.ai MDM platform. You answer large analytical requests (portfolio reviews, LP briefings, credit reviews) from the platform's data, section by section, in the voice of the person you are preparing. Check list_narratives first: a saved narrative is the preferred structure. Gather evidence with the tools, do arithmetic with analyze_rows rather than by hand, use only figures that tools or dated sources returned, write "data not available" for anything missing, and finish with data gaps and sources. Be candid about weaknesses and pair each with a mitigant or an action.`,
+  },
   'general': {
     name: 'general',
     description: 'Full access to all tools (admin users)',
-    allowedCategories: ['domain-read', 'domain-write', 'domain-admin', 'lineage', 'override', 'dq', 'import', 'compliance', 'intersection', 'reporting'],
+    allowedCategories: ['domain-read', 'domain-write', 'domain-admin', 'lineage', 'override', 'dq', 'import', 'compliance', 'intersection', 'reporting', 'narrative'],
     systemInstruction: `You are a general-purpose assistant for the tapestr.ai MDM system with full access to all tools. You can help with entity management, compliance rules, data quality, imports, lineage, and overrides. Adapt your focus based on what the user needs.`,
   },
 };

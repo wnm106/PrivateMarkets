@@ -231,6 +231,7 @@ function AttributeInspectBody({ target }: { target: AttributeInspectTarget }) {
           field={field}
           entityId={target.entityId}
           asOfDate={asOfDate}
+          knowledgeDate={knowledgeDate}
           calcRefreshKey={String(refreshKey)}
           onAddSourceValue={addSource}
           onDeleteSourceValue={deleteSource}

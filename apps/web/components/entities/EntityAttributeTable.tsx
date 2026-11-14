@@ -3,11 +3,13 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ColDef, FilterChangedEvent, SortChangedEvent } from 'ag-grid-community';
+import type { CellValueChangedEvent, ColDef, FilterChangedEvent, SortChangedEvent } from 'ag-grid-community';
 import { attributeDisplayKind, formatAttributeDisplay, type TableCellAlign, tableCellAlign } from '@/lib/attribute-display';
+import { cellEditSeed, inlineCommitValue } from '@/lib/inline-field';
 import { withParentNames } from '@/lib/parent-entities';
+import { AttributeCellEditor } from '@/components/entities/AttributeCellEditor';
 import { AppGrid, type GridApi } from '@/components/grid/AppGrid';
-import { ATTRIBUTE_REGISTER_QUERY, graphqlQuery } from '@/lib/graphql';
+import { ADD_COMPETING_SOURCE_MUTATION, ATTRIBUTE_REGISTER_QUERY, DATA_SOURCE_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { GRID_QUERY, type GridResultPayload } from '@/lib/reporting';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 import { isRowAttributeCode } from '@/components/detail/attribute-source';
@@ -50,6 +52,7 @@ interface CatalogAttr {
   dataType: string;
   listValues?: string[] | null;
   domainCode?: string | null;
+  isEditable?: boolean | null;
   aggregationType?: string | null;
   weightAttributeCode?: string | null;
 }
@@ -61,6 +64,8 @@ interface Col {
   align: TableCellAlign;
   dataType?: string;
   listValues: string[];
+  /** False for identity columns and attributes the register marks read-only. */
+  editable: boolean;
   aggregationType?: string | null;
   weightAttributeCode?: string | null;
 }
@@ -176,6 +181,78 @@ function dayValue(value: unknown): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
 }
 
+const revertingCells = new Set<string>();
+let manualSourceIdPromise: Promise<string> | null = null;
+
+function manualSourceId(): Promise<string> {
+  if (!manualSourceIdPromise) {
+    manualSourceIdPromise = graphqlQuery<{ dataSource: { id: string } | null }, { code: string }>(
+      DATA_SOURCE_QUERY,
+      { code: 'MANUAL' },
+      'network-only',
+    ).then((result) => {
+      const id = result.data?.dataSource?.id;
+      if (!id) {
+        manualSourceIdPromise = null;
+        throw new Error(result.error?.message || 'Manual override is not registered');
+      }
+      return id;
+    }).catch((error) => {
+      manualSourceIdPromise = null;
+      throw error;
+    });
+  }
+  return manualSourceIdPromise;
+}
+
+/** A cell edit on the register writes the golden value as a manual override. */
+async function commitManualOverride(
+  event: CellValueChangedEvent<Record<string, any>>,
+  columns: Col[],
+  asOfDate: string | undefined,
+  setError: (message: string | null) => void,
+) {
+  const code = event.column.getColId();
+  const entityId = String(event.data?.entity_id || '');
+  const key = `${entityId}:${code}`;
+  if (revertingCells.has(key)) {
+    revertingCells.delete(key);
+    return;
+  }
+  if (!entityId || !isRowAttributeCode(code) || event.node?.group || event.node?.footer) return;
+  const col = columns.find((item) => item.code === code);
+  if (!col?.editable) return;
+  const previous = cellEditSeed(event.oldValue);
+  const next = inlineCommitValue(cellEditSeed(event.newValue), previous, col?.kind === 'num');
+  const restore = () => {
+    if (cellEditSeed(event.data?.[code]) === previous) return;
+    revertingCells.add(key);
+    event.node?.setDataValue(code, event.oldValue);
+  };
+  if (!next) {
+    restore();
+    return;
+  }
+  try {
+    const sourceId = await manualSourceId();
+    const validFrom = asOfDate && /^\d{4}-\d{2}-\d{2}$/.test(asOfDate)
+      ? asOfDate
+      : new Date().toISOString().slice(0, 10);
+    const result = await graphqlMutation<
+      { addCompetingSource: { success: boolean; errors: Array<{ message: string }> } },
+      { input: { entityId: string; attributeCode: string; sourceId: string; value: string; validFrom: string } }
+    >(ADD_COMPETING_SOURCE_MUTATION, {
+      input: { entityId, attributeCode: code, sourceId, value: next, validFrom },
+    });
+    const message = result.error?.message || result.data?.addCompetingSource?.errors?.[0]?.message;
+    if (message || !result.data?.addCompetingSource?.success) throw new Error(message || 'Could not save the value');
+    setError(null);
+  } catch (error) {
+    restore();
+    setError(error instanceof Error ? error.message : 'Could not save the value');
+  }
+}
+
 /** Translate an AG Grid filter model into the server grid operators. */
 function filtersFromGridModel(model: Record<string, any> | null | undefined): Filter[] {
   const filters: Filter[] = [];
@@ -276,6 +353,8 @@ export function EntityAttributeTable({
   onTotalChange,
   selectedId,
   onSelect,
+  entityIds,
+  embedded = false,
 }: {
   domainCode: string;
   domainKey: string;
@@ -286,6 +365,10 @@ export function EntityAttributeTable({
   onTotalChange?: (total: number) => void;
   selectedId?: string | null;
   onSelect?: (entity: { id: string; name: string; code: string }) => void;
+  /** When set, the grid is limited to these records. An empty list shows no rows. */
+  entityIds?: readonly string[];
+  /** Stacked section: no register chrome, sized to the rows. */
+  embedded?: boolean;
 }) {
   const router = useRouter();
   const inspect = useAttributeInspect();
@@ -314,14 +397,15 @@ export function EntityAttributeTable({
   const reqId = useRef(0);
 
   const columns = useMemo<Col[]>(() => {
-    const id: Col = { code: 'entity_code', name: 'ID', kind: 'text', align: 'left', listValues: [] };
-    const name: Col = { code: 'entity_name', name: 'Name', kind: 'text', align: 'left', listValues: [] };
+    const id: Col = { code: 'entity_code', name: 'ID', kind: 'text', align: 'left', listValues: [], editable: false };
+    const name: Col = { code: 'entity_name', name: 'Name', kind: 'text', align: 'left', listValues: [], editable: false };
     const relatedCols: Col[] = stableRelated.map((r) => ({
       code: `${r.alias}.${r.field}`,
       name: r.header,
       kind: 'text',
       align: 'left',
       listValues: [],
+      editable: false,
     }));
     return [id, name, ...relatedCols, ...catalog];
   }, [catalog, stableRelated]);
@@ -390,6 +474,7 @@ export function EntityAttributeTable({
             ...columnMeta(a.dataType),
             dataType: a.dataType,
             listValues: (a.listValues || []).map(String).filter(Boolean),
+            editable: a.isEditable !== false,
             aggregationType: a.aggregationType,
             weightAttributeCode: a.weightAttributeCode,
           }))
@@ -401,14 +486,30 @@ export function EntityAttributeTable({
     return () => { cancelled = true; };
   }, [domainCode, refreshKey]);
 
+  const scopeKey = entityIds == null ? null : entityIds.filter(Boolean).join('\0');
+  const scopedIds = useMemo(
+    () => (scopeKey == null ? null : (scopeKey ? scopeKey.split('\0') : [])),
+    [scopeKey],
+  );
+
   const filters = useMemo(() => {
+    if (scopedIds && scopedIds.length === 0) return [];
     const global = globalSearch.trim();
     const base: Filter[] = global ? [{ field: 'entity_code', op: 'searchAny', value: global }] : [];
-    return [...base, ...gridFilters];
-  }, [globalSearch, gridFilters]);
+    const scope: Filter[] = scopedIds ? [{ field: 'entity_id', op: 'in', value: scopedIds }] : [];
+    return [...scope, ...base, ...gridFilters];
+  }, [globalSearch, gridFilters, scopedIds]);
 
   const loadPage = useCallback(async () => {
     if (!catalogReady) return;
+    if (scopedIds && scopedIds.length === 0) {
+      setRows([]);
+      setMatched(0);
+      setScanNote(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     const id = ++reqId.current;
     setLoading(true);
     const base = {
@@ -480,13 +581,13 @@ export function EntityAttributeTable({
     const total = grid?.total || 0;
     setRows(loaded);
     setMatched(total);
-    if (filters.length === 0) onTotalChange?.(total);
+    if (!scopedIds && filters.length === 0) onTotalChange?.(total);
     setScanNote(total > loaded.length
       ? `Row groups and totals use the first ${loaded.length.toLocaleString()} of ${total.toLocaleString()} matching records.`
       : null);
     setError(null);
     setLoading(false);
-  }, [catalogReady, domainCode, asOfDate, attributeColumns, lookups, stableRelated, sort, filters, columns, globalSearch, onTotalChange]);
+  }, [catalogReady, domainCode, asOfDate, attributeColumns, lookups, stableRelated, sort, filters, columns, globalSearch, onTotalChange, scopedIds]);
 
   useEffect(() => { loadPage(); }, [loadPage, refreshKey]);
 
@@ -540,6 +641,9 @@ export function EntityAttributeTable({
   }
 
   const shown = rows.length;
+  const scopeOnly = scopedIds != null && filters.every((filter) => filter.field === 'entity_id' && filter.op === 'in');
+  const embeddedAuto = embedded && !(loading && rows.length === 0) && rows.length <= 12;
+  const embeddedHeight = rows.length > 12 ? 520 : 240;
 
   const gridActions = useRef({ domainKey });
   gridActions.current = { domainKey };
@@ -578,28 +682,37 @@ export function EntityAttributeTable({
           : (params.data ? params.data[col.code] : params.value);
         return formatCell(raw, col) || '';
       },
+      valueSetter: (params) => {
+        if (!params.data || params.node?.group || params.node?.footer) return false;
+        params.data[col.code] = params.newValue;
+        return true;
+      },
+      editable: (params) => col.editable && Boolean(params.data?.entity_id) && !params.node?.group && !params.node?.footer && isRowAttributeCode(col.code),
+      cellEditor: col.editable ? AttributeCellEditor : undefined,
       cellRenderer: col.code === 'entity_code' || col.code === 'entity_name'
         ? EntityLinkCell
         : aggFunc ? AggregateCell : undefined,
       cellRendererParams: aggFunc ? { col } : undefined,
     };
     });
-    defs.push({
-      colId: 'status',
-      headerName: 'Status',
-      sortable: false,
-      filter: false,
-      width: 110,
-      maxWidth: 120,
-      valueGetter: () => 'Active',
-      cellRenderer: () => <span className="status-chip active">Active</span>,
-    });
+    if (!embedded) {
+      defs.push({
+        colId: 'status',
+        headerName: 'Status',
+        sortable: false,
+        filter: false,
+        width: 110,
+        maxWidth: 120,
+        valueGetter: () => 'Active',
+        cellRenderer: () => <span className="status-chip active">Active</span>,
+      });
+    }
     return defs;
-  }, [columns]);
+  }, [columns, embedded]);
 
   return (
     <>
-      <div className="filter-bar">
+      {!embedded && <div className="filter-bar">
         <div className="filter-label">Filter</div>
         <input
           className="attr-global-search"
@@ -619,7 +732,7 @@ export function EntityAttributeTable({
         <div className="filter-count">
           Showing <strong>{loading ? '…' : shown}</strong> of {loading ? '…' : matched}
         </div>
-      </div>
+      </div>}
       {scanNote && <div className="attr-table-note">{scanNote}</div>}
       {error && <div className="attr-table-error">{error}</div>}
 
@@ -628,16 +741,18 @@ export function EntityAttributeTable({
           rows={catalogReady ? rows : []}
           columns={columnDefs}
           getRowId={(row) => String(row.entity_id || row.entity_code || 'row')}
-          autoHeight={false}
-          height="100%"
+          autoHeight={embedded ? embeddedAuto : false}
+          height={embedded ? (embeddedAuto ? undefined : embeddedHeight) : '100%'}
           enableSortFilter
           loading={!catalogReady || (loading && rows.length === 0)}
-          emptyMessage={!catalogReady || loading ? 'Loading…' : (filters.length > 0 ? 'No records match these filters.' : emptyMessage)}
+          emptyMessage={!catalogReady || loading ? 'Loading…' : (!scopeOnly && filters.length > 0 ? 'No records match these filters.' : emptyMessage)}
           context={gridContext}
           onGridReady={(api) => { gridApi.current = api; }}
           onFilterChanged={applyGridFilters}
           onSortChanged={applyGridSort}
-          rowGroupPanelShow="always"
+          singleClickEdit
+          onCellValueChanged={(event) => { void commitManualOverride(event, columns, asOfDate, setError); }}
+          rowGroupPanelShow={embedded ? 'never' : 'always'}
           grandTotalRow="bottom"
           autoGroupColumnDef={{ headerName: 'Group', minWidth: 220 }}
           getRowClass={(params) => (
