@@ -1,4 +1,17 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import {
+    applyVerifiedCapacity,
+    asNumber,
+    buildCapacityQuote,
+    newBreachKeys,
+    normalizeProformaLegs,
+    searchFeasiblePar,
+    type CapacityQuote,
+    type LimitKind,
+    type NormalizedProformaLeg,
+    type ProformaLegInput,
+    type SnapshotRow,
+} from './compliance-capacity';
 
 /**
  * Compliance Rules Engine (thin client wrapper)
@@ -22,6 +35,8 @@ import { SupabaseClient } from '@supabase/supabase-js';
  *   - provide a typed, test-friendly surface for the GraphQL resolvers and
  *     MCP tools
  *   - fetch the resulting run + results in one call for convenience
+ *   - quote investment capacity from proforma snapshots. The par algebra lives
+ *     in compliance-capacity.ts. The snapshots themselves are Postgres.
  */
 
 export interface EvaluateRuleOptions {
@@ -197,6 +212,124 @@ export class ComplianceEngine {
 
         return (data || []).map(mapResult);
     }
+
+    /**
+     * Booked book plus any number of buys and sells. Positive par buys a
+     * security and negative par sells it. An empty leg list is the booked book.
+     * The database removes the ephemeral positions before it returns.
+     */
+    async proformaSnapshot(options: ProformaSnapshotOptions): Promise<SnapshotRow[]> {
+        const { data, error } = await this.cx().rpc('proforma_snapshot', {
+            p_anchor_entity_id: options.anchorEntityId,
+            p_legs: options.legs,
+            p_as_of_date: options.asOfDate,
+            p_knowledge_date: options.knowledgeDate ?? new Date().toISOString(),
+            p_source_scope: options.sourceScope ?? null,
+            p_rule_codes: options.ruleCodes ?? null,
+        });
+        if (error) {
+            throw new Error(`Proforma snapshot failed: ${error.message}`);
+        }
+        const rows = ((data || []) as RawSnapshot[]).map(mapSnapshot);
+        const failures = rows.filter((row) => row.status === 'ERROR');
+        if (failures.length) {
+            throw new Error(failures.map((row) => `${row.ruleCode}: ${row.errorMessage || 'evaluation failed'}`).join('; '));
+        }
+        return rows;
+    }
+
+    /**
+     * Whether this package of buys and sells would breach. Every leg is applied
+     * together. Approved is false when any hard test is new or worse.
+     */
+    async evaluateProforma(options: EvaluateProformaOptions): Promise<ProformaScore> {
+        const legs = normalizeProformaLegs(options.legs);
+        const { data, error } = await this.cx().rpc('evaluate_proforma', {
+            p_anchor_entity_id: options.anchorEntityId,
+            p_legs: legs,
+            p_as_of_date: options.asOfDate,
+            p_knowledge_date: options.knowledgeDate ?? new Date().toISOString(),
+            p_source_scope: options.sourceScope ?? null,
+            p_rule_codes: options.ruleCodes ?? null,
+        });
+        if (error) {
+            throw new Error(`Proforma evaluation failed: ${error.message}`);
+        }
+        const lines = ((data || []) as RawProforma[]).map(mapProforma);
+        return {
+            approved: lines.every((line) => line.approved),
+            lines,
+        };
+    }
+
+    /**
+     * Largest additional par of one security that does not worsen a rule through
+     * its limit. `legs` are buys and sells already in the package, so a swap
+     * can ask how much of the bought name still fits after the sale.
+     * Null capacity means no rule caps the buy. Zero means a rule blocks it.
+     */
+    async investmentCapacity(options: InvestmentCapacityOptions): Promise<CapacityQuote> {
+        if (!options.securityId && !options.securityCode) {
+            throw new Error('Capacity needs a security');
+        }
+        const limitKind: LimitKind = String(options.limitKind || 'HARD').toUpperCase() === 'SOFT' ? 'SOFT' : 'HARD';
+        const knowledgeDate = options.knowledgeDate ?? new Date().toISOString();
+        const probePar = options.probePar && options.probePar > 0 ? options.probePar : 1_000_000;
+        const fixed = options.legs?.length ? normalizeProformaLegs(options.legs) : [];
+        const probe = (par: number): NormalizedProformaLeg => ({
+            security_id: options.securityId ?? null,
+            security_code: options.securityCode ?? null,
+            par,
+            attributes: null,
+        });
+        const shared = {
+            anchorEntityId: options.anchorEntityId,
+            asOfDate: options.asOfDate,
+            knowledgeDate,
+            sourceScope: options.sourceScope,
+            ruleCodes: options.ruleCodes,
+        };
+
+        const { data: metricRows, error: metricError } = await this.cx().rpc('security_test_metrics', {
+            p_security_id: options.securityId ?? null,
+            p_security_code: options.securityCode ?? null,
+            p_as_of_date: options.asOfDate,
+            p_knowledge_date: knowledgeDate,
+            p_source_scope: options.sourceScope ?? null,
+            p_rule_codes: options.ruleCodes ?? null,
+            p_anchor_entity_id: options.anchorEntityId,
+        });
+        if (metricError) {
+            throw new Error(`Capacity metrics failed: ${metricError.message}`);
+        }
+        const weightedMetrics = new Map<string, number | null>();
+        for (const row of (metricRows || []) as Array<{ rule_code: string; metric: unknown }>) {
+            weightedMetrics.set(row.rule_code, asNumber(row.metric));
+        }
+
+        const baseline = await this.proformaSnapshot({ ...shared, legs: fixed });
+        const probed = await this.proformaSnapshot({ ...shared, legs: [...fixed, probe(probePar)] });
+        const probedAgain = await this.proformaSnapshot({ ...shared, legs: [...fixed, probe(probePar * 2)] });
+        const quote = buildCapacityQuote({
+            baseline,
+            probe: probed,
+            probeAgain: probedAgain,
+            probePar,
+            limitKind,
+            weightedMetrics,
+        });
+        if (quote.capacityPar == null || quote.capacityPar <= 0) return quote;
+
+        const at = (par: number) => this.proformaSnapshot({ ...shared, legs: [...fixed, probe(par)] });
+        const closedRows = await at(quote.capacityPar);
+        const breaches = newBreachKeys(baseline, closedRows, limitKind);
+        if (breaches.length === 0) return quote;
+        const verified = await searchFeasiblePar(quote.capacityPar, async (par) => {
+            const rows = await at(par);
+            return newBreachKeys(baseline, rows, limitKind).length === 0;
+        });
+        return applyVerifiedCapacity(quote, verified, breaches, closedRows);
+    }
 }
 
 function mapRun(row: any): ComplianceEvaluationRun {
@@ -251,4 +384,138 @@ export function getComplianceEngine(supabase: SupabaseClient): ComplianceEngine 
         complianceEngineInstance = new ComplianceEngine(supabase);
     }
     return complianceEngineInstance;
+}
+
+export interface ProformaSnapshotOptions {
+    anchorEntityId: string;
+    legs: NormalizedProformaLeg[];
+    asOfDate: string;
+    knowledgeDate?: string;
+    sourceScope?: string | null;
+    ruleCodes?: string[] | null;
+}
+
+export interface EvaluateProformaOptions {
+    anchorEntityId: string;
+    legs: ProformaLegInput[];
+    asOfDate: string;
+    knowledgeDate?: string;
+    sourceScope?: string | null;
+    ruleCodes?: string[] | null;
+}
+
+export interface InvestmentCapacityOptions {
+    anchorEntityId: string;
+    securityId?: string | null;
+    securityCode?: string | null;
+    asOfDate: string;
+    knowledgeDate?: string;
+    sourceScope?: string | null;
+    ruleCodes?: string[] | null;
+    limitKind?: LimitKind | null;
+    /** Buys and sells already in the package. Capacity is additional par of the security on top of these. */
+    legs?: ProformaLegInput[] | null;
+    probePar?: number | null;
+}
+
+export interface ProformaLine {
+    ruleCode: string;
+    ruleName: string;
+    groupByValue: string | null;
+    limitDirection: 'MAX' | 'MIN' | null;
+    baselineValue: number | null;
+    scenarioValue: number | null;
+    baselineStatus: string | null;
+    scenarioStatus: string | null;
+    hardLimitValue: number | null;
+    softLimitValue: number | null;
+    baselineNumerator: number | null;
+    scenarioNumerator: number | null;
+    baselineDenominator: number | null;
+    scenarioDenominator: number | null;
+    verdict: string;
+    approved: boolean;
+}
+
+export interface ProformaScore {
+    approved: boolean;
+    lines: ProformaLine[];
+}
+
+interface RawSnapshot {
+    rule_code: string;
+    rule_name: string;
+    group_by_value: string | null;
+    limit_direction: string | null;
+    numerator_value: unknown;
+    denominator_value: unknown;
+    computed_value: unknown;
+    soft_limit_value: unknown;
+    hard_limit_value: unknown;
+    status: string | null;
+    result_unit: string | null;
+    error_message: string | null;
+}
+
+interface RawProforma {
+    rule_code: string;
+    rule_name: string;
+    group_by_value: string | null;
+    limit_direction: string | null;
+    baseline_value: unknown;
+    scenario_value: unknown;
+    baseline_status: string | null;
+    scenario_status: string | null;
+    hard_limit_value: unknown;
+    soft_limit_value: unknown;
+    baseline_numerator: unknown;
+    scenario_numerator: unknown;
+    baseline_denominator: unknown;
+    scenario_denominator: unknown;
+    verdict: string;
+    approved: boolean;
+}
+
+function directionOf(value: string | null): 'MAX' | 'MIN' | null {
+    if (value === 'MIN') return 'MIN';
+    if (value === 'MAX') return 'MAX';
+    return null;
+}
+
+function mapSnapshot(row: RawSnapshot): SnapshotRow {
+    return {
+        ruleCode: row.rule_code,
+        ruleName: row.rule_name,
+        groupByValue: row.group_by_value,
+        limitDirection: directionOf(row.limit_direction),
+        numeratorValue: asNumber(row.numerator_value),
+        denominatorValue: asNumber(row.denominator_value),
+        computedValue: asNumber(row.computed_value),
+        softLimitValue: asNumber(row.soft_limit_value),
+        hardLimitValue: asNumber(row.hard_limit_value),
+        status: row.status,
+        resultUnit: row.result_unit,
+        errorMessage: row.error_message,
+    };
+}
+
+function mapProforma(row: RawProforma): ProformaLine {
+    return {
+        ruleCode: row.rule_code,
+        ruleName: row.rule_name,
+        groupByValue: row.group_by_value,
+        limitDirection: directionOf(row.limit_direction),
+        baselineValue: asNumber(row.baseline_value),
+        scenarioValue: asNumber(row.scenario_value),
+        baselineStatus: row.baseline_status,
+        scenarioStatus: row.scenario_status,
+        hardLimitValue: asNumber(row.hard_limit_value),
+        softLimitValue: asNumber(row.soft_limit_value),
+        baselineNumerator: asNumber(row.baseline_numerator),
+        scenarioNumerator: asNumber(row.scenario_numerator),
+        baselineDenominator: asNumber(row.baseline_denominator),
+        scenarioDenominator: asNumber(row.scenario_denominator),
+        verdict: row.verdict,
+        approved: row.approved,
+    };
 }

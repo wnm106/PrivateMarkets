@@ -1,5 +1,5 @@
 import { Context } from '../context';
-import { getComplianceEngine } from '../lib/compliance-engine';
+import { ComplianceEngine, getComplianceEngine } from '../lib/compliance-engine';
 import { commitAllocation, loadAllocationDraft, type AllocationHold } from '../lib/allocation-store';
 import type { AllocationAdjustment } from '../lib/allocation-engine';
 import {
@@ -110,6 +110,72 @@ export const complianceResolvers = {
 
     complianceFundBoard: async (_: any, __: any, context: Context) => {
       return loadFundBoard(context);
+    },
+
+    evaluateComplianceProforma: async (_: any, args: {
+      anchorEntityId: string;
+      legs: Array<{ securityId?: string | null; securityCode?: string | null; par: number; attributes?: Record<string, unknown> | null }>;
+      asOfDate: string;
+      knowledgeDate?: string | null;
+      sourceScope?: string | null;
+      ruleCodes?: string[] | null;
+    }, context: Context) => {
+      try {
+        const engine = new ComplianceEngine(context.supabase);
+        const score = await engine.evaluateProforma({
+          anchorEntityId: args.anchorEntityId,
+          legs: args.legs,
+          asOfDate: args.asOfDate,
+          knowledgeDate: args.knowledgeDate || undefined,
+          sourceScope: args.sourceScope,
+          ruleCodes: args.ruleCodes,
+        });
+        return { ...score, errors: [] };
+      } catch (error: any) {
+        console.error('Error evaluating compliance proforma:', error);
+        return { approved: false, lines: [], errors: [{ field: 'general', message: error.message, code: 'EVALUATE_FAILED' }] };
+      }
+    },
+
+    investmentCapacity: async (_: any, args: {
+      anchorEntityId: string;
+      securityId?: string | null;
+      securityCode?: string | null;
+      asOfDate: string;
+      knowledgeDate?: string | null;
+      sourceScope?: string | null;
+      ruleCodes?: string[] | null;
+      limitKind?: string | null;
+      legs?: Array<{ securityId?: string | null; securityCode?: string | null; par: number; attributes?: Record<string, unknown> | null }> | null;
+    }, context: Context) => {
+      try {
+        const requested = args.limitKind ? args.limitKind.toUpperCase() : 'HARD';
+        if (requested !== 'HARD' && requested !== 'SOFT') {
+          throw new Error('limitKind is HARD or SOFT');
+        }
+        const engine = new ComplianceEngine(context.supabase);
+        const quote = await engine.investmentCapacity({
+          anchorEntityId: args.anchorEntityId,
+          securityId: args.securityId,
+          securityCode: args.securityCode,
+          asOfDate: args.asOfDate,
+          knowledgeDate: args.knowledgeDate || undefined,
+          sourceScope: args.sourceScope,
+          ruleCodes: args.ruleCodes,
+          limitKind: requested,
+          legs: args.legs,
+        });
+        return { ...quote, errors: [] };
+      } catch (error: any) {
+        console.error('Error calculating investment capacity:', error);
+        return {
+          capacityPar: null,
+          bindingRuleCode: null,
+          bindingGroup: null,
+          lines: [],
+          errors: [{ field: 'general', message: error.message, code: 'EVALUATE_FAILED' }],
+        };
+      }
     },
   },
 
