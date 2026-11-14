@@ -5,7 +5,8 @@
   "description": "Bi-temporal financial Master Data Management platform for private markets investments",
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "surfaces/*"
   ],
   "scripts": {
     "dev": "turbo run dev",

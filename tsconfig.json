@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
@@ -14,17 +18,53 @@
     "incremental": true,
     "isolatedModules": true,
     "jsx": "preserve",
-    "plugins": [{ "name": "next" }],
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
     "paths": {
-      "@tapestrai/ui": ["./packages/ui/src"],
-      "@tapestrai/ui/*": ["./packages/ui/src/*"],
-      "@tapestrai/graphql": ["./packages/graphql/src"],
-      "@tapestrai/graphql/*": ["./packages/graphql/src/*"],
-      "@tapestrai/database": ["./packages/database/src"],
-      "@tapestrai/mcp-server": ["./packages/mcp-server/src"],
-      "@tapestrai/config": ["./packages/config"]
+      "@tapestrai/ui": [
+        "./packages/ui/src"
+      ],
+      "@tapestrai/ui/*": [
+        "./packages/ui/src/*"
+      ],
+      "@tapestrai/graphql": [
+        "./packages/graphql/src"
+      ],
+      "@tapestrai/graphql/*": [
+        "./packages/graphql/src/*"
+      ],
+      "@tapestrai/database": [
+        "./packages/database/src"
+      ],
+      "@tapestrai/mcp-server": [
+        "./packages/mcp-server/src"
+      ],
+      "@tapestrai/config": [
+        "./packages/config"
+      ],
+      "@tapestrai/surface-sdk": [
+        "./packages/surface-sdk/src"
+      ],
+      "@surfaces/*": [
+        "./surfaces/*"
+      ],
+      "@tapestrai/surface-sdk/*": [
+        "./packages/surface-sdk/src/*"
+      ]
     }
   },
-  "include": ["**/*.ts", "**/*.tsx", "**/*.mts"],
-  "exclude": ["node_modules", "dist", ".next", ".turbo"]
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    ".next",
+    ".turbo"
+  ]
 }
