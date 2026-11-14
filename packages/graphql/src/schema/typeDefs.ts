@@ -997,6 +997,59 @@ type DealComplianceScore {
   errors: [MutationError!]!
 }
 
+# One buy or sell in a proforma package. Positive par buys the security.
+# Negative par sells it. Every leg in one call is applied together.
+input ComplianceProformaLegInput {
+  securityId: ID
+  securityCode: String
+  par: Float!
+  attributes: JSON
+}
+
+type ComplianceProformaLine {
+  ruleCode: String!
+  ruleName: String!
+  groupByValue: String
+  limitDirection: ComplianceLimitDirection
+  baselineValue: Float
+  scenarioValue: Float
+  baselineStatus: ComplianceResultStatus
+  scenarioStatus: ComplianceResultStatus
+  hardLimitValue: Float
+  softLimitValue: Float
+  verdict: String!
+  approved: Boolean!
+}
+
+type ComplianceProformaScore {
+  approved: Boolean!
+  lines: [ComplianceProformaLine!]!
+  errors: [MutationError!]!
+}
+
+# Headroom, in par of one security, on the rules that security would worsen.
+# capacityPar null means no rule caps the buy. Zero means a rule blocks it.
+type ComplianceCapacityLine {
+  ruleCode: String!
+  ruleName: String!
+  groupByValue: String
+  limitDirection: ComplianceLimitDirection
+  impact: String!
+  baselineValue: Float
+  limitValue: Float
+  nativeHeadroom: Float
+  capacityPar: Float
+  binding: Boolean!
+}
+
+type ComplianceCapacity {
+  capacityPar: Float
+  bindingRuleCode: String
+  bindingGroup: String
+  lines: [ComplianceCapacityLine!]!
+  errors: [MutationError!]!
+}
+
 type ComplianceEvaluationResultConnection {
   edges: [ComplianceEvaluationResultEdge!]!
   pageInfo: PageInfo!
@@ -2727,6 +2780,27 @@ type Query {
   complianceResults(filter: ComplianceResultFilter, pagination: PaginationInput): ComplianceEvaluationResultConnection!
   compliancePopulationPreview(input: CompliancePopulationPreviewInput!): CompliancePopulationPreview!
   complianceFundBoard: ComplianceFundBoard!
+  # Booked book plus any number of buys and sells, scored together.
+  evaluateComplianceProforma(
+    anchorEntityId: ID!
+    legs: [ComplianceProformaLegInput!]!
+    asOfDate: Date!
+    knowledgeDate: DateTime
+    sourceScope: String
+    ruleCodes: [String!]
+  ): ComplianceProformaScore!
+  # Largest additional par of one security. legs are the rest of the package.
+  investmentCapacity(
+    anchorEntityId: ID!
+    securityId: ID
+    securityCode: String
+    asOfDate: Date!
+    knowledgeDate: DateTime
+    sourceScope: String
+    ruleCodes: [String!]
+    limitKind: String
+    legs: [ComplianceProformaLegInput!]
+  ): ComplianceCapacity!
 
   # Reference List queries
   referenceLists(domainCode: String, isActive: Boolean): [ReferenceListSummary!]!

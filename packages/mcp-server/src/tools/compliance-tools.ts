@@ -1,3 +1,4 @@
+import { ComplianceEngine } from '@tapestrai/graphql/src/lib/compliance-engine';
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
 
@@ -625,12 +626,102 @@ const deleteComplianceScopeAssignment: ToolDefinition = {
   },
 };
 
+const evaluateComplianceProforma: ToolDefinition = {
+  name: 'evaluate_compliance_proforma',
+  description: 'Score any number of buys and sells together against the compliance rules for one fund. Each leg is a security plus a par: positive par buys, negative par sells. A swap is a sell leg and a buy leg in the same call. A multi-tranche deal is one leg per security. Returns a verdict per rule and group. approved is false when the package creates or deepens a hard breach. anchorEntityId is the fund. securityId or securityCode identifies each security. asOfDate is YYYY-MM-DD.',
+  category: 'compliance',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      anchorEntityId: { type: 'string', description: 'Fund entity id the package is scored against' },
+      asOfDate: { type: 'string', description: 'Valid-time date (YYYY-MM-DD)' },
+      knowledgeDate: { type: 'string', description: 'System/knowledge time (ISO timestamp). Defaults to now.' },
+      sourceScope: { type: 'string', description: 'GOLDEN or a source code. Defaults to the rule default.' },
+      ruleCodes: { type: 'array', items: { type: 'string' }, description: 'Limit the check to these rule codes. Omit to score every active rule for the fund.' },
+      legs: {
+        type: 'array',
+        description: 'Buys and sells applied together. At least one.',
+        items: {
+          type: 'object',
+          properties: {
+            securityId: { type: 'string' },
+            securityCode: { type: 'string' },
+            par: { type: 'number', description: 'Positive buys the security. Negative sells it.' },
+            attributes: { type: 'object', description: 'Extra position attributes, such as expected interest, keyed by attribute code.' },
+          },
+          required: ['par'],
+        },
+      },
+    },
+    required: ['anchorEntityId', 'asOfDate', 'legs'],
+  },
+  execute: async (args, supabase) => {
+    return new ComplianceEngine(supabase).evaluateProforma({
+      anchorEntityId: args.anchorEntityId,
+      asOfDate: args.asOfDate,
+      knowledgeDate: args.knowledgeDate,
+      sourceScope: args.sourceScope,
+      ruleCodes: args.ruleCodes,
+      legs: args.legs || [],
+    });
+  },
+};
+
+const investmentCapacity: ToolDefinition = {
+  name: 'investment_capacity',
+  description: 'Largest additional par of one security that does not push a rule it worsens through its limit. Null capacity means no rule caps the buy. Zero means a rule blocks it. Pass legs to include other buys and sells in the same package, such as the sale in a swap, and the result is how much of the named security still fits on top of those legs. limitKind is HARD (default) or SOFT. anchorEntityId is the fund. securityId or securityCode is the security being sized.',
+  category: 'compliance',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      anchorEntityId: { type: 'string', description: 'Fund entity id' },
+      securityId: { type: 'string', description: 'Security to size. Provide this or securityCode.' },
+      securityCode: { type: 'string', description: 'Security code to size. Provide this or securityId.' },
+      asOfDate: { type: 'string', description: 'Valid-time date (YYYY-MM-DD)' },
+      knowledgeDate: { type: 'string', description: 'System/knowledge time (ISO timestamp). Defaults to now.' },
+      sourceScope: { type: 'string', description: 'GOLDEN or a source code. Defaults to the rule default.' },
+      ruleCodes: { type: 'array', items: { type: 'string' }, description: 'Limit the quote to these rule codes. Omit for every active rule on the fund.' },
+      limitKind: { type: 'string', enum: ['HARD', 'SOFT'], description: 'HARD is room before a hard breach. SOFT is room before a warning.' },
+      legs: {
+        type: 'array',
+        description: 'Other buys and sells already in the package. Capacity is additional par of the named security.',
+        items: {
+          type: 'object',
+          properties: {
+            securityId: { type: 'string' },
+            securityCode: { type: 'string' },
+            par: { type: 'number', description: 'Positive buys. Negative sells.' },
+            attributes: { type: 'object' },
+          },
+          required: ['par'],
+        },
+      },
+    },
+    required: ['anchorEntityId', 'asOfDate'],
+  },
+  execute: async (args, supabase) => {
+    return new ComplianceEngine(supabase).investmentCapacity({
+      anchorEntityId: args.anchorEntityId,
+      securityId: args.securityId,
+      securityCode: args.securityCode,
+      asOfDate: args.asOfDate,
+      knowledgeDate: args.knowledgeDate,
+      sourceScope: args.sourceScope,
+      ruleCodes: args.ruleCodes,
+      limitKind: args.limitKind,
+      legs: args.legs,
+    });
+  },
+};
+
 export function registerComplianceTools(registry: ToolRegistry): void {
   // Read tools
   registry.registerTool(listComplianceRules);
   registry.registerTool(getComplianceRule);
   registry.registerTool(getComplianceRuleVersion);
   registry.registerTool(evaluateComplianceRule);
+  registry.registerTool(evaluateComplianceProforma);
+  registry.registerTool(investmentCapacity);
   registry.registerTool(listComplianceBreaches);
 
   // Write tools
