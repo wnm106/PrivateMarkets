@@ -60,7 +60,7 @@ export default function ExperiencesAdminPage() {
           </div>
         </div>
         <div className="page-actions">
-          <Link href="/pipeline" className="btn btn-primary">Deal Pipeline</Link>
+          <Link href="/s/deal-pipeline" className="btn btn-primary">Deal Pipeline</Link>
         </div>
       </div>
       {error && <div className="xp-error">{error}</div>}

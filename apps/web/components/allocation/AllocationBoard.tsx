@@ -338,10 +338,10 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const strategyName = STRATEGY_LABEL[strategyCode]
     || (strategyCode ? strategyCode.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase()) : '');
   useSurfaceNav([
-    { label: 'Pipeline', href: '/pipeline' },
+    { label: 'Pipeline', href: '/s/deal-pipeline' },
     ...(strategyName ? [{
       label: strategyName,
-      href: strategyCode ? `/pipeline?strategy=${encodeURIComponent(strategyCode)}` : '/pipeline',
+      href: strategyCode ? `/s/deal-pipeline?strategy=${encodeURIComponent(strategyCode)}` : '/s/deal-pipeline',
     }] : []),
     { label: title },
   ]);

@@ -6,6 +6,8 @@ A surface is a custom screen built on the platform. Each lives in `surfaces/<cod
 
 - Import only React, `@tapestrai/surface-sdk`, `@tapestrai/ui`, and your own files. `npm run lint` in `surfaces/` fails on anything else (`@/…`, `apps/…`, other surfaces).
 - Talk to the platform through `useSurfaceHost()`: `query`, `mutate`, `href`, `useCrumbs`, `asOfDate`, `permissions`, `clientCode`. Keep GraphQL documents inside the surface.
+- Use `host.navigate`, `host.basePath`, `host.useQueryParam` and `SurfaceLink` for navigation and URL state; do not import `next/navigation` or `next/link`.
+- Styling comes from the host's global stylesheet and `@tapestrai/ui` (for example the `pipe-*` and `da-*` classes). A surface does not ship its own global CSS yet.
 - Do not define routes, middleware, or auth. The host owns them.
 - Row-level security and tenancy enforce data isolation. Surface gating (`clients`, `requiredPermissions`) only controls who sees the screen.
 

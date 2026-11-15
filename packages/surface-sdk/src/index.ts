@@ -28,6 +28,14 @@ export interface SurfaceHost {
   permissions: readonly string[];
   /** Selected as-of date (YYYY-MM-DD). */
   asOfDate: string;
+  /** Selected knowledge date (YYYY-MM-DD or a datetime). */
+  knowledgeDate: string;
+  /** Where this surface is mounted, e.g. /s/deal-pipeline. Use it for the surface's own links. */
+  basePath: string;
+  /** Go to a platform or surface path. Client-side navigation. */
+  navigate(path: string, options?: { replace?: boolean }): void;
+  /** One URL query parameter on the surface's own page, as a hook: [value, set]. Setting null removes it. */
+  useQueryParam(name: string): [string | null, (value: string | null) => void];
   query<TData = unknown>(
     document: string,
     variables?: Record<string, unknown>,

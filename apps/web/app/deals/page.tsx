@@ -28,7 +28,7 @@ export default function DealsPage() {
           </div>
         </div>
         <div className="page-actions">
-          <Link href="/pipeline" className="btn btn-primary">Pipeline</Link>
+          <Link href="/s/deal-pipeline" className="btn btn-primary">Pipeline</Link>
           <button className="btn">Export</button>
           <button className="btn">Bulk Edit</button>
           <Link href="/deals/new" className="btn">+ New Record</Link>

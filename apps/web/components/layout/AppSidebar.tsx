@@ -23,7 +23,7 @@ interface DomainLink {
 }
 
 const TOOLS = [
-  { href: '/pipeline', label: 'Deal Pipeline', icon: 'layers' },
+  { href: '/s/deal-pipeline', label: 'Deal Pipeline', icon: 'layers' },
   { href: '/fund-surface', label: 'Fund surface', icon: 'chart' },
   { href: '/fund-rec', label: 'Fund reconciliation', icon: 'chart' },
   { href: '/merge', label: 'Entity Resolution', icon: 'nodes' },
@@ -49,6 +49,7 @@ const ADMIN = [
   { href: '/admin/experiences', label: 'Record Experiences', icon: 'domains' },
   { href: '/admin/narratives', label: 'Narratives', icon: 'list' },
   { href: '/admin/skills', label: 'Skills', icon: 'list' },
+  { href: '/admin/jobs', label: 'Jobs', icon: 'list' },
   { href: '/admin/tenancy', label: 'Clients, Users & Roles', icon: 'users' },
 ] as const;
 
