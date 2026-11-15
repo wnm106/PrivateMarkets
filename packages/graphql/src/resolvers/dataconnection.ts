@@ -1,4 +1,5 @@
 import { Context } from '../context';
+import { callerClientId, enqueueJob } from './jobs';
 
 export const dataConnectionResolvers = {
   Query: {
@@ -461,17 +462,18 @@ export const dataConnectionResolvers = {
         if (loaderError) throw loaderError;
         if (!loader) throw new Error('Data loader not found');
 
-        // In a real implementation, this would queue the loader for execution
-        // For now, simulate a run
-        const runId = crypto.randomUUID();
-        
-        await context.supabase
-          .from('data_loaders')
-          .update({
-            loader_status: 'RUNNING',
-            last_run_at: new Date().toISOString(),
-          })
-          .eq('id', args.id);
+        // A loader belongs to whichever client runs it: connections are not client scoped yet.
+        const clientId = await callerClientId(context);
+        if (!clientId) throw new Error('Choose a client before running a loader');
+
+        // The worker picks the run up. One open run per loader: a second click returns the same run.
+        const runId = await enqueueJob(context, {
+          clientId,
+          jobType: 'loader.run',
+          payload: { loaderId: loader.id, loaderCode: loader.loader_code },
+          dedupeKey: `loader:${loader.id}`,
+          maxAttempts: 1,
+        });
 
         return {
           success: true,

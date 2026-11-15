@@ -23,6 +23,8 @@ import { allocationResolvers } from './allocation';
 import { fundSurfaceResolvers } from './fund-surface';
 import { fundRecResolvers } from './fund-rec';
 import { icMemoResolvers } from './ic-memo';
+import { jobResolvers } from './jobs';
+import { feedResolvers } from './feeds';
 
 export const resolvers = {
   Query: {
@@ -61,6 +63,8 @@ export const resolvers = {
     icMemo: icMemoResolvers.Query.icMemo,
     fundSurface: fundSurfaceResolvers.Query.fundSurface,
     ...fundRecResolvers.Query,
+    ...jobResolvers.Query,
+    ...feedResolvers.Query,
   },
   
   Mutation: {
@@ -94,6 +98,8 @@ export const resolvers = {
     createMatchRule: entityResolutionResolvers.Mutation.createMatchRule,
     commitAllocation: allocationResolvers.Mutation.commitAllocation,
     ...surfaceResolvers.Mutation,
+    ...jobResolvers.Mutation,
+    ...feedResolvers.Mutation,
   },
   
   Subscription: {},

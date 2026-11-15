@@ -2788,6 +2788,19 @@ type Query {
   fundRec(fundId: ID!, periodEnd: Date, asOfDate: Date, knowledgeDate: DateTime, driftThresholdPct: Float): JSON!
   """Positional cash flows matched to the fund's bank transactions, with the tie-out."""
   cashRec(fundId: ID!, periodEnd: Date, asOfDate: Date, knowledgeDate: DateTime): JSON!
+  """Job types the worker can run."""
+  jobTypes: [JobType!]!
+  """Schedules for the caller's clients. Tenant admins also see platform schedules."""
+  jobSchedules: [JobSchedule!]!
+  """Recent job runs, newest first."""
+  jobRuns(status: String, scheduleId: ID, first: Int): [JobRun!]!
+  """Places files arrive from, for the caller's clients. Stored credentials are never returned."""
+  feedConnections: [FeedConnection!]!
+  feeds: [Feed!]!
+  """Files the feeds have seen, newest first."""
+  receivedFiles(feedId: ID, first: Int): [ReceivedFile!]!
+  """Saved maps a feed can load through."""
+  feedMaps: [FeedMapOption!]!
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
@@ -3058,6 +3071,27 @@ type Mutation {
   openReconciliationRun(input: OpenReconciliationRunInput!): ReconciliationRunResult!
   resolveReconciliationLine(input: ResolveReconciliationLineInput!): ReconciliationRunResult!
   decideReconciliationRun(input: DecideReconciliationRunInput!): ReconciliationRunResult!
+
+  # Job schedules and runs
+  saveJobSchedule(input: SaveJobScheduleInput!): JobScheduleResult!
+  deleteJobSchedule(id: ID!): MutationResult!
+  """Queues the schedule's job now. Returns the run already open for it when there is one."""
+  runJobScheduleNow(id: ID!): JobRunResult!
+  """Puts a failed or cancelled run back in the queue."""
+  retryJobRun(id: ID!): JobRunResult!
+  """Cancels a queued run. A running job is not interrupted."""
+  cancelJobRun(id: ID!): JobRunResult!
+
+  # Feeds: files that arrive on their own
+  saveFeedConnection(input: SaveFeedConnectionInput!): FeedConnectionResult!
+  deleteFeedConnection(id: ID!): MutationResult!
+  """Queues a check that the connection can be reached. The result shows on the connection."""
+  checkFeedConnection(id: ID!): JobRunResult!
+  saveFeed(input: SaveFeedInput!): FeedResult!
+  """Deletes the feed, its poll schedule and its file history."""
+  deleteFeed(id: ID!): MutationResult!
+  """Queues a poll of the feed now."""
+  pollFeedNow(id: ID!): JobRunResult!
 }
 
 # Root Subscription Type
@@ -4639,5 +4673,197 @@ type ReconciliationRunResult {
   errors: [MutationError!]!
 }
 
+# Jobs: schedules and the run queue (see src/lib/job-types.ts and packages/worker)
+
+type JobType {
+  code: String!
+  label: String!
+  description: String!
+  """PLATFORM (no client), CLIENT (one client), or ANY."""
+  scope: String!
+  payloadExample: JSON!
+}
+
+type JobSchedule {
+  id: ID!
+  """Null for a platform schedule."""
+  clientId: ID
+  scheduleCode: String!
+  scheduleName: String!
+  jobType: String!
+  jobTypeLabel: String!
+  payload: JSON!
+  cronExpression: String!
+  timezone: String!
+  isActive: Boolean!
+  maxAttempts: Int!
+  nextRunAt: DateTime
+  lastRunAt: DateTime
+  lastRunId: ID
+  lastRunStatus: String
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type JobRun {
+  id: ID!
+  clientId: ID
+  scheduleId: ID
+  scheduleName: String
+  jobType: String!
+  jobTypeLabel: String!
+  payload: JSON!
+  """QUEUED, RUNNING, SUCCEEDED, FAILED, or CANCELLED."""
+  status: String!
+  attempts: Int!
+  maxAttempts: Int!
+  runAfter: DateTime!
+  startedAt: DateTime
+  finishedAt: DateTime
+  result: JSON
+  errorMessage: String
+  createdAt: DateTime!
+}
+
+input SaveJobScheduleInput {
+  """Leave out to create a schedule."""
+  id: ID
+  """True for a platform schedule (tenant admins only). Otherwise the schedule belongs to the caller's client."""
+  platform: Boolean
+  scheduleCode: String!
+  scheduleName: String!
+  jobType: String!
+  payload: JSON
+  """Five fields: minute hour day-of-month month day-of-week."""
+  cronExpression: String!
+  """IANA zone such as America/New_York. Defaults to UTC."""
+  timezone: String
+  isActive: Boolean
+  maxAttempts: Int
+}
+
+type JobScheduleResult {
+  schedule: JobSchedule
+  errors: [MutationError!]!
+}
+
+type JobRunResult {
+  run: JobRun
+  errors: [MutationError!]!
+}
+
+# Feeds: connections, feeds and the received-file ledger (see packages/worker/src/feeds.ts)
+
+type FeedConnection {
+  id: ID!
+  clientId: ID!
+  connectionCode: String!
+  connectionName: String!
+  """STORAGE (a folder in the feed inbox) or HTTP (an https address)."""
+  kind: String!
+  """Settings that are safe to show. Never a credential."""
+  config: JSON!
+  hasSecret: Boolean!
+  isActive: Boolean!
+  lastCheckedAt: DateTime
+  lastCheckOk: Boolean
+  lastCheckMessage: String
+  """STORAGE only: where to put files, as bucket/folder."""
+  inboxPath: String
+}
+
+type Feed {
+  id: ID!
+  clientId: ID!
+  connectionId: ID!
+  connectionName: String!
+  connectionKind: String!
+  feedCode: String!
+  feedName: String!
+  path: String!
+  filePattern: String!
+  mapCode: String!
+  sourceCode: String
+  isActive: Boolean!
+  """When the feed is polled. Null when it is only polled on request."""
+  pollCron: String
+  pollTimezone: String
+  nextPollAt: DateTime
+  """When a file is expected. Null when the feed has no deadline."""
+  expectedCron: String
+  expectedTimezone: String!
+  graceMinutes: Int!
+  lastPolledAt: DateTime
+  lastReceivedAt: DateTime
+  lastFileName: String
+  lastFileStatus: String
+  lastFileMessage: String
+}
+
+type ReceivedFile {
+  id: ID!
+  feedId: ID!
+  feedName: String
+  fileName: String!
+  remoteRef: String
+  sizeBytes: Float
+  sha256: String!
+  """LOADING, LOADED, NEEDS_REVIEW, or FAILED."""
+  status: String!
+  attempts: Int!
+  """The file in Load data, when it was stored there."""
+  importInstanceId: ID
+  rowsCreated: Int
+  rowsMatched: Int
+  message: String
+  receivedAt: DateTime!
+  lastSeenAt: DateTime!
+  finishedAt: DateTime
+}
+
+type FeedMapOption {
+  mapCode: String!
+  mapName: String!
+}
+
+input SaveFeedConnectionInput {
+  id: ID
+  connectionCode: String
+  connectionName: String!
+  kind: String!
+  config: JSON
+  """Leave out to keep the stored credential. An empty string removes it."""
+  secret: String
+  isActive: Boolean
+}
+
+input SaveFeedInput {
+  id: ID
+  connectionId: ID!
+  feedCode: String
+  feedName: String!
+  path: String
+  filePattern: String
+  mapCode: String!
+  sourceCode: String
+  isActive: Boolean
+  """Five-field cron for polling. Leave out to poll only on request."""
+  pollCron: String
+  pollTimezone: String
+  """Five-field cron for when a file is expected. Leave out for no deadline."""
+  expectedCron: String
+  expectedTimezone: String
+  graceMinutes: Int
+}
+
+type FeedConnectionResult {
+  connection: FeedConnection
+  errors: [MutationError!]!
+}
+
+type FeedResult {
+  feed: Feed
+  errors: [MutationError!]!
+}
 
 `;
