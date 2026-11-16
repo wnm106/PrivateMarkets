@@ -6,6 +6,7 @@ import { registerDomainTools } from '@tapestrai/mcp-server/src/tools/domain-tool
 import { registerDQTools } from '@tapestrai/mcp-server/src/tools/dq-tools';
 import { registerImportMapTools } from '@tapestrai/mcp-server/src/tools/import-map-tools';
 import { registerLineageTools } from '@tapestrai/mcp-server/src/tools/lineage-tools';
+import { registerListTools } from '@tapestrai/mcp-server/src/tools/list-tools';
 import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrative-tools';
 import { registerOverrideTools } from '@tapestrai/mcp-server/src/tools/override-tools';
 import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/position-file-tools';
@@ -34,6 +35,7 @@ registerComplianceTools(registry);
 registerReportingTools(registry);
 registerQueryTools(registry);
 registerNarrativeTools(registry);
+registerListTools(registry);
 
 interface Listed {
   name: string;

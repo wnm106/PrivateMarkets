@@ -1,7 +1,7 @@
 'use client';
 
 import { Fragment, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { setPath, unanswered, type Confidence, type ProposalAction, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { LIST_VALUE_TOOL, setPath, unanswered, unmetListValues, type Confidence, type ItemDecision, type ProposalAction, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { ChangeSettings, readArg } from '@/components/workflows/ChangeSettings';
 import { graphqlMutation } from '@/lib/graphql';
 import { markdownToHtml } from '@/lib/markdown';
@@ -119,7 +119,17 @@ export function ReviewPanel({ review, onDecided }: Props) {
   const rejected = items.filter((item) => choices[item.id] === 'REJECT');
   const undecided = items.filter((item) => !choices[item.id]);
   const blocked = approved.filter((item) => openQuestions(item).length > 0);
-  const ready = undecided.length === 0 && blocked.length === 0;
+  /** What this person has decided for one change so far, as the server will read it. */
+  const draftDecision = (item: ProposalItem): ItemDecision => {
+    const changed = Object.entries(edits[item.id] || {});
+    const args = changed.length > 0 ? changed.reduce((next, [key, text]) => setPath(next, key, coerce(readArg(item.args, key), text)), item.args) : undefined;
+    return { decision: 'APPROVE', answers: answers[item.id] || {}, ...(args ? { args } : {}) };
+  };
+  const approvedIds = new Set(approved.map((item) => item.id));
+  /** For an approved change: the new list values it sets whose addition is not approved. */
+  const unmet = (item: ProposalItem) => (approvedIds.has(item.id) ? unmetListValues(item, draftDecision(item), { items }, approvedIds) : []);
+  const unlinked = approved.filter((item) => unmet(item).length > 0);
+  const ready = undecided.length === 0 && blocked.length === 0 && unlinked.length === 0;
 
   const focus = (id: string | null) => {
     setExpanded(id);
@@ -185,6 +195,7 @@ export function ReviewPanel({ review, onDecided }: Props) {
     const questions = openQuestions(item).length;
     if (choice === 'REJECT') return { text: 'Rejected', fg: 'var(--ink-3)' };
     if (questions > 0) return { text: `Needs ${plural(questions, 'answer')}`, fg: '#b45309' };
+    if (unmet(item).length > 0) return { text: 'Needs the new list value', fg: '#b91c1c' };
     if (choice === 'APPROVE') return { text: 'Approved', fg: '#166534' };
     return item.needsReview ? { text: 'Look closely', fg: '#b45309' } : { text: 'Ready to approve', fg: 'var(--ink-3)' };
   };
@@ -302,6 +313,28 @@ export function ReviewPanel({ review, onDecided }: Props) {
                       <tr>
                         <td colSpan={6} style={{ ...cell, background: '#f8fafc', padding: '14px 18px' }}>
                           {attentionIndex >= 0 && <div style={{ fontSize: 11, color: '#b45309', fontWeight: 700, marginBottom: 8 }}>NEEDS YOUR ATTENTION · {attentionIndex + 1} OF {attention.length}</div>}
+                          {item.tool === LIST_VALUE_TOOL && (
+                            <div style={{ fontSize: 12, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e3a8a', borderRadius: 6, padding: '8px 10px', marginBottom: 10, lineHeight: 1.45 }}>
+                              <strong>This adds a value to a list every client shares.</strong> Nothing on the list meant the same thing, so the agent proposes a new value. Only a tenant admin can approve it.
+                              {items.filter((other) => (other.dependsOn || []).includes(item.id)).map((other) => (
+                                <div key={other.id}>
+                                  Step 1 of 2. Then:{' '}
+                                  <button type="button" onClick={() => focus(other.id)} style={{ border: 'none', background: 'none', padding: 0, color: '#1d4ed8', fontWeight: 600, cursor: 'pointer', fontSize: 12 }}>
+                                    {other.summary}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {(item.dependsOn || []).map((id) => items.find((other) => other.id === id)).filter((other): other is ProposalItem => Boolean(other)).map((other) => (
+                            <div key={other.id} style={{ fontSize: 12, background: unmet(item).length > 0 ? '#fef2f2' : '#eff6ff', border: `1px solid ${unmet(item).length > 0 ? '#fecaca' : '#bfdbfe'}`, color: unmet(item).length > 0 ? '#991b1b' : '#1e3a8a', borderRadius: 6, padding: '8px 10px', marginBottom: 10, lineHeight: 1.45 }}>
+                              <strong>Step 2 of 2.</strong> This sets a value that is not on the list yet. It needs{' '}
+                              <button type="button" onClick={() => focus(other.id)} style={{ border: 'none', background: 'none', padding: 0, color: '#1d4ed8', fontWeight: 600, cursor: 'pointer', fontSize: 12 }}>
+                                {other.summary}
+                              </button>{' '}
+                              approved too. {unmet(item).length > 0 ? 'That change is not approved: approve it, or choose a value already on the list here.' : 'Or choose a value already on the list here, and reject the addition.'}
+                            </div>
+                          ))}
                           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) minmax(260px, 1fr)', gap: 20 }}>
                             <div>
                               <div style={sectionLabel}>Exactly what will happen</div>
@@ -371,7 +404,7 @@ export function ReviewPanel({ review, onDecided }: Props) {
             <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>
               {items.length === 0
                 ? 'Nothing will change.'
-                : `${approved.length} approved, ${rejected.length} rejected${undecided.length > 0 ? `, ${undecided.length} still to decide` : ''}${blocked.length > 0 ? `, ${plural(blocked.length, 'approval')} waiting on an answer` : ''}.`}
+                : `${approved.length} approved, ${rejected.length} rejected${undecided.length > 0 ? `, ${undecided.length} still to decide` : ''}${blocked.length > 0 ? `, ${plural(blocked.length, 'approval')} waiting on an answer` : ''}${unlinked.length > 0 ? `, ${plural(unlinked.length, 'approval')} needing a new list value approved` : ''}.`}
             </div>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
               {items.length > 0 && (
@@ -388,6 +421,8 @@ export function ReviewPanel({ review, onDecided }: Props) {
                       ? `${undecided.length} still to decide`
                       : blocked.length > 0
                         ? `${plural(blocked.length, 'answer')} still needed`
+                        : unlinked.length > 0
+                          ? 'A new list value is not approved'
                         : approved.length === 0
                           ? 'Confirm: change nothing'
                           : `Apply ${plural(approved.length, 'approved change')}`}

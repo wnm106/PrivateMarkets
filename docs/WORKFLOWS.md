@@ -16,6 +16,7 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 
 | Part | Where | What it does |
 |---|---|---|
+| List values | `supabase/migrations/20261116140000_workflow_list_values.sql`, `packages/worker/src/workflow/list-check.ts`, `packages/mcp-server/src/tools/list-tools.ts` | Reading an attribute's list, holding proposed values to it, and adding a value |
 | Service accounts | `supabase/migrations/20261116130000_workflow_service_accounts.sql` | Which user each client's steps run as, the Workflow Service role, and the checks on people |
 | Tables and functions | `supabase/migrations/20261116120000_workflows.sql` | `ops.workflows`, `workflow_versions`, `workflow_runs`, `workflow_steps`, `workflow_events`, `workflow_reviews`, reached only through the `workflow_*` functions |
 | Graph rules | `packages/graphql/src/lib/workflow-graph.ts` | Step types, what makes a graph sound, which step follows which, `{{placeholders}}` |
@@ -70,6 +71,31 @@ To change something the agent calls `propose_changes`. Each proposed change says
 The step can limit which changes may be proposed ("Changes it can propose").
 
 **Required fields are checked by the engine, not left to the agent.** When a change creates a record, the engine reads what that record's template requires. Each required attribute the agent did not supply becomes a question on the change, marked "required for this type of record".
+
+### Values that come from a list
+
+Many attributes take their value from a list. A proposed value, or a suggested one, has to be on that list. The check runs when the agent proposes, before anything is recorded:
+
+| What the agent wrote | What happens |
+|---|---|
+| The code, the label, or a synonym of a list value, in any case | Stored as the code. The agent is told |
+| Something not on the list | The change is not recorded. The agent is shown the list and asked to choose again |
+| Something not on the list, in a change that depends on one adding it | It stands. The reviewer decides on both |
+
+Sent back with the list, the agent picks the value that means the same thing and says in its reasons what it mapped from ("Consumer Goods" to Consumer Staples), or asks the reviewer with no suggestion. Deciding that two wordings mean the same is a judgement, so the agent makes it where the reviewer can see it; the engine only makes the certain matches.
+
+When nothing on the list fits, the agent can propose **adding the value**, as two linked changes:
+
+1. `add_attribute_list_value`: add the value to the list.
+2. The change that sets it, marked as depending on the first.
+
+They are applied in that order. If the first fails, the second is not attempted. In the review:
+
+- The second cannot be approved without the first, unless the reviewer changes its value to one already on the list.
+- A list is shared by every client, so **only a tenant admin can approve an addition**. Anyone else can reject it and choose an existing value.
+- The agent is told to add sparingly, and never to fit one odd record.
+
+The agent needs `get_attribute_list_values` among its tools to read a list, and `add_attribute_list_value` among the changes it can propose to add to one. The check itself runs either way.
 
 ## Reviewing
 

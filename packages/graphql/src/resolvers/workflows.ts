@@ -1,6 +1,6 @@
 import type { Context } from '../context';
 import { NODE_TYPES, asGraph, validateGraph } from '../lib/workflow-graph';
-import { asDecision, asProposal, checkDecision, proposalCounts } from '../lib/workflow-proposal';
+import { LIST_VALUE_TOOL, asDecision, asProposal, checkDecision, proposalCounts } from '../lib/workflow-proposal';
 import { WORKFLOW_TEMPLATES } from '../lib/workflow-templates';
 import { callerClientId } from './jobs';
 
@@ -298,6 +298,17 @@ export const workflowResolvers = {
           const check = checkDecision(proposal, decision);
           if (!check.ok) {
             return { review: mapReview(current.data as Row), errors: check.problems.map((message) => ({ field: null, message, code: 'INCOMPLETE' })) };
+          }
+          // A list is shared by every client. Only a tenant admin may approve a change to one.
+          const approved = new Set(check.approved);
+          if (proposal.items.some((item) => approved.has(item.id) && item.tool === LIST_VALUE_TOOL)) {
+            const admin = await context.supabase.schema('tenancy').rpc('is_tenant_admin');
+            if (admin.error || admin.data !== true) {
+              return {
+                review: mapReview(current.data as Row),
+                errors: [{ field: null, message: 'Adding a value to a list needs a tenant admin, because lists are shared by every client. Reject that change, or ask a tenant admin to review.', code: 'FORBIDDEN' }],
+              };
+            }
           }
           // Approving a review with every change rejected is a rejection.
           if (proposal.items.length > 0 && check.approved.length === 0) recorded = 'REJECTED';

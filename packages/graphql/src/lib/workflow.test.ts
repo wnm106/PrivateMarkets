@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { asGraph, evaluateCondition, isReadTool, nextNode, resolveTemplates, validateGraph, type WorkflowGraph } from './workflow-graph';
-import { asDecision, checkDecision, finalArgs, normalizeItems, proposalCounts, setPath, withFoundationGaps } from './workflow-proposal';
+import { asDecision, checkDecision, finalArgs, inDependencyOrder, matchListValue, normalizeItems, proposalCounts, setPath, withFoundationGaps } from './workflow-proposal';
 import { WORKFLOW_TEMPLATES } from './workflow-templates';
 
 const cleanup = (): WorkflowGraph => JSON.parse(JSON.stringify(WORKFLOW_TEMPLATES.find((template) => template.code === 'DATA_CLEANUP')!.graph));
@@ -125,5 +125,50 @@ describe('proposals', () => {
     expect(args).toEqual({ attributes: { CURRENCY: 'USD' } });
     expect(setPath({}, '__proto__.polluted', true)).toEqual({});
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
+describe('values that come from a list', () => {
+  const sectors = [
+    { code: 'CONSUMER_STAPLES', label: 'Consumer Staples', synonyms: [] },
+    { code: 'HEALTH_CARE', label: 'Health Care', synonyms: ['Healthcare'] },
+    { code: 'INFORMATION_TECHNOLOGY', label: 'Information Technology', synonyms: ['IT'] },
+  ];
+
+  it('reads a code, a label, or a synonym as the list value, and nothing looser', () => {
+    expect(matchListValue(sectors, 'HEALTH_CARE')?.code).toBe('HEALTH_CARE');
+    expect(matchListValue(sectors, 'health care')?.code).toBe('HEALTH_CARE');
+    expect(matchListValue(sectors, 'Healthcare')?.code).toBe('HEALTH_CARE');
+    expect(matchListValue(sectors, 'it')?.code).toBe('INFORMATION_TECHNOLOGY');
+    // Close in meaning is a judgement for the agent, not a match.
+    expect(matchListValue(sectors, 'Consumer Goods')).toBeNull();
+    expect(matchListValue(sectors, '')).toBeNull();
+  });
+
+  const linked = () =>
+    normalizeItems([
+      { id: 'add', action: 'CREATE', target: { kind: 'List value', label: 'Consumer Discretionary' }, summary: 'Add Consumer Discretionary to the sector list', tool: 'add_attribute_list_value', args: { attributeCode: 'SECTOR', valueCode: 'CONSUMER_DISCRETIONARY', valueLabel: 'Consumer Discretionary' }, confidence: 'HIGH', rationale: 'r' },
+      { id: 'set', dependsOn: ['add'], action: 'UPDATE', target: { kind: 'Issuer', label: 'Obligor 41' }, summary: 'Set sector on Obligor 41', tool: 'submit_manual_override', args: { entityId: 'e41', attributeCode: 'SECTOR', value: 'CONSUMER_DISCRETIONARY' }, confidence: 'MEDIUM', rationale: 'r' },
+    ]);
+
+  it('will not set a new list value unless the change that adds it is approved', () => {
+    const items = linked();
+    // A change to a shared list always gets a close look.
+    expect(items[0].needsReview).toBe(true);
+    expect(items[1].dependsOn).toEqual(['add']);
+    const proposal = { items };
+
+    const both = checkDecision(proposal, asDecision({ items: { add: { decision: 'APPROVE' }, set: { decision: 'APPROVE' } } }));
+    expect(both).toMatchObject({ ok: true, approved: ['add', 'set'] });
+
+    const orphan = checkDecision(proposal, asDecision({ items: { add: { decision: 'REJECT' }, set: { decision: 'APPROVE' } } }));
+    expect(orphan.ok).toBe(false);
+    expect(orphan.problems[0]).toMatch(/sets CONSUMER_DISCRETIONARY, which is not on the list yet\. Approve "Add Consumer Discretionary/);
+
+    // The reviewer picked a value that is on the list, so the addition is not needed.
+    const swapped = checkDecision(proposal, asDecision({ items: { add: { decision: 'REJECT' }, set: { decision: 'APPROVE', args: { value: 'CONSUMER_STAPLES' } } } }));
+    expect(swapped).toMatchObject({ ok: true, approved: ['set'] });
+
+    expect(inDependencyOrder([items[1], items[0]]).map((item) => item.id)).toEqual(['add', 'set']);
   });
 });

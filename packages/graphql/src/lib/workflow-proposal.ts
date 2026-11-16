@@ -39,6 +39,8 @@ export interface ProposalItem {
   rationale: string;
   evidence: string[];
   missing: MissingField[];
+  /** Other changes in the same proposal that must be made first, by id. */
+  dependsOn?: string[];
 }
 
 export interface Proposal {
@@ -107,7 +109,9 @@ export function normalizeItems(raw: unknown, existing: ProposalItem[] = []): Pro
       tool,
       args: record(row.args),
       confidence,
-      needsReview: row.needsReview === true || confidence === 'LOW' || missing.some((field) => field.required),
+      // A change to a list every client shares always gets a close look.
+      needsReview: row.needsReview === true || confidence === 'LOW' || tool === LIST_VALUE_TOOL || missing.some((field) => field.required),
+      ...(Array.isArray(row.dependsOn) && row.dependsOn.length > 0 ? { dependsOn: row.dependsOn.map((dep) => text(dep)).filter((dep) => dep && dep !== id) } : {}),
       rationale: text(row.rationale),
       evidence: (Array.isArray(row.evidence) ? row.evidence : []).map((line) => text(line)).filter(Boolean),
       missing,
@@ -283,6 +287,15 @@ export function checkDecision(proposal: Proposal, decision: ReviewDecision): Dec
     }
     approved.push(item.id);
   }
+
+  // A change that sets a value another change adds to a list needs that change approved too.
+  const approvedIds = new Set(approved);
+  for (const item of proposal.items) {
+    if (!approvedIds.has(item.id)) continue;
+    for (const need of unmetListValues(item, decision.items[item.id], proposal, approvedIds)) {
+      problems.push(`"${item.summary}" sets ${need.value}, which is not on the list yet. Approve "${need.adds.summary}" as well, or choose a value that is on the list.`);
+    }
+  }
   return { ok: problems.length === 0, problems, approved, rejected };
 }
 
@@ -321,4 +334,117 @@ export function asProposal(value: unknown): Proposal {
       missing: Array.isArray(item.missing) ? item.missing : [],
     })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Values that come from a list
+// ---------------------------------------------------------------------------
+
+/** The tool that adds a value to an attribute's list. Proposed on its own, or ahead of a change that sets the new value. */
+export const LIST_VALUE_TOOL = 'add_attribute_list_value';
+
+/**
+ * The attribute a setting holds a value for, if any. An override's "value" is
+ * a value of the attribute it names; a new record's "attributes.X" is a value of X.
+ */
+export function attributeFor(args: Record<string, unknown>, key: string): string | null {
+  if (key === 'value' && typeof args.attributeCode === 'string') return args.attributeCode;
+  if (key.startsWith('attributes.')) return key.slice('attributes.'.length);
+  return null;
+}
+
+/** Every place in a change that holds an attribute's value, set or still to be answered. */
+export function valueSlots(item: Pick<ProposalItem, 'args' | 'missing'>): Array<{ key: string; attributeCode: string }> {
+  const keys = new Set<string>();
+  if ('value' in item.args) keys.add('value');
+  for (const code of Object.keys(record(item.args.attributes))) keys.add(`attributes.${code}`);
+  for (const field of item.missing) keys.add(field.key);
+  const slots: Array<{ key: string; attributeCode: string }> = [];
+  for (const key of keys) {
+    const attributeCode = attributeFor(item.args, key);
+    if (attributeCode) slots.push({ key, attributeCode });
+  }
+  return slots;
+}
+
+export interface ListValue {
+  code: string;
+  label: string;
+  synonyms: string[];
+}
+
+function fold(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, ' ');
+}
+
+/**
+ * The list value a piece of text means: its code, its label, or one of its
+ * synonyms, ignoring case and spacing. Null when nothing on the list is that
+ * text. Only certain matches are made here; judging that "Consumer Goods"
+ * means Consumer Staples is the agent's job, not this function's.
+ */
+export function matchListValue(values: ListValue[], given: unknown): ListValue | null {
+  const wanted = fold(given);
+  if (!wanted) return null;
+  return (
+    values.find((value) => value.code === String(given).trim()) ||
+    values.find((value) => fold(value.code) === wanted) ||
+    values.find((value) => fold(value.label) === wanted) ||
+    values.find((value) => value.synonyms.some((synonym) => fold(synonym) === wanted)) ||
+    null
+  );
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return fold(a) !== '' && fold(a) === fold(b);
+}
+
+/** The changes this item depends on that add a list value. */
+function listAdditions(item: ProposalItem, proposal: Proposal): ProposalItem[] {
+  const wanted = new Set(item.dependsOn || []);
+  return proposal.items.filter((candidate) => wanted.has(candidate.id) && candidate.tool === LIST_VALUE_TOOL);
+}
+
+/**
+ * The new list values this item would set without the change that adds them
+ * being approved. Empty when the reviewer chose another value, or approved both.
+ */
+export function unmetListValues(
+  item: ProposalItem,
+  decision: ItemDecision | undefined,
+  proposal: Proposal,
+  approved: ReadonlySet<string>,
+): Array<{ value: string; adds: ProposalItem }> {
+  const additions = listAdditions(item, proposal).filter((addition) => !approved.has(addition.id));
+  if (additions.length === 0) return [];
+  const args = finalArgs(item, decision || { decision: 'APPROVE' });
+  const unmet: Array<{ value: string; adds: ProposalItem }> = [];
+  for (const slot of valueSlots({ args, missing: [] })) {
+    const value = slot.key === 'value' ? args.value : record(args.attributes)[slot.attributeCode];
+    const adds = additions.find((addition) => addition.args.attributeCode === slot.attributeCode && sameValue(addition.args.valueCode, value));
+    if (adds) unmet.push({ value: String(value), adds });
+  }
+  return unmet;
+}
+
+/** The items with anything they depend on moved ahead of them. The order is otherwise kept. */
+export function inDependencyOrder(items: ProposalItem[]): ProposalItem[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const placed = new Set<string>();
+  const ordered: ProposalItem[] = [];
+  const place = (item: ProposalItem, trail: Set<string>) => {
+    if (placed.has(item.id) || trail.has(item.id)) return;
+    trail.add(item.id);
+    for (const dep of item.dependsOn || []) {
+      const needed = byId.get(dep);
+      if (needed) place(needed, trail);
+    }
+    placed.add(item.id);
+    ordered.push(item);
+  };
+  for (const item of items) place(item, new Set());
+  return ordered;
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import type { CSSProperties } from 'react';
-import { isLockedArg, type MissingField, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { attributeFor, isLockedArg, type MissingField, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { AttributeValueInput, listDisplayLabel, useAttributeDisplay, useAttributeListOptions } from '@/components/forms/AttributeValueInput';
 import { formatAttributeDisplay } from '@/lib/attribute-display';
 import { argRows, showValue } from '@/lib/workflows';
@@ -35,16 +35,6 @@ export function editableArg(args: Record<string, unknown>, key: string): boolean
   return value === null || value === undefined || ['string', 'number', 'boolean'].includes(typeof value);
 }
 
-/**
- * The attribute a setting holds a value for, if any. An override's "value" is
- * a value of the attribute it names; a new record's "attributes.X" is a value of X.
- */
-export function attributeFor(item: Pick<ProposalItem, 'args'>, key: string): string | null {
-  if (key === 'value' && typeof item.args.attributeCode === 'string') return item.args.attributeCode;
-  if (key.startsWith('attributes.')) return key.slice('attributes.'.length);
-  return null;
-}
-
 /** Settings that are dates whatever the tool: when a value starts or stops applying. */
 function dataTypeFor(key: string, field: MissingField | undefined): string | undefined {
   if (field?.dataType) return field.dataType.toUpperCase();
@@ -53,6 +43,8 @@ function dataTypeFor(key: string, field: MissingField | undefined): string | und
 
 const LABELS: Record<string, string> = {
   value: 'New value',
+  valueCode: 'Code stored on records',
+  valueLabel: 'Name people see',
   validFrom: 'Effective from',
   validTo: 'Effective to',
   overrideReason: 'Reason',
@@ -138,7 +130,7 @@ export function ChangeSettings({ item, canDecide, answers, edits, recordedArgs, 
     <div style={{ display: 'grid', gap: 2 }}>
       {rows.map((row) => {
         const field = questions.get(row.key);
-        const attributeCode = attributeFor(item, row.key);
+        const attributeCode = attributeFor(item.args, row.key);
         const dataType = dataTypeFor(row.key, field);
         const label = labelFor(row.key, field);
         const editable = canDecide && (Boolean(field) || editableArg(item.args, row.key));

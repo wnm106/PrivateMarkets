@@ -1,5 +1,6 @@
 import { isReadTool, resolveTemplates } from '@tapestrai/graphql/src/lib/workflow-graph';
-import { normalizeItems, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { normalizeItems, type ListValue, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { checkListValues } from './list-check';
 import { message, type AgentRequest, type AgentResult, type ToolRunner } from './engine';
 
 /**
@@ -76,6 +77,8 @@ const PROPOSE_SPEC: ToolSpec = {
         items: {
           type: 'object',
           properties: {
+            id: { type: 'string', description: 'A short name for this change, such as "add-sector". Needed only when another change depends on it.' },
+            dependsOn: { type: 'array', items: { type: 'string' }, description: 'The ids of changes that must be made before this one. Used when this change sets a list value that another change adds.' },
             action: { type: 'string', enum: ['CREATE', 'UPDATE', 'DELETE'], description: 'Whether this creates, edits, or deletes something.' },
             target: {
               type: 'object',
@@ -141,6 +144,7 @@ export function systemPrompt(proposable: ToolSpec[]): string {
     'Before proposing to create a record, read what its type requires (get_template_metadata) and check the record does not already exist. Supply every required attribute you can establish and ask for the rest. Ask once, for everything that record needs, rather than leaving gaps to be found later.',
     'Rate each change honestly. HIGH means a second source or the record\'s own history confirms it. Set needsReview on anything a careful person would want to look at twice.',
     'No one is watching while you work, so do not ask questions in your text: put them in missing. When the work is done, end with a summary for the reviewer.',
+    '## Values that come from a list\nMany attributes take their value from a list. Before you propose a value for an attribute, or suggest one, read its list (get_attribute_list_values) and use a code from it. What you found in the data is often worded differently from the list: when a list value clearly means the same thing, use that value and say in the rationale what you mapped from. When you are choosing between near fits, pick the closest, lower your confidence, and say what the alternatives were. When nothing on the list means the same thing, do one of two things. Ask the reviewer, with no suggestion. Or, if the value is a real, general one the list should have, propose adding it: one change using add_attribute_list_value, given an id, and the change that sets the value with dependsOn naming that id. A list is shared by everyone, so add to it sparingly and never to fit one odd record.',
     '## The summary\nThe reviewer reads your summary above a table that already lists every change you proposed, so do not list the changes again. Write for a busy person who knows the business and not the system: at most about 120 words, plain sentences, record names and codes but no record ids, tool names, template names, or field names in code formatting. Say what you looked at, what you found, and what needs their judgement and why. If something stopped you (a tool failed, data was missing), say so in one sentence. You may use a short bullet list. Do not use headings.',
     proposable.length > 0 ? `## Changes you can propose\nEach change names one of these tools and gives its settings.\n\n${catalog}` : '## Changes you can propose\nNone. This step only investigates and reports.',
   ].join('\n\n');
@@ -162,7 +166,11 @@ function restore(state: unknown, provider: string): AgentState | null {
 }
 
 export interface AgentDeps {
-  tools: ToolRunner & { specs(): ToolSpec[] };
+  tools: ToolRunner & {
+    specs(): ToolSpec[];
+    /** The values an attribute accepts, or null when it takes any value. Without this, proposed values are not checked against lists. */
+    listValues?(attributeCode: string, actor: AgentRequest['actor']): Promise<ListValue[] | null>;
+  };
   model(provider: string): AgentModel;
 }
 
@@ -188,17 +196,44 @@ export async function runAgentStep(request: AgentRequest, deps: AgentDeps): Prom
   };
   if (state.rounds > 0) await request.event('agent.resumed', `Continued from round ${state.rounds} after a restart`);
 
-  const propose = (input: Record<string, unknown>): { content: string; isError: boolean } => {
+  // Each attribute's list is read once per step.
+  const listCache = new Map<string, Promise<ListValue[] | null>>();
+  const lists = (attributeCode: string): Promise<ListValue[] | null> => {
+    let found = listCache.get(attributeCode);
+    if (!found) {
+      // A list that cannot be read is not checked: the change still goes to a person.
+      found = deps.tools.listValues ? deps.tools.listValues(attributeCode, request.actor).catch(() => null) : Promise.resolve(null);
+      listCache.set(attributeCode, found);
+    }
+    return found;
+  };
+
+  const propose = async (input: Record<string, unknown>): Promise<{ content: string; isError: boolean }> => {
     const added = normalizeItems(input.changes, state.items);
     const refused: string[] = [];
-    const kept = added.filter((item) => {
+    const notes: string[] = [];
+    const allowedHere = added.filter((item) => {
       if (canPropose.has(item.tool)) return true;
-      refused.push(`"${item.summary}" names ${item.tool}, which this step cannot propose.`);
+      refused.push(`"${item.summary}" names ${item.tool}, which this step cannot propose. Proposable tools: ${[...canPropose].join(', ') || 'none'}.`);
       return false;
     });
-    state.items.push(...kept);
-    const lines = [`Recorded ${kept.length} change${kept.length === 1 ? '' : 's'} for review (${state.items.length} in total).`];
-    if (refused.length > 0) lines.push(`Not recorded: ${refused.join(' ')} Proposable tools: ${[...canPropose].join(', ') || 'none'}.`);
+    // Values that come from a list are held to the list before anything is recorded.
+    const pool = [...state.items, ...allowedHere];
+    const kept: ProposalItem[] = [];
+    for (const item of allowedHere) {
+      const check = await checkListValues(item, pool, lists);
+      if ('refusal' in check) refused.push(check.refusal);
+      else {
+        kept.push(check.item);
+        notes.push(...check.notes);
+      }
+    }
+    // A change that depended on one that was not recorded no longer depends on it.
+    const recorded = new Set([...state.items, ...kept].map((item) => item.id));
+    state.items.push(...kept.map((item) => (item.dependsOn ? { ...item, dependsOn: item.dependsOn.filter((id) => recorded.has(id)) } : item)));
+    const lines = [`Recorded ${kept.length} change${kept.length === 1 ? '' : 's'} for review (${state.items.length} in total)${kept.length > 0 ? `: ${kept.map((item) => item.id).join(', ')}` : ''}.`];
+    if (notes.length > 0) lines.push(notes.join(' '));
+    if (refused.length > 0) lines.push(`Not recorded, fix and propose again: ${refused.join(' ')}`);
     return { content: lines.join(' '), isError: kept.length === 0 && refused.length > 0 };
   };
 
@@ -219,7 +254,7 @@ export async function runAgentStep(request: AgentRequest, deps: AgentDeps): Prom
     const results = await Promise.all(
       turn.calls.map(async (call) => {
         if (call.name === PROPOSE_TOOL) {
-          const outcome = propose(call.input);
+          const outcome = await propose(call.input);
           return { call, ...outcome };
         }
         if (!allowed.has(call.name)) {

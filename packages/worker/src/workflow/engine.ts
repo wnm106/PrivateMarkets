@@ -14,6 +14,7 @@ import {
   asProposal,
   checkDecision,
   finalArgs,
+  inDependencyOrder,
   proposalCounts,
   withFoundationGaps,
   type FoundationAttribute,
@@ -324,9 +325,13 @@ async function runApply(node: WorkflowNode, ctx: StepContext): Promise<StepOutco
 
   // A change that already ran is not run again when the step restarts.
   const done: Record<string, ApplyResult> = { ...(record(record(ctx.step?.state).done) as Record<string, ApplyResult>) };
-  for (const item of approved) {
+  // A change another depends on is made first. If it fails, the one that needed it is not attempted.
+  for (const item of inDependencyOrder(approved)) {
     if (done[item.id]) continue;
-    if (!tools.names().has(item.tool)) {
+    const failed = (item.dependsOn || []).map((id) => done[id]).find((needed) => needed && !needed.ok);
+    if (failed) {
+      done[item.id] = { id: item.id, summary: item.summary, tool: item.tool, ok: false, error: `Not attempted, because "${failed.summary}" could not be applied first.` };
+    } else if (!tools.names().has(item.tool)) {
       done[item.id] = { id: item.id, summary: item.summary, tool: item.tool, ok: false, error: `There is no tool called "${item.tool}".` };
     } else {
       // Marked before the call: after a crash mid-call the change is reported as

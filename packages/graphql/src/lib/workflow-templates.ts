@@ -17,6 +17,7 @@ export interface WorkflowTemplate {
 const READ_TOOLS = [
   'list_dq_exceptions',
   'get_dq_summary',
+  'get_attribute_list_values',
   'get_entity',
   'list_entities',
   'get_field_lineage',
@@ -69,7 +70,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
           type: 'agent',
           label: 'Investigate and propose fixes',
           position: { x: 740, y: 60 },
-          config: { instructions: CLEANUP_INSTRUCTIONS, tools: READ_TOOLS, proposable: ['submit_manual_override', 'resolve_dq_exception'], maxRounds: 30, provider: 'claude' },
+          config: { instructions: CLEANUP_INSTRUCTIONS, tools: READ_TOOLS, proposable: ['submit_manual_override', 'resolve_dq_exception', 'add_attribute_list_value'], maxRounds: 30, provider: 'claude' },
         },
         {
           id: 'review',

@@ -5,13 +5,14 @@ import { registerDomainTools } from '@tapestrai/mcp-server/src/tools/domain-tool
 import { registerDQTools } from '@tapestrai/mcp-server/src/tools/dq-tools';
 import { registerImportMapTools } from '@tapestrai/mcp-server/src/tools/import-map-tools';
 import { registerLineageTools } from '@tapestrai/mcp-server/src/tools/lineage-tools';
+import { registerListTools } from '@tapestrai/mcp-server/src/tools/list-tools';
 import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrative-tools';
 import { registerOverrideTools } from '@tapestrai/mcp-server/src/tools/override-tools';
 import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/position-file-tools';
 import { registerQueryTools } from '@tapestrai/mcp-server/src/tools/query-data';
 import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
 import { registerSpecialistTools } from '@tapestrai/mcp-server/src/tools/specialist-tools';
-import type { FoundationAttribute } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { LIST_VALUE_TOOL, type FoundationAttribute, type ListValue } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import type { ToolSpec } from './agent';
 import type { Actor, ToolNeed, ToolRunner } from './engine';
 
@@ -69,6 +70,7 @@ export function buildRegistry(): ToolRegistry {
   registerReportingTools(registry);
   registerQueryTools(registry);
   registerNarrativeTools(registry);
+  registerListTools(registry);
   return registry;
 }
 
@@ -92,6 +94,8 @@ export function signReason(spec: ToolSpec | undefined, args: Record<string, unkn
 export type WorkflowTools = ToolRunner & {
   specs(): ToolSpec[];
   foundation(args: Record<string, unknown>, actor: Actor): Promise<FoundationAttribute[]>;
+  /** The values an attribute accepts, or null when it takes any value. */
+  listValues(attributeCode: string, actor: Actor): Promise<ListValue[] | null>;
 };
 
 interface Session {
@@ -130,21 +134,21 @@ export function workflowTools(
   const specs = toolSpecs(registry);
   const byName = new Map(specs.map((tool) => [tool.name, tool]));
   const names = new Set(byName.keys());
-  const people = new Map<string, { until: number; name: string | null }>();
+  const people = new Map<string, { until: number; name: string | null; tenantAdmin: boolean }>();
   const accounts = new Map<string, Promise<Session>>();
 
   /** Refuses when the person behind the call does not hold what it needs. Asked again after a minute. */
-  async function personFor(actor: Actor, need: ToolNeed): Promise<string | null> {
+  async function personFor(actor: Actor, need: ToolNeed): Promise<{ name: string | null; tenantAdmin: boolean }> {
     const key = `${actor.userId}:${actor.clientId}:${need}`;
     const known = people.get(key);
-    if (known && known.until > Date.now()) return known.name;
+    if (known && known.until > Date.now()) return known;
     const { data, error } = await service.rpc('workflow_worker_person', { p_user_id: actor.userId, p_client_id: actor.clientId, p_permissions: NEEDS[need] });
     if (error) throw new Error(error.message);
-    const result = (data || {}) as { problem?: string; name?: string | null };
+    const result = (data || {}) as { problem?: string; name?: string | null; tenantAdmin?: boolean };
     if (result.problem) throw new Error(result.problem);
-    const name = result.name || null;
-    people.set(key, { until: Date.now() + PERSON_CHECK_MS, name });
-    return name;
+    const person = { until: Date.now() + PERSON_CHECK_MS, name: result.name || null, tenantAdmin: result.tenantAdmin === true };
+    people.set(key, person);
+    return person;
   }
 
   /** A client for the service account of this client. The session is kept until shortly before it expires. */
@@ -176,9 +180,17 @@ export function workflowTools(
   async function run(name: string, args: Record<string, unknown>, actor: Actor, need: ToolNeed, runId?: string): Promise<unknown> {
     if (!names.has(name)) throw new Error(`There is no tool called "${name}".`);
     const person = await personFor(actor, need);
+    if (name === LIST_VALUE_TOOL) {
+      // A list is shared by every client, and only a tenant admin may change one.
+      // The service account is not one, so this single change is made with the
+      // worker's own key, and only when a tenant admin approved it.
+      if (need !== 'apply') throw new Error('A value is added to a shared list only as a change a reviewer approved.');
+      if (!person.tenantAdmin) throw new Error('Adding a value to a shared list needs a tenant admin to approve it. Lists are shared by every client.');
+      return registry.executeTool(name, args, service);
+    }
     const client = await accountClient(actor.clientId);
     // The record's own history shows the service account. The reason says who approved it.
-    const finalArgs = need === 'apply' ? signReason(byName.get(name), args, `Approved by ${person || 'a reviewer'}${runId ? ` in workflow run ${runId}` : ''}.`) : args;
+    const finalArgs = need === 'apply' ? signReason(byName.get(name), args, `Approved by ${person.name || 'a reviewer'}${runId ? ` in workflow run ${runId}` : ''}.`) : args;
     return registry.executeTool(name, finalArgs, client);
   }
 
@@ -186,6 +198,10 @@ export function workflowTools(
     names: () => names,
     specs: () => specs,
     run,
+    async listValues(attributeCode, actor) {
+      const result = (await run('get_attribute_list_values', { attributeCode }, actor, 'read')) as { hasList?: boolean; values?: ListValue[] };
+      return result.hasList && Array.isArray(result.values) ? result.values : null;
+    },
     async foundation(args, actor) {
       const templateCode = typeof args.templateCode === 'string' ? args.templateCode : '';
       const domainCode = typeof args.domainCode === 'string' ? args.domainCode : '';

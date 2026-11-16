@@ -3,6 +3,7 @@ import { WORKFLOW_TEMPLATES } from '@tapestrai/graphql/src/lib/workflow-template
 import { normalizeItems } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { runAgentStep, type AgentModel, type ModelTurn } from './agent';
 import { RunBusyError, advanceRun, message, type Actor, type AgentRequest, type EngineDeps, type LoadedRun, type ReviewRow, type StepRow, type WorkflowStore } from './engine';
+import { checkListValues } from './list-check';
 import { signReason, workflowTools } from './tools';
 
 const CLEANUP = WORKFLOW_TEMPLATES.find((template) => template.code === 'DATA_CLEANUP')!.graph;
@@ -80,7 +81,7 @@ function proposed() {
 
 function deps(store: WorkflowStore, overrides: Partial<EngineDeps> = {}) {
   const calls: Array<{ name: string; args: Record<string, unknown>; actor: Actor; permission: string }> = [];
-  const names = new Set(['list_dq_exceptions', 'get_dq_summary', 'get_entity', 'list_entities', 'get_field_lineage', 'get_temporal_history', 'get_template_metadata', 'get_attribute_metadata', 'search_attributes', 'query_data', 'get_model_map', 'submit_manual_override', 'resolve_dq_exception', 'create_entity']);
+  const names = new Set(['list_dq_exceptions', 'get_dq_summary', 'get_attribute_list_values', 'get_entity', 'list_entities', 'get_field_lineage', 'get_temporal_history', 'get_template_metadata', 'get_attribute_metadata', 'search_attributes', 'query_data', 'get_model_map', 'submit_manual_override', 'resolve_dq_exception', 'create_entity']);
   const built: EngineDeps = {
     store,
     tools: {
@@ -425,5 +426,82 @@ describe('message', () => {
     expect(message({ message: 'Could not find a relationship', details: 'Searched public', hint: null })).toBe('Could not find a relationship Searched public');
     expect(message(new Error('boom'))).toBe('boom');
     expect(message({})).toBe('The step failed');
+  });
+});
+
+describe('checkListValues', () => {
+  const sectors = [
+    { code: 'CONSUMER_STAPLES', label: 'Consumer Staples', synonyms: [] },
+    { code: 'HEALTH_CARE', label: 'Health Care', synonyms: ['Healthcare'] },
+  ];
+  const lists = async (code: string) => (code === 'SECTOR' ? sectors : null);
+  const change = (extra: Record<string, unknown>) =>
+    normalizeItems([{ action: 'UPDATE', target: { kind: 'Issuer', label: 'Obligor 41' }, summary: 'Set sector', tool: 'submit_manual_override', confidence: 'MEDIUM', rationale: 'r', args: { entityId: 'e41', attributeCode: 'SECTOR' }, ...extra }])[0];
+
+  it('stores a label or synonym as the code, in the value and in a suggestion', async () => {
+    const value = await checkListValues(change({ args: { entityId: 'e41', attributeCode: 'SECTOR', value: 'Healthcare' } }), [], lists);
+    expect('item' in value && value.item.args.value).toBe('HEALTH_CARE');
+    expect('item' in value && value.notes[0]).toMatch(/stored as its list code HEALTH_CARE/);
+
+    const suggestion = await checkListValues(change({ missing: [{ key: 'value', label: 'Sector', question: 'Which?', suggested: 'consumer staples' }] }), [], lists);
+    expect('item' in suggestion && suggestion.item.missing[0].suggested).toBe('CONSUMER_STAPLES');
+  });
+
+  it('sends back a value that is not on the list, with the list', async () => {
+    const result = await checkListValues(change({ missing: [{ key: 'value', label: 'Sector', question: 'Which?', suggested: 'Consumer Goods' }] }), [], lists);
+    expect('refusal' in result && result.refusal).toMatch(/"Consumer Goods" is not a value SECTOR accepts\. It accepts: CONSUMER_STAPLES \(Consumer Staples\), HEALTH_CARE \(Health Care\)/);
+    // An attribute with no list takes anything.
+    const free = await checkListValues(change({ args: { entityId: 'e41', attributeCode: 'LEI', value: 'anything' } }), [], lists);
+    expect('item' in free).toBe(true);
+  });
+
+  it('lets a new value stand when a linked change adds it, and refuses to add one that exists', async () => {
+    const [add, set] = normalizeItems([
+      { id: 'add', action: 'CREATE', target: { kind: 'List value', label: 'Energy' }, summary: 'Add Energy', tool: 'add_attribute_list_value', args: { attributeCode: 'SECTOR', valueCode: 'ENERGY', valueLabel: 'Energy' }, confidence: 'HIGH', rationale: 'r' },
+      { id: 'set', dependsOn: ['add'], action: 'UPDATE', target: { kind: 'Issuer', label: 'Obligor 41' }, summary: 'Set sector', tool: 'submit_manual_override', args: { entityId: 'e41', attributeCode: 'SECTOR', value: 'ENERGY' }, confidence: 'MEDIUM', rationale: 'r' },
+    ]);
+    expect('item' in (await checkListValues(add, [add, set], lists))).toBe(true);
+    expect('item' in (await checkListValues(set, [add, set], lists))).toBe(true);
+    // Without the link, the same value is off the list.
+    expect('refusal' in (await checkListValues({ ...set, dependsOn: [] }, [add, set], lists))).toBe(true);
+
+    const duplicate = normalizeItems([{ action: 'CREATE', target: { kind: 'List value', label: 'Healthcare' }, summary: 'Add Healthcare', tool: 'add_attribute_list_value', args: { attributeCode: 'SECTOR', valueCode: 'HEALTHCARE', valueLabel: 'Healthcare' }, confidence: 'HIGH', rationale: 'r' }])[0];
+    const refused = await checkListValues(duplicate, [duplicate], lists);
+    expect('refusal' in refused && refused.refusal).toMatch(/already has this value, as HEALTH_CARE/);
+  });
+});
+
+describe('linked changes when applying', () => {
+  it('adds the list value first, and does not set it when the addition fails', async () => {
+    const memory = memoryStore(CLEANUP);
+    const order: string[] = [];
+    const { deps: engine } = deps(memory.store, {
+      agent: async () => ({
+        summary: 'Two linked changes.',
+        items: normalizeItems([
+          { id: 'set', dependsOn: ['add'], action: 'UPDATE', target: { kind: 'Issuer', label: 'Obligor 41' }, summary: 'Set sector', tool: 'submit_manual_override', args: { entityId: 'e41', attributeCode: 'SECTOR', value: 'ENERGY' }, confidence: 'MEDIUM', rationale: 'r' },
+          { id: 'add', action: 'CREATE', target: { kind: 'List value', label: 'Energy' }, summary: 'Add Energy', tool: 'add_attribute_list_value', args: { attributeCode: 'SECTOR', valueCode: 'ENERGY', valueLabel: 'Energy' }, confidence: 'HIGH', rationale: 'r' },
+        ]),
+      }),
+    });
+    (engine.tools.names() as Set<string>).add('add_attribute_list_value');
+    engine.tools.run = async (name) => {
+      order.push(name);
+      if (name === 'list_dq_exceptions') return { exceptions: [EXCEPTION], totalCount: 1 };
+      if (name === 'add_attribute_list_value') throw new Error('Adding a value to a shared list needs a tenant admin to approve it.');
+      return { success: true };
+    };
+    await advanceRun('run-1', 'job-1', engine);
+    const review = memory.reviews[0];
+    review.status = 'APPROVED';
+    review.decidedBy = 'reviewer';
+    review.decision = { items: { set: { decision: 'APPROVE' }, add: { decision: 'APPROVE' } } };
+    await advanceRun('run-1', 'job-2', engine);
+
+    // The addition was tried first, though it was proposed second. The dependent change was never attempted.
+    expect(order.filter((name) => name !== 'list_dq_exceptions' && name !== 'get_dq_summary')).toEqual(['add_attribute_list_value']);
+    const output = memory.steps.get('apply')?.output as { applied: number; failed: number; results: Array<{ id: string; error?: string }> };
+    expect(output).toMatchObject({ applied: 0, failed: 2 });
+    expect(output.results.find((row) => row.id === 'set')?.error).toMatch(/Not attempted, because "Add Energy" could not be applied first/);
   });
 });
