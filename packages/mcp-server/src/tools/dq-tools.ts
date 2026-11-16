@@ -1,9 +1,10 @@
+import { selectedIds } from '@tapestrai/graphql/src/lib/workflow-filters';
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
 
 const listDQExceptions: ToolDefinition = {
   name: 'list_dq_exceptions',
-  description: 'One page of stored data-quality exceptions. status is OPEN, IN_REVIEW, RESOLVED, WAIVED, or FALSE_POSITIVE. severity is CRITICAL, HIGH, MEDIUM, or LOW. domainCode comes from list_domain_types. first defaults to 20. For how many field values match a filter, use query_data.',
+  description: 'One page of stored data-quality exceptions. status is OPEN, IN_REVIEW, RESOLVED, WAIVED, or FALSE_POSITIVE. severity is CRITICAL, HIGH, MEDIUM, or LOW. domainCode comes from list_domain_types. entityIds limits it to those records; an empty list returns nothing. first defaults to 20. For how many field values match a filter, use query_data.',
   category: 'dq',
   inputSchema: {
     type: 'object',
@@ -11,10 +12,15 @@ const listDQExceptions: ToolDefinition = {
       status: { type: 'string', enum: ['OPEN', 'IN_REVIEW', 'RESOLVED', 'WAIVED', 'FALSE_POSITIVE'], description: 'Filter by status' },
       severity: { type: 'string', enum: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'], description: 'Filter by severity' },
       domainCode: { type: 'string', description: 'Filter by domain code' },
+      entityIds: { type: 'array', items: { type: 'string' }, description: 'Only exceptions on these records. Leave out for every record.' },
       first: { type: 'number', description: 'Number of results to return', default: 20 },
     },
   },
   execute: async (args, supabase) => {
+    const ids = selectedIds(args.entityIds);
+    // A selection that matched nothing has no exceptions. It is not the same as no selection.
+    if (ids && ids.length === 0) return { exceptions: [], totalCount: 0 };
+
     let query = supabase
       .from('dq_exceptions')
       .select(`
@@ -26,6 +32,7 @@ const listDQExceptions: ToolDefinition = {
     if (args.status) query = query.eq('status', args.status);
     if (args.severity) query = query.eq('severity', args.severity);
     if (args.domainCode) query = query.eq('master_entities.domain_code', args.domainCode);
+    if (ids) query = query.in('entity_id', ids);
 
     query = query.order('detected_at', { ascending: false }).limit(args.first || 20);
 

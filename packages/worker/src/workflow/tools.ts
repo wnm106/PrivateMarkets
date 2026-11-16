@@ -11,6 +11,8 @@ import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrativ
 import { registerOverrideTools } from '@tapestrai/mcp-server/src/tools/override-tools';
 import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/position-file-tools';
 import { registerQueryTools } from '@tapestrai/mcp-server/src/tools/query-data';
+import { registerRecTools } from '@tapestrai/mcp-server/src/tools/rec-tools';
+import { registerSelectionTools } from '@tapestrai/mcp-server/src/tools/selection-tools';
 import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
 import { registerSpecialistTools } from '@tapestrai/mcp-server/src/tools/specialist-tools';
 import { LIST_VALUE_TOOL, type FoundationAttribute, type ListValue } from '@tapestrai/graphql/src/lib/workflow-proposal';
@@ -50,7 +52,7 @@ const NEEDS: Record<ToolNeed, string[]> = {
 };
 
 /** Tool settings that hold the reason for a change. An approved change is signed there. */
-const REASON_KEYS = ['overrideReason', 'resolutionNotes'];
+const REASON_KEYS = ['overrideReason', 'resolutionNotes', 'note', 'reason'];
 
 const PERSON_CHECK_MS = 60_000;
 /** A session is replaced this long before it expires, so a long step does not outlive it. */
@@ -73,6 +75,8 @@ export function buildRegistry(): ToolRegistry {
   registerNarrativeTools(registry);
   registerListTools(registry);
   registerDqCheckTools(registry);
+  registerRecTools(registry);
+  registerSelectionTools(registry);
   return registry;
 }
 

@@ -52,6 +52,7 @@ describe('paths and values', () => {
     const graph = cleanup();
     expect(nextNode(graph, 'review', 'approved')?.id).toBe('apply');
     expect(nextNode(graph, 'review', 'rejected')?.id).toBe('end');
+    expect(nextNode(graph, 'start', null)?.id).toBe('select');
     expect(nextNode(graph, 'scan', null)?.id).toBe('any');
     expect(nextNode(graph, 'end', null)).toBeNull();
   });

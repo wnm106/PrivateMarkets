@@ -1,9 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
 import { fetchRecInsights, type RecInsight } from '@/lib/fund-rec-insights';
+import { markdownToHtml } from '@/lib/markdown';
 import { useTemporalStore } from '@/lib/store';
 import { useSurfaceNav } from '@/lib/surface-nav';
 import {
@@ -294,10 +295,25 @@ function RecNote({
   );
 }
 
+/** The notes a reconciliation workflow kept on this close. Read-only here: a new run replaces them. */
+function RecNotes({ notes, outcome }: { notes: string; outcome: string }) {
+  const html = useMemo(() => markdownToHtml(notes.replace(/^#{4,}\s/gm, '### ')), [notes]);
+  return (
+    <section className="da-sec">
+      <div className="da-sechead">
+        <h2>Reconciliation notes</h2>
+        {outcome ? <p>When these were saved: {outcome}</p> : null}
+      </div>
+      <div className="markdown-content" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 900, padding: '4px 16px 16px' }} dangerouslySetInnerHTML={{ __html: html }} />
+    </section>
+  );
+}
+
 function CloseTab({ rec, onOpen, onSignoff }: { rec: FundRec; onOpen: (tab: TabKey) => void; onSignoff: (label: string) => void }) {
   const next = rec.steps.find((step) => step.state !== 'Done');
   const tabOf: Record<string, TabKey> = { integrity: 'integrity', roll: 'roll', val: 'val', fees: 'fees', drift: 'drift' };
   return (
+    <>
     <section className="da-sec">
       <div className="da-sechead">
         <h2>Status to close</h2>
@@ -332,6 +348,8 @@ function CloseTab({ rec, onOpen, onSignoff }: { rec: FundRec; onOpen: (tab: TabK
         </table>
       </div>
     </section>
+    {rec.closeNotes?.notes ? <RecNotes notes={rec.closeNotes.notes} outcome={rec.closeNotes.outcome} /> : null}
+    </>
   );
 }
 

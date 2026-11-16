@@ -25,6 +25,7 @@ const CODES = [
   'ACTIVITY_DATE', 'ACTIVITY_KIND', 'ACTIVITY_AMOUNT', 'ACTIVITY_STATUS',
   'EVIDENCE_KIND', 'EVIDENCE_DATE', 'EVIDENCE_AMOUNT',
   'CLOSE_PERIOD_END', 'CLOSE_SIGNOFF', 'CLOSE_CERTIFIED_AT', 'CLOSE_CERTIFIED_BY', 'CLOSE_CERTIFIED_NAV',
+  'CLOSE_REC_NOTES', 'CLOSE_REC_OUTCOME',
   'DISPOSITION_ITEM', 'DISPOSITION_DECISION', 'DISPOSITION_NOTE',
   'CASHFLOW_DATE', 'CASHFLOW_TYPE', 'AMOUNT',
   'ROLL_PURCHASES', 'ROLL_REPAYMENTS', 'ROLL_SALES', 'ROLL_PIK', 'ROLL_AMORTIZATION',
@@ -90,10 +91,17 @@ class Facts {
 
 type Named = { id: string; entity_code: string; entity_name: string };
 
+/** The reconciliation notes kept on a close, and the position the reconciliation was in when they were saved. */
+export interface CloseNotes {
+  notes: string;
+  outcome: string;
+}
+
 export interface FundRecLoad {
   input: RecInput;
   priorOpen: boolean;
   periods: string[];
+  closeNotes: CloseNotes | null;
 }
 
 function dateOnly(value: string): string {
@@ -453,6 +461,9 @@ export async function loadFundRecInput(
     input,
     priorOpen: Boolean(priorStatementId) && !priorCertified,
     periods: recentPeriods(frequency, periodEndOnOrBefore(frequency, today)),
+    closeNotes: closeId && facts.str(closeId, 'CLOSE_REC_NOTES')
+      ? { notes: facts.str(closeId, 'CLOSE_REC_NOTES'), outcome: facts.str(closeId, 'CLOSE_REC_OUTCOME') }
+      : null,
   };
 }
 
@@ -463,7 +474,7 @@ export async function loadFundRec(
   todayInput: unknown,
   knowledgeInput: unknown,
   driftThresholdPct = 10,
-): Promise<RecReview & { periods: string[]; priorOpen: boolean; fundCode: string }> {
+): Promise<RecReview & { periods: string[]; priorOpen: boolean; fundCode: string; closeNotes: CloseNotes | null }> {
   const lookup = /^[0-9a-f-]{36}$/i.test(fundId) ? 'id' : 'entity_code';
   const { data: fund, error } = await supabase
     .from('master_entities')
@@ -474,7 +485,7 @@ export async function loadFundRec(
   if (!fund || fund.domain_code !== 'FUND') throw new Error('Fund not found');
   const loaded = await loadFundRecInput(supabase, fund, periodEnd, todayInput, knowledgeInput, driftThresholdPct);
   if (!loaded) throw new Error('This fund has no close calendar. Set a close frequency on the fund record.');
-  return { ...buildReview(loaded.input), periods: loaded.periods, priorOpen: loaded.priorOpen, fundCode: fund.entity_code };
+  return { ...buildReview(loaded.input), periods: loaded.periods, priorOpen: loaded.priorOpen, fundCode: fund.entity_code, closeNotes: loaded.closeNotes };
 }
 
 export interface FundRecSummary {

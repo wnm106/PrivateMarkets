@@ -1,3 +1,4 @@
+import { selectedIds } from '@tapestrai/graphql/src/lib/workflow-filters';
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
 
@@ -73,7 +74,7 @@ const getComplianceRuleVersion: ToolDefinition = {
 
 const evaluateComplianceRule: ToolDefinition = {
   name: 'evaluate_compliance_rule',
-  description: 'Run a compliance rule and return result and breach counts. ruleCode comes from list_compliance_rules. asOfDate is YYYY-MM-DD. sourceScope is the golden record or one source code from the source registry. Read get_compliance_rule first if you need to explain the rule. For an ad hoc count that is not a saved rule, use query_data.',
+  description: 'Run a compliance rule and return result and breach counts. ruleCode comes from list_compliance_rules. asOfDate is YYYY-MM-DD, and today when left out. sourceScope is the golden record or one source code from the source registry. Read get_compliance_rule first if you need to explain the rule. For an ad hoc count that is not a saved rule, use query_data.',
   category: 'compliance',
   inputSchema: {
     type: 'object',
@@ -83,12 +84,13 @@ const evaluateComplianceRule: ToolDefinition = {
       knowledgeDate: { type: 'string', description: 'System/knowledge time (ISO timestamp). Defaults to now.' },
       sourceScope: { type: 'string', description: "'GOLDEN' (default) or a specific source_code (e.g. 'BLOOMBERG') for single-source evaluation" },
     },
-    required: ['ruleCode', 'asOfDate'],
+    required: ['ruleCode'],
   },
   execute: async (args, supabase) => {
     const { data: runId, error } = await cx(supabase).rpc('evaluate_rule', {
       p_rule_code: args.ruleCode,
-      p_as_of_date: args.asOfDate,
+      // A run started with no date scores the rule as of today.
+      p_as_of_date: args.asOfDate || new Date().toISOString().slice(0, 10),
       p_knowledge_date: args.knowledgeDate || new Date().toISOString(),
       p_source_scope: args.sourceScope || null,
       p_triggered_by: null,
@@ -121,11 +123,15 @@ const listComplianceBreaches: ToolDefinition = {
       ruleId: { type: 'string', description: 'Filter by rule id' },
       runId: { type: 'string', description: 'Filter by a specific evaluation run id' },
       status: { type: 'string', enum: ['SOFT_BREACH', 'HARD_BREACH'], description: 'Filter by breach severity; omit to return both' },
+      entityIds: { type: 'array', items: { type: 'string' }, description: 'Only breaches on these records. Leave out for every record. An empty list returns nothing.' },
       first: { type: 'number', description: 'Max number of results to return', default: 50 },
     },
   },
   execute: async (args, supabase) => {
+    const ids = selectedIds(args.entityIds);
+    if (ids && ids.length === 0) return { breaches: [] };
     let query = cx(supabase).from('rule_evaluation_results').select('*').order('evaluated_at', { ascending: false });
+    if (ids) query = query.in('anchor_entity_id', ids);
 
     if (args.ruleId) query = query.eq('rule_id', args.ruleId);
     if (args.runId) query = query.eq('run_id', args.runId);

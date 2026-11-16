@@ -3,7 +3,13 @@ import type { FundRecBoard } from '@tapestrai/graphql/src/lib/fund-rec-store';
 import { CREATE_ENTITY_MUTATION, UPDATE_ENTITY_MUTATION, graphqlMutation } from '@/lib/graphql';
 
 export type { RecBind, RecReview, FundRecBoard };
-export type FundRec = RecReview & { periods: string[]; priorOpen: boolean; fundCode: string };
+export type FundRec = RecReview & {
+  periods: string[];
+  priorOpen: boolean;
+  fundCode: string;
+  /** Reconciliation notes kept on the close, and where the reconciliation stood when they were saved. */
+  closeNotes?: { notes: string; outcome: string } | null;
+};
 
 export const FUND_REC_BOARD_QUERY = `
   query FundRecBoard($asOfDate: Date) {

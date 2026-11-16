@@ -12,6 +12,8 @@ import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrativ
 import { registerOverrideTools } from '@tapestrai/mcp-server/src/tools/override-tools';
 import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/position-file-tools';
 import { registerQueryTools } from '@tapestrai/mcp-server/src/tools/query-data';
+import { registerRecTools } from '@tapestrai/mcp-server/src/tools/rec-tools';
+import { registerSelectionTools } from '@tapestrai/mcp-server/src/tools/selection-tools';
 import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
 import { registerSpecialistTools } from '@tapestrai/mcp-server/src/tools/specialist-tools';
 import { isReadTool } from '@tapestrai/graphql/src/lib/workflow-graph';
@@ -38,6 +40,8 @@ registerQueryTools(registry);
 registerNarrativeTools(registry);
 registerListTools(registry);
 registerDqCheckTools(registry);
+registerRecTools(registry);
+registerSelectionTools(registry);
 
 interface Listed {
   name: string;

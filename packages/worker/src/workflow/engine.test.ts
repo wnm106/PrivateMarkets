@@ -81,13 +81,15 @@ function proposed() {
 
 function deps(store: WorkflowStore, overrides: Partial<EngineDeps> = {}) {
   const calls: Array<{ name: string; args: Record<string, unknown>; actor: Actor; permission: string }> = [];
-  const names = new Set(['list_dq_exceptions', 'get_dq_summary', 'get_attribute_list_values', 'get_data_quality_checks', 'get_entity', 'list_entities', 'get_field_lineage', 'get_temporal_history', 'get_template_metadata', 'get_attribute_metadata', 'search_attributes', 'query_data', 'get_model_map', 'submit_manual_override', 'resolve_dq_exception', 'create_entity']);
+  const names = new Set(['find_records', 'list_dq_exceptions', 'get_dq_summary', 'get_attribute_list_values', 'get_data_quality_checks', 'get_entity', 'list_entities', 'get_field_lineage', 'get_temporal_history', 'get_template_metadata', 'get_attribute_metadata', 'search_attributes', 'query_data', 'get_model_map', 'submit_manual_override', 'resolve_dq_exception', 'create_entity']);
   const built: EngineDeps = {
     store,
     tools: {
       names: () => names,
       async run(name, args, actor, permission) {
         calls.push({ name, args, actor, permission });
+        // A run started with no filters is not restricted to particular records.
+        if (name === 'find_records') return { filtered: false, selection: 'every record' };
         if (name === 'list_dq_exceptions') return { exceptions: [EXCEPTION], totalCount: 1 };
         if (name === 'get_dq_summary') return { open: 0 };
         return { success: true };
@@ -109,8 +111,10 @@ describe('advanceRun', () => {
     expect(first).toMatchObject({ status: 'WAITING', waitingOn: 'review' });
     expect(memory.run.status).toBe('WAITING');
     expect(memory.run.lockedBy).toBeNull();
+    // Records are selected first. With no filters nothing is passed, so nothing is restricted.
+    expect(calls[0]).toMatchObject({ name: 'find_records', args: {}, permission: 'read' });
     // The limit is passed as a number, and settings with no value are left out.
-    expect(calls[0]).toMatchObject({ name: 'list_dq_exceptions', args: { status: 'OPEN', first: 5 }, actor: { userId: 'owner' }, permission: 'read' });
+    expect(calls[1]).toEqual({ name: 'list_dq_exceptions', args: { status: 'OPEN', first: 5 }, actor: { userId: 'owner', clientId: 'client-a' }, permission: 'read' });
     // Nothing was changed while waiting.
     expect(calls.filter((call) => call.permission === 'apply')).toEqual([]);
 
@@ -131,8 +135,9 @@ describe('advanceRun', () => {
     expect(writes[0]).toMatchObject({ name: 'submit_manual_override', actor: { userId: 'reviewer', clientId: 'client-a' }, args: { entityId: 'e7', value: '2031-06-30' } });
     expect(memory.steps.get('apply')?.output).toMatchObject({ applied: 1, failed: 0 });
     expect(memory.events.find((event) => event.type === 'change.applied')).toMatchObject({ actor: 'USER', actorId: 'reviewer' });
-    // The scan ran once across all three passes.
-    expect(calls.filter((call) => call.name === 'list_dq_exceptions')).toHaveLength(1);
+    // Across all three passes the records were selected once, and exceptions read twice: the scan, and what is left at the end.
+    expect(calls.filter((call) => call.name === 'find_records')).toHaveLength(1);
+    expect(calls.filter((call) => call.name === 'list_dq_exceptions')).toHaveLength(2);
   });
 
   it('takes the rejected path and changes nothing', async () => {
@@ -152,7 +157,7 @@ describe('advanceRun', () => {
     const { deps: engine } = deps(memory.store);
     engine.tools.run = async () => ({ exceptions: [], totalCount: 0 });
     expect((await advanceRun('run-1', 'job-1', engine)).status).toBe('SUCCEEDED');
-    expect([...memory.steps.keys()]).toEqual(['start', 'scan', 'any', 'end']);
+    expect([...memory.steps.keys()]).toEqual(['start', 'select', 'scan', 'any', 'end']);
   });
 
   it('fails the run at the step that threw, and picks up there on retry', async () => {
@@ -173,7 +178,9 @@ describe('advanceRun', () => {
     // What workflow_run_retry does.
     memory.run.status = 'QUEUED';
     expect((await advanceRun('run-1', 'job-2', engine)).status).toBe('SUCCEEDED');
-    expect(calls.filter((call) => call.name === 'list_dq_exceptions')).toHaveLength(1);
+    // The steps before the one that failed were not run again: one selection, one scan, and the count at the end.
+    expect(calls.filter((call) => call.name === 'find_records')).toHaveLength(1);
+    expect(calls.filter((call) => call.name === 'list_dq_exceptions')).toHaveLength(2);
     // Nothing proposed, so the review was skipped and nothing was applied.
     expect(memory.reviews).toHaveLength(0);
     expect(memory.steps.get('apply')?.output).toMatchObject({ applied: 0 });
@@ -499,7 +506,7 @@ describe('linked changes when applying', () => {
     await advanceRun('run-1', 'job-2', engine);
 
     // The addition was tried first, though it was proposed second. The dependent change was never attempted.
-    expect(order.filter((name) => name !== 'list_dq_exceptions' && name !== 'get_dq_summary')).toEqual(['add_attribute_list_value']);
+    expect(order.filter((name) => name !== 'find_records' && name !== 'list_dq_exceptions')).toEqual(['add_attribute_list_value']);
     const output = memory.steps.get('apply')?.output as { applied: number; failed: number; results: Array<{ id: string; error?: string }> };
     expect(output).toMatchObject({ applied: 0, failed: 2 });
     expect(output.results.find((row) => row.id === 'set')?.error).toMatch(/Not attempted, because "Add Energy" could not be applied first/);

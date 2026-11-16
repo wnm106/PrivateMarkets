@@ -12,7 +12,8 @@ export type ToolCategory =
   | 'compliance'         // Compliance rules
   | 'reporting'          // Dashboard / narrative design
   | 'narrative'          // Running narratives: evidence, composing, saving runs
-  | 'intersection';      // Intersection tools
+  | 'intersection'       // Intersection tools
+  | 'reconciliation';    // Fund close: NAV, position, and cash reconciliation
 
 export interface ToolDefinition {
   name: string;

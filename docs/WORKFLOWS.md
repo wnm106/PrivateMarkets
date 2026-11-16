@@ -19,12 +19,15 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 | List values | `supabase/migrations/20261116140000_workflow_list_values.sql`, `packages/worker/src/workflow/list-check.ts`, `packages/mcp-server/src/tools/list-tools.ts` | Reading an attribute's list, holding proposed values to it, and adding a value |
 | Service accounts | `supabase/migrations/20261116130000_workflow_service_accounts.sql` | Which user each client's steps run as, the Workflow Service role, and the checks on people |
 | Tables and functions | `supabase/migrations/20261116120000_workflows.sql` | `ops.workflows`, `workflow_versions`, `workflow_runs`, `workflow_steps`, `workflow_events`, `workflow_reviews`, reached only through the `workflow_*` functions |
+| Record filters | `packages/graphql/src/lib/workflow-filters.ts`, `packages/mcp-server/src/tools/selection-tools.ts` | The filters a run is started with, and the step that turns them into the records it works on |
 | Graph rules | `packages/graphql/src/lib/workflow-graph.ts` | Step types, what makes a graph sound, which step follows which, `{{placeholders}}` |
 | Proposals | `packages/graphql/src/lib/workflow-proposal.ts` | What an agent proposes, the required-field check, a reviewer's decision |
 | Templates | `packages/graphql/src/lib/workflow-templates.ts` | Starting points offered by New workflow |
 | Engine | `packages/worker/src/workflow/engine.ts` | Walks a run through its graph, one recorded step at a time |
 | Agent step | `packages/worker/src/workflow/agent.ts`, `claude.ts`, `gemini.ts` | The model loop and the two providers |
 | Tools | `packages/worker/src/workflow/tools.ts` | The chat assistant's tools, run as a person |
+| Reconciliation tools | `packages/mcp-server/src/tools/rec-tools.ts`, `packages/graphql/src/lib/rec-digest.ts`, `rec-actions.ts` | Reading a fund's NAV, position, and cash reconciliation, and recording decisions, cash pairs, adjustments, and notes |
+| Pack tables | `packages/mcp-server/src/feeds/pack-tables.ts` | Reading every table of a stored file, trying a mapping without writing, and loading one table |
 | API | `packages/graphql/src/resolvers/workflows.ts` | Queries and mutations the pages use |
 | Pages | `apps/web/app/workflows` | The list, the editor, and the run page with its review |
 
@@ -43,6 +46,56 @@ Workflows run on the job worker. See [JOBS.md](JOBS.md) for running it. On top o
 
 A worker with no model key still runs workflows that have no agent step.
 
+## Which records a run works on
+
+**A workflow says what is done. A run says to which records.** No workflow names a fund, a type of record, or a filter of its own. The same Fund reconciliation runs for one fund, for three, or for all of them; the same Data cleanup runs for one record or for every record.
+
+A run is started with `filters` in its input, in the same shape for every workflow:
+
+```json
+{ "filters": { "domainCode": "FUND", "entityCodes": ["HSCF2", "HOCF1"], "nameContains": "" } }
+```
+
+| Filter | Keeps |
+|---|---|
+| `domainCode` | Records of this type |
+| `entityCodes` | Records with these codes |
+| `entityIds` | Records with these ids |
+| `nameContains` | Records whose name contains this text |
+| `limit` | At most this many. Default 100, at most 500 |
+
+Every filter given must hold. Only active records are selected.
+
+Every template starts with the same step, **Select records** (`find_records`), which turns the filters into a list. The steps after it read that list (`{{steps.select.entityIds}}`) and nothing else, and each agent is told to stay inside it.
+
+Two cases are kept apart all the way down:
+
+| The run was started with | Select records returns | The steps after it |
+|---|---|---|
+| No filters | `filtered: false` and no list | Are not restricted: they cover every record they apply to |
+| Filters that match nothing | An empty list | Have nothing to do, and the run ends |
+
+Select records also reports any code or id that matched nothing, and says when the filters match more records than the limit. A selected record a workflow does not apply to is left out and named: a position passed to Fund reconciliation is listed as not a fund.
+
+An agent works through the selected records in one step, within its round limit, and everything it proposes goes to one review. For a large selection, start several runs with narrower filters. A run does not yet split itself up.
+
+The templates, all built this way:
+
+| Template | What it does | Changes data |
+|---|---|---|
+| Data cleanup | Investigates open data quality exceptions and proposes fixes | After review |
+| Fund reconciliation | Maps and loads administrator packs, reconciles, writes notes | After review |
+| Required values check | Proposes missing required values. Needs filters | After review |
+| Data quality brief | Briefs on open exceptions | No |
+| NAV review | Names the checks and lines to look at before sign-off | No |
+| Cash tie-out | Says what ties to the bank and what does not | No |
+| Closing readiness | Says whether each deal can close and what is open | No |
+| Overcollateralization test, Single-name check | Score one compliance rule and explain the result | Stores the rule's results |
+
+A compliance template fixes which rule it scores. That is what it does, not which records it is for: the rule is scored for every record it applies to, and the filters decide which records the brief covers.
+
+When you build a workflow of your own, start it with Select records and give later steps `{{steps.select.entityIds}}`. Do not put a record, a type, or a filter in a step's settings.
+
 ## Building one
 
 New workflow offers the templates. The editor is a canvas: add steps from the bar above it, drag from a step's right edge to connect it, and select a step to change its settings. The list under the canvas names everything that stops the graph being published.
@@ -52,7 +105,7 @@ New workflow offers the templates. The editor is a canvas: add steps from the ba
 - Try it runs the version on screen without publishing it.
 - A workflow runs each step once. There are no loops.
 
-A step's settings can read the run's input and any earlier step's result: `{{input.limit}}`, `{{steps.scan.totalCount}}`. A setting that is only a placeholder keeps its type, so a number stays a number. A setting whose value is missing is left out, and the tool uses its own default.
+A step's settings can read the run's input and any earlier step's result: `{{input.limit}}`, `{{steps.scan.totalCount}}`. Which records a step works on comes from Select records, not from the input. A setting that is only a placeholder keeps its type, so a number stays a number. A setting whose value is missing is left out, and the tool uses its own default.
 
 A Condition and a Human review have named outcomes (`true`/`false`, `approved`/`rejected`). Each connection leaving them says which outcome it follows.
 
@@ -114,6 +167,88 @@ They are applied in that order. If the first fails, the second is not attempted.
 
 The agent needs `get_attribute_list_values` among its tools to read a list, and `add_attribute_list_value` among the changes it can propose to add to one. The check itself runs either way.
 
+## Fund reconciliation
+
+The Fund reconciliation template takes each selected fund's administrator pack from a received file to reconciliation notes.
+
+Start it with the funds to reconcile, or with no filters for every fund that has a close calendar:
+
+```json
+{ "filters": { "entityCodes": ["HSCF2"] }, "periodEnd": "" }
+```
+
+Leave `periodEnd` blank for the period each fund is now closing. The agents find each fund's pack among the files not yet loaded.
+
+| Step | Kind | What it does |
+|---|---|---|
+| Select records | Fixed | Turns the run's filters into the list of funds |
+| Funds in this run | Fixed | Reads where each selected fund's close stands, before anything is loaded |
+| Any fund to reconcile? | Fixed | Ends the run if the selection holds no fund with a close calendar |
+| Step | Kind | What it does |
+|---|---|---|
+| Files received | Fixed | Lists the newest stored files |
+| Map the packs | Agent | For each fund, reads every table of its pack, maps each one, and tries the mapping without writing |
+| Review the mapping | Human | One change per table: what it is, where each column goes, what the trial load counted |
+| Load the packs | Fixed | Loads the approved tables and saves each mapping for next time |
+| Closes after loading | Fixed | Reads where each close stands again |
+| Reconcile and write notes | Agent | Fund by fund: works through cash, positions, and NAV; decides each open item; writes the notes |
+| Review the reconciliation | Human | Approve, edit, or reject each decision, cash pair, adjustment, and the notes |
+| Record the outcome | Fixed | Records what was approved |
+| Where the closes stand now | Fixed | Reads each close a last time. This is the run's result |
+
+### How a pack gets in
+
+The workflow works on files already stored in Load data. A file arrives there one of two ways:
+
+- **A feed** (see [FEEDS.md](FEEDS.md)). A file that fits its saved map loads on its own, and the workflow has nothing to map. A file that does not fit is stored for review, and the workflow maps it.
+- **An upload** in Load data.
+
+A mapping approved here is saved. The next pack with the same columns fits its map, so a feed loads it unattended and the workflow goes straight to reconciling.
+
+### Mapping
+
+A pack is usually a workbook with several tables. The agent sees all of them (`get_position_file_tables`), and proposes one `load_position_file_table` per table it wants loaded, with the as-of date and the source (`FUND_ADMIN` for the administrator's figures, `INTERNAL` for our own).
+
+- Before it proposes, it tries each mapping with `preview_position_file_load`. Matching and value cleanup are the real ones; nothing is written. The proposal carries the counts.
+- A mapping that names a column, record type, or attribute that does not exist is refused by name, in the trial and again at the load.
+- A table that loads with rows refused is reported as a failed change, with the counts. Rows that did load stay loaded.
+- Rejecting every table ends the run. Nothing is reconciled against a pack nobody approved.
+
+### Reconciling
+
+The agent reads the same reconciliation the pages draw (`get_nav_reconciliation`, `get_position_reconciliation`, `get_cash_reconciliation`). It does not recalculate anything. It explains differences and proposes:
+
+| Change | Tool | Notes |
+|---|---|---|
+| A decision on a review item | `record_rec_decision` | Accept, adjust, or query the administrator. Adjust and query need a note. Refused on a certified period |
+| A cash pair | `approve_cash_match` | A pair the rules propose keeps its rule and confidence. Any other is a manual match with its variance. Refused if either side is already paired |
+| A cash adjustment | `post_cash_adjustment` | Needs a reason. The agent is told to post one only for a difference whose cause is established, never to clear a residual |
+| The notes | `save_reconciliation_notes` | One per fund, applied after that fund's other changes |
+
+Each change is checked against the reconciliation again when it is applied, so a change that no longer fits is refused instead of recorded. An approved decision or adjustment is signed in its note: "Approved by Ada Reviewer in workflow run …".
+
+**No workflow signs off or certifies.** There is no tool for either. Both stay with a person on the reconciliation page.
+
+### The notes
+
+The notes are kept on the period's close record and shown on the fund's reconciliation page under Status to close. Sections: outcome, what was received, NAV, positions, cash, actions (who does what, and what it unblocks), and queries for the administrator, worded to send.
+
+The agent writes the notes before the review, as the reconciliation will stand if everything is approved. A reviewer who rejects a change should edit the notes to match. As a check, the platform stores an outcome line beside the notes that it reads from the reconciliation itself when they are saved: breaks, undecided items, whether cash ties. The page shows both.
+
+Saving notes again replaces them. Earlier versions stay in the close record's history.
+
+### Setting up
+
+- Apply `supabase/migrations/20261116160000_close_rec_notes.sql`. Without it everything runs except saving the notes, which fails and says so.
+- The client's workflow service account needs to read and write the fund's records, which the Workflow Service role gives it.
+- The worker needs `SUPABASE_SERVICE_ROLE_KEY` (it already does) for the file tools, which read stored files with it, inside the service account's client.
+
+To run it on a schedule, queue `workflow.start` after the feed's poll:
+
+```json
+{ "workflowCode": "FUND_RECONCILIATION", "input": { "filters": { "entityCodes": ["HSCF2"] } } }
+```
+
 ## Reviewing
 
 A run that reaches a Human review step waits, for as long as it takes. It shows under "Waiting for a person" on `/workflows`.
@@ -170,7 +305,7 @@ Every run keeps an append-only log: each step starting and finishing, each tool 
 Put a `workflow.start` job on a schedule at `/admin/jobs`:
 
 ```json
-{ "workflowCode": "DATA_CLEANUP", "input": { "limit": 20 } }
+{ "workflowCode": "DATA_CLEANUP", "input": { "filters": { "domainCode": "FUND" }, "limit": 20 } }
 ```
 
 It starts a run of the published version for the schedule's creator, who must hold `workflow.run`. If the run reaches a review, it waits there for a person like any other.
@@ -192,6 +327,9 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 ## Not built yet
 
 - Loops and steps that run side by side. A graph is one path, each step once.
-- Reconciliation and deal setup templates. The engine supports them; only Data cleanup is written.
+- A deal setup template. The engine supports it.
+- Splitting a large selection into several runs, or one run per record. A run works through its whole selection in one pass.
+- Filtering by an attribute's value (every fund of one strategy). Filters are by type, code, id, and name.
+- Checking the notes against the reconciliation after a reviewer rejects a change. The stored outcome line is the check.
 - Assigning a review to a named person, and telling them it is waiting.
 - A time limit on a review.
