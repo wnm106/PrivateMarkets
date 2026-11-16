@@ -1,10 +1,11 @@
 'use client';
 
 import { Fragment, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { isLockedArg, setPath, unanswered, type Confidence, type MissingField, type ProposalAction, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { setPath, unanswered, type Confidence, type ProposalAction, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { ChangeSettings, readArg } from '@/components/workflows/ChangeSettings';
 import { graphqlMutation } from '@/lib/graphql';
 import { markdownToHtml } from '@/lib/markdown';
-import { DECIDE_REVIEW, argRows, showValue, when, type MutationErrors, type ReviewView } from '@/lib/workflows';
+import { DECIDE_REVIEW, showValue, when, type MutationErrors, type ReviewView } from '@/lib/workflows';
 
 /**
  * A person's review of what an agent step proposed.
@@ -61,16 +62,6 @@ function AgentSummary({ text }: { text: string }) {
   );
 }
 
-/** What a setting in a proposed change holds, read by its dotted key ("attributes.CURRENCY"). */
-function readArg(args: Record<string, unknown>, key: string): unknown {
-  let current: unknown = args;
-  for (const part of key.split('.')) {
-    if (!current || typeof current !== 'object') return undefined;
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
-}
-
 /** Text the reviewer typed, as the kind of value the agent proposed there. */
 function coerce(original: unknown, text: string): unknown {
   if (typeof original === 'number') {
@@ -79,47 +70,6 @@ function coerce(original: unknown, text: string): unknown {
   }
   if (typeof original === 'boolean') return text.trim().toLowerCase() === 'true';
   return text;
-}
-
-/** Whether the reviewer may edit this setting: not what the change is aimed at, and a plain value. */
-function editableArg(args: Record<string, unknown>, key: string): boolean {
-  if (isLockedArg(key.split('.')[0])) return false;
-  const value = readArg(args, key);
-  return value === null || ['string', 'number', 'boolean'].includes(typeof value);
-}
-
-function QuestionInput({ field, value, onChange, disabled }: { field: MissingField; value: string; onChange(value: string): void; disabled: boolean }) {
-  const type = (field.dataType || '').toUpperCase();
-  if (field.options && field.options.length > 0) {
-    return (
-      <select className="text-input" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} style={{ minWidth: 220 }}>
-        <option value="">Choose…</option>
-        {field.options.map((option) => (
-          <option key={option} value={option}>{option}</option>
-        ))}
-      </select>
-    );
-  }
-  if (type === 'BOOLEAN') {
-    return (
-      <select className="text-input" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
-        <option value="">Choose…</option>
-        <option value="true">Yes</option>
-        <option value="false">No</option>
-      </select>
-    );
-  }
-  return (
-    <input
-      className="text-input"
-      type={type === 'DATE' ? 'date' : type === 'NUMBER' ? 'number' : 'text'}
-      step={type === 'NUMBER' ? 'any' : undefined}
-      value={value}
-      disabled={disabled}
-      onChange={(event) => onChange(event.target.value)}
-      style={{ minWidth: 220 }}
-    />
-  );
 }
 
 interface Props {
@@ -357,56 +307,17 @@ export function ReviewPanel({ review, onDecided }: Props) {
                               <div style={sectionLabel}>Exactly what will happen</div>
                               <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 6 }}>
                                 {ACTION[item.action].label} via <code>{item.tool}</code>
-                                {canDecide && '. You can change the values. What the change is aimed at is fixed.'}
+                                {canDecide && '. Change any value here before you approve. What it is aimed at (the record, attribute, and type) is fixed.'}
                               </div>
-                              <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>
-                                <tbody>
-                                  {argRows(item.args).map((row) => {
-                                    const canEdit = canDecide && editableArg(item.args, row.key);
-                                    const edited = edits[item.id]?.[row.key];
-                                    // A decided review shows what was actually applied.
-                                    const recorded = !open ? readArg((review.decision?.items?.[item.id] as { args?: Record<string, unknown> } | undefined)?.args || {}, row.key) : undefined;
-                                    const changed = recorded !== undefined && showValue(recorded) !== row.value;
-                                    return (
-                                      <tr key={row.key}>
-                                        <td style={{ padding: '4px 10px 4px 0', color: 'var(--ink-3)', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{row.key}</td>
-                                        <td style={{ padding: '3px 0', fontWeight: 600, wordBreak: 'break-word' }}>
-                                          {canEdit ? (
-                                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                              <input
-                                                className="text-input"
-                                                aria-label={row.key}
-                                                value={edited ?? (row.value === '—' ? '' : row.value)}
-                                                onChange={(event) => edit(item, row.key, event.target.value)}
-                                                style={{ flex: 1, minWidth: 0, padding: '4px 6px', fontSize: 12, fontWeight: 600, borderColor: edited !== undefined ? '#b45309' : undefined }}
-                                              />
-                                              {edited !== undefined && (
-                                                <button type="button" title={`The agent proposed: ${row.value}`} onClick={() => edit(item, row.key, null)} style={{ border: 'none', background: 'none', padding: 0, fontSize: 11, color: 'var(--entity-link)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                  Undo edit
-                                                </button>
-                                              )}
-                                            </div>
-                                          ) : changed ? (
-                                            <span>
-                                              {showValue(recorded)} <span style={{ fontWeight: 400, color: 'var(--ink-4)' }}>(edited by the reviewer; the agent proposed {row.value})</span>
-                                            </span>
-                                          ) : (
-                                            row.value
-                                          )}
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                  {item.missing.map((field) => (
-                                    <tr key={field.key}>
-                                      <td style={{ padding: '3px 10px 3px 0', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{field.key}</td>
-                                      <td style={{ padding: '3px 0', fontWeight: 600, color: answers[item.id]?.[field.key] ? 'var(--ink)' : '#b45309' }}>
-                                        {answers[item.id]?.[field.key] || (field.required ? 'Waiting for your answer' : 'Left out')}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                              <ChangeSettings
+                                item={item}
+                                canDecide={canDecide}
+                                answers={answers[item.id] || {}}
+                                edits={edits[item.id] || {}}
+                                recordedArgs={(review.decision?.items?.[item.id] as { args?: Record<string, unknown> } | undefined)?.args}
+                                onAnswer={(key, value) => answer(item.id, key, value)}
+                                onEdit={(key, value) => edit(item, key, value)}
+                              />
                             </div>
                             <div>
                               <div style={sectionLabel}>Why</div>
@@ -423,41 +334,6 @@ export function ReviewPanel({ review, onDecided }: Props) {
                               )}
                             </div>
                           </div>
-
-                          {item.missing.length > 0 && (
-                            <div style={{ marginTop: 14, padding: 12, background: '#fffbeb', border: '1px solid #fde8c0', borderRadius: 6 }}>
-                              <div style={sectionLabel}>{plural(item.missing.length, 'question')} for you</div>
-                              <div style={{ display: 'grid', gap: 12 }}>
-                                {item.missing.map((field) => {
-                                  const value = answers[item.id]?.[field.key] || '';
-                                  const suggestion = field.suggested === undefined ? '' : showValue(field.suggested);
-                                  return (
-                                    <div key={field.key}>
-                                      <div style={{ fontSize: 13, fontWeight: 600 }}>
-                                        {field.question}
-                                        {!field.required && <span style={{ fontWeight: 400, color: 'var(--ink-4)' }}> (optional)</span>}
-                                      </div>
-                                      <div style={{ fontSize: 11, color: 'var(--ink-4)', margin: '2px 0 6px' }}>
-                                        {field.label}
-                                        {field.origin === 'FOUNDATION' ? ' · required for this type of record' : ' · the agent could not establish this'}
-                                      </div>
-                                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                                        <QuestionInput field={field} value={value} disabled={!canDecide} onChange={(next) => answer(item.id, field.key, next)} />
-                                        {canDecide && suggestion && value !== suggestion && (
-                                          <button type="button" className="btn btn-sm" onClick={() => answer(item.id, field.key, suggestion)}>
-                                            Back to the agent&apos;s suggestion: {suggestion}
-                                          </button>
-                                        )}
-                                        {canDecide && suggestion && value === suggestion && (
-                                          <span style={{ fontSize: 12, color: '#92400e' }}>The agent&apos;s suggestion. Change it if it is wrong.</span>
-                                        )}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
 
                           {canDecide && (
                             <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center' }}>

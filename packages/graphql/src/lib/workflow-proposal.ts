@@ -220,12 +220,12 @@ export function unanswered(item: ProposalItem, decision: ItemDecision | undefine
 }
 
 /**
- * Settings that say which record or field a change is about. A reviewer can
+ * Settings that say which record, field, or type of record a change is about. A reviewer can
  * change the value a change sets, not what it is aimed at: a change to a
  * different record is a different change, and was never proposed.
  */
 export function isLockedArg(key: string): boolean {
-  return /Id$/.test(key) || key === 'attributeCode';
+  return /Id$/.test(key) || key === 'attributeCode' || key === 'domainCode' || key === 'templateCode';
 }
 
 /** The reviewer's edited settings with the locked ones put back as they were proposed. */
