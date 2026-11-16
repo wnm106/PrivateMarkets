@@ -1,7 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { mapFileLoader } from './feed-loader';
+import { assistantBriefHandler, assistantSweepHandler, assistantWatchHandler } from './assistant';
 import { connectionCheckHandler, feedCheckHandler, feedPollHandler } from './feeds';
 import { JobError, type JobHandler, type JobRun } from './worker';
+import { engineDeps, workflowAdvanceHandler, workflowStartHandler } from './workflow/handlers';
 
 /**
  * One handler per job type in packages/graphql/src/lib/job-types.ts.
@@ -184,6 +186,15 @@ export function staleScanHandler(supabase: SupabaseClient): JobHandler {
   };
 }
 
+/**
+ * Connectors refuse private and loopback addresses. FEED_ALLOW_PRIVATE_HOSTS=true
+ * lifts that, for testing against a server on this machine. Never set it where
+ * the worker can reach an internal network.
+ */
+function connectorOptions() {
+  return { allowPrivate: process.env.FEED_ALLOW_PRIVATE_HOSTS === 'true' };
+}
+
 export function buildHandlers(supabase: SupabaseClient): Record<string, JobHandler> {
   return {
     'dq.scan': dqScanHandler(supabase),
@@ -191,8 +202,13 @@ export function buildHandlers(supabase: SupabaseClient): Record<string, JobHandl
     'calc.process': calcProcessHandler(supabase),
     'compliance.evaluate': complianceEvaluateHandler(supabase),
     'loader.run': loaderRunHandler(supabase),
-    'feed.poll': feedPollHandler({ supabase, loadFile: mapFileLoader(supabase) }),
+    'feed.poll': feedPollHandler({ supabase, loadFile: mapFileLoader(supabase), http: connectorOptions() }),
     'feed.check': feedCheckHandler({ supabase }),
-    'connection.check': connectionCheckHandler({ supabase }),
+    'connection.check': connectionCheckHandler({ supabase, http: connectorOptions() }),
+    'assistant.sweep': assistantSweepHandler(supabase),
+    'assistant.brief': assistantBriefHandler(supabase),
+    'assistant.watch': assistantWatchHandler(supabase),
+    'workflow.advance': workflowAdvanceHandler(engineDeps(supabase)),
+    'workflow.start': workflowStartHandler(supabase),
   };
 }

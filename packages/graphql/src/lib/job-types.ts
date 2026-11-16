@@ -17,6 +17,11 @@ export interface JobTypeDef {
   scope: JobScope;
   /** Shown in the schedule form as the starting payload. */
   payloadExample: Record<string, unknown>;
+  /**
+   * False for a job the worker queues itself. It stays out of the schedule
+   * form. Omitted means a person can put it on a cron.
+   */
+  schedulable?: boolean;
 }
 
 export const JOB_TYPES: readonly JobTypeDef[] = [
@@ -79,6 +84,46 @@ export const JOB_TYPES: readonly JobTypeDef[] = [
     scope: 'CLIENT',
     payloadExample: { connectionId: '' },
   },
+  {
+    code: 'assistant.sweep',
+    label: 'Assistant summaries',
+    description:
+      'Looks for people whose summary is due, and for urgent changes still waiting. Created when someone turns the assistant on. One per client is enough.',
+    scope: 'CLIENT',
+    payloadExample: {},
+  },
+  {
+    code: 'assistant.brief',
+    label: 'Assistant brief',
+    description: 'Writes one person a summary of what they follow. Queued by the assistant sweep, or when they ask for a summary now.',
+    scope: 'CLIENT',
+    payloadExample: {},
+    schedulable: false,
+  },
+  {
+    code: 'assistant.watch',
+    label: 'Assistant watch',
+    description: 'Writes one person an immediate note about a change they asked to hear about right away.',
+    scope: 'CLIENT',
+    payloadExample: {},
+    schedulable: false,
+  },
+  {
+    code: 'workflow.start',
+    label: 'Start a workflow',
+    description:
+      'Starts a run of a published workflow. workflowCode names it; input is what the run starts with. The run belongs to the person who created the schedule, who must belong to this client only. See docs/WORKFLOWS.md.',
+    scope: 'CLIENT',
+    payloadExample: { workflowCode: '', input: {} },
+  },
+  {
+    code: 'workflow.advance',
+    label: 'Advance a workflow run',
+    description: 'Moves one workflow run forward until it finishes, fails, or waits for a person. Queued when a run starts and when a review is decided.',
+    scope: 'CLIENT',
+    payloadExample: {},
+    schedulable: false,
+  },
 ];
 
 export function jobType(code: string): JobTypeDef | null {
@@ -91,5 +136,16 @@ export function jobScopeProblem(code: string, clientId: string | null): string |
   if (!type) return `"${code}" is not a job type.`;
   if (type.scope === 'PLATFORM' && clientId) return `${type.label} is a platform job and cannot belong to a client.`;
   if (type.scope === 'CLIENT' && !clientId) return `${type.label} needs a client.`;
+  return null;
+}
+
+/** Returns a message when this type cannot be put on a schedule, or null when it can. */
+export function jobScheduleProblem(code: string, clientId: string | null): string | null {
+  const scope = jobScopeProblem(code, clientId);
+  if (scope) return scope;
+  const type = jobType(code);
+  if (type && type.schedulable === false) {
+    return `${type.label} runs when someone is due. It is not put on a schedule from this page.`;
+  }
   return null;
 }

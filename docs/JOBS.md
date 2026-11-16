@@ -38,7 +38,17 @@ Optional settings: `WORKER_CONCURRENCY` (runs side by side, default 5), `WORKER_
 | `compliance.evaluate` | Platform | `ruleCodes` (leave out for every active rule), `asOfDate` (default today) | Results and breaches per rule |
 | `dq.scan` | One client | `domainCode` (optional) | The data quality dashboard's headline figures |
 | `stale.scan` | One client | `olderThanDays` (default 30), `domainCode` (optional) | Count of stale values and the 25 oldest |
-| `loader.run` | One client | `loaderId` | Fails until connectors are built |
+| `feed.poll` | One client | `feedId` | Files seen, loaded, duplicates, needing review, failed. See [FEEDS.md](FEEDS.md) |
+| `feed.check` | One client | none | Fails and names the feeds whose file is late |
+| `connection.check` | One client | `connectionId` | Whether the connection can be reached |
+| `loader.run` | One client | `loaderId` | Always fails: data loaders were replaced by feeds |
+| `assistant.sweep` | One client | none | How many people were due for a summary, and how many urgent notes were queued. Created when someone turns the assistant on. One per client is enough. |
+| `assistant.brief` | One client | none | Whether a summary was written, and how many changes it included. Not put on a schedule. Queued for one person by the sweep, or when they ask for a summary now. |
+| `assistant.watch` | One client | none | The same, for a change they asked to hear about right away. Not put on a schedule. |
+| `workflow.start` | One client | `workflowCode`, `input` (optional) | The run it started. See [WORKFLOWS.md](WORKFLOWS.md) |
+| `workflow.advance` | One client | none | Where the run got to: finished, failed, or waiting for a person. Not put on a schedule. Queued when a run starts and when a review is decided. |
+
+`assistant.brief` and `assistant.watch` run as the person the note is for. See [who a job runs as](#who-a-job-runs-as). What they follow, and when the summary is sent, is set at Assistant, not on this page. A summary is not sent when nothing they follow has changed.
 
 A platform schedule has no client and only a tenant admin can create one. Compliance is a platform job because a rule is scored for every fund it covers, in every client.
 
@@ -47,6 +57,8 @@ A platform schedule has no client and only a tenant admin can create one. Compli
 The worker uses the service role. `calc.process` and `compliance.evaluate` call functions that need no signed-in user.
 
 `dq.scan` and `stale.scan` read reports that decide access from who is signed in. They run as the job's owner: the person who created the schedule, or who pressed Run now. The owner must still belong to the job's client, belong to no other client, and hold `entity.read` there. Otherwise the run fails with that reason and is not retried. To change the owner, delete the schedule and have the new owner create it.
+
+`assistant.brief` and `assistant.watch` run the same way, as the person the note is for. The sweep does not read their records. It only queues the run.
 
 ## Retries
 

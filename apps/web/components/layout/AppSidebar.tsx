@@ -31,6 +31,8 @@ const TOOLS = [
   { href: '/lists', label: 'Value Lists', icon: 'layers' },
   { href: '/intersections', label: 'Composite Entities', icon: 'nodes' },
   { href: '/imports', label: 'Load data', icon: 'download' },
+  { href: '/assistant', label: 'Assistant', icon: 'list' },
+  { href: '/workflows', label: 'Workflows', icon: 'nodes' },
 ] as const;
 
 const ADMIN = [
@@ -49,6 +51,7 @@ const ADMIN = [
   { href: '/admin/experiences', label: 'Record Experiences', icon: 'domains' },
   { href: '/admin/narratives', label: 'Narratives', icon: 'list' },
   { href: '/admin/skills', label: 'Skills', icon: 'list' },
+  { href: '/admin/feeds', label: 'Feeds', icon: 'download' },
   { href: '/admin/jobs', label: 'Jobs', icon: 'list' },
   { href: '/admin/tenancy', label: 'Clients, Users & Roles', icon: 'users' },
 ] as const;

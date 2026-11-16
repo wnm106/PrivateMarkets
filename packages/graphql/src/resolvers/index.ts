@@ -24,7 +24,9 @@ import { fundSurfaceResolvers } from './fund-surface';
 import { fundRecResolvers } from './fund-rec';
 import { icMemoResolvers } from './ic-memo';
 import { jobResolvers } from './jobs';
+import { workflowResolvers } from './workflows';
 import { feedResolvers } from './feeds';
+import { assistantResolvers } from './assistant';
 
 export const resolvers = {
   Query: {
@@ -60,11 +62,14 @@ export const resolvers = {
     mergePreview: entityResolutionResolvers.Query.mergePreview,
     entityGraph: entityResolutionResolvers.Query.entityGraph,
     previewAllocation: allocationResolvers.Query.previewAllocation,
+    periodReturns: allocationResolvers.Query.periodReturns,
     icMemo: icMemoResolvers.Query.icMemo,
     fundSurface: fundSurfaceResolvers.Query.fundSurface,
     ...fundRecResolvers.Query,
     ...jobResolvers.Query,
+    ...workflowResolvers.Query,
     ...feedResolvers.Query,
+    ...assistantResolvers.Query,
   },
   
   Mutation: {
@@ -97,9 +102,12 @@ export const resolvers = {
     updateMatchRule: entityResolutionResolvers.Mutation.updateMatchRule,
     createMatchRule: entityResolutionResolvers.Mutation.createMatchRule,
     commitAllocation: allocationResolvers.Mutation.commitAllocation,
+    refreshDealPerformance: allocationResolvers.Mutation.refreshDealPerformance,
     ...surfaceResolvers.Mutation,
     ...jobResolvers.Mutation,
+    ...workflowResolvers.Mutation,
     ...feedResolvers.Mutation,
+    ...assistantResolvers.Mutation,
   },
   
   Subscription: {},

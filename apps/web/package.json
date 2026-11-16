@@ -16,6 +16,7 @@
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.39.0",
     "@urql/core": "^5.0.0",
+    "@xyflow/react": "^13.0.0",
     "ag-grid-community": "^36.2.0",
     "ag-grid-enterprise": "^36.2.0",
     "ag-grid-react": "^36.2.0",

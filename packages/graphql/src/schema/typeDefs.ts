@@ -97,7 +97,7 @@ type FieldLineage {
   currentValue: String
   competingValues: [SourceValue!]!
   resolutionRule: String
-  lastUpdated: DateTime!
+  lastUpdated: DateTime
   # True while a materialized calc that owns this attribute is waiting to be recomputed.
   calcDirty: Boolean!
 }
@@ -2379,6 +2379,24 @@ type AllocationTrancheResult {
   securityId: ID
 }
 
+# IRR or MOIC for one entity over a period, solved from position cash flows and market values.
+type PeriodReturn {
+  entityId: ID!
+  attributeCode: String!
+  startDate: String
+  endDate: String!
+  value: Float
+}
+
+type DealPerformanceRefresh {
+  dealId: ID!
+  asOfDate: String
+  written: Int!
+  closed: Int!
+  unchanged: Int!
+  errors: [MutationError!]!
+}
+
 type AllocationPreview {
   dealId: ID!
   dealCode: String!
@@ -2780,6 +2798,8 @@ type Query {
   mergePreview(survivorId: ID!, retiredId: ID!, ruleCode: String): MergePreview!
   entityGraph(entityId: ID!, depth: Int, relationshipCodes: [String!]): EntityGraph!
   previewAllocation(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): AllocationPreview!
+  # Returns over any period. No start date is inception to date. The codes are series calcs such as DEAL_IRR_ITD.
+  periodReturns(entityIds: [ID!]!, attributeCodes: [String!]!, startDate: Date, endDate: Date): [PeriodReturn!]!
   icMemo(dealId: ID!, asOfDate: Date): IcMemo!
   fundSurface(fundId: ID!, asOfDate: Date, knowledgeDate: DateTime): FundSurface!
   """Close board: every fund with a close calendar, its current close, status, breaks, and what is still open."""
@@ -2794,6 +2814,20 @@ type Query {
   jobSchedules: [JobSchedule!]!
   """Recent job runs, newest first."""
   jobRuns(status: String, scheduleId: ID, first: Int): [JobRun!]!
+  """Workflows the caller can see: their clients' own, and the shared ones."""
+  workflows: [Workflow!]!
+  """One workflow with the graph of a version. Leave version out for the latest save."""
+  workflow(id: ID!, version: Int): Workflow
+  """Starting points for a new workflow."""
+  workflowTemplates: [WorkflowTemplate!]!
+  """The kinds of step a workflow can have."""
+  workflowNodeTypes: JSON!
+  """Recent workflow runs, newest first."""
+  workflowRuns(workflowId: ID, status: String, first: Int): [WorkflowRun!]!
+  """One run with the graph it ran, each step, its audit log, and its reviews."""
+  workflowRun(id: ID!): WorkflowRun
+  """Reviews waiting for a person. status defaults to OPEN."""
+  workflowReviews(status: String): [WorkflowReview!]!
   """Places files arrive from, for the caller's clients. Stored credentials are never returned."""
   feedConnections: [FeedConnection!]!
   feeds: [Feed!]!
@@ -2801,6 +2835,10 @@ type Query {
   receivedFiles(feedId: ID, first: Int): [ReceivedFile!]!
   """Saved maps a feed can load through."""
   feedMaps: [FeedMapOption!]!
+  """When the caller wants a summary, and whether delivery is on."""
+  assistantSettings: AssistantSettings!
+  """What the caller has asked the assistant to follow."""
+  assistantFollows: [AssistantFollow!]!
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
@@ -2940,6 +2978,7 @@ type Mutation {
   reorderSectionAttributes(domainCode: String!, sectionName: String!, attributeIds: [ID!]!): AttributeSectionResult!
   processCalculatedAttributes(limit: Int): ProcessCalculatedAttributesResult!
   updateCalcExpression(id: ID!, expression: JSON!, operands: [CalcOperandInput!]): UpdateCalcExpressionResult!
+  updateCalcAggregate(id: ID!, aggregateFn: String!, measure: CalcOperandInput!, weightAttributeCode: String): UpdateCalcExpressionResult!
   deleteAttribute(id: ID!): MutationResult!
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
   updateTemplate(id: ID!, input: UpdateTemplateInput!): UpdateTemplateResult!
@@ -2956,6 +2995,8 @@ type Mutation {
   updateMatchRule(input: UpdateMatchRuleInput!): UpdateMatchRuleResult!
   createMatchRule(input: CreateMatchRuleInput!): UpdateMatchRuleResult!
   commitAllocation(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): AllocationPreview!
+  # Run the deal performance model on the committed allocation and store its outputs as attribute values.
+  refreshDealPerformance(dealId: ID!, asOfDate: Date): DealPerformanceRefresh!
   
   # DQ mutations
   createDQRule(input: CreateDQRuleInput!): CreateDQRuleResult!
@@ -3082,6 +3123,20 @@ type Mutation {
   """Cancels a queued run. A running job is not interrupted."""
   cancelJobRun(id: ID!): JobRunResult!
 
+  # Workflows: definitions, runs, and reviews
+  """Saves a new version of a workflow. It is not published."""
+  saveWorkflow(input: SaveWorkflowInput!): WorkflowResult!
+  """Makes a version the one new runs use. Refused while the graph has problems."""
+  publishWorkflow(id: ID!, version: Int!): WorkflowResult!
+  archiveWorkflow(id: ID!): MutationResult!
+  """Starts a run on the published version, or on a version to try a draft."""
+  startWorkflowRun(workflowId: ID!, input: JSON, version: Int): WorkflowRunResult!
+  cancelWorkflowRun(id: ID!): WorkflowRunResult!
+  """Puts a failed run back in the queue. It continues from the step that failed."""
+  retryWorkflowRun(id: ID!): WorkflowRunResult!
+  """Approves or rejects the changes a run proposed, and lets the run continue."""
+  decideWorkflowReview(input: DecideWorkflowReviewInput!): WorkflowReviewResult!
+
   # Feeds: files that arrive on their own
   saveFeedConnection(input: SaveFeedConnectionInput!): FeedConnectionResult!
   deleteFeedConnection(id: ID!): MutationResult!
@@ -3092,6 +3147,11 @@ type Mutation {
   deleteFeed(id: ID!): MutationResult!
   """Queues a poll of the feed now."""
   pollFeedNow(id: ID!): JobRunResult!
+
+  saveAssistantSettings(input: SaveAssistantSettingsInput!): SaveAssistantSettingsResult!
+  saveAssistantFollow(input: SaveAssistantFollowInput!): SaveAssistantFollowResult!
+  deleteAssistantFollow(id: ID!): MutationResult!
+  deliverAssistantBrief: MutationResult!
 }
 
 # Root Subscription Type
@@ -4752,6 +4812,139 @@ type JobRunResult {
   errors: [MutationError!]!
 }
 
+# Workflows: multi-step automations with fixed, agent, and human steps (see docs/WORKFLOWS.md)
+
+type WorkflowProblem {
+  """The step with the problem. Null when it is about the workflow as a whole."""
+  nodeId: String
+  message: String!
+}
+
+type WorkflowVersion {
+  version: Int!
+  changeNote: String
+  createdBy: ID
+  createdAt: DateTime!
+}
+
+type Workflow {
+  id: ID!
+  """Null for a shared workflow."""
+  clientId: ID
+  code: String!
+  name: String!
+  description: String
+  """The version new runs use. Null until one is published."""
+  publishedVersion: Int
+  latestVersion: Int!
+  """The version whose graph is returned."""
+  version: Int
+  """{ nodes, edges }. Null in a list."""
+  graph: JSON
+  """What stops this graph being published."""
+  problems: [WorkflowProblem!]!
+  versions: [WorkflowVersion!]!
+  canManage: Boolean!
+  runCount: Int!
+  lastRunAt: DateTime
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type WorkflowTemplate {
+  code: String!
+  name: String!
+  description: String!
+  inputExample: JSON!
+  graph: JSON!
+}
+
+type WorkflowReview {
+  id: ID!
+  runId: ID!
+  clientId: ID!
+  nodeId: String!
+  workflowName: String
+  title: String!
+  instructions: String
+  """The agent's own summary of what it did and proposed."""
+  summary: String
+  """{ items }: each proposed change with its tool call, confidence, and open questions. Null in a list."""
+  proposal: JSON
+  counts: JSON
+  itemCount: Int!
+  """OPEN, APPROVED, REJECTED, or CANCELLED."""
+  status: String!
+  decision: JSON
+  decidedBy: ID
+  decidedAt: DateTime
+  createdAt: DateTime!
+  canReview: Boolean!
+}
+
+type WorkflowRun {
+  id: ID!
+  clientId: ID!
+  workflowId: ID!
+  workflowName: String
+  version: Int!
+  """QUEUED, RUNNING, WAITING (for a person), SUCCEEDED, FAILED, or CANCELLED."""
+  status: String!
+  input: JSON!
+  """Each finished step's output, by step id."""
+  context: JSON!
+  currentNode: String
+  errorMessage: String
+  startedBy: ID
+  openReviews: Int!
+  canRun: Boolean!
+  canReview: Boolean!
+  createdAt: DateTime!
+  startedAt: DateTime
+  finishedAt: DateTime
+  """The graph of the version this run is on. Null in a list."""
+  graph: JSON
+  steps: JSON!
+  """The audit log, oldest first."""
+  events: JSON!
+  reviews: [WorkflowReview!]!
+}
+
+input SaveWorkflowInput {
+  """Leave out to create a workflow."""
+  id: ID
+  """True for a shared workflow (tenant admins only). Otherwise it belongs to the caller's client."""
+  shared: Boolean
+  code: String
+  name: String!
+  description: String
+  graph: JSON!
+  changeNote: String
+}
+
+input DecideWorkflowReviewInput {
+  reviewId: ID!
+  """APPROVED or REJECTED."""
+  outcome: String!
+  """{ items: { <change id>: { decision: APPROVE | REJECT, answers, args, note } }, note }"""
+  decision: JSON
+}
+
+type WorkflowResult {
+  workflow: Workflow
+  errors: [MutationError!]!
+}
+
+type WorkflowRunResult {
+  run: WorkflowRun
+  errors: [MutationError!]!
+}
+
+type WorkflowReviewResult {
+  review: WorkflowReview
+  errors: [MutationError!]!
+}
+
 # Feeds: connections, feeds and the received-file ledger (see packages/worker/src/feeds.ts)
 
 type FeedConnection {
@@ -4759,7 +4952,7 @@ type FeedConnection {
   clientId: ID!
   connectionCode: String!
   connectionName: String!
-  """STORAGE (a folder in the feed inbox) or HTTP (an https address)."""
+  """STORAGE (a folder in the feed inbox), HTTP (an https address), or SFTP (a folder on an SFTP server)."""
   kind: String!
   """Settings that are safe to show. Never a credential."""
   config: JSON!
@@ -4863,6 +5056,49 @@ type FeedConnectionResult {
 
 type FeedResult {
   feed: Feed
+  errors: [MutationError!]!
+}
+
+type AssistantSettings {
+  enabled: Boolean!
+  preset: String!
+  timezone: String!
+  morningHour: Int!
+  nextDeliveryAt: DateTime
+  followCount: Int!
+}
+
+type AssistantFollow {
+  id: ID!
+  subjectType: String!
+  subjectId: ID
+  subjectCode: String
+  label: String!
+  delivery: String!
+  createdAt: DateTime
+}
+
+input SaveAssistantSettingsInput {
+  enabled: Boolean!
+  preset: String!
+  timezone: String!
+  morningHour: Int!
+}
+
+input SaveAssistantFollowInput {
+  subjectType: String!
+  subjectId: ID
+  subjectCode: String
+  delivery: String!
+}
+
+type SaveAssistantSettingsResult {
+  settings: AssistantSettings
+  errors: [MutationError!]!
+}
+
+type SaveAssistantFollowResult {
+  follow: AssistantFollow
   errors: [MutationError!]!
 }
 
