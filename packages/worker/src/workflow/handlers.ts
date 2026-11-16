@@ -20,7 +20,6 @@ function toolEnv(): ToolEnv {
   return {
     url: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
     anonKey: process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
-    jwtSecret: process.env.SUPABASE_JWT_SECRET || '',
   };
 }
 
@@ -69,9 +68,10 @@ export function workflowStartHandler(supabase: SupabaseClient): JobHandler {
     if (!run.clientId) throw new JobError('This job needs a client.');
     if (!run.requestedBy) throw new JobError('This job has no owner to run as. Queue it from a schedule or from the Jobs page.');
 
-    const member = await supabase.rpc('workflow_worker_member', { p_user_id: run.requestedBy, p_client_id: run.clientId, p_permission: 'workflow.run' });
-    if (member.error) throw new Error(member.error.message);
-    if (typeof member.data === 'string' && member.data) throw new JobError(member.data);
+    const person = await supabase.rpc('workflow_worker_person', { p_user_id: run.requestedBy, p_client_id: run.clientId, p_permissions: ['workflow.run'] });
+    if (person.error) throw new Error(person.error.message);
+    const problem = (person.data as { problem?: string } | null)?.problem;
+    if (problem) throw new JobError(problem);
 
     const found = await supabase.rpc('workflow_worker_find', { p_client_id: run.clientId, p_code: code });
     if (found.error) throw new Error(found.error.message);

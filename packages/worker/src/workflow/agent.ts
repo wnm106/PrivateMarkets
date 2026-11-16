@@ -223,7 +223,7 @@ export async function runAgentStep(request: AgentRequest, deps: AgentDeps): Prom
           return { call, content: `${call.name} is not available in this step. To change data, use ${PROPOSE_TOOL}.`, isError: true };
         }
         try {
-          const value = await deps.tools.run(call.name, call.input, request.actor, 'entity.read');
+          const value = await deps.tools.run(call.name, call.input, request.actor, 'read');
           return { call, content: clip(JSON.stringify(value ?? null), MAX_RESULT_CHARS), isError: false };
         } catch (error) {
           const text = error instanceof Error ? error.message : String(error);

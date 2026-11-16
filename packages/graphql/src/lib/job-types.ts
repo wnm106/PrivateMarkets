@@ -112,7 +112,7 @@ export const JOB_TYPES: readonly JobTypeDef[] = [
     code: 'workflow.start',
     label: 'Start a workflow',
     description:
-      'Starts a run of a published workflow. workflowCode names it; input is what the run starts with. The run belongs to the person who created the schedule, who must belong to this client only. See docs/WORKFLOWS.md.',
+      'Starts a run of a published workflow. workflowCode names it; input is what the run starts with. The run belongs to the person who created the schedule, who must be allowed to run workflows. See docs/WORKFLOWS.md.',
     scope: 'CLIENT',
     payloadExample: { workflowCode: '', input: {} },
   },

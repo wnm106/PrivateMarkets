@@ -159,7 +159,7 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, onChange
           {tool && !tool.readOnly && (
             <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, background: 'var(--badge-warn-bg)', color: 'var(--badge-warn-fg)', padding: 8, borderRadius: 6 }}>
               <input type="checkbox" checked={config.allowWrite === true} onChange={(event) => set({ allowWrite: event.target.checked })} />
-              <span>This step may change data. It runs without a review, as the person who started the run.</span>
+              <span>This step may change data. It runs without a review. The person who starts the run must be allowed to edit records.</span>
             </label>
           )}
         </>
@@ -214,7 +214,7 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, onChange
       )}
 
       {node.type === 'apply' && (
-        <Field name="Applies what was approved in" help="Each approved change is made as the person who approved it, with their access.">
+        <Field name="Applies what was approved in" help="Each approved change is made by the workflow service account and signed with the approver's name. The approver must be allowed to edit records.">
           <select className="text-input" style={full} value={String(config.review || '')} onChange={(event) => set({ review: event.target.value })}>
             <option value="">Choose a review step</option>
             {before.filter((candidate) => candidate.type === 'review').map((candidate) => (

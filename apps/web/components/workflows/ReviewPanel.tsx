@@ -410,7 +410,7 @@ export function ReviewPanel({ review, onDecided }: Props) {
               </button>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: 'var(--ink-4)' }}>Approved changes are made in your name, with your access. Your decision is kept in the run&apos;s history.</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-4)' }}>Approved changes are made by the workflow service account and signed with your name. You need permission to edit records to approve. Your decision is kept in the run&apos;s history.</div>
         </footer>
       )}
     </section>

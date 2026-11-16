@@ -74,7 +74,7 @@ export const NODE_TYPES: readonly NodeTypeDef[] = [
     type: 'apply',
     label: 'Apply approved changes',
     kind: 'fixed',
-    description: 'Makes the changes a person approved in a review step, as that person.',
+    description: 'Makes the changes a person approved in a review step, signed with that person\'s name.',
     outcomes: [],
     defaultConfig: { review: '' },
   },

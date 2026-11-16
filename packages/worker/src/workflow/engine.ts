@@ -95,15 +95,26 @@ export interface WorkflowStore {
   openReview(runId: string, nodeId: string, title: string, instructions: string, summary: string, proposal: unknown): Promise<ReviewRow>;
 }
 
-/** Who a tool call is made as. Every call runs with that person's access to the run's client. */
+/**
+ * Who is behind a tool call, and for which client. The call itself runs as the
+ * client's workflow service account; this person must hold what the call needs.
+ */
 export interface Actor {
   userId: string | null;
   clientId: string;
 }
 
+/**
+ * What a call needs of the person behind it.
+ *   read   a step reading for the person who started the run
+ *   write  a fixed step its author allowed to change data, for the person who started the run
+ *   apply  a change a reviewer approved
+ */
+export type ToolNeed = 'read' | 'write' | 'apply';
+
 export interface ToolRunner {
   names(): ReadonlySet<string>;
-  run(name: string, args: Record<string, unknown>, actor: Actor, permission: string): Promise<unknown>;
+  run(name: string, args: Record<string, unknown>, actor: Actor, need: ToolNeed, runId?: string): Promise<unknown>;
 }
 
 export interface AgentRequest {
@@ -187,7 +198,7 @@ async function runTool(node: WorkflowNode, ctx: StepContext): Promise<StepOutcom
   const write = !isReadTool(tool);
   if (write && node.config.allowWrite !== true) throw new Error(`"${tool}" changes data and this step is not allowed to.`);
   const actor: Actor = { userId: ctx.run.startedBy, clientId: ctx.run.clientId };
-  const output = clampOutput(await ctx.deps.tools.run(tool, args, actor, write ? 'entity.write' : 'entity.read'));
+  const output = clampOutput(await ctx.deps.tools.run(tool, args, actor, write ? 'write' : 'read'));
   await ctx.deps.store.event(ctx.run.id, node.id, 'tool.called', 'SYSTEM', ctx.run.startedBy, `Ran ${tool}`, { tool, args });
   return { outcome: null, output };
 }
@@ -299,7 +310,7 @@ async function runApply(node: WorkflowNode, ctx: StepContext): Promise<StepOutco
   const review = record(ctx.scope.steps[String(node.config.review || '')]);
   const approved = (Array.isArray(review.approved) ? review.approved : []) as ProposalItem[];
   const decidedBy = typeof review.decidedBy === 'string' ? review.decidedBy : null;
-  // Changes are made as the person who approved them, with that person's access.
+  // Made by the service account, for the person who approved them. That person must be allowed to make the change.
   const actor: Actor = { userId: decidedBy, clientId: ctx.run.clientId };
 
   // A change that already ran is not run again when the step restarts.
@@ -314,7 +325,7 @@ async function runApply(node: WorkflowNode, ctx: StepContext): Promise<StepOutco
       const pending = { ...done, [item.id]: { id: item.id, summary: item.summary, tool: item.tool, ok: false, error: 'The worker stopped while this change was being made. Check the record before applying it again.' } };
       if (!(await store.saveStep(ctx.run.id, ctx.owner, node.id, { state: { done: pending } }))) throw new Halted();
       try {
-        const result = clampOutput(await tools.run(item.tool, item.args, actor, 'entity.write'));
+        const result = clampOutput(await tools.run(item.tool, item.args, actor, 'apply', ctx.run.id));
         done[item.id] = { id: item.id, summary: item.summary, tool: item.tool, ok: true, result };
       } catch (error) {
         done[item.id] = { id: item.id, summary: item.summary, tool: item.tool, ok: false, error: message(error) };

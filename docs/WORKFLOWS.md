@@ -16,6 +16,7 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 
 | Part | Where | What it does |
 |---|---|---|
+| Service accounts | `supabase/migrations/20261116130000_workflow_service_accounts.sql` | Which user each client's steps run as, the Workflow Service role, and the checks on people |
 | Tables and functions | `supabase/migrations/20261116120000_workflows.sql` | `ops.workflows`, `workflow_versions`, `workflow_runs`, `workflow_steps`, `workflow_events`, `workflow_reviews`, reached only through the `workflow_*` functions |
 | Graph rules | `packages/graphql/src/lib/workflow-graph.ts` | Step types, what makes a graph sound, which step follows which, `{{placeholders}}` |
 | Proposals | `packages/graphql/src/lib/workflow-proposal.ts` | What an agent proposes, the required-field check, a reviewer's decision |
@@ -33,7 +34,7 @@ Workflows run on the job worker. See [JOBS.md](JOBS.md) for running it. On top o
 | Setting | Needed for | Notes |
 |---|---|---|
 | `SUPABASE_ANON_KEY` | Any step that runs a tool | |
-| `SUPABASE_JWT_SECRET` | Any step that runs a tool | The project's JWT secret (Supabase dashboard, Project Settings, API). See [who a step runs as](#who-a-step-runs-as) |
+| A workflow service account for the client | Any step that runs a tool | See [who a step runs as](#who-a-step-runs-as) |
 | `ANTHROPIC_API_KEY` | Agent steps on Claude | |
 | `GEMINI_API_KEY` | Agent steps set to Gemini | |
 | `WORKFLOW_AGENT_MODEL` | Optional | Default `claude-opus-5-5` |
@@ -85,14 +86,30 @@ Approving records the decision and the run continues down its `approved` path. R
 
 ## Who a step runs as
 
-The worker's service key cannot read the data schemas, and a workflow should not see more than a person could. Every tool call is made with a short-lived token for a person, signed with `SUPABASE_JWT_SECRET`, so tenancy and row security apply as if that person were signed in.
+Every step runs as the client's **workflow service account**: a user that is not a person, belongs to that one client, and holds the Workflow Service role (`entity.read`, `entity.write`, `dq.manage`). What a workflow can read and change is what that account can. It cannot delete records or manage users, roles, or access. Give it another role if a workflow needs more.
 
-| Step | Runs as |
-|---|---|
-| Run a tool, Agent | The person who started the run. For a scheduled run, the person who created the schedule |
-| Apply approved changes | The person who approved them |
+The worker's own service key is not used for data. It cannot read the data schemas, and it would see every client at once. The worker uses it only to get the service account a session from Supabase Auth. No signing secret is kept, and no real person is ever signed in for.
 
-Before each call the engine checks that person still belongs to the run's client, belongs to no other client, and holds `entity.read` (to read) or `entity.write` (to change). If not, the step fails and says why.
+People are checked by lookup before each call:
+
+| Step | Person behind it | Must hold |
+|---|---|---|
+| Run a tool (reading), Agent | Who started the run. For a scheduled run, who created the schedule | `workflow.run` |
+| Run a tool (changing data) | The same | `workflow.run` and `entity.write` |
+| Apply approved changes | Who approved them | `workflow.review` and `entity.write` |
+
+If the person does not hold these, the step fails and says why. So nobody approves a change they could not make themselves.
+
+Two things follow from running as a shared account:
+
+- **A workflow can read records its starter cannot.** If a person is restricted from some records, a workflow they start may still read them and show them in a proposal. Give `workflow.run` only to people you would trust with what the service account can see.
+- **A record's own history shows the service account as the author.** Where the tool has a reason field, an approved change is signed there: "Approved by Ada Reviewer in workflow run …". The run's history always records who approved what.
+
+### Setting up a client's service account
+
+1. Create a user for it in Supabase Auth, with no password. Nobody signs in as it.
+2. Add it to the client in `tenancy.client_users` and give it the `WORKFLOW_SERVICE` role in `tenancy.user_roles`. It must belong to no other client.
+3. Register it: `select public.workflow_service_account_set('<client id>', '<user id>');`
 
 ## History
 
@@ -113,7 +130,7 @@ Put a `workflow.start` job on a schedule at `/admin/jobs`:
 { "workflowCode": "DATA_CLEANUP", "input": { "limit": 20 } }
 ```
 
-It starts a run of the published version as the schedule's creator. If the run reaches a review, it waits there for a person like any other.
+It starts a run of the published version for the schedule's creator, who must hold `workflow.run`. If the run reaches a review, it waits there for a person like any other.
 
 ## Permissions
 
@@ -123,7 +140,7 @@ It starts a run of the published version as the schedule's creator. If the run r
 | `workflow.run` | Start, cancel, and retry runs |
 | `workflow.review` | Approve or reject proposed changes |
 
-Client admins have all three. Any member of a client can see its workflows, runs, and reviews. A shared workflow (no client) can be run by every client and changed only by a tenant admin.
+Client admins have all three. A person may belong to several clients. Any member of a client can see its workflows, runs, and reviews. A shared workflow (no client) can be run by every client and changed only by a tenant admin.
 
 ## Adding a template
 

@@ -3,7 +3,7 @@ import { WORKFLOW_TEMPLATES } from '@tapestrai/graphql/src/lib/workflow-template
 import { normalizeItems } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { runAgentStep, type AgentModel, type ModelTurn } from './agent';
 import { RunBusyError, advanceRun, type Actor, type AgentRequest, type EngineDeps, type LoadedRun, type ReviewRow, type StepRow, type WorkflowStore } from './engine';
-import { userToken } from './tools';
+import { signReason, workflowTools } from './tools';
 
 const CLEANUP = WORKFLOW_TEMPLATES.find((template) => template.code === 'DATA_CLEANUP')!.graph;
 
@@ -109,9 +109,9 @@ describe('advanceRun', () => {
     expect(memory.run.status).toBe('WAITING');
     expect(memory.run.lockedBy).toBeNull();
     // The limit is passed as a number, and settings with no value are left out.
-    expect(calls[0]).toMatchObject({ name: 'list_dq_exceptions', args: { status: 'OPEN', first: 5 }, actor: { userId: 'owner' }, permission: 'entity.read' });
+    expect(calls[0]).toMatchObject({ name: 'list_dq_exceptions', args: { status: 'OPEN', first: 5 }, actor: { userId: 'owner' }, permission: 'read' });
     // Nothing was changed while waiting.
-    expect(calls.filter((call) => call.permission === 'entity.write')).toEqual([]);
+    expect(calls.filter((call) => call.permission === 'apply')).toEqual([]);
 
     // A second job with nothing decided waits again and opens no second review.
     expect(await advanceRun('run-1', 'job-2', engine)).toMatchObject({ status: 'WAITING' });
@@ -125,7 +125,7 @@ describe('advanceRun', () => {
 
     const second = await advanceRun('run-1', 'job-3', engine);
     expect(second.status).toBe('SUCCEEDED');
-    const writes = calls.filter((call) => call.permission === 'entity.write');
+    const writes = calls.filter((call) => call.permission === 'apply');
     expect(writes).toHaveLength(1);
     expect(writes[0]).toMatchObject({ name: 'submit_manual_override', actor: { userId: 'reviewer', clientId: 'client-a' }, args: { entityId: 'e7', value: '2031-06-30' } });
     expect(memory.steps.get('apply')?.output).toMatchObject({ applied: 1, failed: 0 });
@@ -143,7 +143,7 @@ describe('advanceRun', () => {
     memory.reviews[0].decision = { items: {} };
     expect((await advanceRun('run-1', 'job-2', engine)).status).toBe('SUCCEEDED');
     expect(memory.steps.has('apply')).toBe(false);
-    expect(calls.filter((call) => call.permission === 'entity.write')).toEqual([]);
+    expect(calls.filter((call) => call.permission === 'apply')).toEqual([]);
   });
 
   it('skips the agent when the scan finds nothing', async () => {
@@ -346,13 +346,76 @@ describe('runAgentStep', () => {
   });
 });
 
-describe('userToken', () => {
-  it('signs a short-lived token for one person', () => {
-    const token = userToken('user-1', 'secret', Date.parse('2026-11-16T00:00:00Z'));
-    const [, payload] = token.split('.');
-    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    expect(claims).toMatchObject({ sub: 'user-1', role: 'authenticated', aud: 'authenticated' });
-    expect(claims.exp - claims.iat).toBe(900);
-    expect(userToken('user-1', 'other', Date.parse('2026-11-16T00:00:00Z'))).not.toBe(token);
+describe('workflowTools', () => {
+  /** The service client, answering the two lookups the tool runner makes. */
+  function service(answers: { person?: Record<string, unknown>; account?: Record<string, unknown> }) {
+    const calls: Array<[string, Record<string, unknown>]> = [];
+    const client = {
+      async rpc(fn: string, args: Record<string, unknown>) {
+        calls.push([fn, args]);
+        if (fn === 'workflow_worker_person') return { data: answers.person ?? { name: 'Ada Reviewer' }, error: null };
+        if (fn === 'workflow_worker_service_account') return { data: answers.account ?? { userId: 'svc-1' }, error: null };
+        return { data: null, error: null };
+      },
+    };
+    return { client: client as never, calls };
+  }
+
+  function registry(ran: Array<Record<string, unknown>>) {
+    const tools = [
+      { name: 'get_entity', description: 'Read', inputSchema: { type: 'object', properties: { entityId: {} } } },
+      { name: 'submit_manual_override', description: 'Set', inputSchema: { type: 'object', properties: { value: {}, overrideReason: {} } } },
+    ];
+    return {
+      listTools: () => tools,
+      executeTool: async (_name: string, args: Record<string, unknown>) => (ran.push(args), { ok: true }),
+    } as never;
+  }
+
+  const env = { url: 'https://project.example', anonKey: 'anon' };
+  const actor = { userId: 'reviewer', clientId: 'client-a' };
+  const hour = () => ({ token: 't', expiresAt: Date.now() + 3_600_000 });
+
+  it('runs as the service account, checks the person, and signs an approved change', async () => {
+    const ran: Array<Record<string, unknown>> = [];
+    const { client, calls } = service({});
+    const sessions: string[] = [];
+    const tools = workflowTools(client, env, registry(ran), async (userId) => (sessions.push(userId), hour()));
+
+    await tools.run('get_entity', { entityId: 'e7' }, actor, 'read');
+    await tools.run('submit_manual_override', { value: '5', overrideReason: 'Missing' }, actor, 'apply', 'run-9');
+    await tools.run('submit_manual_override', { value: '6' }, actor, 'write');
+
+    // One session for the client's account, reused across calls. Never one for the person.
+    expect(sessions).toEqual(['svc-1']);
+    expect(calls.filter(([fn]) => fn === 'workflow_worker_person').map(([, args]) => args.p_permissions)).toEqual([
+      ['workflow.run'],
+      ['workflow.review', 'entity.write'],
+      ['workflow.run', 'entity.write'],
+    ]);
+    expect(ran).toEqual([{ entityId: 'e7' }, { value: '5', overrideReason: 'Missing Approved by Ada Reviewer in workflow run run-9.' }, { value: '6' }]);
+  });
+
+  it('refuses before anything runs when the person or the account is not allowed', async () => {
+    const ran: Array<Record<string, unknown>> = [];
+    const noPerson = workflowTools(service({ person: { problem: 'The person behind this step does not hold entity.write for this client.' } }).client, env, registry(ran), async () => hour());
+    await expect(noPerson.run('submit_manual_override', {}, actor, 'apply')).rejects.toThrow(/does not hold entity\.write/);
+
+    const noAccount = workflowTools(service({ account: { problem: 'This client has no workflow service account.' } }).client, env, registry(ran), async () => hour());
+    await expect(noAccount.run('get_entity', {}, actor, 'read')).rejects.toThrow(/no workflow service account/);
+    expect(ran).toEqual([]);
+  });
+
+  it('starts a new session when the last one is about to expire', async () => {
+    let started = 0;
+    const tools = workflowTools(service({}).client, env, registry([]), async () => ((started += 1), { token: 't', expiresAt: Date.now() + 60_000 }));
+    await tools.run('get_entity', {}, actor, 'read');
+    await tools.run('get_entity', {}, actor, 'read');
+    expect(started).toBe(2);
+  });
+
+  it('leaves a tool with no reason field as it was', () => {
+    const spec = { name: 'create_entity', description: '', inputSchema: { type: 'object', properties: { entityCode: {} } } };
+    expect(signReason(spec, { entityCode: 'X' }, 'Approved by Ada.')).toEqual({ entityCode: 'X' });
   });
 });
