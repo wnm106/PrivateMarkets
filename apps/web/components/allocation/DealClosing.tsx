@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION } from '@/lib/graphql';
 import { attributeText } from '@/lib/experience';
 import { domainHref } from '@/lib/domain-routes';
+import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useTemporalStore } from '@/lib/store';
 
 const WORKSTREAM: Record<string, string> = {
@@ -300,7 +301,7 @@ export function DealClosing({
           <div className="da-facts five">
             <div className="da-fact">
               <span>Target close</span>
-              <strong>{closeDate ? formatDay(closeDate) : '—'}</strong>
+              <strong><InspectValue bind={attrBind(dealId, 'DEAL', 'DEAL_TARGET_CLOSE_DATE', 'Target Close Date')} value={closeDate}>{closeDate ? formatDay(closeDate) : '—'}</InspectValue></strong>
               <small>{awayLabel}</small>
             </div>
             <div className="da-fact">
@@ -378,15 +379,15 @@ export function DealClosing({
                   return (
                     <tr key={row.id}>
                       <td><Link href={`${domainHref('DEAL_DOCUMENT')}/${row.id}`}>{row.title}</Link></td>
-                      <td>{row.parties}</td>
-                      <td>{row.version}</td>
+                      <td><InspectValue bind={attrBind(row.id, 'DEAL_DOCUMENT', 'DOC_PARTIES', 'Parties', row.title)} value={row.parties}>{row.parties}</InspectValue></td>
+                      <td><InspectValue bind={attrBind(row.id, 'DEAL_DOCUMENT', 'DOC_VERSION', 'Version', row.title)} value={row.version}>{row.version}</InspectValue></td>
                       <td>
                         <span className="da-bar" style={{ width: 72, display: 'inline-block', verticalAlign: 'middle', marginRight: 8 }}>
                           <i style={{ width: `${width}%` }} />
                         </span>
-                        {row.received} of {row.required}
+                        <InspectValue bind={attrBind(row.id, 'DEAL_DOCUMENT', 'DOC_SIGNATURES_RECEIVED', 'Signatures Received', row.title)} value={row.received}>{row.received}</InspectValue> of <InspectValue bind={attrBind(row.id, 'DEAL_DOCUMENT', 'DOC_SIGNATURES_REQUIRED', 'Signatures Required', row.title)} value={row.required}>{row.required}</InspectValue>
                       </td>
-                      <td>{named(row.status, DOCUMENT_STATUS)}</td>
+                      <td><InspectValue bind={attrBind(row.id, 'DEAL_DOCUMENT', 'DOC_STATUS', 'Status', row.title)} value={row.status}>{named(row.status, DOCUMENT_STATUS)}</InspectValue></td>
                     </tr>
                   );
                 })}
@@ -420,10 +421,10 @@ export function DealClosing({
                         : row.fundName}
                     </td>
                     <td className="num">{plain(row.cash + row.line + row.call)}</td>
-                    <td className="num">{plain(row.cash)}</td>
-                    <td className="num">{plain(row.line)}</td>
-                    <td className="num">{plain(row.call)}</td>
-                    <td>{named(row.status, FUNDING_STATUS)}</td>
+                    <td className="num"><InspectValue bind={attrBind(row.id, 'DEAL_FUNDING_PLAN', 'FUNDING_CASH_AMOUNT', 'Cash', row.fundName)} value={row.cash}>{plain(row.cash)}</InspectValue></td>
+                    <td className="num"><InspectValue bind={attrBind(row.id, 'DEAL_FUNDING_PLAN', 'FUNDING_LINE_AMOUNT', 'Leverage Line', row.fundName)} value={row.line}>{plain(row.line)}</InspectValue></td>
+                    <td className="num"><InspectValue bind={attrBind(row.id, 'DEAL_FUNDING_PLAN', 'FUNDING_CALL_AMOUNT', 'Capital Call', row.fundName)} value={row.call}>{plain(row.call)}</InspectValue></td>
+                    <td><InspectValue bind={attrBind(row.id, 'DEAL_FUNDING_PLAN', 'FUNDING_STATUS', 'Funding Status', row.fundName)} value={row.status}>{named(row.status, FUNDING_STATUS)}</InspectValue></td>
                   </tr>
                 ))}
               </tbody>
@@ -469,8 +470,8 @@ function Group({
             <Link href={`${domainHref('CLOSING_CONDITION')}/${row.id}`}>{row.title}</Link>
             {row.link && LINK_TAB[row.link] && <small>Linked to {LINK_TAB[row.link]}</small>}
           </td>
-          <td>{named(row.owner, OWNER)}</td>
-          <td>{row.due ? formatDay(row.due) : '—'}</td>
+          <td><InspectValue bind={attrBind(row.id, 'CLOSING_CONDITION', 'CONDITION_OWNER', 'Owner', row.title)} value={row.owner}>{named(row.owner, OWNER)}</InspectValue></td>
+          <td><InspectValue bind={attrBind(row.id, 'CLOSING_CONDITION', 'CONDITION_DUE_DATE', 'Due Date', row.title)} value={row.due}>{row.due ? formatDay(row.due) : '—'}</InspectValue></td>
           <td>
             {row.link ? (
               <span>

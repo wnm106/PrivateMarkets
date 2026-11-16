@@ -120,6 +120,41 @@ export class ComplianceEngine {
         return this.getRun(runId as string);
     }
 
+    /**
+     * Scores one rule for each fund on a deal. One database call walks the
+     * anchors, so the allocation panel does not open a round trip per fund.
+     */
+    async evaluateRulesForFunds(options: EvaluateRuleOptions & {
+        anchorEntityIds: string[];
+        ignoreEnrollment?: boolean;
+    }): Promise<ComplianceEvaluationResult[]> {
+        if (!options.anchorEntityIds.length) return [];
+        const { data, error } = await this.cx().rpc('evaluate_rules_for_funds', {
+            p_rule_code: options.ruleCode,
+            p_as_of_date: options.asOfDate,
+            p_knowledge_date: options.knowledgeDate ?? new Date().toISOString(),
+            p_source_scope: options.sourceScope ?? null,
+            p_triggered_by: options.triggeredBy ?? null,
+            p_anchor_ids: options.anchorEntityIds,
+            p_scenario_code: options.scenarioCode ?? null,
+            p_ignore_enrollment: options.ignoreEnrollment ?? false,
+        });
+        if (error) {
+            console.error('Error evaluating compliance rule for funds:', error);
+            throw new Error(`Compliance rule evaluation failed: ${error.message}`);
+        }
+        const runIds = runIdsOf(data);
+        if (!runIds.length) return [];
+        const { data: resultRows, error: resultsError } = await this.cx()
+            .from('rule_evaluation_results')
+            .select('*')
+            .in('run_id', runIds);
+        if (resultsError) {
+            throw new Error(`Failed to fetch compliance evaluation results: ${resultsError.message}`);
+        }
+        return (resultRows || []).map(mapResult);
+    }
+
     async getRun(runId: string): Promise<{
         run: ComplianceEvaluationRun;
         results: ComplianceEvaluationResult[];
@@ -199,6 +234,12 @@ export class ComplianceEngine {
 
         return (data || []).map(mapResult);
     }
+}
+
+function runIdsOf(data: unknown): string[] {
+    if (Array.isArray(data)) return data.filter((id): id is string => typeof id === 'string' && id.length > 0);
+    if (typeof data !== 'string' || !data) return [];
+    return data.replace(/^\{|\}$/g, '').split(',').map((id) => id.trim()).filter((id) => id.length > 0);
 }
 
 function mapRun(row: any): ComplianceEvaluationRun {

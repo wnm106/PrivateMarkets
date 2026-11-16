@@ -356,7 +356,7 @@ const COLUMNS: ColDef<GridRow>[] = [
   { colId: 'select', headerName: '', width: 58, maxWidth: 58, sortable: false, filter: false, resizable: false, headerComponent: SelectAllHeader, cellRenderer: SelectCell },
   { field: 'attributeName', headerName: 'Name', minWidth: 200, flex: 1, autoHeight: false, wrapText: false },
   { field: 'attributeCode', headerName: 'Code', minWidth: 300, flex: 1, autoHeight: false, wrapText: false },
-  { colId: 'description', headerName: 'Description', minWidth: 420, flex: 3, sortable: false, filter: false, autoHeight: false, wrapText: false, cellRenderer: DescriptionCell },
+  { field: 'description', colId: 'description', headerName: 'Description', minWidth: 420, flex: 3, sortable: false, autoHeight: false, wrapText: false, cellRenderer: DescriptionCell },
   { field: 'dataType', headerName: 'Data Type', minWidth: 130 },
   { colId: 'aggregation', headerName: 'Aggregation', minWidth: 170, sortable: false, filter: false, autoHeight: true, cellRenderer: AggregationCell },
   { colId: 'precision', headerName: 'Precision', minWidth: 120, sortable: false, filter: false, cellRenderer: PrecisionCell },

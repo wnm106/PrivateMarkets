@@ -7,6 +7,7 @@ import {
   type AllocationPreview,
 } from '../lib/allocation-store';
 import type { AllocationAdjustment } from '../lib/allocation-engine';
+import { storeDealPerformance } from '../lib/deal-performance-store';
 
 function adjustments(input: any[] | null | undefined): AllocationAdjustment[] | null {
   if (!input) return null;
@@ -50,6 +51,30 @@ export const allocationResolvers = {
         return emptyPreview(args.dealId, message);
       }
     },
+    periodReturns: async (
+      _: unknown,
+      args: { entityIds: string[]; attributeCodes: string[]; startDate?: string | null; endDate?: string | null },
+      context: Context,
+    ) => {
+      const day = (value: string | null | undefined) => (value && /^\d{4}-\d{2}-\d{2}/.test(String(value)) ? String(value).slice(0, 10) : null);
+      const end = day(args.endDate) || new Date().toISOString().slice(0, 10);
+      const start = day(args.startDate);
+      if (!args.entityIds.length || !args.attributeCodes.length) return [];
+      const { data, error } = await context.supabase.schema('golden_master').rpc('period_returns', {
+        p_entity_ids: args.entityIds,
+        p_attribute_codes: args.attributeCodes,
+        p_start: start,
+        p_end: end,
+      });
+      if (error) throw new Error(error.message);
+      return ((data || []) as Array<{ entity_id: string; attribute_code: string; value: number | string | null }>).map((row) => ({
+        entityId: row.entity_id,
+        attributeCode: row.attribute_code,
+        startDate: start,
+        endDate: end,
+        value: row.value == null ? null : Number(row.value),
+      }));
+    },
   },
   Mutation: {
     commitAllocation: async (
@@ -65,10 +90,30 @@ export const allocationResolvers = {
           holds(args.holds),
           adjustments(args.adjustments) ?? [],
         );
-        return { ...(await commitAllocation(context.supabase, draft, context.user?.id ?? null)), errors: [] };
+        const committed = await commitAllocation(context.supabase, draft, context.user?.id ?? null);
+        // The stored performance figures follow the committed allocation. A failure here does not undo the commit.
+        try {
+          await storeDealPerformance(context.supabase, args.dealId, args.asOfDate, context.user?.id ?? null);
+        } catch (error) {
+          console.error('Deal performance was not refreshed after commit', error);
+        }
+        return { ...committed, errors: [] };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Could not commit the allocation';
         return emptyPreview(args.dealId, message);
+      }
+    },
+    refreshDealPerformance: async (
+      _: unknown,
+      args: { dealId: string; asOfDate?: string | null },
+      context: Context,
+    ) => {
+      try {
+        const result = await storeDealPerformance(context.supabase, args.dealId, args.asOfDate, context.user?.id ?? null);
+        return { dealId: args.dealId, asOfDate: result.asOf, written: result.written, closed: result.closed, unchanged: result.unchanged, errors: [] };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Could not refresh deal performance';
+        return { dealId: args.dealId, asOfDate: null, written: 0, closed: 0, unchanged: 0, errors: [{ field: 'dealId', message, code: 'PERFORMANCE_REFRESH_FAILED' }] };
       }
     },
   },

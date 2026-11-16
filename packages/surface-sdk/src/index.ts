@@ -21,6 +21,17 @@ export interface GraphqlResult<TData> {
 }
 
 /** What the host exposes to a mounted surface. */
+/** One attribute on one entity: what a displayed value points back to. */
+export interface SurfaceAttributeTarget {
+  entityId: string;
+  entityName?: string;
+  domainCode: string;
+  attributeCode: string;
+  attributeName: string;
+  /** The value as shown, for the drawer header. */
+  value?: string;
+}
+
 export interface SurfaceHost {
   /** Client (tenant) code the signed-in user works in, when known. */
   clientCode: string | null;
@@ -49,6 +60,8 @@ export interface SurfaceHost {
   href(path: string): string;
   /** Set the top-bar trail while the surface is mounted. A hook: call it unconditionally. */
   useCrumbs(crumbs: SurfaceCrumb[]): void;
+  /** Open the platform's source drawer for a displayed value. */
+  inspectAttribute(target: SurfaceAttributeTarget): void;
 }
 
 export interface SurfaceManifest {

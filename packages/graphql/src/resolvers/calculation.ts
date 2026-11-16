@@ -1,4 +1,5 @@
 import { Context } from '../context';
+import { planAggregateUpdate, type AggregateBinding } from '../lib/calc-aggregate';
 import { listExpressionFunctions } from '../lib/expression-library';
 import { knowledgeCutoff } from '../lib/on-read-values';
 
@@ -191,6 +192,62 @@ function expressionRefs(expr: unknown, found: string[] = []): string[] {
     return found;
   }
   throw new Error('Expression must use ref, const, op, or fn');
+}
+
+interface StoredCalcInput {
+  id: string;
+  input_role: string;
+  attribute_code: string;
+  traversal: string;
+  relationship_codes: string[] | null;
+}
+
+function bindingCode(raw: unknown): string {
+  if (!raw || typeof raw !== 'object') return '';
+  return String((raw as { attributeCode?: unknown }).attributeCode || '').trim();
+}
+
+function bindingPath(raw: unknown): string[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const codes = (raw as { relationshipCodes?: unknown }).relationshipCodes;
+  if (!Array.isArray(codes)) return [];
+  return codes.map((code) => String(code || '').trim()).filter(Boolean);
+}
+
+async function keepCalcInput(
+  db: { from: (table: string) => any },
+  definitionId: string,
+  rows: StoredCalcInput[],
+  role: string,
+  binding: AggregateBinding,
+  ordinal: number,
+) {
+  const [keep, ...extra] = rows;
+  if (extra.length) {
+    const { error } = await db.from('calc_inputs').delete().in('id', extra.map((row) => row.id));
+    if (error) throw error;
+  }
+  if (!keep) {
+    const { error } = await db.from('calc_inputs').insert({
+      calc_definition_id: definitionId,
+      input_role: role,
+      attribute_code: binding.attributeCode,
+      traversal: binding.traversal,
+      relationship_codes: binding.relationshipCodes,
+      ordinal,
+    });
+    if (error) throw error;
+    return;
+  }
+  const samePath = keep.traversal === binding.traversal
+    && JSON.stringify(keep.relationship_codes || []) === JSON.stringify(binding.relationshipCodes);
+  if (keep.attribute_code === binding.attributeCode && samePath) return;
+  const { error } = await db.from('calc_inputs').update({
+    attribute_code: binding.attributeCode,
+    traversal: binding.traversal,
+    relationship_codes: binding.relationshipCodes,
+  }).eq('id', keep.id);
+  if (error) throw error;
 }
 
 export const calculationResolvers = {
@@ -386,6 +443,104 @@ export const calculationResolvers = {
         return { definition: mapDefinition(saved), errors: [] };
       } catch (error: any) {
         return { definition: null, errors: [calcError(error?.message || 'Could not save the expression')] };
+      }
+    },
+
+    updateCalcAggregate: async (
+      _: unknown,
+      args: { id: string; aggregateFn: string; measure: unknown; weightAttributeCode?: string | null },
+      context: Context,
+    ) => {
+      try {
+        const db = context.supabase.schema('metadata_register');
+        const { data: definition, error: definitionError } = await db
+          .from('calc_definitions')
+          .select('id, calc_kind, domain_code, attribute_id')
+          .eq('id', args.id)
+          .maybeSingle();
+        if (definitionError) throw definitionError;
+        if (!definition) return { definition: null, errors: [calcError('Calculation was not found')] };
+        if (definition.calc_kind !== 'AGGREGATE') {
+          return { definition: null, errors: [calcError('Only aggregate calculations can be edited here')] };
+        }
+
+        const { data: own, error: ownError } = await db
+          .from('attribute_register')
+          .select('attribute_code')
+          .eq('id', definition.attribute_id)
+          .maybeSingle();
+        if (ownError) throw ownError;
+        if (!own?.attribute_code) return { definition: null, errors: [calcError('Calculation was not found')] };
+
+        const requestedCodes = new Set<string>([own.attribute_code]);
+        const measureCode = bindingCode(args.measure);
+        if (measureCode) requestedCodes.add(measureCode);
+        const weightCode = String(args.weightAttributeCode || '').trim();
+        if (weightCode) requestedCodes.add(weightCode);
+        const { data: attributes, error: attributeError } = await db
+          .from('attribute_register')
+          .select('attribute_code, domain_code, data_type')
+          .in('attribute_code', [...requestedCodes]);
+        if (attributeError) throw attributeError;
+
+        const relationshipCodes = bindingPath(args.measure);
+        const { data: relationships, error: relationshipError } = relationshipCodes.length
+          ? await db
+            .from('relationship_types')
+            .select('relationship_code, parent_domain_code, child_domain_code')
+            .in('relationship_code', relationshipCodes)
+          : { data: [], error: null };
+        if (relationshipError) throw relationshipError;
+
+        const plan = planAggregateUpdate(args, {
+          ownAttributeCode: own.attribute_code,
+          ownDomainCode: definition.domain_code,
+          attributes: (attributes || []).map((row) => ({
+            attributeCode: row.attribute_code,
+            domainCode: row.domain_code,
+            dataType: row.data_type,
+          })),
+          relationships: (relationships || []).map((row) => ({
+            relationshipCode: row.relationship_code,
+            parentDomainCode: row.parent_domain_code,
+            childDomainCode: row.child_domain_code,
+          })),
+        });
+
+        const { data: inputs, error: inputError } = await db
+          .from('calc_inputs')
+          .select('id, input_role, attribute_code, ordinal, traversal, relationship_codes')
+          .eq('calc_definition_id', args.id);
+        if (inputError) throw inputError;
+        const rows = (inputs || []) as StoredCalcInput[];
+        await keepCalcInput(db, args.id, rows.filter((row) => row.input_role === 'MEASURE'), 'MEASURE', plan.measure, 1);
+        if (plan.weight) {
+          await keepCalcInput(db, args.id, rows.filter((row) => row.input_role === 'WEIGHT'), 'WEIGHT', plan.weight, 2);
+        }
+
+        const { error: updateError } = await db
+          .from('calc_definitions')
+          .update({ aggregate_fn: plan.aggregateFn, updated_at: new Date().toISOString() })
+          .eq('id', args.id);
+        if (updateError) throw updateError;
+
+        if (!plan.weight) {
+          const weights = rows.filter((row) => row.input_role === 'WEIGHT').map((row) => row.id);
+          if (weights.length) {
+            const { error } = await db.from('calc_inputs').delete().in('id', weights);
+            if (error) throw error;
+          }
+        }
+
+        const { data: saved, error: savedError } = await context.supabase
+          .from('calc_definitions')
+          .select('*')
+          .eq('id', args.id)
+          .single();
+        if (savedError) throw savedError;
+        return { definition: mapDefinition(saved), errors: [] };
+      } catch (error: any) {
+        return { definition: null, errors: [calcError(error?.message || 'Could not save the calculation')] };
       }
     },
   },

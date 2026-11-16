@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { graphqlQuery } from '@/lib/graphql';
 import { attributeText } from '@/lib/experience';
 import { domainHref } from '@/lib/domain-routes';
+import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useTemporalStore } from '@/lib/store';
 
 const ROLE: Record<string, string> = {
@@ -98,6 +99,7 @@ interface Seat {
 }
 
 interface Order {
+  id: string;
   seatId: string;
   trancheId: string;
   ordered: number;
@@ -218,6 +220,7 @@ export function DealSyndicate({
       const trancheId = child(node, 'ORDER_TRANCHE')?.childEntityId;
       if (!seatId || !trancheId || !seatIds.has(seatId)) return [];
       return [{
+        id: node.id,
         seatId,
         trancheId,
         ordered: amountOf(node.attributes?.ORDER_AMOUNT),
@@ -285,7 +288,7 @@ export function DealSyndicate({
     <section className="da-sec">
       <div className="da-sechead">
         <h2>Syndicate</h2>
-        <span className="da-st na">{statusLabel}</span>
+        <span className="da-st na"><InspectValue bind={attrBind(dealId, 'DEAL', 'SYNDICATE_STATUS', 'Syndicate Status')} value={statusLabel}>{statusLabel}</InspectValue></span>
       </div>
 
       {loading && <div className="xp-empty">Loading the syndicate…</div>}
@@ -343,7 +346,7 @@ export function DealSyndicate({
                     <i className="other" style={{ width: `${otherWidth}%` }} />
                   </div>
                   <dl>
-                    <dt>Facility</dt><dd>{millions(tranche.size)}</dd>
+                    <dt>Facility</dt><dd><InspectValue bind={attrBind(tranche.id, 'DEAL_TRANCHE', 'TRANCHE_SIZE', 'Tranche Size', tranche.name)} value={tranche.size}>{millions(tranche.size)}</InspectValue></dd>
                     <dt>Our funds</dt><dd>{millions(ours)}{tranche.size ? ` (${Math.round(ours / tranche.size * 100)}%)` : ''}</dd>
                     <dt>Other lenders</dt><dd>{millions(others)}</dd>
                     <dt>Placed</dt><dd>{tranche.size ? `${Math.round(placed / tranche.size * 100)}%` : '—'}</dd>
@@ -374,10 +377,10 @@ export function DealSyndicate({
                   const cells = book.shown.map((tranche) => {
                     if (seat.house) {
                       const allocated = book.ours(tranche.id);
-                      return { allocated, ordered: allocated, house: true };
+                      return { allocated, ordered: allocated, house: true, orderId: undefined as string | undefined };
                     }
                     const order = orders.find((item) => item.seatId === seat.id && item.trancheId === tranche.id);
-                    return { allocated: order?.allocated || 0, ordered: order?.ordered || 0, house: false };
+                    return { allocated: order?.allocated || 0, ordered: order?.ordered || 0, house: false, orderId: order?.id };
                   });
                   const total = cells.reduce((sum, cell) => sum + cell.allocated, 0);
                   return (
@@ -395,16 +398,16 @@ export function DealSyndicate({
                                 <Link href={`${domainHref('FUND')}/${fund.id}`}>{shortName(fund.name)}</Link>
                               </span>
                             ))
-                            : seat.lenderType}
+                            : <InspectValue bind={attrBind(seat.lenderId, 'LENDER', 'LENDER_TYPE', 'Lender Type', seat.name)} value={seat.lenderType}>{seat.lenderType}</InspectValue>}
                         </small>
                         </div>
                       </td>
-                      <td>{seat.role}</td>
+                      <td><InspectValue bind={attrBind(seat.id === 'house' ? null : seat.id, 'SYNDICATE_SEAT', 'SEAT_ROLE', 'Role', seat.name)} value={seat.role}>{seat.role}</InspectValue></td>
                       {cells.map((cell, index) => (
                         <td key={book.shown[index].id} className="num">
                           {cell.allocated > 0 || cell.ordered > 0 ? (
                             <>
-                              <b>{plain(cell.allocated)}</b>
+                              <b><InspectValue bind={attrBind(cell.orderId, 'SYNDICATE_ORDER', 'ORDER_ALLOCATED_AMOUNT', 'Allocated Amount', seat.name)} value={cell.allocated}>{plain(cell.allocated)}</InspectValue></b>
                               <small>
                                 {cell.house || cell.ordered <= 0
                                   ? `Order ${plain(cell.ordered || cell.allocated)}`
@@ -415,7 +418,7 @@ export function DealSyndicate({
                         </td>
                       ))}
                       <td className="num"><b>{plain(total)}</b></td>
-                      <td>{seat.documents}</td>
+                      <td><InspectValue bind={attrBind(seat.id === 'house' ? null : seat.id, 'SYNDICATE_SEAT', 'ASSIGNMENT_STATUS', 'Assignment Documents', seat.name)} value={seat.documents}>{seat.documents}</InspectValue></td>
                     </tr>
                   );
                 })}

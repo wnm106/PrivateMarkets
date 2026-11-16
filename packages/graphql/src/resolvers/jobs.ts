@@ -1,6 +1,6 @@
 import type { Context } from '../context';
 import { assertSchedulable, nextCronRun } from '../lib/cron';
-import { JOB_TYPES, jobScopeProblem, jobType } from '../lib/job-types';
+import { JOB_TYPES, jobScheduleProblem, jobScopeProblem, jobType } from '../lib/job-types';
 
 /**
  * Job schedules and runs. The tables are reached only through the job_*
@@ -110,7 +110,7 @@ export async function enqueueJob(
 
 export const jobResolvers = {
   Query: {
-    jobTypes: () => JOB_TYPES,
+    jobTypes: () => JOB_TYPES.filter((type) => type.schedulable !== false),
 
     jobSchedules: async (_: unknown, __: unknown, context: Context) => {
       const { data, error } = await context.supabase.rpc('job_schedules_list', {});
@@ -164,7 +164,7 @@ export const jobResolvers = {
           }
         }
 
-        const problem = jobScopeProblem(String(input.jobType || ''), clientId);
+        const problem = jobScheduleProblem(String(input.jobType || ''), clientId);
         if (problem) return { schedule: null, errors: [{ field: 'jobType', message: problem, code: 'VALIDATION' }] };
 
         const isActive = input.isActive !== false;

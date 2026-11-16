@@ -40,6 +40,7 @@ import {
   type SkillState,
   type SkillView,
 } from '@tapestrai/mcp-server/src/lib/chat-skills';
+import { AttributeInspectPanel, useDetailDrawer } from '@/components/detail/AttributeInspect';
 
 /** A file the user has staged but not yet sent. */
 interface StagedAttachment {
@@ -84,13 +85,16 @@ function extractProposals(text: string): Array<{ raw: string; value: Record<stri
 }
 
 /**
- * The app's single chat surface: a popout docked to the right edge (~30% wide).
+ * The app's single assistant surface: a popout docked to the right edge.
  * It answers general questions, explores data and designs reports, and accepts
- * screenshots or reference documents to design against.
+ * screenshots or reference documents to design against. A right-click on a
+ * value slides that attribute's sources over the conversation, inside this panel.
  */
 export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const isOpen = useTemporalStore((state) => state.chatOpen);
   const setChatOpen = useTemporalStore((state) => state.setChatOpen);
+  const inspect = useDetailDrawer();
+  const inspectOpen = inspect.view != null;
   const asOfDate = useTemporalStore((state) => state.asOfDate);
   const chatVoice = useTemporalStore((state) => state.chatVoice);
   const setChatVoice = useTemporalStore((state) => state.setChatVoice);
@@ -134,6 +138,14 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
       unsubscribe();
     };
   }, []);
+
+  // Closing the assistant from anywhere else dismisses details too. Only the
+  // open-to-closed edge counts, so a right-click cannot clear the view it just set.
+  const assistantWasOpen = useRef(isOpen);
+  useEffect(() => {
+    if (assistantWasOpen.current && !isOpen) inspect.close();
+    assistantWasOpen.current = isOpen;
+  }, [isOpen, inspect.close]);
 
   // The stored choice is read after mount so the server render stays on the default.
   useEffect(() => {
@@ -486,11 +498,12 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
 
   return (
     <aside
-      className={`chat-popout ${isOpen ? 'open' : ''}`}
+      className={`chat-popout ${isOpen ? 'open' : ''}${inspectOpen ? ' has-inspect' : ''}`}
       aria-hidden={!isOpen}
       inert={!isOpen}
       aria-label="tapestr.ai assistant"
     >
+      <div className="chat-pane" inert={inspectOpen ? true : undefined} aria-hidden={inspectOpen}>
       {/* Header */}
       <div className="chat-header">
         <div className="chat-header-title">
@@ -872,6 +885,8 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
           {isLoading ? '⏳' : '➤'}
         </button>
       </div>
+      </div>
+      <AttributeInspectPanel />
     </aside>
   );
 }

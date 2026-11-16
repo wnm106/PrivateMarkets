@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { graphqlMutation } from '@/lib/graphql';
+import { dealCheckResults, resultsForAssignedRules, resultsForFund } from '@/lib/deal-compliance-view';
 
 export interface ComplianceFundRef {
   fundId: string;
@@ -11,7 +12,7 @@ export interface ComplianceFundRef {
   level: string;
 }
 
-interface FundRule {
+export interface FundRule {
   id: string;
   ruleCode: string;
   ruleName: string;
@@ -21,7 +22,7 @@ interface FundRule {
   groupByAttributeCode?: string | null;
 }
 
-interface FundResult {
+export interface FundResult {
   id: string;
   ruleId: string;
   anchorEntityId: string;
@@ -117,6 +118,34 @@ function utilisation(result: FundResult, direction?: string | null): number | nu
   return result.computedValue / limit;
 }
 
+function detailSections(rule: FundRule, result: FundResult): Array<{ label: string; value: string }> {
+  const direction = result.limitDirection || rule.limitDirection;
+  const sections: Array<{ label: string; value: string }> = [];
+  if (result.groupByValue) {
+    sections.push({
+      label: GROUP_LABEL[rule.groupByAttributeCode || ''] || 'Group',
+      value: result.groupByValue,
+    });
+  }
+  if (result.rankPosition != null) sections.push({ label: 'Rank', value: String(result.rankPosition) });
+  if (result.contributingCount != null) {
+    sections.push({ label: 'Positions', value: result.contributingCount.toLocaleString('en-US') });
+  }
+  sections.push({ label: 'Pro-forma', value: formatMeasure(result.computedValue, rule.resultUnit) });
+  if (result.hardLimitValue != null) {
+    sections.push({
+      label: direction === 'MIN' ? 'Floor' : 'Limit',
+      value: formatMeasure(result.hardLimitValue, rule.resultUnit),
+    });
+  }
+  if (result.softLimitValue != null) {
+    sections.push({ label: 'Soft limit', value: formatMeasure(result.softLimitValue, rule.resultUnit) });
+  }
+  if (result.numeratorValue != null) sections.push({ label: 'Numerator', value: formatRaw(result.numeratorValue) });
+  if (result.denominatorValue != null) sections.push({ label: 'Denominator', value: formatRaw(result.denominatorValue) });
+  return sections;
+}
+
 function explain(rule: FundRule, result: FundResult): string {
   const direction = result.limitDirection || rule.limitDirection;
   const groupName = result.groupByValue
@@ -207,60 +236,184 @@ const SCORE = `
   }
 `;
 
-export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds }: {
+type ScoreAdjustment = { fundId: string; trancheId: string; type: string; amount?: number | null; reason?: string | null; note?: string | null };
+
+export interface DealComplianceScore {
+  board: Board | null;
+  loading: boolean;
+  error: string;
+}
+
+export function useDealComplianceScore({
+  dealId,
+  asOfDate,
+  holds,
+  adjustments,
+  enabled = true,
+}: {
   dealId: string;
   asOfDate?: string | null;
   holds: Record<string, number>;
-  adjustments: Array<{ fundId: string; trancheId: string; type: string; amount?: number | null; reason?: string | null; note?: string | null }>;
-  funds: ComplianceFundRef[];
-}) {
+  adjustments: ScoreAdjustment[];
+  enabled?: boolean;
+}): DealComplianceScore {
   const [board, setBoard] = useState<Board | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState('');
+  const holdKey = JSON.stringify(holds);
+  const adjustmentKey = JSON.stringify(adjustments);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    setLoading(true);
+    const timer = window.setTimeout(() => {
+      setError('');
+      const holdList = Object.entries(holds).map(([trancheId, holdPct]) => ({ trancheId, holdPct }));
+      const adjustmentList = adjustments.map((item) => ({
+        fundId: item.fundId,
+        trancheId: item.trancheId,
+        type: item.type,
+        amount: item.amount,
+        reasonCode: item.reason,
+        note: item.note,
+      }));
+      graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>(SCORE, {
+        dealId,
+        asOfDate: asOfDate || null,
+        holds: holdList,
+        adjustments: adjustmentList,
+      }).then((result) => {
+        if (cancelled) return;
+        const scored = result.data?.scoreDealCompliance;
+        const message = result.error?.message || scored?.errors?.[0]?.message;
+        if (!scored) {
+          setError(message || 'Could not score this allocation');
+          return;
+        }
+        setBoard({ rules: scored.rules, results: scored.results });
+        if (!scored.results.length && message) setError(message);
+      }).catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not score this allocation');
+      }).finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [dealId, asOfDate, holdKey, adjustmentKey, enabled]);
+
+  return { board, loading, error };
+}
+
+function childrenOfFunds(funds: Array<{ fundId: string; parentFundId?: string | null }>) {
+  const ids = new Set(funds.map((fund) => fund.fundId));
+  const children = new Map<string, Array<{ fundId: string }>>();
+  for (const fund of funds) {
+    if (!fund.parentFundId || !ids.has(fund.parentFundId)) continue;
+    const list = children.get(fund.parentFundId) || [];
+    list.push({ fundId: fund.fundId });
+    children.set(fund.parentFundId, list);
+  }
+  return children;
+}
+
+export function ComplianceGaugeList({
+  fundId,
+  funds,
+  score,
+}: {
+  fundId: string;
+  funds: Array<{ fundId: string; fundName: string; parentFundId?: string | null }>;
+  score: DealComplianceScore;
+}) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const rules = useMemo(() => new Map((score.board?.rules || []).map((rule) => [rule.id, rule])), [score.board]);
+  const rows = useMemo(() => {
+    const byFund = new Map<string, FundResult[]>();
+    for (const result of score.board?.results || []) {
+      const list = byFund.get(result.anchorEntityId) || [];
+      list.push(result);
+      byFund.set(result.anchorEntityId, list);
+    }
+    const visible = resultsForAssignedRules(fundId, byFund, childrenOfFunds(funds));
+    visible.sort((left, right) => {
+      const leftUse = utilisation(left, left.limitDirection || rules.get(left.ruleId)?.limitDirection);
+      const rightUse = utilisation(right, right.limitDirection || rules.get(right.ruleId)?.limitDirection);
+      return (rightUse ?? -1) - (leftUse ?? -1);
+    });
+    return visible;
+  }, [score.board, fundId, funds, rules]);
+
+  if (score.loading && rows.length === 0) return <p className="da-note">Scoring this allocation against the fund's limits.</p>;
+  if (!rows.length) return <p className="da-note">{score.error || 'No compliance limits are assigned to this fund.'}</p>;
+
+  return (
+    <>
+      {score.loading && <p className="da-note">Updating the pro-forma for this deal.</p>}
+      {rows.map((result) => {
+        const rule = rules.get(result.ruleId);
+        if (!rule) return null;
+        const view = reading(result, result.limitDirection || rule.limitDirection);
+        const ratio = utilisation(result, result.limitDirection || rule.limitDirection) ?? 0;
+        const owner = result.anchorEntityId === fundId
+          ? ''
+          : funds.find((fund) => fund.fundId === result.anchorEntityId)?.fundName.replace(/^[^:]+:\s*/, '') || '';
+        const group = result.groupByValue ? `${GROUP_LABEL[rule.groupByAttributeCode || ''] || 'Group'} ${result.groupByValue}` : '';
+        const open = openId === result.id;
+        const sections = detailSections(rule, result);
+        return (
+          <div key={result.id} className={`da-rule${open ? ' open' : ''}`}>
+            <button
+              type="button"
+              className="da-rulehead"
+              aria-expanded={open}
+              onClick={() => setOpenId(open ? null : result.id)}
+            >
+              <span className="da-ruleline">
+                <span className="da-twist" aria-hidden="true">{open ? '▾' : '▸'}</span>
+                <b>
+                  <span className="da-rulename">{rule.ruleName}</span>
+                  {(group || owner) && <span className="da-rulegroup">{[group, owner && `(${owner})`].filter(Boolean).join(' ')}</span>}
+                </b>
+                <span className={`da-st ${view.tone}`}>{view.label}</span>
+              </span>
+              <span className={`da-gauge ${view.tone}`}><i style={{ width: `${Math.min(100, ratio * 100)}%` }} /></span>
+            </button>
+            {open && (
+              <div className="da-ruledetail">
+                {sections.map((section) => (
+                  <div key={section.label}><span>{section.label}</span><b>{section.value}</b></div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds, score }: {
+  dealId: string;
+  asOfDate?: string | null;
+  holds: Record<string, number>;
+  adjustments: ScoreAdjustment[];
+  funds: ComplianceFundRef[];
+  score?: DealComplianceScore;
+}) {
+  const own = useDealComplianceScore({ dealId, asOfDate, holds, adjustments, enabled: !score });
+  const board = score?.board ?? own.board;
+  const loading = score?.loading ?? own.loading;
+  const error = score?.error ?? own.error;
   const [selectedId, setSelectedId] = useState<string | null>(funds.find((fund) => fund.level === 'PORTFOLIO')?.fundId || funds[0]?.fundId || null);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('ALL');
   const [sort, setSort] = useState<SortKey>('utilisation');
   const [bucket, setBucket] = useState<Bucket>('all');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-
-  const holdKey = JSON.stringify(holds);
-  const adjustmentKey = JSON.stringify(adjustments);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError('');
-    const holdList = Object.entries(holds).map(([trancheId, holdPct]) => ({ trancheId, holdPct }));
-    const adjustmentList = adjustments.map((item) => ({
-      fundId: item.fundId,
-      trancheId: item.trancheId,
-      type: item.type,
-      amount: item.amount,
-      reasonCode: item.reason,
-      note: item.note,
-    }));
-    graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>(SCORE, {
-      dealId,
-      asOfDate: asOfDate || null,
-      holds: holdList,
-      adjustments: adjustmentList,
-    }).then((result) => {
-      if (cancelled) return;
-      const scored = result.data?.scoreDealCompliance;
-      const message = result.error?.message || scored?.errors?.[0]?.message;
-      if (message || !scored) {
-        setError(message || 'Could not score this allocation');
-        return;
-      }
-      setBoard({ rules: scored.rules, results: scored.results });
-    }).catch((err: unknown) => {
-      if (!cancelled) setError(err instanceof Error ? err.message : 'Could not score this allocation');
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [dealId, asOfDate, holdKey, adjustmentKey]);
 
   const branches = useMemo(() => {
     const ids = new Set(funds.map((fund) => fund.fundId));
@@ -291,11 +444,14 @@ export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds }: 
     return grouped;
   }, [board, fundIds]);
 
-  const dealResults = useMemo(() => funds.flatMap((fund) => byFund.get(fund.fundId) || []), [funds, byFund]);
+  const dealResults = useMemo(
+    () => dealCheckResults(funds, byFund, branches.children),
+    [funds, byFund, branches.children],
+  );
   const directionFor = (result: FundResult) => result.limitDirection || rules.get(result.ruleId)?.limitDirection;
   const dealTally = tally(dealResults, directionFor);
   const selected = funds.find((fund) => fund.fundId === selectedId) || funds[0] || null;
-  const selectedResults = selected ? byFund.get(selected.fundId) || [] : [];
+  const selectedResults = selected ? resultsForFund(selected.fundId, byFund, branches.children) : [];
   const selectedTally = tally(selectedResults, directionFor);
 
   const categories = useMemo(() => {
@@ -376,7 +532,7 @@ export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds }: 
                 depth={0}
                 selectedId={selected?.fundId || null}
                 collapsed={collapsed}
-                countsFor={(id) => tally(byFund.get(id) || [], directionFor)}
+                countsFor={(id) => tally(resultsForFund(id, byFund, branches.children), directionFor)}
                 onToggle={(id) => setCollapsed((current) => {
                   const next = new Set(current);
                   if (next.has(id)) next.delete(id);
@@ -441,11 +597,14 @@ export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds }: 
                     if (!rule) return null;
                     const ratio = utilisation(result, rule.limitDirection);
                     const place = reading(result, rule.limitDirection);
+                    const owner = result.anchorEntityId === selected?.fundId
+                      ? ''
+                      : funds.find((fund) => fund.fundId === result.anchorEntityId)?.fundName;
                     return (
                       <tr key={result.id}>
                         <td className="dc-rule">
                           <b><Link href={`/admin/compliance/${encodeURIComponent(rule.ruleCode)}`}>{rule.ruleName}</Link></b>
-                          <small>{explain(rule, result)}</small>
+                          <small>{owner ? `${owner}. ` : ''}{explain(rule, result)}</small>
                         </td>
                         <td>{CATEGORY[rule.ruleCategory] || rule.ruleCategory}</td>
                         <td className="num">{formatMeasure(result.hardLimitValue ?? result.softLimitValue, rule.resultUnit)}</td>

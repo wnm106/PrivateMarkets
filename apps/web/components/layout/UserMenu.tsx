@@ -3,7 +3,9 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { browserSessionIsActive } from '@/lib/auth-token';
 import { graphqlClient, ME_QUERY } from '@/lib/graphql';
+import { loginPath } from '@/lib/safe-next-path';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
 
 interface MeData {
@@ -21,7 +23,7 @@ export function initialsFor(name: string | null | undefined, email: string | nul
   return letters.toUpperCase();
 }
 
-export async function signOutAndRedirect() {
+async function endSession() {
   try {
     await supabaseBrowserClient().auth.signOut();
   } catch {
@@ -32,7 +34,18 @@ export async function signOutAndRedirect() {
   } catch {
     /* ignore */
   }
-  window.location.href = '/welcome';
+}
+
+export async function signOutAndRedirect() {
+  await endSession();
+  window.location.assign('/login');
+}
+
+/** Drops any session the login page would bounce, then opens the sign-in form. */
+export async function goToSignIn(pathname?: string) {
+  const from = pathname || (typeof window === 'undefined' ? '/' : window.location.pathname);
+  await endSession();
+  window.location.assign(loginPath(from));
 }
 
 /** Where the account menu opens from its trigger. */
@@ -49,24 +62,40 @@ export function UserMenu({
 }) {
   const pathname = usePathname() || '/';
   const [me, setMe] = useState<MeData | null>(null);
+  const [pending, setPending] = useState(true);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const load = async () => {
+    let timer = 0;
+    const load = async (attempt = 0) => {
       const result = await graphqlClient.query(ME_QUERY, {}, { requestPolicy: 'network-only' }).toPromise();
-      if (!cancelled) setMe(result.data?.me ?? null);
+      if (cancelled) return;
+      if (result.data?.me) {
+        setMe(result.data.me);
+        setPending(false);
+        return;
+      }
+      // A live session can answer a moment after the first paint. Keep the
+      // account chip in place instead of offering a sign-in link that bounces.
+      if (attempt < 4 && browserSessionIsActive()) {
+        timer = window.setTimeout(() => { void load(attempt + 1); }, 400);
+        return;
+      }
+      setMe(null);
+      setPending(false);
     };
-    load();
+    void load();
     // Reload when auth state changes (login / token refresh / profile edits)
     const { data: sub } = supabaseBrowserClient().auth.onAuthStateChange(() => {
-      setTimeout(load, 300);
+      timer = window.setTimeout(() => { void load(); }, 300);
     });
-    const onProfileUpdated = () => load();
+    const onProfileUpdated = () => { void load(); };
     window.addEventListener('profile-updated', onProfileUpdated);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
       sub.subscription.unsubscribe();
       window.removeEventListener('profile-updated', onProfileUpdated);
     };
@@ -82,11 +111,22 @@ export function UserMenu({
   }, [open, handleClickOutside]);
 
   if (!me) {
+    if (pending) {
+      return (
+        <div className={`user-chip ${variant === 'sidebar' ? 'user-chip-sidebar' : ''}`} aria-hidden>
+          <div className="avatar">…</div>
+        </div>
+      );
+    }
     return (
-      <Link href={`/login?redirectedFrom=${encodeURIComponent(pathname)}`} className={`user-chip ${variant === 'sidebar' ? 'user-chip-sidebar' : ''}`} style={{ textDecoration: 'none' }}>
+      <button
+        type="button"
+        className={`user-chip ${variant === 'sidebar' ? 'user-chip-sidebar' : ''}`}
+        onClick={() => { void goToSignIn(pathname); }}
+      >
         <div className="avatar">?</div>
         {showLabel && <div style={{ fontSize: '12px', color: 'var(--accent)', fontWeight: 600 }}>Sign in</div>}
-      </Link>
+      </button>
     );
   }
 

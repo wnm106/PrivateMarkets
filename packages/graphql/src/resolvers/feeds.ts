@@ -111,11 +111,20 @@ async function visibleMaps(context: Context): Promise<Array<{ mapCode: string; m
   const { data, error } = await context.supabase
     .schema('entity_instances')
     .from('feed_maps')
-    .select('map_code, map_name, is_active')
+    .select('map_code, map_name, is_active, column_mappings, header_signature, assignment_template')
     .order('map_name');
   if (error) throw error;
   return (data || [])
-    .filter((row: Row) => row.is_active !== false)
+    // A feed needs a map that can tell whether an unattended file is the shape it was saved for:
+    // one that carries its file layout (parseReusableMap in packages/mcp-server/src/feeds/reusable-map.ts),
+    // or one found by the file's exact column headers (findStoredMap in load-maps.ts).
+    .filter((row: Row) => {
+      if (row.is_active === false) return false;
+      const layout = row.column_mappings;
+      const hasLayout = layout?.version === 1 && Array.isArray(layout.headers) && Array.isArray(layout.assignments);
+      const hasSignature = Boolean(row.header_signature) && Array.isArray(row.assignment_template) && row.assignment_template.length > 0;
+      return hasLayout || hasSignature;
+    })
     .map((row: Row) => ({ mapCode: row.map_code, mapName: row.map_name || row.map_code }));
 }
 

@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import { Inter, IBM_Plex_Mono } from 'next/font/google';
 import { AppChrome } from '@/components/layout/AppChrome';
 import { AuthSync } from '@/components/auth/AuthSync';
-import { SignedOutGate } from '@/components/auth/SignedOutGate';
 import '../styles/globals.css';
 
 // Single UI face: Inter has tabular numerals and stays legible at 11-13px in dense grids.
@@ -34,7 +33,6 @@ export default function RootLayout({
     <html lang="en" className={`${inter.variable} ${ibmPlexMono.variable}`}>
       <body>
         <AuthSync />
-        <SignedOutGate />
         <AppChrome>{children}</AppChrome>
       </body>
     </html>

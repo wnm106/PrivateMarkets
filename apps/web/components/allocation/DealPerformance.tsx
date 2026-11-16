@@ -5,7 +5,27 @@ import { graphqlQuery } from '@/lib/graphql';
 import { attributeText } from '@/lib/experience';
 import { useTemporalStore } from '@/lib/store';
 import { heldShare, spreadFromPricing } from '@/lib/servicing-schedule';
+import { attrBind, InspectValue } from '@/components/detail/InspectValue';
+import { DealActualReturns } from './DealActualReturns';
 import { projectPerformance, type PerformanceCase, type PerformanceFees } from '@/lib/deal-performance';
+
+/** Stored attribute behind each line of the gross-to-net bridge. */
+const BRIDGE: Record<string, { amount: string; irr?: string; moic?: string }> = {
+  'Gross profit': { amount: 'DEAL_GROSS_PROFIT', irr: 'DEAL_GROSS_IRR', moic: 'DEAL_GROSS_MOIC' },
+  'Management fee': { amount: 'DEAL_MGMT_FEE_AMOUNT' },
+  'Fund expenses': { amount: 'DEAL_FUND_EXPENSE_AMOUNT' },
+  'Incentive fee': { amount: 'DEAL_INCENTIVE_FEE_AMOUNT' },
+  'Net profit to investors': { amount: 'DEAL_NET_PROFIT', irr: 'DEAL_NET_IRR', moic: 'DEAL_NET_MOIC' },
+};
+
+/** Stored attribute behind each line of the return sources table. */
+const SOURCES: Record<string, string> = {
+  'Cash interest and undrawn fees': 'DEAL_INCOME_CASH',
+  'PIK interest': 'DEAL_INCOME_PIK',
+  'OID and upfront fees': 'DEAL_INCOME_OID',
+  'Mark-to-market and equity kicker': 'DEAL_INCOME_MARK',
+  'Total gross profit': 'DEAL_GROSS_PROFIT',
+};
 
 const RATING: Record<string, string> = {
   R1: '1 Exceptional',
@@ -244,12 +264,16 @@ export function DealPerformance({
 
   const spreadBps = model?.grossIrr != null && model.netIrr != null ? Math.round((model.grossIrr - model.netIrr) * 10000) : null;
   const fundedLeverage = senior;
+  // Every modelled figure is stored on the deal or the tranche by the server model. These point a shown value at it.
+  const D = (code: string, name: string) => attrBind(dealId, 'DEAL', code, name, borrowerName);
+  const T = (row: { id: string; name: string }, code: string, name: string) => attrBind(row.id, 'DEAL_TRANCHE', code, name, row.name);
 
   return (
     <div className="da">
+      <DealActualReturns dealId={dealId} dealName={borrowerName} tranches={tranches} />
       <section className="da-sec">
         <div className="da-sechead">
-          <h2>Performance</h2>
+          <h2>Projected performance</h2>
           <p>
             {borrowerName || 'Borrower'}: our allocated position across the debt tranches. Projected returns use the servicing cash flows{stage === 'CLOSED' ? '.' : '; the deal has not closed, so all months are pro forma.'}
           </p>
@@ -259,40 +283,40 @@ export function DealPerformance({
             <div className="da-facts six">
               <div className="da-fact">
                 <span>Gross IRR</span>
-                <strong>{pct(model.grossIrr)}</strong>
-                <small>MOIC {multiple(model.grossMoic)}</small>
+                <strong><InspectValue bind={D('DEAL_GROSS_IRR', 'Gross IRR')} value={model.grossIrr}>{pct(model.grossIrr)}</InspectValue></strong>
+                <small><InspectValue bind={D('DEAL_GROSS_MOIC', 'Gross MOIC')} value={model.grossMoic}>MOIC {multiple(model.grossMoic)}</InspectValue></small>
               </div>
               <div className="da-fact">
                 <span>Net IRR</span>
-                <strong>{pct(model.netIrr)}</strong>
-                <small>TVPI {multiple(model.netMoic)}</small>
+                <strong><InspectValue bind={D('DEAL_NET_IRR', 'Net IRR')} value={model.netIrr}>{pct(model.netIrr)}</InspectValue></strong>
+                <small><InspectValue bind={D('DEAL_NET_MOIC', 'Net TVPI')} value={model.netMoic}>TVPI {multiple(model.netMoic)}</InspectValue></small>
               </div>
               <div className="da-fact">
                 <span>Gross to net spread</span>
-                <strong>{spreadBps == null ? '—' : `${spreadBps.toLocaleString('en-US')} bps`}</strong>
+                <strong><InspectValue bind={D('DEAL_GROSS_TO_NET_SPREAD_BPS', 'Gross to Net Spread')} value={spreadBps}>{spreadBps == null ? '—' : `${spreadBps.toLocaleString('en-US')} bps`}</InspectValue></strong>
                 <small>Fees, expenses and carry</small>
               </div>
               <div className="da-fact">
                 <span>Current cash yield</span>
-                <strong>{pct(model.cashYield, 2)}</strong>
+                <strong><InspectValue bind={D('DEAL_CASH_YIELD', 'Current Cash Yield')} value={model.cashYield}>{pct(model.cashYield, 2)}</InspectValue></strong>
                 <small>Annualised, first quarter</small>
               </div>
               <div className="da-fact">
                 <span>All-in yield</span>
-                <strong>{pct(model.allInYield, 2)}</strong>
+                <strong><InspectValue bind={D('DEAL_ALL_IN_YIELD', 'All-in Yield')} value={model.allInYield}>{pct(model.allInYield, 2)}</InspectValue></strong>
                 <small>Coupon plus OID over the hold</small>
               </div>
               <div className="da-fact">
                 <span>Profit gross / net</span>
-                <strong>{millions(model.grossProfit)} / {millions(model.netProfit)}</strong>
-                <small>On {millions(model.invested)} invested</small>
+                <strong><InspectValue bind={D('DEAL_GROSS_PROFIT', 'Gross Profit')} value={model.grossProfit}>{millions(model.grossProfit)}</InspectValue> / <InspectValue bind={D('DEAL_NET_PROFIT', 'Net Profit')} value={model.netProfit}>{millions(model.netProfit)}</InspectValue></strong>
+                <small>On <InspectValue bind={D('DEAL_INVESTED_AMOUNT', 'Invested Amount')} value={model.invested}>{millions(model.invested)}</InspectValue> invested</small>
               </div>
             </div>
           </div>
         )}
         {model && (
           <div className="da-tabs" role="tablist" aria-label="Return basis">
-            <button type="button" className="on">Projected life (to {monthName(model.endDate)})</button>
+            <button type="button" className="on">Projected life (to <InspectValue bind={D('DEAL_PROJECTION_END_DATE', 'Projection End Date')} value={model.endDate}>{monthName(model.endDate)}</InspectValue>)</button>
           </div>
         )}
       </section>
@@ -337,35 +361,35 @@ export function DealPerformance({
                   {model.tranches.map((row) => (
                     <tr key={row.id}>
                       <td>{row.name}</td>
-                      <td className="num">{money(row.position)}</td>
-                      <td className="num">{pct(row.coupon, 2)}</td>
+                      <td className="num"><InspectValue bind={T(row, 'TRANCHE_HELD_POSITION', 'Held Position')} value={row.position}>{money(row.position)}</InspectValue></td>
+                      <td className="num"><InspectValue bind={T(row, 'TRANCHE_CASH_COUPON', 'Cash Coupon')} value={row.coupon}>{pct(row.coupon, 2)}</InspectValue></td>
                       <td className="num">{leverage(row.leverageFrom, row.leverageTo)}</td>
-                      <td className="num">{money(row.income)}</td>
-                      <td className="num">{money(row.mark)}</td>
-                      <td className="num"><b>{money(row.profit)}</b></td>
-                      <td className="num">{pct(row.irr)}</td>
-                      <td className="num">{multiple(row.moic)}</td>
+                      <td className="num"><InspectValue bind={T(row, 'TRANCHE_MODEL_INCOME', 'Income')} value={row.income}>{money(row.income)}</InspectValue></td>
+                      <td className="num"><InspectValue bind={T(row, 'TRANCHE_MODEL_MARK_GAIN', 'Mark and Equity')} value={row.mark}>{money(row.mark)}</InspectValue></td>
+                      <td className="num"><b><InspectValue bind={T(row, 'TRANCHE_MODEL_PROFIT', 'Profit')} value={row.profit}>{money(row.profit)}</InspectValue></b></td>
+                      <td className="num"><InspectValue bind={T(row, 'TRANCHE_MODEL_IRR', 'IRR')} value={row.irr}>{pct(row.irr)}</InspectValue></td>
+                      <td className="num"><InspectValue bind={T(row, 'TRANCHE_MODEL_MOIC', 'MOIC')} value={row.moic}>{multiple(row.moic)}</InspectValue></td>
                       <td>
                         <span className="da-share" title={pct(row.share, 0)}><i style={{ width: `${Math.max(0, Math.min(100, row.share * 100))}%` }} /></span>
-                        <small>{pct(row.share, 0)}</small>
+                        <small><InspectValue bind={T(row, 'TRANCHE_PROFIT_SHARE', 'Share of Deal Profit')} value={row.share}>{pct(row.share, 0)}</InspectValue></small>
                       </td>
-                      <td className="num">{points(row.contribution)}</td>
+                      <td className="num"><InspectValue bind={T(row, 'TRANCHE_IRR_CONTRIBUTION', 'Contribution to Deal IRR')} value={row.contribution}>{points(row.contribution)}</InspectValue></td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr>
                     <td>Total deal, gross</td>
-                    <td className="num">{money(model.tranches.reduce((sum, row) => sum + row.position, 0))}</td>
-                    <td className="num">{pct(model.weightedCoupon, 2)}</td>
+                    <td className="num"><InspectValue bind={D('DEAL_HELD_POSITION', 'Held Position')} value={model.tranches.reduce((sum, row) => sum + row.position, 0)}>{money(model.tranches.reduce((sum, row) => sum + row.position, 0))}</InspectValue></td>
+                    <td className="num"><InspectValue bind={D('DEAL_WEIGHTED_COUPON', 'Weighted Cash Coupon')} value={model.weightedCoupon}>{pct(model.weightedCoupon, 2)}</InspectValue></td>
                     <td className="num">—</td>
-                    <td className="num">{money(model.tranches.reduce((sum, row) => sum + row.income, 0))}</td>
-                    <td className="num">{money(model.tranches.reduce((sum, row) => sum + row.mark, 0))}</td>
-                    <td className="num">{money(model.grossProfit)}</td>
-                    <td className="num">{pct(model.grossIrr)}</td>
-                    <td className="num">{multiple(model.grossMoic)}</td>
+                    <td className="num"><InspectValue bind={D('DEAL_MODEL_INCOME', 'Income')} value={model.tranches.reduce((sum, row) => sum + row.income, 0)}>{money(model.tranches.reduce((sum, row) => sum + row.income, 0))}</InspectValue></td>
+                    <td className="num"><InspectValue bind={D('DEAL_INCOME_MARK', 'Mark and Equity')} value={model.tranches.reduce((sum, row) => sum + row.mark, 0)}>{money(model.tranches.reduce((sum, row) => sum + row.mark, 0))}</InspectValue></td>
+                    <td className="num"><InspectValue bind={D('DEAL_GROSS_PROFIT', 'Gross Profit')} value={model.grossProfit}>{money(model.grossProfit)}</InspectValue></td>
+                    <td className="num"><InspectValue bind={D('DEAL_GROSS_IRR', 'Gross IRR')} value={model.grossIrr}>{pct(model.grossIrr)}</InspectValue></td>
+                    <td className="num"><InspectValue bind={D('DEAL_GROSS_MOIC', 'Gross MOIC')} value={model.grossMoic}>{multiple(model.grossMoic)}</InspectValue></td>
                     <td>100%</td>
-                    <td className="num">{points(model.grossIrr)}</td>
+                    <td className="num"><InspectValue bind={D('DEAL_GROSS_IRR', 'Gross IRR')} value={model.grossIrr}>{points(model.grossIrr)}</InspectValue></td>
                   </tr>
                 </tfoot>
               </table>
@@ -384,10 +408,10 @@ export function DealPerformance({
                     {model.bridge.map((row) => (
                       <tr key={row.label} className={row.net ? 'net' : ''}>
                         <td>{row.label === 'Management fee' ? `Management fee (${rateLabel(fees.management)} on invested)` : row.label === 'Fund expenses' ? `Fund expenses (${rateLabel(fees.expenses)})` : row.label === 'Incentive fee' ? `Incentive fee (${rateLabel(fees.carry)} over ${rateLabel(fees.hurdle)} hurdle)` : row.label}</td>
-                        <td className="num">{money(row.amount)}</td>
+                        <td className="num"><InspectValue bind={BRIDGE[row.label] ? D(BRIDGE[row.label].amount, row.label) : null} value={row.amount}>{money(row.amount)}</InspectValue></td>
                         <td className="num">{row.shareOfGross == null ? '—' : `${(row.shareOfGross * 100).toFixed(1)}%`}</td>
-                        <td className="num">{row.irr == null ? '' : pct(row.irr)}</td>
-                        <td className="num">{row.moic == null ? '' : multiple(row.moic)}</td>
+                        <td className="num"><InspectValue bind={BRIDGE[row.label]?.irr ? D(BRIDGE[row.label].irr as string, row.net ? 'Net IRR' : 'Gross IRR') : null} value={row.irr}>{row.irr == null ? '' : pct(row.irr)}</InspectValue></td>
+                        <td className="num"><InspectValue bind={BRIDGE[row.label]?.moic ? D(BRIDGE[row.label].moic as string, row.net ? 'Net TVPI' : 'Gross MOIC') : null} value={row.moic}>{row.moic == null ? '' : multiple(row.moic)}</InspectValue></td>
                       </tr>
                     ))}
                   </tbody>
@@ -405,7 +429,7 @@ export function DealPerformance({
                     {model.sources.map((row, index) => (
                       <tr key={row.label} className={index === model.sources.length - 1 ? 'net' : ''}>
                         <td>{row.label}</td>
-                        <td className="num">{money(row.amount)}</td>
+                        <td className="num"><InspectValue bind={SOURCES[row.label] ? D(SOURCES[row.label], row.label) : null} value={row.amount}>{money(row.amount)}</InspectValue></td>
                         <td className="num">{row.shareOfProfit == null ? '—' : `${Math.round(row.shareOfProfit * 100)}%`}</td>
                         <td className="num">{pct(row.onInvested, 2)}</td>
                       </tr>
@@ -422,34 +446,34 @@ export function DealPerformance({
               <article className="da-card">
                 <h3>Returns</h3>
                 <dl>
-                  <dt>Gross TVPI</dt><dd>{multiple(model.grossMoic)}</dd>
-                  <dt>Net TVPI</dt><dd>{multiple(model.netMoic)}</dd>
-                  <dt>DPI (gross)</dt><dd>{multiple(model.dpi)}</dd>
-                  <dt>RVPI (gross)</dt><dd>{multiple(model.rvpi)}</dd>
-                  <dt>Gross IRR</dt><dd>{pct(model.grossIrr)}</dd>
-                  <dt>Net IRR</dt><dd>{pct(model.netIrr)}</dd>
+                  <dt>Gross TVPI</dt><dd><InspectValue bind={D('DEAL_GROSS_MOIC', 'Gross TVPI')} value={model.grossMoic}>{multiple(model.grossMoic)}</InspectValue></dd>
+                  <dt>Net TVPI</dt><dd><InspectValue bind={D('DEAL_NET_MOIC', 'Net TVPI')} value={model.netMoic}>{multiple(model.netMoic)}</InspectValue></dd>
+                  <dt>DPI (gross)</dt><dd><InspectValue bind={D('DEAL_DPI', 'DPI')} value={model.dpi}>{multiple(model.dpi)}</InspectValue></dd>
+                  <dt>RVPI (gross)</dt><dd><InspectValue bind={D('DEAL_RVPI', 'RVPI')} value={model.rvpi}>{multiple(model.rvpi)}</InspectValue></dd>
+                  <dt>Gross IRR</dt><dd><InspectValue bind={D('DEAL_GROSS_IRR', 'Gross IRR')} value={model.grossIrr}>{pct(model.grossIrr)}</InspectValue></dd>
+                  <dt>Net IRR</dt><dd><InspectValue bind={D('DEAL_NET_IRR', 'Net IRR')} value={model.netIrr}>{pct(model.netIrr)}</InspectValue></dd>
                 </dl>
               </article>
               <article className="da-card">
                 <h3>Yield and income</h3>
                 <dl>
-                  <dt>Weighted cash coupon</dt><dd>{pct(model.weightedCoupon, 2)}</dd>
-                  <dt>Weighted spread over SOFR</dt><dd>{pct(model.weightedSpread, 2)}</dd>
-                  <dt>Current cash yield</dt><dd>{pct(model.cashYield, 2)}</dd>
-                  <dt>All-in yield</dt><dd>{pct(model.allInYield, 2)}</dd>
-                  <dt>PIK share of income</dt><dd>{pct(model.pikShare, 0)}</dd>
-                  <dt>OID</dt><dd>{amountOf(oid) ? amountOf(oid).toFixed(1) : '—'}</dd>
+                  <dt>Weighted cash coupon</dt><dd><InspectValue bind={D('DEAL_WEIGHTED_COUPON', 'Weighted Cash Coupon')} value={model.weightedCoupon}>{pct(model.weightedCoupon, 2)}</InspectValue></dd>
+                  <dt>Weighted spread over SOFR</dt><dd><InspectValue bind={D('DEAL_WEIGHTED_SPREAD', 'Weighted Spread')} value={model.weightedSpread}>{pct(model.weightedSpread, 2)}</InspectValue></dd>
+                  <dt>Current cash yield</dt><dd><InspectValue bind={D('DEAL_CASH_YIELD', 'Current Cash Yield')} value={model.cashYield}>{pct(model.cashYield, 2)}</InspectValue></dd>
+                  <dt>All-in yield</dt><dd><InspectValue bind={D('DEAL_ALL_IN_YIELD', 'All-in Yield')} value={model.allInYield}>{pct(model.allInYield, 2)}</InspectValue></dd>
+                  <dt>PIK share of income</dt><dd><InspectValue bind={D('DEAL_PIK_INCOME_SHARE', 'PIK Share of Income')} value={model.pikShare}>{pct(model.pikShare, 0)}</InspectValue></dd>
+                  <dt>OID</dt><dd><InspectValue bind={attrBind(dealId, 'DEAL', 'DEAL_OID_PRICE', 'OID Price')} value={oid}>{amountOf(oid) ? amountOf(oid).toFixed(1) : '—'}</InspectValue></dd>
                 </dl>
               </article>
               <article className="da-card">
                 <h3>Credit quality</h3>
                 <dl>
-                  <dt>Total leverage (funded)</dt><dd>{fundedLeverage == null ? '—' : `${fundedLeverage.toFixed(1)}x`}</dd>
-                  <dt>Interest coverage</dt><dd>{model.coverage == null ? '—' : `${model.coverage.toFixed(1)}x`}</dd>
-                  <dt>Internal rating</dt><dd>{rating || '—'}</dd>
-                  <dt>Mark</dt><dd>{mark == null ? '—' : mark.toFixed(1)}</dd>
-                  <dt>Weighted average life</dt><dd>{model.walYears == null ? '—' : `${model.walYears.toFixed(1)} yrs`}</dd>
-                  <dt>Realised losses / non-accruals</dt><dd>{millions(loss)} / {nonAccrual ? 'non-accrual' : 'none'}</dd>
+                  <dt>Total leverage (funded)</dt><dd><InspectValue bind={attrBind(dealId, 'DEAL', 'DEAL_LEVERAGE_SENIOR', 'Senior Leverage')} value={fundedLeverage}>{fundedLeverage == null ? '—' : `${fundedLeverage.toFixed(1)}x`}</InspectValue></dd>
+                  <dt>Interest coverage</dt><dd><InspectValue bind={D('DEAL_INTEREST_COVERAGE', 'Interest Coverage')} value={model.coverage}>{model.coverage == null ? '—' : `${model.coverage.toFixed(1)}x`}</InspectValue></dd>
+                  <dt>Internal rating</dt><dd><InspectValue bind={attrBind(dealId, 'DEAL', 'SERVICING_RATING', 'Internal Rating')} value={rating}>{rating || '—'}</InspectValue></dd>
+                  <dt>Mark</dt><dd><InspectValue bind={attrBind(dealId, 'DEAL', 'SERVICING_MARK', 'Mark')} value={mark}>{mark == null ? '—' : mark.toFixed(1)}</InspectValue></dd>
+                  <dt>Weighted average life</dt><dd><InspectValue bind={D('DEAL_WAL_YEARS', 'Weighted Average Life')} value={model.walYears}>{model.walYears == null ? '—' : `${model.walYears.toFixed(1)} yrs`}</InspectValue></dd>
+                  <dt>Realised losses / non-accruals</dt><dd><InspectValue bind={attrBind(dealId, 'DEAL', 'SERVICING_REALIZED_LOSS', 'Realised Loss')} value={loss}>{millions(loss)}</InspectValue> / <InspectValue bind={attrBind(dealId, 'DEAL', 'SERVICING_NON_ACCRUAL', 'Non-accrual')} value={String(nonAccrual)}>{nonAccrual ? 'non-accrual' : 'none'}</InspectValue></dd>
                 </dl>
               </article>
             </div>

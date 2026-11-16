@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanConnectionConfig, cleanFeedPath, cleanFolder, codeFrom, needsSecret } from './feed-config';
+import { cleanConnectionConfig, cleanFeedPath, cleanFolder, cleanRemoteFolder, codeFrom, needsSecret } from './feed-config';
 
 describe('cleanFolder', () => {
   it('tidies a folder path and refuses anything that could leave it', () => {
@@ -30,7 +30,38 @@ describe('cleanConnectionConfig', () => {
     expect(() => cleanConnectionConfig('HTTP', { baseUrl: 'not an address' })).toThrow(/starting with https/);
     expect(() => cleanConnectionConfig('HTTP', { baseUrl: 'https://files.example.com/', authType: 'BASIC' })).toThrow(/user name/);
     expect(() => cleanConnectionConfig('HTTP', { baseUrl: 'https://files.example.com/', authType: 'HEADER', headerName: 'bad header' })).toThrow(/header/);
-    expect(() => cleanConnectionConfig('SFTP', {})).toThrow(/STORAGE or HTTP/);
+    expect(() => cleanConnectionConfig('FTP', {})).toThrow(/STORAGE, HTTP, or SFTP/);
+  });
+});
+
+describe('sftp settings', () => {
+  const good = { host: 'SFTP.Example.com', username: 'feeds', folder: '/outbound/nav', password: 'oops' };
+
+  it('keeps known settings, fills defaults, and drops a stray credential', () => {
+    expect(cleanConnectionConfig('SFTP', good)).toEqual({
+      host: 'sftp.example.com', port: 22, username: 'feeds', authType: 'PASSWORD', folder: '/outbound/nav', afterLoad: 'MOVE',
+    });
+    expect(cleanConnectionConfig('SFTP', { ...good, port: '2222', authType: 'key', afterLoad: 'leave', hostKey: `SHA256:${'A'.repeat(43)}` })).toMatchObject({
+      port: 2222, authType: 'KEY', afterLoad: 'LEAVE', hostKey: `SHA256:${'A'.repeat(43)}`,
+    });
+  });
+
+  it('refuses a host with a scheme or path, a bad port, a missing user and a malformed host key', () => {
+    expect(() => cleanConnectionConfig('SFTP', { ...good, host: 'sftp://sftp.example.com' })).toThrow(/server name only/);
+    expect(() => cleanConnectionConfig('SFTP', { ...good, host: 'sftp.example.com/outbound' })).toThrow(/server name only/);
+    expect(() => cleanConnectionConfig('SFTP', { ...good, host: 'user@sftp.example.com' })).toThrow(/server name only/);
+    expect(() => cleanConnectionConfig('SFTP', { ...good, port: 70000 })).toThrow(/port/);
+    expect(() => cleanConnectionConfig('SFTP', { ...good, username: ' ' })).toThrow(/user name/);
+    expect(() => cleanConnectionConfig('SFTP', { ...good, hostKey: 'MD5:aa:bb' })).toThrow(/host key/);
+    expect(() => cleanConnectionConfig('SFTP', { ...good, folder: '/outbound/../etc' })).toThrow(/may only use/);
+  });
+
+  it('keeps a leading slash on a server folder and always needs a credential', () => {
+    expect(cleanRemoteFolder('/outbound/nav/')).toBe('/outbound/nav');
+    expect(cleanRemoteFolder('outbound')).toBe('outbound');
+    expect(cleanRemoteFolder('')).toBe('');
+    expect(needsSecret('SFTP', {})).toBe(true);
+    expect(cleanFeedPath('SFTP', 'nav/')).toBe('nav');
   });
 });
 

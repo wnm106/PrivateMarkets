@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { nextCronRun } from '@tapestrai/graphql/src/lib/cron';
-import { buildConnector, type ConnectionSpec, type Connector, type FeedSpec, type FileOutcome, type HttpOptions } from './connectors';
+import { buildConnector, type ConnectionSpec, type Connector, type FeedSpec, type FileOutcome, type SftpOptions } from './connectors';
 import { JobError, type JobHandler } from './worker';
 
 /**
@@ -43,7 +43,8 @@ export interface FeedDeps {
   loadFile: FileLoader;
   now?: () => Date;
   connectorFor?: (connection: ConnectionSpec) => Connector;
-  http?: HttpOptions;
+  /** Options for the connectors. Tests use it to allow local addresses. */
+  http?: SftpOptions;
 }
 
 type Row = Record<string, any>;
@@ -74,6 +75,15 @@ interface FileReport {
   message?: string;
 }
 
+/** The activity kind and the sentence stored for one file, or null when the file changed nothing. */
+export function feedActivity(feedName: string, fileName: string, outcome: FileOutcome, message?: string): { kind: string; summary: string } | null {
+  const detail = message ? ` ${message}` : '';
+  if (outcome === 'LOADED') return { kind: 'FEED_LOADED', summary: `${feedName}: loaded ${fileName}.` };
+  if (outcome === 'NEEDS_REVIEW') return { kind: 'FEED_NEEDS_REVIEW', summary: `${feedName}: ${fileName} is waiting for review.${detail}` };
+  if (outcome === 'FAILED' || outcome === 'GAVE_UP') return { kind: 'FEED_FAILED', summary: `${feedName}: ${fileName} failed.${detail}` };
+  return null;
+}
+
 export function feedPollHandler(deps: FeedDeps): JobHandler {
   const now = deps.now || (() => new Date());
   const connectorFor = deps.connectorFor || ((connection: ConnectionSpec) => buildConnector(deps.supabase, connection, deps.http));
@@ -91,70 +101,88 @@ export function feedPollHandler(deps: FeedDeps): JobHandler {
     const connector = connectorFor(connectionSpec(context.connection, context.secret));
     const spec: FeedSpec = { feedCode: feed.feed_code, path: feed.path || '', filePattern: feed.file_pattern || '*' };
     const started = now();
-    const files = await connector.list(spec, started);
     const reports: FileReport[] = [];
+    try {
+      const files = await connector.list(spec, started);
 
-    for (const file of files) {
-      let outcome: FileOutcome = 'FAILED';
-      let message: string | undefined;
-      try {
-        const fetched = await connector.fetch(file);
-        if (!fetched) continue;
-        const sha256 = createHash('sha256').update(fetched.bytes).digest('hex');
-        const ledger = await call<Row>(deps.supabase, 'feed_file_begin', {
-          p_feed_id: feedId,
-          p_file_name: fetched.name,
-          p_remote_ref: file.ref,
-          p_size_bytes: fetched.bytes.length,
-          p_sha256: sha256,
-          p_job_run_id: run.id,
-        });
-
-        if (ledger.action !== 'LOAD') {
-          // Another poll is loading this content right now. Leave it alone.
-          if (ledger.status === 'LOADING') continue;
-          // Seen before. A file that used up its attempts is set aside; anything else is a repeat.
-          outcome = ledger.status === 'FAILED' ? 'GAVE_UP' : 'DUPLICATE';
-        } else {
-          let loaded: LoadOutcome;
-          try {
-            loaded = await deps.loadFile({
-              clientId: feed.client_id,
-              mapCode: feed.map_code,
-              sourceCode: feed.source_code || null,
-              fileName: fetched.name,
-              mediaType: fetched.mediaType,
-              bytes: fetched.bytes,
-            });
-          } catch (error) {
-            loaded = { status: 'FAILED', message: reason(error) };
-          }
-          await call(deps.supabase, 'feed_file_finish', {
-            p_id: ledger.id,
-            p_status: loaded.status,
-            p_import_instance_id: loaded.importInstanceId || null,
-            p_rows_created: loaded.created ?? null,
-            p_rows_matched: loaded.matched ?? null,
-            p_message: loaded.message || null,
+      for (const file of files) {
+        let outcome: FileOutcome = 'FAILED';
+        let message: string | undefined;
+        try {
+          const fetched = await connector.fetch(file);
+          if (!fetched) continue;
+          const sha256 = createHash('sha256').update(fetched.bytes).digest('hex');
+          const ledger = await call<Row>(deps.supabase, 'feed_file_begin', {
+            p_feed_id: feedId,
+            p_file_name: fetched.name,
+            p_remote_ref: file.ref,
+            p_size_bytes: fetched.bytes.length,
+            p_sha256: sha256,
+            p_job_run_id: run.id,
           });
-          outcome = loaded.status;
-          message = loaded.message || undefined;
-        }
-      } catch (error) {
-        outcome = 'FAILED';
-        message = reason(error);
-      }
 
-      try {
-        await connector.settle?.(file, outcome, started);
-      } catch (error) {
-        message = message ? `${message} ${reason(error)}` : reason(error);
-        if (outcome === 'LOADED' || outcome === 'DUPLICATE') outcome = 'FAILED';
+          if (ledger.action !== 'LOAD') {
+            // Another poll is loading this content right now. Leave it alone.
+            if (ledger.status === 'LOADING') continue;
+            // Seen before. A file that used up its attempts is set aside; anything else is a repeat.
+            outcome = ledger.status === 'FAILED' ? 'GAVE_UP' : 'DUPLICATE';
+          } else {
+            let loaded: LoadOutcome;
+            try {
+              loaded = await deps.loadFile({
+                clientId: feed.client_id,
+                mapCode: feed.map_code,
+                sourceCode: feed.source_code || null,
+                fileName: fetched.name,
+                mediaType: fetched.mediaType,
+                bytes: fetched.bytes,
+              });
+            } catch (error) {
+              loaded = { status: 'FAILED', message: reason(error) };
+            }
+            await call(deps.supabase, 'feed_file_finish', {
+              p_id: ledger.id,
+              p_status: loaded.status,
+              p_import_instance_id: loaded.importInstanceId || null,
+              p_rows_created: loaded.created ?? null,
+              p_rows_matched: loaded.matched ?? null,
+              p_message: loaded.message || null,
+            });
+            outcome = loaded.status;
+            message = loaded.message || undefined;
+          }
+        } catch (error) {
+          outcome = 'FAILED';
+          message = reason(error);
+        }
+
+        try {
+          await connector.settle?.(file, outcome, started);
+        } catch (error) {
+          message = message ? `${message} ${reason(error)}` : reason(error);
+          if (outcome === 'LOADED' || outcome === 'DUPLICATE') outcome = 'FAILED';
+        }
+        reports.push({ file: file.name, outcome, ...(message ? { message } : {}) });
       }
-      reports.push({ file: file.name, outcome, ...(message ? { message } : {}) });
+    } finally {
+      await connector.close?.().catch(() => undefined);
     }
 
     await call(deps.supabase, 'feed_polled', { p_feed_id: feedId });
+
+    for (const report of reports) {
+      const noted = feedActivity(String(feed.feed_name || feed.feed_code), report.file, report.outcome, report.message);
+      if (!noted) continue;
+      await call(deps.supabase, 'activity_record', {
+        p_client_id: feed.client_id,
+        p_kind: noted.kind,
+        p_subject_type: 'FEED',
+        p_subject_id: feed.id,
+        p_subject_code: feed.feed_code,
+        p_summary: noted.summary,
+        p_payload: { file: report.file, outcome: report.outcome },
+      });
+    }
 
     const count = (wanted: FileOutcome) => reports.filter((report) => report.outcome === wanted).length;
     const result = {
@@ -214,6 +242,18 @@ export function feedCheckHandler(deps: Pick<FeedDeps, 'supabase' | 'now'>): JobH
     const expectations = (await call<Row[] | null>(deps.supabase, 'feed_expectations', { p_client_id: run.clientId })) || [];
     const late = lateFeeds(expectations, now());
     if (late.length > 0) {
+      for (const item of late) {
+        const row = expectations.find((expectation) => expectation.feed_code === item.feed);
+        await call(deps.supabase, 'activity_record', {
+          p_client_id: run.clientId,
+          p_kind: 'FEED_LATE',
+          p_subject_type: 'FEED',
+          p_subject_id: row?.id || null,
+          p_subject_code: item.feed,
+          p_summary: `${item.name} has not received the file expected ${item.expectedAt.slice(0, 16).replace('T', ' ')} UTC.`,
+          p_payload: { expectedAt: item.expectedAt },
+        });
+      }
       const lines = late.map((item) => `${item.name} (expected ${item.expectedAt.slice(0, 16).replace('T', ' ')} UTC)`);
       throw new JobError(`${late.length} of ${expectations.length} feeds are late: ${lines.join('; ')}.`);
     }
@@ -229,13 +269,16 @@ export function connectionCheckHandler(deps: Pick<FeedDeps, 'supabase' | 'connec
     const context = await call<Row | null>(deps.supabase, 'feed_connection_context', { p_connection_id: connectionId });
     if (!context?.connection) throw new JobError('The connection no longer exists.');
     if (context.connection.client_id !== run.clientId) throw new JobError('The connection belongs to another client.');
+    const connector = connectorFor(connectionSpec(context.connection, context.secret));
     try {
-      const message = await connectorFor(connectionSpec(context.connection, context.secret)).check();
+      const message = await connector.check();
       await call(deps.supabase, 'feed_connection_checked', { p_connection_id: connectionId, p_ok: true, p_message: message });
       return { ok: true, message };
     } catch (error) {
       await call(deps.supabase, 'feed_connection_checked', { p_connection_id: connectionId, p_ok: false, p_message: reason(error) });
       throw new JobError(reason(error));
+    } finally {
+      await connector.close?.().catch(() => undefined);
     }
   };
 }

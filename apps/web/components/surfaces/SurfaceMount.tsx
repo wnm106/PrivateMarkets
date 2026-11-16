@@ -8,6 +8,7 @@ import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { findSurface } from '@/lib/surface-registry';
 import { useSurfaceNav } from '@/lib/surface-nav';
 import { useTemporalStore } from '@/lib/store';
+import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 
 interface SurfaceMountProps {
   code: string;
@@ -17,19 +18,20 @@ interface SurfaceMountProps {
 
 /** URL query parameter on the surface's own page, as a hook. */
 function useHostQueryParam(name: string): [string | null, (value: string | null) => void] {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const value = searchParams.get(name);
   const set = useCallback(
     (next: string | null) => {
-      const params = new URLSearchParams(searchParams.toString());
+      const params = new URLSearchParams(window.location.search);
       if (next == null || next === '') params.delete(name);
       else params.set(name, next);
       const text = params.toString();
-      router.replace(text ? `${pathname}?${text}` : pathname, { scroll: false });
+      // History API, not router.replace: Next keeps useSearchParams in sync, and the
+      // server page is not re-rendered for a filter change.
+      window.history.replaceState(window.history.state, '', text ? `${pathname}?${text}` : pathname);
     },
-    [name, pathname, router, searchParams],
+    [name, pathname],
   );
   return [value, set];
 }
@@ -41,6 +43,7 @@ export function SurfaceMount({ code, clientCode, permissions }: SurfaceMountProp
   const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const [Component, setComponent] = useState<ComponentType | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const openInspect = useAttributeInspect().open;
 
   useEffect(() => {
     let cancelled = false;
@@ -56,10 +59,14 @@ export function SurfaceMount({ code, clientCode, permissions }: SurfaceMountProp
     return () => { cancelled = true; };
   }, [code]);
 
+  // The server page hands over a new array on every render; key on its contents so the
+  // host object (and anything keyed on it) stays stable.
+  const permissionKey = permissions.join('|');
+
   const host = useMemo<SurfaceHost>(
     () => ({
       clientCode,
-      permissions,
+      permissions: permissionKey ? permissionKey.split('|') : [],
       asOfDate,
       knowledgeDate,
       basePath: `/s/${code}`,
@@ -69,8 +76,9 @@ export function SurfaceMount({ code, clientCode, permissions }: SurfaceMountProp
       mutate: (document, variables) => graphqlMutation(document, variables ?? {}) as never,
       href: (path) => path,
       useCrumbs: useSurfaceNav,
+      inspectAttribute: (target) => openInspect(target),
     }),
-    [clientCode, permissions, asOfDate, knowledgeDate, code, router],
+    [clientCode, permissionKey, asOfDate, knowledgeDate, code, router, openInspect],
   );
 
   if (error) return <div className="xp-error">{error}</div>;

@@ -3,7 +3,10 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ColDef } from 'ag-grid-community';
+import { goToSignIn } from '@/components/layout/UserMenu';
+import { browserSessionIsActive } from '@/lib/auth-token';
 import { graphqlQuery } from '@/lib/graphql';
+import { isUnauthenticatedGraphqlError } from '@/lib/safe-next-path';
 import { domainColor, domainHref } from '@/lib/domain-routes';
 import { AppGrid } from '@/components/grid/AppGrid';
 
@@ -125,6 +128,7 @@ export default function LandingPage() {
   const [query, setQuery] = useState('');
   const [stats, setStats] = useState<DashboardStats>(EMPTY);
   const [loading, setLoading] = useState(true);
+  const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -197,6 +201,16 @@ export default function LandingPage() {
             'network-only'
           ),
         ]);
+
+        const rejected = isUnauthenticatedGraphqlError(domainsResult.error) || isUnauthenticatedGraphqlError(opsResult.error);
+        if (rejected && !browserSessionIsActive()) {
+          await goToSignIn('/');
+          return;
+        }
+        if (rejected || (domainsResult.error && !domainsResult.data)) {
+          if (!cancelled) setProblem(rejected ? 'Sign in to load this overview.' : (domainsResult.error?.message || 'The overview could not be loaded.'));
+          return;
+        }
 
         const activeDomains = (domainsResult.data?.domainTypes || []).filter((domain) => domain.isActive);
         const counts: Record<string, number> = {};
@@ -305,6 +319,17 @@ export default function LandingPage() {
 
   const domainName = (code: string) => stats.entities.find((entity) => entity.domainCode === code)?.name || code;
   const sourcesHealthy = stats.totalSources > 0 && stats.sourcesConnected === stats.totalSources;
+
+  if (problem) {
+    return (
+      <div className="view-fade home">
+        <header className="home-hero">
+          <h1 className="home-title">Overview unavailable</h1>
+          <p className="home-sub">{problem}</p>
+        </header>
+      </div>
+    );
+  }
 
   return (
     <div className="view-fade home">

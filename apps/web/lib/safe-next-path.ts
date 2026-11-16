@@ -15,3 +15,15 @@ export function safeNextPath(value: string | null | undefined, fallback = '/'): 
 export function nextPathCookie(path: string): string {
   return `${NEXT_PATH_COOKIE}=${encodeURIComponent(safeNextPath(path))}; Path=/; Max-Age=600; SameSite=Lax`;
 }
+
+/** Login URL that returns the visitor to an in-app path after they sign in. */
+export function loginPath(pathname: string): string {
+  return `/login?redirectedFrom=${encodeURIComponent(safeNextPath(pathname))}`;
+}
+
+export function isUnauthenticatedGraphqlError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as { message?: unknown; graphQLErrors?: Array<{ message?: unknown }> };
+  const parts = [record.message, ...(record.graphQLErrors || []).map((item) => item?.message)];
+  return parts.some((part) => typeof part === 'string' && /not authenticated/i.test(part));
+}

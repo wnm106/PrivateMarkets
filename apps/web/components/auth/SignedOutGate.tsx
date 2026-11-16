@@ -3,21 +3,17 @@
 import { useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import { browserSessionIsActive } from '@/lib/auth-token';
+import { loginPath } from '@/lib/safe-next-path';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
 
 const PUBLIC_PATHS = ['/welcome', '/login', '/no-access', '/auth/callback'];
 
-function destinationFor(pathname: string) {
-  if (pathname === '/') return '/welcome';
-  return `/login?redirectedFrom=${encodeURIComponent(pathname)}`;
-}
-
 /**
- * Middleware sends a full request with no session to the marketing home page.
+ * Middleware sends a full request with no session to the login page.
  * This covers the case where the session ends while the app is already open,
  * so the dashboard does not stay on screen after sign-out.
  */
-export function SignedOutGate() {
+export function SignedOutGate({ onLeave }: { onLeave?: () => void }) {
   const pathname = usePathname() || '/';
 
   useEffect(() => {
@@ -25,7 +21,8 @@ export function SignedOutGate() {
     if (isPublic) return;
 
     const leave = () => {
-      window.location.replace(destinationFor(pathname));
+      onLeave?.();
+      window.location.replace(loginPath(pathname));
     };
 
     let cancelled = false;
@@ -44,7 +41,7 @@ export function SignedOutGate() {
       cancelled = true;
       data.subscription.unsubscribe();
     };
-  }, [pathname]);
+  }, [pathname, onLeave]);
 
   return null;
 }

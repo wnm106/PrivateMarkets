@@ -93,7 +93,7 @@ type FieldLineage {
   currentValue: String
   competingValues: [SourceValue!]!
   resolutionRule: String
-  lastUpdated: DateTime!
+  lastUpdated: DateTime
   # True while a materialized calc that owns this attribute is waiting to be recomputed.
   calcDirty: Boolean!
 }

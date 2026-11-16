@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { graphqlQuery } from '@/lib/graphql';
 import { attributeText } from '@/lib/experience';
 import { domainHref } from '@/lib/domain-routes';
+import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useTemporalStore } from '@/lib/store';
 import { addMonths, heldShare, monthKey, projectSchedule, spreadFromPricing, type ScheduleDraw, type ScheduleMonth } from '@/lib/servicing-schedule';
 
@@ -364,7 +365,7 @@ export function DealServicing({
             </div>
             <div className="da-fact">
               <span>Internal rating</span>
-              <strong>{terms?.rating ? (RATING[terms.rating] || terms.rating) : '—'}</strong>
+              <strong><InspectValue bind={attrBind(dealId, 'DEAL', 'SERVICING_RATING', 'Internal Rating')} value={terms?.rating}>{terms?.rating ? (RATING[terms.rating] || terms.rating) : '—'}</InspectValue></strong>
               <small>{terms?.mark ? `Mark ${terms.mark.toFixed(1)}${terms.markDate ? `, valued ${formatDay(terms.markDate)}` : ''}` : '—'}</small>
             </div>
           </div>
@@ -447,11 +448,11 @@ export function DealServicing({
               <tbody>
                 {sizedDraws.map((draw) => (
                   <tr key={draw.id}>
-                    <td>{draw.date ? formatDay(draw.date, true) : '—'}</td>
+                    <td><InspectValue bind={attrBind(draw.id, 'AMORTIZATION', 'AMORT_DATE', 'Draw Date', draw.purpose)} value={draw.date}>{draw.date ? formatDay(draw.date, true) : '—'}</InspectValue></td>
                     <td>{draw.trancheId ? <Link href={`${domainHref('DEAL_TRANCHE')}/${draw.trancheId}`}>{draw.trancheName}</Link> : draw.trancheName}</td>
                     <td><Link href={`${domainHref('AMORTIZATION')}/${draw.id}`}>{draw.purpose}</Link></td>
                     <td className="num">{plainMillions(draw.our)}</td>
-                    <td><span className={draw.status === 'PAID' ? 'da-st ok' : 'da-st na'}>{DRAW_STATUS[draw.status] || draw.status}</span></td>
+                    <td><span className={draw.status === 'PAID' ? 'da-st ok' : 'da-st na'}><InspectValue bind={attrBind(draw.id, 'AMORTIZATION', 'AMORT_STATUS', 'Draw Status', draw.purpose)} value={draw.status}>{DRAW_STATUS[draw.status] || draw.status}</InspectValue></span></td>
                   </tr>
                 ))}
               </tbody>
@@ -516,8 +517,8 @@ export function DealServicing({
                             <Link href={`${domainHref('DEAL_COVENANT')}/${row.id}`}>{row.name}</Link>
                             {row.firstTest && <small>First test {formatDay(row.firstTest, true)}</small>}
                           </td>
-                          <td className="num">{format(row.level)}</td>
-                          <td className="num">{format(row.current)}</td>
+                          <td className="num"><InspectValue bind={attrBind(row.id, 'DEAL_COVENANT', 'COVENANT_LEVEL', 'Covenant Level', row.name)} value={row.level}>{format(row.level)}</InspectValue></td>
+                          <td className="num"><InspectValue bind={attrBind(row.id, 'DEAL_COVENANT', 'COVENANT_CURRENT', 'Current', row.name)} value={row.current}>{format(row.current)}</InspectValue></td>
                           <td className="num">{Math.round(cushion(row.direction, row.level, row.current) * 100)}%</td>
                           <td><span className={status === 'Pass' ? 'da-st ok' : status === 'Watch' ? 'da-st near' : 'da-st breach'}>{status}</span></td>
                         </tr>
@@ -540,7 +541,7 @@ export function DealServicing({
                     {reports.map((row) => (
                       <tr key={row.id}>
                         <td><Link href={`${domainHref('REPORTING_OBLIGATION')}/${row.id}`}>{row.name}</Link></td>
-                        <td>{row.due ? formatDay(row.due, true) : '—'}</td>
+                        <td><InspectValue bind={attrBind(row.id, 'REPORTING_OBLIGATION', 'REPORT_DUE_DATE', 'Due Date', row.name)} value={row.due}>{row.due ? formatDay(row.due, true) : '—'}</InspectValue></td>
                       </tr>
                     ))}
                   </tbody>

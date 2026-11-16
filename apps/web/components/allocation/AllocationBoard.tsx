@@ -6,7 +6,7 @@ import { graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION } from '@/lib/gra
 import { domainHref } from '@/lib/domain-routes';
 import { useTemporalStore } from '@/lib/store';
 import { IcMemo } from './IcMemo';
-import { DealCompliance } from './DealCompliance';
+import { ComplianceGaugeList, DealCompliance, useDealComplianceScore } from './DealCompliance';
 import { DealSyndicate } from './DealSyndicate';
 import { DealClosing } from './DealClosing';
 import { DealServicing } from './DealServicing';
@@ -14,6 +14,7 @@ import { DealFinancials } from './DealFinancials';
 import { DealPerformance } from './DealPerformance';
 import { DEAL_PANEL_KEYS, mountedPanel, tabReason, useLiveSurface } from '@/components/surfaces/useLiveSurface';
 import { useSurfaceNav } from '@/lib/surface-nav';
+import { attrBind, InspectValue, useInspectBind, type AttrBind } from '@/components/detail/InspectValue';
 
 const REASONS = [
   ['LIQ', 'Liquidity or reserve constraint'],
@@ -204,20 +205,31 @@ function EditableValue({
   display,
   kind,
   label,
+  bind = null,
   onSave,
 }: {
   value: string;
   display?: string;
   kind: 'text' | 'number' | 'date';
   label: string;
+  /** The attribute this value is stored on. Right-click opens its sources. */
+  bind?: AttrBind | null;
   onSave: (value: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  const inspect = useInspectBind();
   useEffect(() => setDraft(value), [value]);
   if (!editing) {
     return (
-      <button type="button" className="field-edit" onClick={() => setEditing(true)} aria-label={`Edit ${label}`}>
+      <button
+        type="button"
+        className={bind ? 'field-edit attr-inspectable' : 'field-edit'}
+        title={bind ? 'Right-click to view sources' : undefined}
+        onClick={() => setEditing(true)}
+        onContextMenu={bind ? (event) => inspect(event, bind, value) : undefined}
+        aria-label={`Edit ${label}`}
+      >
         {display || (kind === 'date' ? when(value) : value) || '—'}
       </button>
     );
@@ -253,6 +265,13 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const [selected, setSelected] = useState<string | null>(null);
   const [edit, setEdit] = useState<{ fundId: string; trancheId: string; amount: string; reason: string; note: string; type: 'override' | 'exclude' } | null>(null);
   const [tab, setTab] = useState<'capital' | 'memo' | 'compliance' | 'syndicate' | 'closing' | 'servicing' | 'financials' | 'performance'>('capital');
+  const complianceScore = useDealComplianceScore({
+    dealId,
+    asOfDate,
+    holds,
+    adjustments,
+    enabled: seeded && (tab === 'capital' || tab === 'compliance'),
+  });
   const live = useLiveSurface('DEAL_PIPELINE', dealId);
   useEffect(() => {
     if (live.pages.length === 0) return;
@@ -370,20 +389,22 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   };
 
   const leverageParts = (preview?.leverage || '').split('/').map((part) => part.replace(/x/gi, '').trim());
+  const dealBind = (code: string, name: string) => attrBind(dealId, 'DEAL', code, name, title);
+  const trancheBind = (tranche: Tranche, code: string, name: string) => attrBind(tranche.id, 'DEAL_TRANCHE', code, name, tranche.name);
 
   return (
     <div className="da">
       <header className="da-ribbon">
         <div className="da-title">
-          <span className="da-chip">{STAGE_LABEL[preview?.stage || ''] || preview?.stage || 'Deal'}</span>
+          <span className="da-chip"><InspectValue bind={dealBind('DEAL_STAGE', 'Stage')} value={preview?.stage}>{STAGE_LABEL[preview?.stage || ''] || preview?.stage || 'Deal'}</InspectValue></span>
           <h1><Link href={`${domainHref('DEAL')}/${dealId}`}>{title}</Link></h1>
           <p>
-            <EditableValue label="Description" kind="text" value={preview?.description || ''} onSave={(value) => saveAttribute('DEAL_DESCRIPTION', value)} />
+            <EditableValue label="Description" kind="text" bind={dealBind('DEAL_DESCRIPTION', 'Description')} value={preview?.description || ''} onSave={(value) => saveAttribute('DEAL_DESCRIPTION', value)} />
           </p>
           <span className="da-track">{STAGES.map((stage, index) => <i key={stage} className={index <= stageIndex ? 'on' : ''} />)}</span>
         </div>
         <div className="da-facts">
-          <div className="da-fact big"><span>Total facility</span><strong>{millions(facility)}</strong></div>
+          <div className="da-fact big"><span>Total facility</span><strong><InspectValue bind={dealBind('DEAL_FACILITY_SIZE', 'Facility Size')} value={facility}>{millions(facility)}</InspectValue></strong></div>
           <div className="da-fact">
             <span>Borrower</span>
             <strong>{preview?.borrowerId ? <Link href={`${domainHref('ISSUER')}/${preview.borrowerId}`}>{preview.borrower}</Link> : '—'}</strong>
@@ -394,27 +415,27 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
           </div>
           <div className="da-fact">
             <span>Pricing</span>
-            <strong><EditableValue label="Pricing" kind="text" value={preview?.pricing || ''} onSave={(value) => saveAttribute('DEAL_PRICING_SUMMARY', value)} /></strong>
+            <strong><EditableValue label="Pricing" kind="text" bind={dealBind('DEAL_PRICING_SUMMARY', 'Pricing')} value={preview?.pricing || ''} onSave={(value) => saveAttribute('DEAL_PRICING_SUMMARY', value)} /></strong>
           </div>
           <div className="da-fact">
             <span>OID</span>
-            <strong><EditableValue label="OID" kind="number" value={preview?.oid || ''} onSave={(value) => saveAttribute('DEAL_OID_PRICE', value)} /></strong>
+            <strong><EditableValue label="OID" kind="number" bind={dealBind('DEAL_OID_PRICE', 'OID Price')} value={preview?.oid || ''} onSave={(value) => saveAttribute('DEAL_OID_PRICE', value)} /></strong>
           </div>
           <div className="da-fact">
             <span>Leverage (senior / total)</span>
             <strong className="da-pair">
-              <EditableValue label="Senior leverage" kind="number" value={leverageParts[0] || ''} display={leverageParts[0] ? `${leverageParts[0]}x` : ''} onSave={(value) => saveAttribute('DEAL_LEVERAGE_SENIOR', value)} />
+              <EditableValue label="Senior leverage" kind="number" bind={dealBind('DEAL_LEVERAGE_SENIOR', 'Senior Leverage')} value={leverageParts[0] || ''} display={leverageParts[0] ? `${leverageParts[0]}x` : ''} onSave={(value) => saveAttribute('DEAL_LEVERAGE_SENIOR', value)} />
               <span>/</span>
-              <EditableValue label="Total leverage" kind="number" value={leverageParts[1] || ''} display={leverageParts[1] ? `${leverageParts[1]}x` : ''} onSave={(value) => saveAttribute('DEAL_LEVERAGE_TOTAL', value)} />
+              <EditableValue label="Total leverage" kind="number" bind={dealBind('DEAL_LEVERAGE_TOTAL', 'Total Leverage')} value={leverageParts[1] || ''} display={leverageParts[1] ? `${leverageParts[1]}x` : ''} onSave={(value) => saveAttribute('DEAL_LEVERAGE_TOTAL', value)} />
             </strong>
           </div>
           <div className="da-fact">
             <span>Maturity</span>
-            <strong><EditableValue label="Maturity" kind="date" value={preview?.maturity || ''} onSave={(value) => saveAttribute('DEAL_MATURITY_DATE', value)} /></strong>
+            <strong><EditableValue label="Maturity" kind="date" bind={dealBind('DEAL_MATURITY_DATE', 'Maturity Date')} value={preview?.maturity || ''} onSave={(value) => saveAttribute('DEAL_MATURITY_DATE', value)} /></strong>
           </div>
           <div className="da-fact">
             <span>Close</span>
-            <strong><EditableValue label="Close" kind="date" value={preview?.closeDate || ''} onSave={(value) => saveAttribute('DEAL_TARGET_CLOSE_DATE', value)} /></strong>
+            <strong><EditableValue label="Close" kind="date" bind={dealBind('DEAL_TARGET_CLOSE_DATE', 'Target Close Date')} value={preview?.closeDate || ''} onSave={(value) => saveAttribute('DEAL_TARGET_CLOSE_DATE', value)} /></strong>
           </div>
         </div>
         <div className="da-holdbox">
@@ -524,6 +545,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
             parentFundId: row.parentFundId,
             level: row.level,
           }))}
+          score={complianceScore}
         />
       )}
 
@@ -563,12 +585,12 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
                   <article key={tranche.id} className="da-card" style={{ borderTopColor: COLOR[tranche.instrumentType] || '#0B5D73' }}>
                     <h3>{tranche.securityId ? <Link href={`${domainHref('SECURITY')}/${tranche.securityId}`}>{tranche.name}</Link> : tranche.name}</h3>
                     <div className="da-rank">{tranche.equityLinked ? 'Equity-linked, junior to all debt' : tranche.unfunded ? '1st lien senior secured' : '1st lien senior secured'}</div>
-                    <div className="da-size">{millions(tranche.size)} <small>{tranche.status}</small></div>
+                    <div className="da-size"><InspectValue bind={trancheBind(tranche, 'TRANCHE_SIZE', 'Tranche Size')} value={tranche.size}>{millions(tranche.size)}</InspectValue> <small>{tranche.status}</small></div>
                     <dl>
-                      {tranche.pricing && <><dt>Pricing</dt><dd>{tranche.pricing}</dd></>}
-                      {tranche.tickingFee && <><dt>Ticking fee</dt><dd>{tranche.tickingFee}</dd></>}
-                      {tranche.coverage && <><dt>Coverage</dt><dd>{tranche.coverage}</dd></>}
-                      {tranche.callProtection && <><dt>Call protection</dt><dd>{tranche.callProtection}</dd></>}
+                      {tranche.pricing && <><dt>Pricing</dt><dd><InspectValue bind={trancheBind(tranche, 'TRANCHE_PRICING', 'Pricing')} value={tranche.pricing}>{tranche.pricing}</InspectValue></dd></>}
+                      {tranche.tickingFee && <><dt>Ticking fee</dt><dd><InspectValue bind={trancheBind(tranche, 'TRANCHE_TICKING_FEE_PCT', 'Ticking Fee')} value={tranche.tickingFee}>{tranche.tickingFee}</InspectValue></dd></>}
+                      {tranche.coverage && <><dt>Coverage</dt><dd><InspectValue bind={trancheBind(tranche, 'TRANCHE_WARRANT_COVERAGE_PCT', 'Warrant Coverage')} value={tranche.coverage}>{tranche.coverage}</InspectValue></dd></>}
+                      {tranche.callProtection && <><dt>Call protection</dt><dd><InspectValue bind={trancheBind(tranche, 'TRANCHE_CALL_PROTECTION', 'Call Protection')} value={tranche.callProtection}>{tranche.callProtection}</InspectValue></dd></>}
                     </dl>
                     <div className="da-holdblock">
                     <label>
@@ -642,11 +664,11 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
                             )}
                             <span>
                               <b><Link href={`${domainHref('FUND')}/${row.fundId}`} onClick={(event) => event.stopPropagation()}>{row.fundName}</Link></b>
-                              <small>{row.level === 'PORTFOLIO' ? `${sleeves} sub-portfolios` : `NAV ${millions(row.nav)}`}</small>
+                              <small>{row.level === 'PORTFOLIO' ? `${sleeves} sub-portfolios` : <InspectValue bind={attrBind(row.fundId, 'FUND', 'NAV', 'NAV', row.fundName)} value={row.nav}>{`NAV ${millions(row.nav)}`}</InspectValue>}</small>
                             </span>
                             </div>
                           </td>
-                          <td className="num"><b>{plain(row.availableCapital)}</b><small>{row.availableCapital ? `${Math.round(row.total / row.availableCapital * 100)}% used` : ''}</small></td>
+                          <td className="num"><b><InspectValue bind={attrBind(row.fundId, 'FUND', 'FUND_AVAILABLE_CAPITAL', 'Available Capital', row.fundName)} value={row.availableCapital}>{plain(row.availableCapital)}</InspectValue></b><small>{row.availableCapital ? `${Math.round(row.total / row.availableCapital * 100)}% used` : ''}</small></td>
                           {row.cells.map((cell) => (
                             <td key={cell.trancheId} className={`num ${cell.eligible ? 'act' : 'na'} ${cell.overridden ? 'ovr' : ''}`} onClick={(event) => {
                               event.stopPropagation();
@@ -717,6 +739,8 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
                     })}
                     onChange={setEdit}
                     onCancel={() => setEdit(null)}
+                    compliance={complianceScore}
+                    funds={preview.rows}
                     onApply={() => {
                       if (!edit) return;
                       const sleeve = selectedRow.level === 'SLEEVE';
@@ -793,6 +817,8 @@ function FundPanel({
   onChange,
   onCancel,
   onApply,
+  compliance,
+  funds,
 }: {
   row: Row;
   parentName?: string;
@@ -805,18 +831,13 @@ function FundPanel({
   onChange: (next: { fundId: string; trancheId: string; amount: string; reason: string; note: string; type: 'override' | 'exclude' }) => void;
   onCancel: () => void;
   onApply: () => void;
+  compliance: Parameters<typeof ComplianceGaugeList>[0]['score'];
+  funds: Array<{ fundId: string; fundName: string; parentFundId?: string | null }>;
 }) {
   const sleeve = row.level === 'SLEEVE';
   const share = allocated ? row.total / allocated : 0;
   const used = row.availableCapital ? row.total / row.availableCapital : 0;
-  const issuerLimit = (row.issuerLimit || 0) * row.nav;
-  const sponsorLimit = (row.sponsorLimit || 0) * row.nav;
-  const unfundedLimit = (row.unfundedLimit || 0) * row.nav;
-  const unfunded = tranches.filter((tranche) => tranche.unfunded).reduce((total, tranche) => total + (row.cells.find((cell) => cell.trancheId === tranche.id)?.amount || 0), 0);
-  const issuer = limitStatus(row.total, issuerLimit);
   const liquidity = limitStatus(row.total, row.availableCapital);
-  const sponsor = limitStatus(row.total, sponsorLimit);
-  const unfundedRule = limitStatus(unfunded, unfundedLimit);
 
   return (
     <>
@@ -917,11 +938,11 @@ function FundPanel({
         <h4>Liquidity</h4>
         <table>
           <tbody>
-            <tr><td>Cash on hand</td><td>{plain(row.cash || 0)}</td></tr>
-            <tr><td>Undrawn commitments</td><td>{plain(row.undrawn || 0)}</td></tr>
-            <tr><td>Credit line headroom</td><td>{plain(row.line || 0)}</td></tr>
-            <tr><td>Reserved for pipeline</td><td>{plain(row.reserve || 0)}</td></tr>
-            <tr><td><b>Available capital</b></td><td><b>{plain(row.availableCapital)}</b></td></tr>
+            <tr><td>Cash on hand</td><td><InspectValue bind={attrBind(row.fundId, 'FUND', 'FUND_CASH_BALANCE', 'Cash Balance', row.fundName)} value={row.cash}>{plain(row.cash || 0)}</InspectValue></td></tr>
+            <tr><td>Undrawn commitments</td><td><InspectValue bind={attrBind(row.fundId, 'FUND', 'FUND_UNDRAWN_COMMITMENTS', 'Undrawn Commitments', row.fundName)} value={row.undrawn}>{plain(row.undrawn || 0)}</InspectValue></td></tr>
+            <tr><td>Credit line headroom</td><td><InspectValue bind={attrBind(row.fundId, 'FUND', 'FUND_CREDIT_LINE_HEADROOM', 'Credit Line Headroom', row.fundName)} value={row.line}>{plain(row.line || 0)}</InspectValue></td></tr>
+            <tr><td>Reserved for pipeline</td><td><InspectValue bind={attrBind(row.fundId, 'FUND', 'FUND_PIPELINE_RESERVE', 'Pipeline Reserve', row.fundName)} value={row.reserve}>{plain(row.reserve || 0)}</InspectValue></td></tr>
+            <tr><td><b>Available capital</b></td><td><b><InspectValue bind={attrBind(row.fundId, 'FUND', 'FUND_AVAILABLE_CAPITAL', 'Available Capital', row.fundName)} value={row.availableCapital}>{plain(row.availableCapital)}</InspectValue></b></td></tr>
             <tr><td>Used by this deal</td><td>{plain(row.total)} ({Math.round(used * 100)}%)</td></tr>
             <tr><td>Remaining after deal</td><td>{plain(Math.max(0, row.availableCapital - row.total))}</td></tr>
           </tbody>
@@ -930,21 +951,8 @@ function FundPanel({
       </section>
       <section>
         <h4>Compliance rules</h4>
-        <Rule name="Single-issuer concentration" status={issuer} detail={`${plain(row.total)} of ${plain(issuerLimit)} allowed (${((row.issuerLimit || 0) * 100).toFixed(1)}% of NAV ${millions(row.nav)}). Pro-forma ${row.nav ? ((row.total / row.nav) * 100).toFixed(2) : '0.00'}%.`} />
-        {!sleeve && row.sponsorLimit != null && <Rule name="Sponsor concentration" status={sponsor} detail={`${plain(row.total)} against ${plain(sponsorLimit)} (${((row.sponsorLimit || 0) * 100).toFixed(0)}% of NAV).`} />}
-        {!sleeve && tranches.some((tranche) => tranche.unfunded) && <Rule name="Unfunded commitments" status={unfundedRule} detail={`${plain(unfunded)} of unfunded tranches against ${plain(unfundedLimit)} (${((row.unfundedLimit || 0) * 100).toFixed(0)}% of NAV).`} />}
-        <Rule name="Liquidity coverage" status={liquidity} detail={`${plain(row.total)} against ${plain(row.availableCapital)} of available capital.`} />
+        <ComplianceGaugeList fundId={row.fundId} funds={funds} score={compliance} />
       </section>
     </>
-  );
-}
-
-function Rule({ name, status, detail }: { name: string; status: { kind: string; label: string; ratio: number }; detail: string }) {
-  return (
-    <div className="da-rule">
-      <div><b>{name}</b><span className={`da-st ${status.kind}`}>{status.label}</span></div>
-      <p>{detail}</p>
-      <div className={`da-gauge ${status.kind}`}><i style={{ width: `${Math.min(100, status.ratio * 100)}%` }} /></div>
-    </div>
   );
 }

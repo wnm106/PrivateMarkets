@@ -359,7 +359,7 @@ export interface RecBind {
   code: string;
   name: string;
   dataType: string;
-  /** Valid date this figure was read at. The detail drawer opens on that date. */
+  /** Valid date this figure was read at. The assistant sources panel opens on that date. */
   asOfDate?: string;
   /** Knowledge cutoff this figure was read at. */
   knowledgeDate?: string;

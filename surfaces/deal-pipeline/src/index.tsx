@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { defineSurface } from '@tapestrai/surface-sdk';
 import { SurfaceLink, useSurfaceHost } from '@tapestrai/surface-sdk/react';
 import { attributeText, RECORD_EXPERIENCES_QUERY, type PipelineStage as Stage, type RecordExperience } from './experience';
@@ -67,6 +67,24 @@ function formatDate(ms: number | null): string {
 
 type SortKey = 'name' | 'strategy' | 'stage' | 'facility' | 'hold' | 'close';
 
+/** A deal value that points back to its attribute. Right-click opens its sources. */
+function Bound({ deal, code, name, value, children }: { deal: DealCard; code: string; name: string; value?: string; children: ReactNode }) {
+  const host = useSurfaceHost();
+  return (
+    <span
+      className="attr-inspectable"
+      title="Right-click to view sources"
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        host.inspectAttribute({ entityId: deal.id, entityName: deal.entityName, domainCode: 'DEAL', attributeCode: code, attributeName: name, value });
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
 function knownBy(knowledgeDate: string, createdAt: string | null | undefined): boolean {
   if (!createdAt) return true;
   const created = Date.parse(createdAt);
@@ -97,7 +115,7 @@ function DealPipeline() {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'stage', dir: 1 });
 
   const load = useCallback(async () => {
-    setLoading(true);
+    // Keep the current board on screen while a refresh runs; loading starts true for the first load.
     setError(null);
     const [experiences, entities] = await Promise.all([
       host.query<{ recordExperiences: RecordExperience[] }>(
@@ -169,6 +187,10 @@ function DealPipeline() {
       stageIndex: stages.findIndex((item) => item.code === stageCode),
       strategyCode,
       sector: attributeText(deal.attributes?.DEAL_SECTOR) || attributeText(deal.attributes?.DEAL_TYPE),
+      // Which attribute each shown value came from, so the drill-down opens the right one.
+      sectorCode: attributeText(deal.attributes?.DEAL_SECTOR) ? 'DEAL_SECTOR' : 'DEAL_TYPE',
+      facilityCode: amountOf(deal.attributes?.DEAL_FACILITY_SIZE) != null ? 'DEAL_FACILITY_SIZE' : 'DEAL_VALUE',
+      closeCode: dateOf(deal.attributes?.DEAL_TARGET_CLOSE_DATE) != null ? 'DEAL_TARGET_CLOSE_DATE' : 'DEAL_DATE',
       facility,
       hold,
       allocated,
@@ -407,29 +429,29 @@ function DealPipeline() {
                           const ratio = row.hold ? (row.allocated || 0) / row.hold : 0;
                           return (
                             <tr key={row.deal.id} className={`deal ${group === 'none' ? '' : 'in'}`} onClick={() => openDeal(row.deal.id)}>
-                              <td><span className="pipe-name">{row.deal.entityName}</span><span className="sm2">{row.sector}</span></td>
-                              {group !== 'strategy' && <td>{labelOf(row.strategyCode)}</td>}
+                              <td><span className="pipe-name">{row.deal.entityName}</span><span className="sm2"><Bound deal={row.deal} code={row.sectorCode} name="Sector" value={row.sector}>{row.sector}</Bound></span></td>
+                              {group !== 'strategy' && <td><Bound deal={row.deal} code="DEAL_STRATEGY" name="Strategy" value={row.strategyCode}>{labelOf(row.strategyCode)}</Bound></td>}
                               {group !== 'stage' && (
                                 <td>
                                   <span className="pipe-stg">
                                     <span className="pipe-trk">{stages.map((itemStage, index) => <i key={itemStage.code} className={index <= row.stageIndex ? 'on' : ''} />)}</span>
-                                    {stages[row.stageIndex]?.label || 'Unstaged'}
+                                    <Bound deal={row.deal} code={stageAttribute} name="Stage" value={row.stageCode}>{stages[row.stageIndex]?.label || 'Unstaged'}</Bound>
                                   </span>
                                 </td>
                               )}
-                              <td className="r">{money(row.facility)}</td>
-                              <td className="r">{row.hold != null ? money(row.hold) : '—'}</td>
+                              <td className="r"><Bound deal={row.deal} code={row.facilityCode} name="Facility Size" value={String(row.facility)}>{money(row.facility)}</Bound></td>
+                              <td className="r"><Bound deal={row.deal} code="DEAL_TARGET_HOLD" name="Target Hold" value={row.hold == null ? undefined : String(row.hold)}>{row.hold != null ? money(row.hold) : '—'}</Bound></td>
                               <td>
                                 {row.hold != null && (
                                   <span className="pipe-prog"><i style={{ width: `${Math.min(100, ratio * 100)}%` }} /></span>
                                 )}
-                                {row.allocated != null ? `${Math.round(ratio * 100)}%` : '—'}
+                                <Bound deal={row.deal} code="DEAL_ALLOCATED_AMOUNT" name="Allocated Amount" value={row.allocated == null ? undefined : String(row.allocated)}>{row.allocated != null ? `${Math.round(ratio * 100)}%` : '—'}</Bound>
                               </td>
                               <td>
                                 {row.needsAttention && <span className="pipe-pill bad">needs attention</span>}
                                 {row.gap != null && row.gap > row.facility * 0.01 && <span className="pipe-pill">{money(row.gap)} unallocated</span>}
                               </td>
-                              <td>{formatDate(row.close)}</td>
+                              <td><Bound deal={row.deal} code={row.closeCode} name="Target Close" value={formatDate(row.close)}>{formatDate(row.close)}</Bound></td>
                             </tr>
                           );
                         }                        )}

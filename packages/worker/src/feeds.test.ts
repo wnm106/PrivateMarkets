@@ -5,14 +5,18 @@ import {
   httpConnector,
   matchesPattern,
   mediaTypeFor,
+  hostKeyFingerprint,
   safeFolder,
+  sftpConnector,
+  sftpFolder,
   storageConnector,
+  type SftpSession,
   type ConnectionSpec,
   type Connector,
   type FileOutcome,
   type RemoteFile,
 } from './connectors';
-import { connectionCheckHandler, feedCheckHandler, feedPollHandler, lateFeeds, type LoadOutcome, type LoadRequest } from './feeds';
+import { connectionCheckHandler, feedActivity, feedCheckHandler, feedPollHandler, lateFeeds, type LoadOutcome, type LoadRequest } from './feeds';
 import { JobError, type JobRun } from './worker';
 
 const NOW = new Date('2026-11-16T15:00:00Z');
@@ -212,6 +216,135 @@ describe('storageConnector', () => {
   });
 });
 
+describe('sftpConnector', () => {
+  const HOST_KEY = Buffer.from('a server host key');
+  const sftp = (config: Record<string, unknown> = {}, secret: string | null = 'pw'): ConnectionSpec =>
+    connection({ kind: 'SFTP', secret, config: { host: 'sftp.example.com', port: 22, username: 'feeds', folder: '/outbound', authType: 'PASSWORD', ...config } });
+
+  function fakeServer(entries: Array<{ type: string; name: string; size: number }> = [], behaviour: { rejectConnect?: string; readOnly?: boolean } = {}) {
+    const calls: Array<[string, ...unknown[]]> = [];
+    let sessions = 0;
+    const createSession = (): SftpSession => {
+      sessions += 1;
+      return {
+        async connect(options) {
+          calls.push(['connect', { ...options, hostVerifier: undefined }]);
+          const accepted = (options.hostVerifier as (key: Buffer) => boolean)(HOST_KEY);
+          if (!accepted) throw new Error('Handshake failed: host verification');
+          if (behaviour.rejectConnect) throw new Error(behaviour.rejectConnect);
+        },
+        async list(path) {
+          calls.push(['list', path]);
+          return entries;
+        },
+        async get(path) {
+          calls.push(['get', path]);
+          if (path.endsWith('gone.csv')) throw new Error('get: No such file');
+          return Buffer.from(`content of ${path}`);
+        },
+        async rename(from, to) {
+          if (behaviour.readOnly) throw new Error('rename: Permission denied');
+          calls.push(['rename', from, to]);
+        },
+        async mkdir(path) {
+          calls.push(['mkdir', path]);
+        },
+        async end() {
+          calls.push(['end']);
+        },
+      };
+    };
+    const options = { createSession, resolve: async () => ['93.184.216.34'] };
+    return { calls, options, sessions: () => sessions };
+  }
+  const feed = { feedCode: 'NAV', path: 'nav', filePattern: 'NAV_*.csv' };
+
+  it('builds remote folders, keeping a leading slash', () => {
+    expect(sftpFolder('/outbound', 'nav')).toBe('/outbound/nav');
+    expect(sftpFolder('outbound', '')).toBe('outbound');
+    expect(sftpFolder('', '')).toBe('.');
+    expect(() => sftpFolder('/outbound', '../etc')).toThrow(JobError);
+  });
+
+  it('lists matching files, fetches one, and uses a single session', async () => {
+    const server = fakeServer([
+      { type: '-', name: 'NAV_oct.csv', size: 10 },
+      { type: 'd', name: 'processed', size: 0 },
+      { type: '-', name: 'notes.txt', size: 3 },
+      { type: '-', name: 'NAV_nov.csv', size: 12 },
+    ]);
+    const connector = sftpConnector(sftp(), server.options);
+    const files = await connector.list(feed, NOW);
+    expect(files).toEqual([
+      { name: 'NAV_nov.csv', ref: '/outbound/nav/NAV_nov.csv', size: 12 },
+      { name: 'NAV_oct.csv', ref: '/outbound/nav/NAV_oct.csv', size: 10 },
+    ]);
+    const fetched = await connector.fetch(files[0]);
+    expect(fetched?.bytes.toString()).toBe('content of /outbound/nav/NAV_nov.csv');
+    expect(fetched?.mediaType).toBe('text/csv');
+    expect(await connector.fetch({ name: 'gone.csv', ref: '/outbound/nav/gone.csv' })).toBeNull();
+    expect(server.sessions()).toBe(1);
+    expect(server.calls[0]).toEqual(['connect', expect.objectContaining({ host: 'sftp.example.com', port: 22, username: 'feeds', password: 'pw' })]);
+    await connector.close?.();
+    expect(server.calls.at(-1)).toEqual(['end']);
+  });
+
+  it('signs in with a private key when the connection uses one', async () => {
+    const server = fakeServer();
+    await sftpConnector(sftp({ authType: 'KEY' }, '-----BEGIN KEY-----'), server.options).list(feed, NOW);
+    const sent = server.calls[0][1] as Record<string, unknown>;
+    expect(sent.privateKey).toBe('-----BEGIN KEY-----');
+    expect(sent.password).toBeUndefined();
+  });
+
+  it('reports the host key on a check and accepts it once pinned', async () => {
+    const fingerprint = hostKeyFingerprint(HOST_KEY);
+    expect(fingerprint).toMatch(/^SHA256:[A-Za-z0-9+/]{43}$/);
+    const open = fakeServer();
+    expect(await sftpConnector(sftp(), open.options).check()).toContain(`Its host key is ${fingerprint}`);
+    const pinned = fakeServer();
+    expect(await sftpConnector(sftp({ hostKey: fingerprint }), pinned.options).check()).toMatch(/matches the saved one/);
+  });
+
+  it('refuses a server whose host key is not the pinned one', async () => {
+    const server = fakeServer();
+    const failure = await sftpConnector(sftp({ hostKey: `SHA256:${'A'.repeat(43)}` }), server.options).check().catch((error) => error);
+    expect(failure).toBeInstanceOf(JobError);
+    expect(failure.message).toMatch(/different host key/);
+    expect(server.calls.at(-1)).toEqual(['end']);
+  });
+
+  it('does not retry a refused sign-in, and does retry a server that cannot be reached', async () => {
+    const refused = await sftpConnector(sftp(), fakeServer([], { rejectConnect: 'All configured authentication methods failed' }).options).check().catch((error) => error);
+    expect(refused).toBeInstanceOf(JobError);
+    const down = await sftpConnector(sftp(), fakeServer([], { rejectConnect: 'connect ECONNREFUSED' }).options).check().catch((error) => error);
+    expect(down).toBeInstanceOf(Error);
+    expect(down).not.toBeInstanceOf(JobError);
+  });
+
+  it('never connects to a private address or without a credential', async () => {
+    const server = fakeServer();
+    await expect(sftpConnector(sftp(), { ...server.options, resolve: async () => ['10.0.0.8'] }).check()).rejects.toThrow(/not a public address/);
+    await expect(sftpConnector(sftp({}, null), server.options).check()).rejects.toThrow(/stored credential/);
+    expect(server.sessions()).toBe(0);
+  });
+
+  it('moves handled files, leaves them when told to, and explains a read-only server', async () => {
+    const file: RemoteFile = { name: 'NAV_oct.csv', ref: '/outbound/nav/NAV_oct.csv' };
+    const moving = fakeServer();
+    await sftpConnector(sftp(), moving.options).settle?.(file, 'LOADED', NOW);
+    expect(moving.calls).toContainEqual(['mkdir', '/outbound/nav/processed']);
+    expect(moving.calls).toContainEqual(['rename', '/outbound/nav/NAV_oct.csv', '/outbound/nav/processed/20261116T150000_NAV_oct.csv']);
+
+    const leaving = fakeServer();
+    await sftpConnector(sftp({ afterLoad: 'LEAVE' }), leaving.options).settle?.(file, 'LOADED', NOW);
+    expect(leaving.sessions()).toBe(0);
+
+    const readOnly = fakeServer([], { readOnly: true });
+    await expect(sftpConnector(sftp(), readOnly.options).settle?.(file, 'LOADED', NOW)).rejects.toThrow(/leave files in place/);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // feed.poll against a ledger held in memory
 // ---------------------------------------------------------------------------
@@ -226,6 +359,7 @@ function pollSetup(options: {
   const finished: Array<Record<string, unknown>> = [];
   const settled: Array<[string, FileOutcome]> = [];
   const loads: LoadRequest[] = [];
+  const activity: Array<Record<string, unknown>> = [];
   let polled = 0;
   const supabase = {
     async rpc(fn: string, args: Record<string, any>) {
@@ -262,6 +396,10 @@ function pollSetup(options: {
         polled += 1;
         return { data: null, error: null };
       }
+      if (fn === 'activity_record') {
+        activity.push(args);
+        return { data: 'event-1', error: null };
+      }
       return { data: null, error: { message: `unexpected ${fn}` } };
     },
   };
@@ -282,8 +420,17 @@ function pollSetup(options: {
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handler = feedPollHandler({ supabase: supabase as any, loadFile, now: () => NOW, connectorFor: () => connector });
-  return { handler, ledger, finished, settled, loads, polled: () => polled };
+  return { handler, ledger, finished, settled, loads, activity, polled: () => polled };
 }
+
+describe('feedActivity', () => {
+  it('names a load, a file waiting for review, and a failure, and skips a duplicate', () => {
+    expect(feedActivity('NAV pack', 'nav.csv', 'LOADED')).toEqual({ kind: 'FEED_LOADED', summary: 'NAV pack: loaded nav.csv.' });
+    expect(feedActivity('NAV pack', 'odd.csv', 'NEEDS_REVIEW', 'Missing NAV.')?.summary).toMatch(/waiting for review\. Missing NAV\./);
+    expect(feedActivity('NAV pack', 'bad.csv', 'GAVE_UP', 'Row 3 has no identifier')?.kind).toBe('FEED_FAILED');
+    expect(feedActivity('NAV pack', 'nav.csv', 'DUPLICATE')).toBeNull();
+  });
+});
 
 describe('feedPollHandler', () => {
   it('loads a new file through the feed map and records it', async () => {
@@ -294,6 +441,7 @@ describe('feedPollHandler', () => {
     expect(setup.finished[0]).toMatchObject({ p_status: 'LOADED', p_import_instance_id: 'imp-1', p_rows_created: 4, p_rows_matched: 6 });
     expect(setup.settled).toEqual([['nav.csv', 'LOADED']]);
     expect(setup.polled()).toBe(1);
+    expect(setup.activity[0]).toMatchObject({ p_kind: 'FEED_LOADED', p_subject_id: 'feed-1', p_summary: 'NAV pack: loaded nav.csv.' });
   });
 
   it('does not load the same content twice, even under another name', async () => {

@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { posix } from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { JobError } from './worker';
 
@@ -12,6 +14,7 @@ import { JobError } from './worker';
  *
  *   STORAGE  a folder in the private feed-inbox bucket, under the client's own folder
  *   HTTP     an https address
+ *   SFTP     a folder on an SFTP server
  *
  * To add a kind: implement Connector, add it to buildConnector, and allow the
  * kind in ops.connections (supabase/migrations/20261114210000_feeds.sql).
@@ -58,6 +61,8 @@ export interface Connector {
   fetch(file: RemoteFile): Promise<FetchedFile | null>;
   /** Called once per file with how it turned out, so the source can be tidied. */
   settle?(file: RemoteFile, outcome: FileOutcome, now: Date): Promise<void>;
+  /** Called when the job is finished with the connector. */
+  close?(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +225,12 @@ export interface HttpOptions {
 export async function assertPublicAddress(url: URL, options: HttpOptions = {}): Promise<void> {
   if (options.allowPrivate) return;
   if (url.protocol !== 'https:') throw new JobError('The address must start with https://.');
-  const host = url.hostname.replace(/^\[|\]$/g, '');
+  await assertPublicHost(url.hostname.replace(/^\[|\]$/g, ''), options);
+}
+
+/** Refuses a host that is, or resolves to, a private, loopback or link-local address. */
+export async function assertPublicHost(host: string, options: HttpOptions = {}): Promise<void> {
+  if (options.allowPrivate) return;
   const resolve = options.resolve || (async (name: string) => (await lookup(name, { all: true })).map((entry) => entry.address));
   let addresses: string[];
   try {
@@ -324,8 +334,155 @@ export function httpConnector(connection: ConnectionSpec, options: HttpOptions =
   };
 }
 
-export function buildConnector(supabase: SupabaseClient, connection: ConnectionSpec, options: HttpOptions = {}): Connector {
+// ---------------------------------------------------------------------------
+// SFTP: a folder on an SFTP server
+// ---------------------------------------------------------------------------
+
+/** The part of an SFTP client the connector uses. ssh2-sftp-client fits it. */
+export interface SftpSession {
+  connect(options: Record<string, unknown>): Promise<unknown>;
+  list(path: string): Promise<Array<{ type: string; name: string; size: number }>>;
+  get(path: string): Promise<unknown>;
+  rename(from: string, to: string): Promise<unknown>;
+  mkdir(path: string, recursive?: boolean): Promise<unknown>;
+  end(): Promise<unknown>;
+}
+
+export interface SftpOptions extends HttpOptions {
+  /** Tests supply a stand-in. The default opens a real session. */
+  createSession?: () => SftpSession;
+}
+
+/** The fingerprint OpenSSH prints for a host key: SHA256: then base64 without padding. */
+export function hostKeyFingerprint(key: Buffer): string {
+  return `SHA256:${createHash('sha256').update(key).digest('base64').replace(/=+$/, '')}`;
+}
+
+/** A remote folder path. Absolute paths are allowed; ".." and odd characters are not. */
+export function sftpFolder(...parts: string[]): string {
+  const absolute = String(parts.find((part) => String(part || '').trim()) || '').trim().startsWith('/');
+  const joined = safeFolder(...parts);
+  return absolute ? `/${joined}` : joined || '.';
+}
+
+export function sftpConnector(connection: ConnectionSpec, options: SftpOptions = {}): Connector {
+  const host = String(connection.config.host || '').trim();
+  const port = Number(connection.config.port) || 22;
+  const username = String(connection.config.username || '').trim();
+  const authType = String(connection.config.authType || 'PASSWORD').toUpperCase();
+  const pinned = String(connection.config.hostKey || '').trim();
+  // Some servers only let us read. Then files stay where they are and the ledger alone stops repeats.
+  const leave = String(connection.config.afterLoad || 'MOVE').toUpperCase() === 'LEAVE';
+  let session: SftpSession | null = null;
+  let seenFingerprint = '';
+
+  async function open(): Promise<SftpSession> {
+    if (session) return session;
+    if (!host || !username) throw new JobError('The connection needs a host and a user name.');
+    if (!connection.secret) throw new JobError('This connection needs a stored credential.');
+    await assertPublicHost(host, options);
+    const created = options.createSession
+      ? options.createSession()
+      : // eslint-disable-next-line @typescript-eslint/no-require-imports
+        (new (require('ssh2-sftp-client'))() as SftpSession);
+    let refused = false;
+    try {
+      await created.connect({
+        host,
+        port,
+        username,
+        ...(authType === 'KEY' ? { privateKey: connection.secret } : { password: connection.secret }),
+        readyTimeout: 30_000,
+        retries: 0,
+        // The server proves who it is with its host key. When one is pinned, anything else is refused.
+        hostVerifier: (key: Buffer) => {
+          seenFingerprint = hostKeyFingerprint(key);
+          refused = Boolean(pinned) && seenFingerprint !== pinned;
+          return !refused;
+        },
+      });
+    } catch (error) {
+      await created.end().catch(() => undefined);
+      if (refused) {
+        throw new JobError(`${host} presented a different host key (${seenFingerprint}) from the one saved for this connection. Nothing was sent.`);
+      }
+      const text = error instanceof Error ? error.message : String(error);
+      if (/authentication|permission denied|parse.*key|private key/i.test(text)) throw new JobError(`${host} refused the sign-in.`);
+      throw new Error(`${host} could not be reached: ${text}`);
+    }
+    session = created;
+    return created;
+  }
+
+  const folderFor = (feed?: FeedSpec) => sftpFolder(String(connection.config.folder || ''), feed?.path || '');
+
+  return {
+    async check() {
+      const folder = folderFor();
+      const sftp = await open();
+      try {
+        await sftp.list(folder);
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        if (/no such file/i.test(text)) throw new JobError(`${host} accepted the sign-in, but the folder ${folder} does not exist there.`);
+        throw error;
+      }
+      const key = pinned ? 'Its host key matches the saved one.' : `Its host key is ${seenFingerprint}. Save that on the connection to pin it.`;
+      return `${host} accepted the sign-in and ${folder} can be read. ${key}`;
+    },
+
+    async list(feed) {
+      const folder = folderFor(feed);
+      const entries = await (await open()).list(folder);
+      return entries
+        .filter((entry) => entry.type === '-' && matchesPattern(entry.name, feed.filePattern))
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .slice(0, MAX_FILES_PER_POLL)
+        .map((entry) => ({ name: entry.name, ref: posix.join(folder, entry.name), size: Number(entry.size) || undefined }));
+    },
+
+    async fetch(file) {
+      if (file.size && file.size > MAX_FILE_BYTES) {
+        throw new JobError(`${file.name} is larger than ${MAX_FILE_BYTES / 1024 / 1024} MB.`);
+      }
+      let data: unknown;
+      try {
+        data = await (await open()).get(file.ref);
+      } catch (error) {
+        if (/no such file/i.test(error instanceof Error ? error.message : '')) return null;
+        throw error;
+      }
+      const bytes = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+      if (bytes.length > MAX_FILE_BYTES) throw new JobError(`${file.name} is larger than ${MAX_FILE_BYTES / 1024 / 1024} MB.`);
+      return { name: file.name, bytes, mediaType: mediaTypeFor(file.name) };
+    },
+
+    async settle(file, outcome, now) {
+      const target = SETTLED_FOLDER[outcome];
+      if (!target || leave) return;
+      const sftp = await open();
+      const folder = posix.join(posix.dirname(file.ref), target);
+      const stamp = now.toISOString().replace(/[-:]/g, '').slice(0, 15);
+      try {
+        await sftp.mkdir(folder, true).catch(() => undefined);
+        await sftp.rename(file.ref, posix.join(folder, `${stamp}_${file.name}`));
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        throw new Error(`${file.name} was handled but could not be moved to ${target}: ${text}. If this server is read-only, set the connection to leave files in place.`);
+      }
+    },
+
+    async close() {
+      const open = session;
+      session = null;
+      if (open) await open.end().catch(() => undefined);
+    },
+  };
+}
+
+export function buildConnector(supabase: SupabaseClient, connection: ConnectionSpec, options: SftpOptions = {}): Connector {
   if (connection.kind === 'STORAGE') return storageConnector(supabase, connection);
   if (connection.kind === 'HTTP') return httpConnector(connection, options);
+  if (connection.kind === 'SFTP') return sftpConnector(connection, options);
   throw new JobError(`There is no connector for "${connection.kind}".`);
 }

@@ -20,6 +20,8 @@ import {
   type RowHeightParams,
   type SortChangedEvent,
 } from 'ag-grid-community';
+import { columnSearchFilterParams, prepareGridColumns } from '@/lib/grid-filters';
+import { ColumnLikeFilter } from '@/components/grid/ColumnLikeFilter';
 
 const enterpriseLicense = process.env.NEXT_PUBLIC_AG_GRID_LICENSE_KEY;
 if (enterpriseLicense) LicenseManager.setLicenseKey(enterpriseLicense);
@@ -98,13 +100,13 @@ function interactiveTarget(target: EventTarget | null | undefined) {
   return !!element?.closest?.('a, button, input, select, textarea, label');
 }
 
-/** Columns with a value can be dragged into the group-by bar. Action columns stay put. */
-function withRowGroup<T>(columns: ColDef<T>[]): ColDef<T>[] {
-  return columns.map((column) => {
-    if (column.enableRowGroup != null) return column;
-    const groupable = column.field != null || typeof column.valueGetter === 'function';
-    return groupable ? { ...column, enableRowGroup: true } : column;
-  });
+/** The contains box sits on columns that use the standard value-list filter. */
+function withColumnSearch<T>(columns: ColDef<T>[]): ColDef<T>[] {
+  return columns.map((column) => (
+    column.filter === 'agMultiColumnFilter' && column.floatingFilterComponent == null
+      ? { ...column, floatingFilterComponent: ColumnLikeFilter }
+      : column
+  ));
 }
 
 export interface AppGridProps<T> {
@@ -195,7 +197,7 @@ export function AppGrid<T>({
 
   const defaultColDef = useMemo<ColDef<T>>(() => ({
     sortable: enableSortFilter,
-    filter: enableSortFilter,
+    floatingFilter: enableSortFilter,
     resizable: true,
     minWidth: 110,
     autoHeight: autoRowHeight,
@@ -203,8 +205,19 @@ export function AppGrid<T>({
     suppressKeyboardEvent: (params) => interactiveTarget(params.event.target),
   }), [autoRowHeight, enableSortFilter]);
 
-  const columnDefs = useMemo(() => withRowGroup(columns), [columns]);
-  const groupColumn = autoGroupColumnDef ?? { headerName: 'Group', minWidth: 220, flex: 1 };
+  const columnDefs = useMemo(
+    () => withColumnSearch(prepareGridColumns(columns, enableSortFilter)),
+    [columns, enableSortFilter],
+  );
+  const groupColumn = useMemo(() => autoGroupColumnDef ?? {
+    headerName: 'Group',
+    minWidth: 220,
+    flex: 1,
+    filter: 'agMultiColumnFilter',
+    floatingFilter: true,
+    floatingFilterComponent: ColumnLikeFilter,
+    filterParams: columnSearchFilterParams(),
+  }, [autoGroupColumnDef]);
 
   const handleReady = (event: GridReadyEvent<T>) => {
     setApi(event.api);
@@ -238,6 +251,7 @@ export function AppGrid<T>({
         getRowId={getRowId ? (params: GetRowIdParams<T>) => getRowId(params.data) : undefined}
         domLayout={autoHeight ? 'autoHeight' : 'normal'}
         headerHeight={headerHeight}
+        floatingFiltersHeight={enableSortFilter ? 36 : undefined}
         loading={loading}
         overlayNoRowsTemplate={`<span class="app-grid-empty">${escapeHtml(emptyMessage)}</span>`}
         context={context}

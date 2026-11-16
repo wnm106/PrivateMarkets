@@ -1,6 +1,12 @@
 import { Context } from '../context';
 import { callerClientId, enqueueJob } from './jobs';
 
+/** Keeps the keys of a stored settings object and hides every value. */
+export function redactValues(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.keys(value as Record<string, unknown>).map((key) => [key, '********']));
+}
+
 export const dataConnectionResolvers = {
   Query: {
     /**
@@ -520,10 +526,12 @@ function mapDataConnection(row: any) {
     vendorName: row.vendor_name,
     endpointUrl: row.endpoint_url,
     endpointMethod: row.endpoint_method,
-    endpointHeaders: row.endpoint_headers || {},
+    // Headers and sign-in settings can hold credentials, so they are never sent back.
+    // Only the names are returned. Feeds (resolvers/feeds.ts) keep credentials in Vault.
+    endpointHeaders: redactValues(row.endpoint_headers),
     requestTimeout: row.request_timeout,
     authType: row.auth_type,
-    authConfig: row.auth_config || {},
+    authConfig: redactValues(row.auth_config),
     connectionStatus: row.connection_status || 'ACTIVE',
     lastTestedAt: row.last_tested_at,
     lastTestResult: row.last_test_result || {},

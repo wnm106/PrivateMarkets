@@ -26,6 +26,7 @@ import {
   type CalcOperandBinding,
   type CalcRelationship,
 } from '@/lib/calc-fields';
+import { AGGREGATE_FUNCTIONS, AGGREGATE_NUMERIC_TYPES } from '@tapestrai/graphql/src/lib/calc-aggregate';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 
 interface ExpressionFn {
@@ -97,21 +98,32 @@ const CATALOG_QUERY = `
   }
 `;
 
+const DEFINITION_FIELDS = `
+  id
+  attributeCode
+  domainCode
+  calcKind
+  evaluationMode
+  outputGrain
+  expression
+  aggregateFn
+  seriesFn
+  inputs { inputRole attributeCode traversal relationshipCodes }
+`;
+
 const SAVE_EXPRESSION = `
   mutation UpdateCalcExpression($id: ID!, $expression: JSON!, $operands: [CalcOperandInput!]) {
     updateCalcExpression(id: $id, expression: $expression, operands: $operands) {
-      definition {
-        id
-        attributeCode
-        domainCode
-        calcKind
-        evaluationMode
-        outputGrain
-        expression
-        aggregateFn
-        seriesFn
-        inputs { inputRole attributeCode traversal relationshipCodes }
-      }
+      definition { ${DEFINITION_FIELDS} }
+      errors { message }
+    }
+  }
+`;
+
+const SAVE_AGGREGATE = `
+  mutation UpdateCalcAggregate($id: ID!, $aggregateFn: String!, $measure: CalcOperandInput!, $weightAttributeCode: String) {
+    updateCalcAggregate(id: $id, aggregateFn: $aggregateFn, measure: $measure, weightAttributeCode: $weightAttributeCode) {
+      definition { ${DEFINITION_FIELDS} }
       errors { message }
     }
   }
@@ -215,6 +227,19 @@ export function CalculationWorkspace({
     [spec.domainCode, attributes, relationships, names, selfOnly],
   );
 
+  if (spec.calcKind === 'AGGREGATE') {
+    return (
+      <AggregateDesigner
+        spec={spec}
+        choices={choices}
+        relationships={relationships}
+        names={names}
+        ready={ready}
+        onSaved={onSaved}
+      />
+    );
+  }
+
   if (spec.calcKind !== 'EXPRESSION') {
     return (
       <div style={{ marginTop: '8px', fontSize: '13px' }}>
@@ -242,6 +267,218 @@ export function CalculationWorkspace({
       onSaved={onSaved}
     />
   );
+}
+
+function choiceKey(choice: Pick<CalcFieldChoice, 'attributeCode' | 'place'>): string {
+  return `${choice.attributeCode}|${choice.place.traversal}|${choice.place.relationshipCodes.join('>')}`;
+}
+
+function bindingKey(binding: CalcOperandBinding): string {
+  return `${binding.attributeCode}|${binding.traversal}|${binding.relationshipCodes.join('>')}`;
+}
+
+function AggregateDesigner({
+  spec,
+  choices,
+  relationships,
+  names,
+  ready,
+  onSaved,
+}: {
+  spec: CalculationSpec;
+  choices: CalcFieldChoice[];
+  relationships: CalcRelationship[];
+  names: Record<string, string>;
+  ready: boolean;
+  onSaved: (next: CalculationSpec) => void;
+}) {
+  const storedMeasure = spec.inputs.find((input) => input.inputRole === 'MEASURE');
+  const storedWeight = spec.inputs.find((input) => input.inputRole === 'WEIGHT');
+  const measureBinding = storedMeasure ? toBinding(storedMeasure) : null;
+  const fieldChoices = useMemo(() => {
+    const numeric = choices.filter((choice) =>
+      AGGREGATE_NUMERIC_TYPES.includes(choice.dataType)
+      && choice.attributeCode !== spec.attributeCode,
+    );
+    return [
+      ...numeric.filter((choice) => choice.place.traversal !== 'SELF'),
+      ...numeric.filter((choice) => choice.place.traversal === 'SELF'),
+    ];
+  }, [choices, spec.attributeCode]);
+  const [fn, setFn] = useState(spec.aggregateFn || 'SUM');
+  const [measureKey, setMeasureKey] = useState(measureBinding ? bindingKey(measureBinding) : '');
+  const [weightCode, setWeightCode] = useState(storedWeight?.attributeCode || '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const measureOptions = useMemo(() => {
+    const options = fieldChoices.map((choice) => ({
+      key: choiceKey(choice),
+      choice,
+    }));
+    if (measureBinding && !options.some((option) => option.key === bindingKey(measureBinding))) {
+      options.unshift({
+        key: bindingKey(measureBinding),
+        choice: {
+          attributeCode: measureBinding.attributeCode,
+          attributeName: measureBinding.attributeCode,
+          dataType: '',
+          domainCode: null,
+          place: {
+            domainCode: spec.domainCode,
+            traversal: measureBinding.traversal,
+            relationshipCodes: measureBinding.relationshipCodes,
+            relationshipNames: [],
+          },
+          groupLabel: bindingLabel(measureBinding, spec.domainCode, relationships, names),
+        },
+      });
+    }
+    return options;
+  }, [fieldChoices, measureBinding, names, relationships, spec.domainCode]);
+
+  const selectedMeasure = measureOptions.find((option) => option.key === measureKey) || measureOptions[0];
+  const weightOptions = useMemo(() => {
+    if (!selectedMeasure) return [];
+    const place = selectedMeasure.choice.place;
+    return fieldChoices.filter((choice) =>
+      choice.place.traversal === place.traversal
+      && choice.place.relationshipCodes.join('>') === place.relationshipCodes.join('>'),
+    );
+  }, [fieldChoices, selectedMeasure]);
+  const selectedWeight = weightOptions.find((choice) => choice.attributeCode === weightCode) || weightOptions[0];
+  const weighted = fn === 'WAVG';
+  const place = selectedMeasure ? bindingLabel({
+    attributeCode: selectedMeasure.choice.attributeCode,
+    traversal: selectedMeasure.choice.place.traversal,
+    relationshipCodes: selectedMeasure.choice.place.relationshipCodes,
+  }, spec.domainCode, relationships, names) : '';
+  const summary = selectedMeasure
+    ? aggregateSummary(fn, selectedMeasure.choice.attributeName, place, weighted ? (selectedWeight?.attributeName || '') : '')
+    : 'Choose the field this total reads.';
+  const issue = !selectedMeasure
+    ? 'Choose the field this total reads'
+    : weighted && !selectedWeight
+      ? 'Weighted average needs a weight field'
+      : '';
+
+  const save = async () => {
+    if (!selectedMeasure || issue) return;
+    setSaving(true);
+    setError('');
+    try {
+      const measure = {
+        attributeCode: selectedMeasure.choice.attributeCode,
+        traversal: selectedMeasure.choice.place.traversal,
+        relationshipCodes: selectedMeasure.choice.place.relationshipCodes,
+      };
+      const result = await graphqlMutation<{
+        updateCalcAggregate: { definition: CalculationSpec | null; errors: Array<{ message: string }> };
+      }, { id: string; aggregateFn: string; measure: CalcOperandBinding; weightAttributeCode?: string }>(
+        SAVE_AGGREGATE,
+        {
+          id: spec.id,
+          aggregateFn: fn,
+          measure,
+          weightAttributeCode: weighted ? selectedWeight?.attributeCode : undefined,
+        },
+      );
+      const saved = result.data?.updateCalcAggregate;
+      const message = result.error?.message || saved?.errors?.[0]?.message;
+      if (message || !saved?.definition) setError(message || 'Could not save the calculation');
+      else onSaved(saved.definition);
+    } catch (err: any) {
+      setError(err?.message || 'Could not save the calculation');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="calc-builder">
+      <BuilderHead
+        help={`This total reads a numeric field on related records. ${refreshSentence(spec.outputGrain)}`}
+        status={issue ? { tone: 'bad', label: 'Incomplete' } : { tone: ready ? 'ok' : 'wait', label: ready ? 'Valid' : 'Loading fields' }}
+        issue={issue}
+      />
+      <div className="calc-fields">
+        <label className="calc-field">
+          <span className="calc-label">Function</span>
+          <select className="text-input" aria-label="Aggregate function" value={fn} onChange={(event) => setFn(event.target.value)}>
+            {AGGREGATE_FUNCTIONS.map((item) => (
+              <option key={item.code} value={item.code}>{item.name}</option>
+            ))}
+            {fn && !AGGREGATE_FUNCTIONS.some((item) => item.code === fn) && <option value={fn}>{fn}</option>}
+          </select>
+        </label>
+        <label className="calc-field">
+          <span className="calc-label">Field</span>
+          <select
+            className="text-input"
+            aria-label="Field to total"
+            value={selectedMeasure?.key || ''}
+            onChange={(event) => setMeasureKey(event.target.value)}
+          >
+            {measureOptions.length === 0 && <option value="">Loading fields…</option>}
+            {groupOptions(measureOptions).map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.options.map((option) => (
+                  <option key={option.key} value={option.key}>{option.choice.attributeName}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        {weighted && (
+          <label className="calc-field wide">
+            <span className="calc-label">Weight</span>
+            <select
+              className="text-input"
+              aria-label="Weight field"
+              value={selectedWeight?.attributeCode || ''}
+              onChange={(event) => setWeightCode(event.target.value)}
+            >
+              {weightOptions.length === 0 && <option value="">No numeric field on these records</option>}
+              {weightOptions.map((choice) => (
+                <option key={choice.attributeCode} value={choice.attributeCode}>{choice.attributeName}</option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+      <p className="calc-help">{summary}</p>
+      {issue && ready && <div className="calc-expr-issue">{issue}</div>}
+      {error && <div className="calc-expr-issue">{error}</div>}
+      <button className="btn btn-primary" type="button" onClick={save} disabled={saving || Boolean(issue) || !ready}>
+        {saving ? 'Saving…' : 'Save calculation'}
+      </button>
+    </div>
+  );
+}
+
+function groupOptions(options: Array<{ key: string; choice: CalcFieldChoice }>) {
+  const groups: Array<{ label: string; options: typeof options }> = [];
+  for (const option of options) {
+    const label = option.choice.groupLabel;
+    const current = groups[groups.length - 1];
+    if (current && current.label === label) current.options.push(option);
+    else groups.push({ label, options: [option] });
+  }
+  return groups;
+}
+
+function aggregateSummary(fn: string, field: string, place: string, weight: string): string {
+  const where = place ? ` on ${place}` : '';
+  if (fn === 'WAVG') return `Weighted average of ${field}${weight ? `, weighted by ${weight}` : ''}${where}.`;
+  const verb = fn === 'MIN' ? 'Minimum' : fn === 'MAX' ? 'Maximum' : 'Sum';
+  return `${verb} of ${field}${where}.`;
+}
+
+function refreshSentence(grain: string): string {
+  if (grain === 'MONTH_END') return 'It is stored and refreshes at month end.';
+  if (grain === 'QUARTER_END') return 'It is stored and refreshes at quarter end.';
+  if (grain === 'YEAR_END') return 'It is stored and refreshes at year end.';
+  return 'It is stored and refreshes when that field changes.';
 }
 
 function OriginList({

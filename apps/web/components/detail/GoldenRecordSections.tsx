@@ -45,7 +45,7 @@ export interface LineageData {
     receivedAt?: string | null;
   }>;
   resolutionRule: string;
-  lastUpdated: string;
+  lastUpdated: string | null;
 }
 
 interface GoldenRecordSectionsProps {

@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import { CLIENT_ADMIN_PERMISSIONS, isPlatformAdminPath } from '@/lib/admin-access';
-import { NEXT_PATH_COOKIE, safeNextPath } from '@/lib/safe-next-path';
+import { loginPath, NEXT_PATH_COOKIE, safeNextPath } from '@/lib/safe-next-path';
 
 const PUBLIC_PATHS = ['/welcome', '/login', '/auth/callback', '/no-access'];
 
@@ -85,23 +85,15 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/favicon') ||
     /\.(jpg|jpeg|png|svg|ico|webp|gif)$/i.test(pathname); // public/ images (logo)
 
-  // Signed-out visitors to the root see the marketing landing page.
-  if (!user && pathname === '/') {
-    return redirectTo('/welcome');
-  }
-
   // Signed-in users have no need for the marketing page or the sign-in form.
   if (user && (pathname === '/welcome' || pathname === '/login')) {
     const next = pathname === '/login' ? safeNextPath(request.nextUrl.searchParams.get('redirectedFrom')) : '/';
     return redirectTo(next);
   }
 
+  // A signed-out visitor never sees the application shell, including the home page.
   if (!user && !isPublicPath && !isApiOrAsset) {
-    const redirectUrl = new URL('/login', request.url);
-    redirectUrl.searchParams.set('redirectedFrom', request.nextUrl.pathname);
-    const redirect = NextResponse.redirect(redirectUrl);
-    refreshedCookies.forEach(({ name, value, options }) => redirect.cookies.set(name, value, options as any));
-    return redirect;
+    return redirectTo(loginPath(pathname));
   }
 
   // Admin tools are limited to tenant admins and client administrators.

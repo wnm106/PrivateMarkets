@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ADD_COMPETING_SOURCE_MUTATION,
   DATA_SOURCE_QUERY,
@@ -19,7 +19,7 @@ export interface AttributeInspectTarget {
   attributeCode: string;
   attributeName: string;
   dataType?: string;
-  /** Value from the grid that opened this drawer. The drawer shows the as-of lineage instead. */
+  /** Value from the grid that opened this panel. The panel shows the as-of lineage instead. */
   value?: string;
   domainCode?: string;
   /** Valid date to open, when the figure was read at a date other than the page as-of. */
@@ -29,7 +29,7 @@ export interface AttributeInspectTarget {
   onChanged?: () => void;
 }
 
-/** What the bottom drawer is showing. Add a kind here when another action should fill it. */
+/** What the assistant's sources panel is showing. Add a kind here when another action should fill it. */
 export type DetailDrawerView = {
   kind: 'attribute';
   target: AttributeInspectTarget;
@@ -59,8 +59,29 @@ export function useAttributeInspect() {
 
 export function AttributeInspectProvider({ children }: { children: React.ReactNode }) {
   const [view, setView] = useState<DetailDrawerView | null>(null);
-  const open = useCallback((next: DetailDrawerView) => setView(next), []);
-  const close = useCallback(() => setView(null), []);
+  const setChatOpen = useTemporalStore((state) => state.setChatOpen);
+  const closeTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (closeTimer.current != null) window.clearTimeout(closeTimer.current);
+  }, []);
+  const open = useCallback((next: DetailDrawerView) => {
+    if (closeTimer.current != null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+    setView(next);
+    setChatOpen(true);
+  }, [setChatOpen]);
+  // Closing the details collapses the dock. The view stays until the width
+  // animation has finished, so the conversation never shows underneath.
+  const close = useCallback(() => {
+    setChatOpen(false);
+    if (closeTimer.current != null) window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => {
+      closeTimer.current = null;
+      setView(null);
+    }, 420);
+  }, [setChatOpen]);
   const api = useMemo(() => ({ view, open, close }), [view, open, close]);
   return (
     <DetailDrawerContext.Provider value={api}>
@@ -69,14 +90,17 @@ export function AttributeInspectProvider({ children }: { children: React.ReactNo
   );
 }
 
-/** Bottom dock. A flex sibling of the page, so opening it shortens the screen. */
-export function DetailDrawer() {
+/** Details for a right-clicked value. Fills the assistant dock on its own. */
+export function AttributeInspectPanel() {
   const { view, close } = useDetailDrawer();
 
   useEffect(() => {
     if (!view) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close();
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      close();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -89,20 +113,23 @@ export function DetailDrawer() {
 
   return (
     <section
-      className={`detail-drawer${view ? ' open' : ''}`}
+      className="chat-inspect"
       aria-hidden={!view}
       inert={!view ? true : undefined}
-      aria-label={title ? `${title} details` : 'Details'}
+      aria-label={title ? `${title} sources` : 'Sources'}
     >
-      <div className="detail-drawer-sheet">
-        <div className="attr-inspect-head">
-          <div>
-            <div className="attr-inspect-title">{title || 'Details'}</div>
-            {subtitle && <div className="attr-inspect-sub">{subtitle}</div>}
+      <div className="chat-inspect-sheet">
+        <div className="chat-inspect-head">
+          <div className="chat-inspect-copy">
+            <div className="chat-inspect-kicker">Sources</div>
+            <div className="chat-inspect-title">{title || 'Sources'}</div>
+            {subtitle && <div className="chat-inspect-sub">{subtitle}</div>}
           </div>
-          <button type="button" className="sa-drill-close" onClick={close} aria-label="Close details">×</button>
+          <button type="button" className="chat-icon-btn" onClick={close} aria-label="Close sources">
+            ✕
+          </button>
         </div>
-        <div className="detail-drawer-body">
+        <div className="chat-inspect-body">
           {view?.kind === 'attribute' && (
             <AttributeInspectBody key={`${view.target.entityId}:${view.target.attributeCode}:${view.target.asOfDate || ''}:${view.target.knowledgeDate || ''}`} target={view.target} />
           )}

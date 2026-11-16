@@ -11,6 +11,7 @@ import {
   conditionExpressionReads,
 } from '../lib/compliance-population';
 import { parseFundBoardResultPayload, selectLatestFundResults } from '../lib/fund-board-results';
+import { DEAL_SURFACE_RULE_CODES, dealSurfaceResults, rulesToScore } from '../lib/deal-compliance';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
 // through `.schema('compliance')` first (same convention as tenancy.ts /
@@ -426,17 +427,39 @@ export const complianceResolvers = {
         const preview = await commitAllocation(writer, draft, context.user?.id ?? null, { proposalsOnly: true });
         const fundIds = new Set(preview.rows.map((row) => row.fundId));
 
-        const { data: ruleRows, error: ruleError } = await cx(context)
+        // Pro forma rules are inactive on purpose, so a platform-wide job skips
+        // them. Enrolled rules are the ones with a limit assigned to a fund on
+        // this deal. Reading through the service role keeps a user policy from
+        // hiding an inactive rule.
+        const compliance = writer.schema('compliance');
+        const fundList = [...fundIds];
+        const { data: thresholdRows, error: thresholdError } = fundList.length
+          ? await compliance
+            .from('rule_thresholds')
+            .select('rule_id, entity_id, group_value, rank_from, applies, valid_from, valid_to')
+            .in('entity_id', fundList)
+          : { data: [], error: null };
+        if (thresholdError) throw new Error(thresholdError.message);
+        const enrolledIds = [...new Set((thresholdRows || []).map((row) => row.rule_id))];
+        const { data: surfaceRows, error: surfaceError } = await compliance
           .from('rules')
           .select('*')
-          .eq('anchor_domain_code', 'FUND')
-          .eq('is_active', true);
-        if (ruleError) throw new Error(ruleError.message);
-        const rules = ruleRows || [];
-        const ruleIds = rules.map((row) => row.id);
-        const { data: versionRows, error: versionError } = ruleIds.length
-          ? await cx(context).from('rule_versions').select('*').in('rule_id', ruleIds).eq('is_active', true)
+          .in('rule_code', [...DEAL_SURFACE_RULE_CODES]);
+        if (surfaceError) throw new Error(surfaceError.message);
+        const { data: enrolledRows, error: enrolledError } = enrolledIds.length
+          ? await compliance.from('rules').select('*').in('id', enrolledIds)
           : { data: [], error: null };
+        if (enrolledError) throw new Error(enrolledError.message);
+        const ruleById = new Map<string, any>();
+        for (const row of [...(surfaceRows || []), ...(enrolledRows || [])]) ruleById.set(row.id, row);
+        const plans = rulesToScore([...ruleById.values()], thresholdRows || [], fundIds, draft.asOf);
+        if (!plans.length) throw new Error('No compliance rules with limits are assigned to the funds on this deal.');
+        const ruleIds = plans.map((plan) => plan.rule.id);
+        const { data: versionRows, error: versionError } = await compliance
+          .from('rule_versions')
+          .select('*')
+          .in('rule_id', ruleIds)
+          .eq('is_active', true);
         if (versionError) throw new Error(versionError.message);
         const versionByRule = new Map<string, any>();
         for (const version of versionRows || []) {
@@ -446,17 +469,31 @@ export const complianceResolvers = {
 
         const engine = getComplianceEngine(writer);
         const results: any[] = [];
-        for (const rule of rules) {
-          const scored = await engine.evaluateRule({
-            ruleCode: rule.rule_code,
+        const failures: string[] = [];
+        const settled = await Promise.allSettled(plans.map(async (plan) => {
+          const scored = await engine.evaluateRulesForFunds({
+            ruleCode: plan.rule.rule_code,
             asOfDate: draft.asOf,
             scenarioCode: draft.dealCode,
             triggeredBy: context.user?.id,
+            anchorEntityIds: plan.anchorIds,
+            // The anchor list is already the set of funds with a limit. Pro
+            // forma rules have no enrollment row, and a rank band has no
+            // separate "this test applies" row, so the enrollment skip is off.
+            ignoreEnrollment: plan.ignoreEnrollment,
           });
-          for (const result of scored.results) {
-            if (fundIds.has(result.anchorEntityId)) results.push(result);
+          return scored;
+        }));
+        settled.forEach((outcome, index) => {
+          if (outcome.status === 'fulfilled') {
+            results.push(...outcome.value);
+            return;
           }
-        }
+          const reason = outcome.reason;
+          const message = reason instanceof Error ? reason.message : String(reason);
+          failures.push(`${plans[index].rule.rule_name}: ${message}`);
+        });
+        if (!results.length && failures.length) throw new Error(failures[0]);
 
         const { data: scenarioAttribute } = await writer
           .from('attribute_register')
@@ -472,12 +509,10 @@ export const complianceResolvers = {
             .gte('system_to', new Date().toISOString())
           : { data: [] };
         const proposalIds = new Set((scenarioRows || []).map((row) => row.entity_id));
-        const impacted = proposalIds.size
-          ? results.filter((result) => (result.contributingEntityIds || []).some((id: string) => proposalIds.has(id)))
-          : results;
+        const impacted = dealSurfaceResults(results, fundIds, proposalIds);
 
         return {
-          rules: rules.map((row) => {
+          rules: plans.map(({ rule: row }) => {
             const version = versionByRule.get(row.id);
             return {
               id: row.id,
@@ -492,7 +527,7 @@ export const complianceResolvers = {
             };
           }),
           results: impacted,
-          errors: [],
+          errors: failures.map((message) => ({ field: 'general', message, code: 'EVALUATE_FAILED' })),
         };
       } catch (error: any) {
         console.error('Error scoring deal compliance:', error);

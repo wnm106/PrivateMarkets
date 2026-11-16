@@ -143,6 +143,7 @@ type Mutation {
   reorderSectionAttributes(domainCode: String!, sectionName: String!, attributeIds: [ID!]!): AttributeSectionResult!
   processCalculatedAttributes(limit: Int): ProcessCalculatedAttributesResult!
   updateCalcExpression(id: ID!, expression: JSON!, operands: [CalcOperandInput!]): UpdateCalcExpressionResult!
+  updateCalcAggregate(id: ID!, aggregateFn: String!, measure: CalcOperandInput!, weightAttributeCode: String): UpdateCalcExpressionResult!
   createTemplate(input: CreateTemplateInput!): CreateTemplateResult!
   assignAttributeToTemplate(input: AssignAttributeInput!): AssignAttributeResult!
   updateTemplateSourcePreference(input: UpdateTemplateSourcePreferenceInput!): UpdateTemplateSourcePreferenceResult!

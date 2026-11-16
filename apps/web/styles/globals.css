@@ -4113,7 +4113,8 @@
     flex-direction: column;
   }
 
-  /* Chat popout — docks to the right edge and squeezes the page to ~70% width */
+  /* Assistant — docks to the right edge at a fixed width. A right-click
+     slides sources over the conversation, inside this same panel. */
   .chat-popout {
     flex: 0 0 auto;
     align-self: stretch;
@@ -4138,10 +4139,146 @@
     box-shadow: -12px 0 40px rgba(10, 22, 40, 0.08);
   }
 
-  /* Pin the panel's contents at a usable width while the container animates,
-     so the conversation does not reflow as the page is squeezed. */
-  .chat-popout > * {
+  /* Pin the conversation at a usable width while the dock animates,
+     so the thread does not reflow as the page is squeezed. */
+  .chat-pane {
+    flex: 1 1 auto;
     min-width: 316px;
+    max-width: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .chat-inspect {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition: transform 0.28s ease, visibility 0s linear 0.28s;
+  }
+
+  .chat-popout.has-inspect .chat-pane,
+  .chat-popout:not(.open) .chat-pane {
+    visibility: hidden;
+  }
+
+  .chat-popout.has-inspect .chat-inspect {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.28s ease, visibility 0s;
+  }
+
+  .chat-inspect-sheet {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .chat-inspect-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 11px;
+    background: var(--brand-gradient);
+    color: #fff;
+  }
+
+  .chat-inspect-copy {
+    min-width: 0;
+  }
+
+  .chat-inspect-kicker {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0;
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  .chat-inspect-title {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-inspect-sub {
+    margin-top: 2px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.82);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-inspect-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    overflow: auto;
+    background: var(--surface);
+  }
+
+  .chat-inspect-body .sa-drilldown-standalone {
+    overflow: visible;
+    min-width: 0;
+  }
+
+  /* The source table shares the assistant's width, so the columns shrink
+     instead of pushing the dock wider. */
+  .chat-inspect-body .sa-source-seq {
+    min-width: 0;
+    width: 100%;
+    grid-template-columns: 20px minmax(6.5rem, 1.45fr) minmax(3.4rem, 0.75fr) minmax(5.5rem, 1fr) minmax(4.8rem, 5.2rem) max-content;
+  }
+
+  .chat-inspect-body .sa-drill-th {
+    white-space: normal;
+    line-height: 1.25;
+  }
+
+  .chat-inspect-body .sa-drill-td .src-pill-sm {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+  }
+
+  .chat-inspect-body .sa-drill-thead,
+  .chat-inspect-body .sa-drill-trow {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+
+  .chat-inspect-body .sa-drill-td {
+    padding: 4px 4px;
+  }
+
+  .chat-inspect-body .sa-drill-received,
+  .chat-inspect-body .sa-drill-updated {
+    white-space: normal;
+    flex-wrap: wrap;
+    gap: 2px 6px;
+  }
+
+  .attr-inspect-note {
+    padding: 11px 13px;
+    font-size: 13px;
+    color: var(--ink-3);
   }
 
   .chat-popout::before {
@@ -4908,6 +5045,10 @@
       z-index: 1200;
       width: 100%;
       box-shadow: -12px 0 40px rgba(10, 22, 40, 0.16);
+    }
+
+    .chat-popout.open .chat-pane {
+      min-width: 0;
     }
   }
 
@@ -6970,6 +7111,10 @@ a.ex-rule:hover { text-decoration: underline; }
 }
 
 .calc-builder { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.calc-fields { display: grid; grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); gap: 10px 12px; }
+.calc-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.calc-field.wide { grid-column: 1 / -1; }
+.calc-field .text-input { width: 100%; }
 .calc-builder-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 11px; }
 .calc-help { margin: 0; font-size: 12px; line-height: 1.45; color: var(--ink-3); }
 .calc-badge {
@@ -7205,6 +7350,7 @@ a.ex-rule:hover { text-decoration: underline; }
 @media (max-width: 860px) {
   .calc-stage, .calc-stage.collapsed .calc-rail { grid-template-columns: 1fr; }
   .calc-builder-top { flex-direction: column; }
+  .calc-fields { grid-template-columns: 1fr; }
 }
 .calc-break { display: flex; flex-direction: column; gap: 8px; }
 .calc-break-formula {
@@ -7396,84 +7542,6 @@ a.ex-rule:hover { text-decoration: underline; }
 
 .attr-inspectable {
   cursor: context-menu;
-}
-
-/* Bottom detail drawer. A flex sibling of the page, same idea as the chat dock:
-   opening it shortens the screen instead of covering it. */
-.detail-drawer {
-  flex: 0 0 auto;
-  height: 0;
-  min-height: 0;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  background: var(--surface);
-  border-top: 0 solid var(--line);
-  box-shadow: 0 -12px 40px rgba(10, 22, 40, 0);
-  transition: height 0.28s ease, border-top-width 0.28s ease, box-shadow 0.28s ease;
-}
-
-.detail-drawer.open {
-  height: clamp(320px, 46vh, 560px);
-  border-top-width: 1px;
-  box-shadow: 0 -12px 40px rgba(10, 22, 40, 0.08);
-}
-
-.detail-drawer-sheet {
-  height: clamp(320px, 46vh, 560px);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  min-width: 0;
-  max-width: 100%;
-  position: relative;
-  font-family: var(--font-ibm-plex-sans);
-}
-
-.detail-drawer-sheet::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: var(--brand-gradient);
-}
-
-.detail-drawer-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  min-width: 0;
-  max-width: 100%;
-  overflow: auto;
-}
-
-.attr-inspect-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 11px;
-  padding: 10px 13px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-
-.attr-inspect-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.attr-inspect-sub {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--ink-3);
-}
-
-.attr-inspect-note {
-  padding: 11px 13px;
-  font-size: 13px;
-  color: var(--ink-3);
 }
 
 .xp-lead {
@@ -8388,6 +8456,33 @@ a.xp-admin-row:hover { background: var(--bg); }
   --ag-font-family: var(--font-ibm-plex-sans);
 }
 
+.app-grid .ag-floating-filter {
+  padding-top: 2px;
+  padding-bottom: 4px;
+}
+
+.app-grid-like {
+  width: 100%;
+  height: 24px;
+  box-sizing: border-box;
+  border: 1px solid var(--line-strong, #cbd5e1);
+  border-radius: 4px;
+  padding: 0 8px;
+  background: var(--surface, #fff);
+  color: var(--ink, #0f172a);
+  font: inherit;
+  font-size: 12px;
+}
+
+.app-grid-like::placeholder {
+  color: var(--ink-4, #94a3b8);
+}
+
+.app-grid-like:focus {
+  outline: none;
+  border-color: var(--accent, #0e7490);
+}
+
 .app-grid.is-clickable .ag-row {
   cursor: pointer;
 }
@@ -9240,7 +9335,16 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .da-gauge.near i, .da-gauge.bind i { background: #8f5400; }
 .da-gauge.breach i { background: #b3261e; }
 .da-rule { padding: 8px 0; border-bottom: 1px solid var(--da-line); }
-.da-rule div { display: flex; justify-content: space-between; gap: 8px; }
+.da-rulehead { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 100%; margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.da-ruleline { display: flex; align-items: flex-start; gap: 8px; }
+.da-ruleline .da-twist { flex: 0 0 14px; width: 14px; min-width: 14px; max-width: 14px; text-align: center; }
+.da-ruleline b { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
+.da-rulename, .da-rulegroup { display: block; }
+.da-ruleline .da-st { flex: none; white-space: nowrap; margin-top: 1px; }
+.da-rulehead .da-gauge { margin-top: 0; }
+.da-ruledetail { margin-top: 8px; display: grid; gap: 4px; }
+.da-ruledetail div { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }
+.da-ruledetail span { color: var(--da-muted); }
 .da-rule p { margin: 3px 0 0; color: var(--da-muted); font-size: 12.5px; }
 .da-st { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
 .da-st.ok { background: #e1f2e8; color: #1b6f46; }
@@ -9263,7 +9367,7 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .da-cardmeta { display: flex; justify-content: space-between; font-size: 12.5px; }
 .da-main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; align-items: start; margin-top: 10px; }
 .da-main.solo { grid-template-columns: minmax(0, 1fr); }
-.da-panel { position: sticky; top: 8px; max-height: calc(100vh - 88px); overflow: auto; background: var(--surface); border: 1px solid var(--da-line); border-radius: 8px; }
+.da-panel { position: sticky; top: 8px; height: calc(100vh - 88px); max-height: calc(100vh - 88px); overflow: auto; overflow-anchor: none; scrollbar-gutter: stable; background: var(--surface); border: 1px solid var(--da-line); border-radius: 8px; }
 .da-gridwrap { overflow-x: auto; max-width: 100%; background: var(--surface); border: 1px solid var(--da-line); border-radius: 8px; }
 .da-grid { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 860px; font-size: 13px; }
 .da-grid.fit { min-width: 640px; }
@@ -9284,11 +9388,13 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .da-grid .da-tcol { border-top: 3px solid #0b5d73; min-width: 140px; }
 .da-grid .da-tcol span, .da-grid small { display: block; font-weight: 400; color: var(--da-muted); font-size: 11.5px; }
 .da-colhold { display: flex; justify-content: flex-end; align-items: center; gap: 4px; }
-.da-grid tbody tr.par { background: var(--bg-alt); }
+.da-grid tbody tr.par { background: #d5dbe3; }
+.da-grid tbody tr.sub { background: #fff; }
 .da-grid tbody tr.sub td:first-child { padding-left: 64px; }
-.da-grid tbody tr.sel { background: #e2f0f4; }
-.da-grid td.na { background-color: #e8edf2; background-image: repeating-linear-gradient(135deg, transparent 0 7px, #d5dbe3 7px 8px); color: #475368; font-size: 12px; text-align: center; }
-.da-natag { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid #9aa6b8; background: transparent; font-weight: 600; font-size: 11px; }
+.da-grid tbody tr.sel { background: #d3eef4; }
+.da-grid tbody tr.sel td:first-child { box-shadow: inset 3px 0 0 #0b5d73; }
+.da-grid td.na { background-color: #f8f1e4; background-image: repeating-linear-gradient(135deg, transparent 0 6px, #e4d0aa 6px 7px); color: #7a4e12; font-size: 12px; text-align: center; }
+.da-natag { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid #c4a36a; background: #fffaf2; color: #7a4e12; font-weight: 600; font-size: 11px; }
 .da-grid td.ovr { background: #ffe7c4; }
 .da-grid td b { font-weight: 600; }
 .da-grid td em { font-style: normal; font-size: 10px; font-weight: 700; background: #faefdb; color: #8f5400; border-radius: 999px; padding: 0 5px; margin-right: 4px; }
@@ -9316,7 +9422,7 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .da-seg2 { display: flex; border: 1px solid var(--da-line); border-radius: 6px; overflow: hidden; }
 .da-seg2 button { flex: 1; border: 0; background: var(--surface); padding: 6px; cursor: pointer; }
 .da-seg2 button[aria-pressed="true"] { background: #0b5d73; color: #fff; }
-@media (max-width: 860px) { .da-main { grid-template-columns: 1fr; } .da-columns { grid-template-columns: 1fr; } .da-facts, .da-facts.five, .da-facts.six { grid-template-columns: repeat(2, 1fr); } .da-panel { position: static; max-height: none; } }
+@media (max-width: 860px) { .da-main { grid-template-columns: 1fr; } .da-columns { grid-template-columns: 1fr; } .da-facts, .da-facts.five, .da-facts.six { grid-template-columns: repeat(2, 1fr); } .da-panel { position: static; height: auto; max-height: none; } }
 
 .dc-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .dc-top h2 { margin: 0; font-size: 17px; }
