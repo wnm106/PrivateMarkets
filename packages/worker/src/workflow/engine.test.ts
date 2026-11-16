@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { WORKFLOW_TEMPLATES } from '@tapestrai/graphql/src/lib/workflow-templates';
 import { normalizeItems } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { runAgentStep, type AgentModel, type ModelTurn } from './agent';
-import { RunBusyError, advanceRun, type Actor, type AgentRequest, type EngineDeps, type LoadedRun, type ReviewRow, type StepRow, type WorkflowStore } from './engine';
+import { RunBusyError, advanceRun, message, type Actor, type AgentRequest, type EngineDeps, type LoadedRun, type ReviewRow, type StepRow, type WorkflowStore } from './engine';
 import { signReason, workflowTools } from './tools';
 
 const CLEANUP = WORKFLOW_TEMPLATES.find((template) => template.code === 'DATA_CLEANUP')!.graph;
@@ -417,5 +417,13 @@ describe('workflowTools', () => {
   it('leaves a tool with no reason field as it was', () => {
     const spec = { name: 'create_entity', description: '', inputSchema: { type: 'object', properties: { entityCode: {} } } };
     expect(signReason(spec, { entityCode: 'X' }, 'Approved by Ada.')).toEqual({ entityCode: 'X' });
+  });
+});
+
+describe('message', () => {
+  it('reads a database error, which is an object and not an Error', () => {
+    expect(message({ message: 'Could not find a relationship', details: 'Searched public', hint: null })).toBe('Could not find a relationship Searched public');
+    expect(message(new Error('boom'))).toBe('boom');
+    expect(message({})).toBe('The step failed');
   });
 });

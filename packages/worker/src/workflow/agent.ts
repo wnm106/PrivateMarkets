@@ -1,6 +1,6 @@
 import { isReadTool, resolveTemplates } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { normalizeItems, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
-import type { AgentRequest, AgentResult, ToolRunner } from './engine';
+import { message, type AgentRequest, type AgentResult, type ToolRunner } from './engine';
 
 /**
  * The agent step. A model works toward the step's goal by calling read-only
@@ -148,7 +148,9 @@ export function systemPrompt(proposable: ToolSpec[]): string {
 function taskMessage(request: AgentRequest): string {
   const instructions = String(resolveTemplates(request.node.config.instructions || '', request.scope) || '');
   const context = clip(JSON.stringify({ input: request.scope.input, steps: request.scope.steps }, null, 1), MAX_CONTEXT_CHARS);
-  return `${instructions}\n\n## What this run was started with, and what earlier steps returned\n${context}`;
+  // The model does not know the date, and a change needs one.
+  const today = (request.now?.() ?? new Date()).toISOString().slice(0, 10);
+  return `${instructions}\n\nToday is ${today}.\n\n## What this run was started with, and what earlier steps returned\n${context}`;
 }
 
 function restore(state: unknown, provider: string): AgentState | null {
@@ -226,8 +228,7 @@ export async function runAgentStep(request: AgentRequest, deps: AgentDeps): Prom
           const value = await deps.tools.run(call.name, call.input, request.actor, 'read');
           return { call, content: clip(JSON.stringify(value ?? null), MAX_RESULT_CHARS), isError: false };
         } catch (error) {
-          const text = error instanceof Error ? error.message : String(error);
-          return { call, content: `${text}. Do not repeat this call unchanged.`, isError: true };
+          return { call, content: `${message(error)}. Do not repeat this call unchanged.`, isError: true };
         }
       }),
     );

@@ -121,6 +121,8 @@ export interface AgentRequest {
   node: WorkflowNode;
   scope: RunScope;
   actor: Actor;
+  /** The clock, for tests. Defaults to now. */
+  now?: () => Date;
   /** The checkpoint from an earlier attempt at this step, if there was one. */
   state: unknown;
   checkpoint(state: unknown): Promise<void>;
@@ -160,9 +162,16 @@ class Halted extends Error {}
 
 const MAX_OUTPUT_CHARS = 200_000;
 
-function message(error: unknown): string {
+/** The text of whatever was thrown. A database error is a plain object with a message, not an Error. */
+export function message(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
-  return typeof error === 'string' && error ? error : 'The step failed';
+  if (typeof error === 'string' && error) return error;
+  if (error && typeof error === 'object') {
+    const raw = error as { message?: unknown; details?: unknown; hint?: unknown };
+    const parts = [raw.message, raw.details, raw.hint].filter((part): part is string => typeof part === 'string' && part !== '');
+    if (parts.length > 0) return parts.join(' ');
+  }
+  return 'The step failed';
 }
 
 function record(value: unknown): Record<string, unknown> {
