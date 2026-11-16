@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { ToolRegistry } from '@tapestrai/mcp-server/src/lib/tool-registry';
 import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/compliance-tools';
 import { registerDomainTools } from '@tapestrai/mcp-server/src/tools/domain-tools';
+import { registerDqCheckTools } from '@tapestrai/mcp-server/src/tools/dq-check-tools';
 import { registerDQTools } from '@tapestrai/mcp-server/src/tools/dq-tools';
 import { registerImportMapTools } from '@tapestrai/mcp-server/src/tools/import-map-tools';
 import { registerLineageTools } from '@tapestrai/mcp-server/src/tools/lineage-tools';
@@ -36,6 +37,7 @@ registerReportingTools(registry);
 registerQueryTools(registry);
 registerNarrativeTools(registry);
 registerListTools(registry);
+registerDqCheckTools(registry);
 
 interface Listed {
   name: string;

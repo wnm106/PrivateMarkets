@@ -81,7 +81,7 @@ function proposed() {
 
 function deps(store: WorkflowStore, overrides: Partial<EngineDeps> = {}) {
   const calls: Array<{ name: string; args: Record<string, unknown>; actor: Actor; permission: string }> = [];
-  const names = new Set(['list_dq_exceptions', 'get_dq_summary', 'get_attribute_list_values', 'get_entity', 'list_entities', 'get_field_lineage', 'get_temporal_history', 'get_template_metadata', 'get_attribute_metadata', 'search_attributes', 'query_data', 'get_model_map', 'submit_manual_override', 'resolve_dq_exception', 'create_entity']);
+  const names = new Set(['list_dq_exceptions', 'get_dq_summary', 'get_attribute_list_values', 'get_data_quality_checks', 'get_entity', 'list_entities', 'get_field_lineage', 'get_temporal_history', 'get_template_metadata', 'get_attribute_metadata', 'search_attributes', 'query_data', 'get_model_map', 'submit_manual_override', 'resolve_dq_exception', 'create_entity']);
   const built: EngineDeps = {
     store,
     tools: {

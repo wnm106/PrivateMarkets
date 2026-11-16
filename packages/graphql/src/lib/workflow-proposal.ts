@@ -41,6 +41,8 @@ export interface ProposalItem {
   missing: MissingField[];
   /** Other changes in the same proposal that must be made first, by id. */
   dependsOn?: string[];
+  /** The data quality checks this change is meant to clear, by rule code. */
+  fixes?: string[];
 }
 
 export interface Proposal {
@@ -111,6 +113,7 @@ export function normalizeItems(raw: unknown, existing: ProposalItem[] = []): Pro
       confidence,
       // A change to a list every client shares always gets a close look.
       needsReview: row.needsReview === true || confidence === 'LOW' || tool === LIST_VALUE_TOOL || missing.some((field) => field.required),
+      ...(Array.isArray(row.fixes) && row.fixes.length > 0 ? { fixes: [...new Set(row.fixes.map((code) => text(code)).filter(Boolean))] } : {}),
       ...(Array.isArray(row.dependsOn) && row.dependsOn.length > 0 ? { dependsOn: row.dependsOn.map((dep) => text(dep)).filter((dep) => dep && dep !== id) } : {}),
       rationale: text(row.rationale),
       evidence: (Array.isArray(row.evidence) ? row.evidence : []).map((line) => text(line)).filter(Boolean),

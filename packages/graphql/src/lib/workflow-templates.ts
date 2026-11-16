@@ -18,6 +18,7 @@ const READ_TOOLS = [
   'list_dq_exceptions',
   'get_dq_summary',
   'get_attribute_list_values',
+  'get_data_quality_checks',
   'get_entity',
   'list_entities',
   'get_field_lineage',
@@ -32,7 +33,7 @@ const READ_TOOLS = [
 const CLEANUP_INSTRUCTIONS = `Work through the open data quality exceptions listed in the "Find open exceptions" step.
 
 For each exception:
-1. Read the record and the failing field. Use lineage and history to see where the current value came from and what it was before.
+1. Read the record and the failing field, and run the data quality checks on the record to see everything it fails today, not only this exception. Use lineage and history to see where the current value came from and what it was before.
 2. Decide what would fix it. Usually one of:
    - The value is wrong or missing and you can establish the right one from another source or from history: propose submit_manual_override with that value, then propose resolve_dq_exception with status RESOLVED.
    - The value is right and the rule does not apply to this record: propose resolve_dq_exception with status FALSE_POSITIVE and say why in resolutionNotes.

@@ -72,6 +72,23 @@ The step can limit which changes may be proposed ("Changes it can propose").
 
 **Required fields are checked by the engine, not left to the agent.** When a change creates a record, the engine reads what that record's template requires. Each required attribute the agent did not supply becomes a question on the change, marked "required for this type of record".
 
+### Data quality checks
+
+Give an agent step `get_data_quality_checks` and it can run every active data quality rule against a record as the record is now. This is the same evaluation the data quality page shows. Nothing is stored. It is different from `list_dq_exceptions`, which reads exceptions recorded earlier.
+
+For one record it returns:
+
+- the checks it fails, each with the rule, the value that failed, and why
+- the checks it passes, with the rule, so a proposed value can be held to it
+- failures a person has already accepted
+- required attributes it is missing
+
+The agent is told to use this three ways. A failing check is a reason to propose a change, and the change names the checks it clears. A proposed value must satisfy the rules for its attribute. And a failure a person has accepted is settled and is left alone.
+
+In the review, a change that clears a check says so in the table, and its detail lists the rule codes. The agent's summary says how many checks each record fails, and which of those its proposals would and would not clear.
+
+The checks are not run again after changes are applied. To see the effect, run the workflow again or open the record's data quality page.
+
 ### Values that come from a list
 
 Many attributes take their value from a list. A proposed value, or a suggested one, has to be on that list. The check runs when the agent proposes, before anything is recorded:

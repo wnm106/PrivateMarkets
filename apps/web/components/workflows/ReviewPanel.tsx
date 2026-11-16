@@ -305,7 +305,14 @@ export function ReviewPanel({ review, onDecided }: Props) {
                         <div style={{ fontWeight: 600 }}>{item.target.label}</div>
                         <div style={{ fontSize: 11, color: 'var(--ink-4)' }}>{item.target.kind}</div>
                       </td>
-                      <td style={cell}>{item.summary}</td>
+                      <td style={cell}>
+                        {item.summary}
+                        {item.fixes && item.fixes.length > 0 && (
+                          <div style={{ fontSize: 11, color: '#166534', marginTop: 2 }}>
+                            Clears {item.fixes.length === 1 ? 'a failing data quality check' : `${item.fixes.length} failing data quality checks`}
+                          </div>
+                        )}
+                      </td>
                       <td style={cell}><span style={chip(CONFIDENCE[item.confidence].fg, CONFIDENCE[item.confidence].bg)}>{CONFIDENCE[item.confidence].label}</span></td>
                       <td style={{ ...cell, color: status.fg, fontWeight: 600, fontSize: 12 }}>{status.text}</td>
                     </tr>
@@ -355,6 +362,16 @@ export function ReviewPanel({ review, onDecided }: Props) {
                             <div>
                               <div style={sectionLabel}>Why</div>
                               <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>{item.rationale || 'The agent gave no reason.'}</div>
+                              {item.fixes && item.fixes.length > 0 && (
+                                <>
+                                  <div style={{ ...sectionLabel, marginTop: 12 }}>Data quality checks this clears</div>
+                                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                    {item.fixes.map((code) => (
+                                      <span key={code} style={{ ...chip('#166534', '#dcfce7'), fontFamily: 'var(--font-mono, monospace)', fontWeight: 600 }}>{code}</span>
+                                    ))}
+                                  </div>
+                                </>
+                              )}
                               {item.evidence.length > 0 && (
                                 <>
                                   <div style={{ ...sectionLabel, marginTop: 12 }}>Based on</div>
