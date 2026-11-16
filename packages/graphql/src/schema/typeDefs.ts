@@ -908,6 +908,10 @@ type ComplianceMeasureLine {
   kind: ComplianceMeasureKind!
   sign: Int!
   attributeCode: String
+  # Where and when this line reads its attribute. Empty reads the run source at the as-of date.
+  dimension: ComplianceAttributeDimension
+  # Formula evaluated on each record. The line kind aggregates those results.
+  expression: JSON
   path: [ComplianceRollupHop!]!
   weightAttributeCode: String
   valuePath: [ComplianceRollupHop!]!
@@ -1199,6 +1203,8 @@ input ComplianceMeasureLineInput {
   kind: ComplianceMeasureKind!
   sign: Int
   attributeCode: String
+  dimension: ComplianceAttributeDimensionInput
+  expression: JSON
   path: [ComplianceRollupHopInput!]
   weightAttributeCode: String
   valuePath: [ComplianceRollupHopInput!]
@@ -2839,6 +2845,14 @@ type Query {
   assistantSettings: AssistantSettings!
   """What the caller has asked the assistant to follow."""
   assistantFollows: [AssistantFollow!]!
+  """Where the caller's home page differs from their role default, for the client in this session."""
+  homeLayout: HomeLayout!
+  """Recent changes to what the caller follows, newest first."""
+  homeActivity(days: Int, first: Int): [HomeActivityItem!]!
+  """The caller's latest assistant brief, and whether the assistant is on."""
+  homeBrief: HomeBrief!
+  """What the caller follows, each with its latest change."""
+  homeFollows: [HomeFollow!]!
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
@@ -3152,6 +3166,8 @@ type Mutation {
   saveAssistantFollow(input: SaveAssistantFollowInput!): SaveAssistantFollowResult!
   deleteAssistantFollow(id: ID!): MutationResult!
   deliverAssistantBrief: MutationResult!
+  """Saves the caller's home page choices. Null for a list returns it to the default."""
+  saveHomeLayout(input: SaveHomeLayoutInput!): SaveHomeLayoutResult!
 }
 
 # Root Subscription Type
@@ -5101,5 +5117,68 @@ type SaveAssistantFollowResult {
   follow: AssistantFollow
   errors: [MutationError!]!
 }
+
+type HomeLayout {
+  """Null when the session sees no client or several; the page then shows defaults and cannot save."""
+  clientId: ID
+  canSave: Boolean!
+  """Module codes the caller hid. Null means the default for their role."""
+  hiddenModules: [String!]
+  """Place keys the caller pinned, in order. Null means every place they can open."""
+  pinnedPlaces: [String!]
+  updatedAt: DateTime
+}
+
+input SaveHomeLayoutInput {
+  hiddenModules: [String!]
+  pinnedPlaces: [String!]
+}
+
+type SaveHomeLayoutResult {
+  layout: HomeLayout
+  errors: [MutationError!]!
+}
+
+type HomeActivityItem {
+  id: ID!
+  kind: String!
+  subjectType: String!
+  subjectId: ID
+  subjectCode: String
+  summary: String!
+  occurredAt: DateTime!
+  """The follow that matched this change."""
+  followLabel: String!
+  """DIGEST or IMMEDIATE."""
+  delivery: String!
+}
+
+type HomeFollow {
+  id: ID!
+  """KIND, ENTITY, or FEED."""
+  subjectType: String!
+  subjectId: ID
+  subjectCode: String
+  label: String!
+  delivery: String!
+  """The record's domain, when it is a record the caller can read."""
+  domainCode: String
+  lastSummary: String
+  lastAt: DateTime
+}
+
+type HomeBrief {
+  """False when the session sees no single client."""
+  available: Boolean!
+  enabled: Boolean!
+  preset: String!
+  nextDeliveryAt: DateTime
+  conversationId: ID
+  """The last note the assistant wrote, as markdown."""
+  content: String
+  deliveredAt: DateTime
+  followCount: Int!
+}
+
 
 `;

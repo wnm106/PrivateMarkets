@@ -12,5 +12,10 @@ describe('graphql schema', () => {
     expect(mutation?.saveAssistantFollow).toBeTruthy();
     expect(mutation?.deleteAssistantFollow).toBeTruthy();
     expect(mutation?.deliverAssistantBrief).toBeTruthy();
+    expect(query?.homeLayout).toBeTruthy();
+    expect(query?.homeActivity).toBeTruthy();
+    expect(query?.homeBrief).toBeTruthy();
+    expect(query?.homeFollows).toBeTruthy();
+    expect(mutation?.saveHomeLayout).toBeTruthy();
   });
 });

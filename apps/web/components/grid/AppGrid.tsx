@@ -20,8 +20,8 @@ import {
   type RowHeightParams,
   type SortChangedEvent,
 } from 'ag-grid-community';
-import { columnSearchFilterParams, prepareGridColumns } from '@/lib/grid-filters';
 import { ColumnLikeFilter } from '@/components/grid/ColumnLikeFilter';
+import { columnSearchFilterParams, prepareGridColumns } from '@/lib/grid-filters';
 
 const enterpriseLicense = process.env.NEXT_PUBLIC_AG_GRID_LICENSE_KEY;
 if (enterpriseLicense) LicenseManager.setLicenseKey(enterpriseLicense);
@@ -100,7 +100,7 @@ function interactiveTarget(target: EventTarget | null | undefined) {
   return !!element?.closest?.('a, button, input, select, textarea, label');
 }
 
-/** The contains box sits on columns that use the standard value-list filter. */
+/** The contains box stays on the column. The filter menu still lists the values. */
 function withColumnSearch<T>(columns: ColDef<T>[]): ColDef<T>[] {
   return columns.map((column) => (
     column.filter === 'agMultiColumnFilter' && column.floatingFilterComponent == null

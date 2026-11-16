@@ -1,39 +1,40 @@
-import type { ColDef, IMultiFilterParams } from 'ag-grid-community';
+import type { ColDef, IMultiFilterParams, ITextFilterParams } from 'ag-grid-community';
+
+/** Substring match. The box under the header uses this. */
+export function textContainsFilterParams(): ITextFilterParams {
+  return {
+    filterOptions: ['contains'],
+    defaultOption: 'contains',
+    maxNumConditions: 1,
+    caseSensitive: false,
+    debounceMs: 200,
+  };
+}
 
 /**
- * Column filter used by the standard grids.
+ * Contains search plus the value pick list.
  *
- * The value list starts with nothing checked. The grid's default is the opposite:
- * every value starts checked, and the search box only hides rows in that list.
- * Checking one visible value then puts every hidden value back in the selection,
- * the model becomes "all values", and the grid shows every row again.
- *
- * A contains box under the header is the first child filter. The value list is
- * the second, so a text search does not clear a checked value, or the reverse.
+ * The list starts with nothing checked. The grid's default is the opposite:
+ * every value starts checked, and choosing one visible value after a search
+ * puts the hidden values back in, which clears the filter.
  */
 export function columnSearchFilterParams(): IMultiFilterParams {
   return {
     filters: [
       {
         filter: 'agTextColumnFilter',
-        display: 'subMenu',
+        display: 'inline',
         title: 'Contains',
-        filterParams: {
-          filterOptions: ['contains'],
-          defaultOption: 'contains',
-          maxNumConditions: 1,
-          caseSensitive: false,
-          debounceMs: 200,
-        },
+        filterParams: textContainsFilterParams(),
       },
       {
         filter: 'agSetColumnFilter',
+        display: 'inline',
+        title: 'Values',
         filterParams: {
           defaultToNothingSelected: true,
           suppressClearModelOnRefreshValues: true,
           caseSensitive: false,
-          browserAutoComplete: false,
-          buttons: ['reset'],
         },
       },
     ],
@@ -53,7 +54,7 @@ export function textFromColumnFilter(model: unknown): string {
 }
 
 /**
- * Contains-search model for one column. Keeps the value-list selection in place.
+ * Contains-search model for one column. Keeps the pick-list selection in place.
  * An empty search with no checked values clears the column filter.
  */
 export function likeSearchModel(current: unknown, text: string): GridMultiFilterModel | null {
@@ -63,7 +64,7 @@ export function likeSearchModel(current: unknown, text: string): GridMultiFilter
   return { filterType: 'multi', filterModels: existing };
 }
 
-/** Sort, group, and the standard search for columns that have not chosen their own filter. */
+/** Sort, group, and the standard search for string columns. */
 export function prepareGridColumns<T>(columns: ColDef<T>[], enableSortFilter: boolean): ColDef<T>[] {
   return columns.map((column) => {
     const next: ColDef<T> = { ...column };
@@ -71,12 +72,17 @@ export function prepareGridColumns<T>(columns: ColDef<T>[], enableSortFilter: bo
       next.enableRowGroup = true;
     }
     if (!enableSortFilter || next.filter === false) return next;
-    if (next.filter != null && next.filter !== true) return next;
+    if (next.filter != null && next.filter !== true && !isStringColumnFilter(next.filter)) return next;
     next.filter = 'agMultiColumnFilter';
     next.floatingFilter = true;
+    next.floatingFilterComponent = undefined;
     next.filterParams = columnSearchFilterParams();
     return next;
   });
+}
+
+function isStringColumnFilter(filter: ColDef['filter']): boolean {
+  return filter === 'agSetColumnFilter' || filter === 'agMultiColumnFilter' || filter === 'agTextColumnFilter';
 }
 
 function childModels(model: unknown): Array<Record<string, unknown> | null> {

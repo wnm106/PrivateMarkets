@@ -381,15 +381,21 @@ export default function WorkflowEditorPage() {
           {runs.length === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>No runs yet.</div>
           ) : (
-            <div style={{ display: 'grid', gap: 4 }}>
+            <div className="wf-run-grid" role="table" aria-label="Recent runs of this workflow">
+              <div className="wf-run-head" role="row">
+                <span role="columnheader">Status</span>
+                <span role="columnheader">Version</span>
+                <span role="columnheader">Started</span>
+                <span role="columnheader">Result</span>
+              </div>
               {runs.map((run) => {
                 const status = statusOf(run.status);
                 return (
-                  <Link key={run.id} href={`/workflows/runs/${run.id}`} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 6, textDecoration: 'none', color: 'inherit', fontSize: 13 }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: status.color, background: status.tint, padding: '2px 8px', borderRadius: 999 }}>{status.label}</span>
-                    <span>Version {run.version}</span>
-                    <span style={{ color: 'var(--ink-3)' }}>{when(run.startedAt || run.createdAt)}</span>
-                    {run.errorMessage && <span style={{ color: 'var(--red)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.errorMessage}</span>}
+                  <Link key={run.id} href={`/workflows/runs/${run.id}`} role="row">
+                    <span role="cell"><span className="wf-run-status" style={{ color: status.color, background: status.tint }}>{status.label}</span></span>
+                    <span role="cell">Version {run.version}</span>
+                    <span className="wf-run-when" role="cell">{when(run.startedAt || run.createdAt)}</span>
+                    <span className="wf-run-error" role="cell" title={run.errorMessage || undefined}>{run.errorMessage || ''}</span>
                   </Link>
                 );
               })}

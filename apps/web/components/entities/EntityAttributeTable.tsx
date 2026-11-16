@@ -9,6 +9,7 @@ import { cellEditSeed, inlineCommitValue } from '@/lib/inline-field';
 import { withParentNames } from '@/lib/parent-entities';
 import { AttributeCellEditor } from '@/components/entities/AttributeCellEditor';
 import { AppGrid, type GridApi } from '@/components/grid/AppGrid';
+import { columnSearchFilterParams } from '@/lib/grid-filters';
 import { ADD_COMPETING_SOURCE_MUTATION, ATTRIBUTE_REGISTER_QUERY, DATA_SOURCE_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { GRID_QUERY, type GridResultPayload } from '@/lib/reporting';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
@@ -258,8 +259,11 @@ function filtersFromGridModel(model: Record<string, any> | null | undefined): Fi
   const filters: Filter[] = [];
   for (const [field, raw] of Object.entries(model || {})) {
     if (!raw || raw.operator === 'OR') continue;
-    const conditions = Array.isArray(raw.conditions) ? raw.conditions : [raw];
+    const conditions = raw.filterType === 'multi' && Array.isArray(raw.filterModels)
+      ? raw.filterModels
+      : (Array.isArray(raw.conditions) ? raw.conditions : [raw]);
     for (const condition of conditions) {
+      if (!condition || condition.filterType === 'set') continue;
       const mapped = mapGridCondition(field, condition);
       if (mapped) filters.push(mapped);
     }
@@ -655,11 +659,11 @@ export function EntityAttributeTable({
       colId: col.code,
       headerName: col.name,
       sortable: true,
-      filter: col.kind === 'num' ? 'agNumberColumnFilter' : col.kind === 'date' ? 'agDateColumnFilter' : 'agSetColumnFilter',
+      filter: col.kind === 'num' ? 'agNumberColumnFilter' : col.kind === 'date' ? 'agDateColumnFilter' : 'agMultiColumnFilter',
       floatingFilter: true,
-      filterParams: col.kind === 'text' || col.kind === 'bool'
-        ? { applyMiniFilterWhileTyping: true, defaultToNothingSelected: false }
-        : { maxNumConditions: 2, buttons: ['reset'] },
+      filterParams: col.kind === 'num' || col.kind === 'date'
+        ? { maxNumConditions: 2, buttons: ['reset'] }
+        : columnSearchFilterParams(),
       enableRowGroup: true,
       enableValue: Boolean(aggFunc),
       aggFunc,

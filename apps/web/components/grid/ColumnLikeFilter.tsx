@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CustomFloatingFilterProps } from 'ag-grid-react';
 import { likeSearchModel, textFromColumnFilter } from '@/lib/grid-filters';
 
-/** Contains search shown under a column header. */
+/** Contains search under a column header. The filter menu keeps the value pick list. */
 export function ColumnLikeFilter(props: CustomFloatingFilterProps) {
   const parentText = textFromColumnFilter(props.model);
   const [value, setValue] = useState(parentText);

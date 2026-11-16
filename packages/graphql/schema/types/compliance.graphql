@@ -217,6 +217,10 @@ type ComplianceMeasureLine {
   kind: ComplianceMeasureKind!
   sign: Int!
   attributeCode: String
+  # Where and when this line reads its attribute. Empty reads the run source at the as-of date.
+  dimension: ComplianceAttributeDimension
+  # Formula evaluated on each record. The line kind aggregates those results.
+  expression: JSON
   path: [ComplianceRollupHop!]!
   weightAttributeCode: String
   valuePath: [ComplianceRollupHop!]!
@@ -511,6 +515,8 @@ input ComplianceMeasureLineInput {
   kind: ComplianceMeasureKind!
   sign: Int
   attributeCode: String
+  dimension: ComplianceAttributeDimensionInput
+  expression: JSON
   path: [ComplianceRollupHopInput!]
   weightAttributeCode: String
   valuePath: [ComplianceRollupHopInput!]

@@ -27,6 +27,7 @@ import { jobResolvers } from './jobs';
 import { workflowResolvers } from './workflows';
 import { feedResolvers } from './feeds';
 import { assistantResolvers } from './assistant';
+import { homeResolvers } from './home';
 
 export const resolvers = {
   Query: {
@@ -70,6 +71,7 @@ export const resolvers = {
     ...workflowResolvers.Query,
     ...feedResolvers.Query,
     ...assistantResolvers.Query,
+    ...homeResolvers.Query,
   },
   
   Mutation: {
@@ -108,6 +110,7 @@ export const resolvers = {
     ...workflowResolvers.Mutation,
     ...feedResolvers.Mutation,
     ...assistantResolvers.Mutation,
+    ...homeResolvers.Mutation,
   },
   
   Subscription: {},
