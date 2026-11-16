@@ -1,8 +1,9 @@
 'use client';
 
 import { Fragment, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { unanswered, type Confidence, type MissingField, type ProposalAction, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { isLockedArg, setPath, unanswered, type Confidence, type MissingField, type ProposalAction, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { graphqlMutation } from '@/lib/graphql';
+import { markdownToHtml } from '@/lib/markdown';
 import { DECIDE_REVIEW, argRows, showValue, when, type MutationErrors, type ReviewView } from '@/lib/workflows';
 
 /**
@@ -34,6 +35,57 @@ const sectionLabel: CSSProperties = { fontSize: 11, fontWeight: 700, color: 'var
 
 function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
+}
+
+const LONG_SUMMARY = 700;
+
+/** The agent's summary, formatted. A long one is folded so the changes stay in view. */
+function AgentSummary({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > LONG_SUMMARY;
+  // The renderer knows three heading levels. Deeper ones are shown as the third.
+  const html = useMemo(() => markdownToHtml(text.replace(/^#{4,}\s/gm, '### ')), [text]);
+  return (
+    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
+      <div style={sectionLabel}>What the agent found</div>
+      <div style={{ position: 'relative', maxHeight: long && !open ? 210 : undefined, overflow: 'hidden' }}>
+        <div className="markdown-content" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 900 }} dangerouslySetInnerHTML={{ __html: html }} />
+        {long && !open && <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 44, background: 'linear-gradient(rgba(255,255,255,0), var(--surface))' }} />}
+      </div>
+      {long && (
+        <button type="button" onClick={() => setOpen(!open)} style={{ border: 'none', background: 'none', padding: 0, marginTop: 6, fontSize: 12, fontWeight: 600, color: 'var(--entity-link)', cursor: 'pointer' }}>
+          {open ? 'Show less' : 'Read the full summary'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** What a setting in a proposed change holds, read by its dotted key ("attributes.CURRENCY"). */
+function readArg(args: Record<string, unknown>, key: string): unknown {
+  let current: unknown = args;
+  for (const part of key.split('.')) {
+    if (!current || typeof current !== 'object') return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+/** Text the reviewer typed, as the kind of value the agent proposed there. */
+function coerce(original: unknown, text: string): unknown {
+  if (typeof original === 'number') {
+    const parsed = Number(text);
+    return text.trim() !== '' && Number.isFinite(parsed) ? parsed : text;
+  }
+  if (typeof original === 'boolean') return text.trim().toLowerCase() === 'true';
+  return text;
+}
+
+/** Whether the reviewer may edit this setting: not what the change is aimed at, and a plain value. */
+function editableArg(args: Record<string, unknown>, key: string): boolean {
+  if (isLockedArg(key.split('.')[0])) return false;
+  const value = readArg(args, key);
+  return value === null || ['string', 'number', 'boolean'].includes(typeof value);
 }
 
 function QuestionInput({ field, value, onChange, disabled }: { field: MissingField; value: string; onChange(value: string): void; disabled: boolean }) {
@@ -90,8 +142,20 @@ export function ReviewPanel({ review, onDecided }: Props) {
     for (const [id, entry] of Object.entries(review.decision?.items || {})) {
       recorded[id] = Object.fromEntries(Object.entries(entry.answers || {}).map(([key, value]) => [key, showValue(value)]));
     }
+    // An open review starts with the agent's suggestions filled in. They are a
+    // recommendation to edit or accept, and nothing is applied until the change is approved.
+    if (open) {
+      for (const item of items) {
+        for (const field of item.missing) {
+          if (field.suggested === undefined || field.suggested === null) continue;
+          recorded[item.id] = { [field.key]: showValue(field.suggested), ...(recorded[item.id] || {}) };
+        }
+      }
+    }
     return recorded;
   });
+  /** The reviewer's changes to what a change sets, by item and setting. */
+  const [edits, setEdits] = useState<Record<string, Record<string, string>>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [note, setNote] = useState(review.decision?.note || '');
   const [saving, setSaving] = useState(false);
@@ -113,6 +177,20 @@ export function ReviewPanel({ review, onDecided }: Props) {
   };
   const choose = (id: string, choice: Choice) => setChoices((current) => ({ ...current, [id]: choice }));
   const answer = (id: string, key: string, value: string) => setAnswers((current) => ({ ...current, [id]: { ...(current[id] || {}), [key]: value } }));
+  const edit = (item: ProposalItem, key: string, value: string | null) =>
+    setEdits((current) => {
+      const next = { ...(current[item.id] || {}) };
+      // Typing the proposed value back in is not an edit.
+      if (value === null || value === showValue(readArg(item.args, key))) delete next[key];
+      else next[key] = value;
+      return { ...current, [item.id]: next };
+    });
+  /** The proposed settings with the reviewer's edits applied, or undefined when they changed nothing. */
+  const editedArgs = (item: ProposalItem): Record<string, unknown> | undefined => {
+    const changed = Object.entries(edits[item.id] || {});
+    if (changed.length === 0) return undefined;
+    return changed.reduce((args, [key, text]) => setPath(args, key, coerce(readArg(item.args, key), text)), item.args);
+  };
 
   /** The next change that still needs a person: undecided, or approved with a question open. */
   const nextNeeding = (after?: string): ProposalItem | undefined => {
@@ -133,11 +211,12 @@ export function ReviewPanel({ review, onDecided }: Props) {
   const submit = async (outcome: 'APPROVED' | 'REJECTED') => {
     setSaving(true);
     setErrors([]);
-    const decisionItems: Record<string, { decision: Choice; answers?: Record<string, string> }> = {};
+    const decisionItems: Record<string, { decision: Choice; answers?: Record<string, string>; args?: Record<string, unknown> }> = {};
     for (const item of items) {
       const choice: Choice = outcome === 'REJECTED' ? 'REJECT' : choices[item.id] || 'REJECT';
       const given = Object.fromEntries(Object.entries(answers[item.id] || {}).filter(([, value]) => value.trim() !== ''));
-      decisionItems[item.id] = { decision: choice, ...(choice === 'APPROVE' && Object.keys(given).length > 0 ? { answers: given } : {}) };
+      const args = choice === 'APPROVE' ? editedArgs(item) : undefined;
+      decisionItems[item.id] = { decision: choice, ...(choice === 'APPROVE' && Object.keys(given).length > 0 ? { answers: given } : {}), ...(args ? { args } : {}) };
     }
     const { data, error } = await graphqlMutation<{ decideWorkflowReview: { errors: MutationErrors } }>(DECIDE_REVIEW, {
       input: { reviewId: review.id, outcome, decision: { items: decisionItems, ...(note.trim() ? { note: note.trim() } : {}) } },
@@ -172,12 +251,7 @@ export function ReviewPanel({ review, onDecided }: Props) {
         {open && !review.canReview && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--red)' }}>You can see this review but cannot decide it. Someone with the review permission needs to.</div>}
       </header>
 
-      {review.summary && (
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
-          <div style={sectionLabel}>What the agent found</div>
-          <div style={{ fontSize: 13, color: 'var(--ink-2)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{review.summary}</div>
-        </div>
-      )}
+      {review.summary && <AgentSummary text={review.summary} />}
 
       <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', borderBottom: '1px solid var(--line)' }}>
         <div style={{ fontSize: 13 }}>
@@ -283,15 +357,46 @@ export function ReviewPanel({ review, onDecided }: Props) {
                               <div style={sectionLabel}>Exactly what will happen</div>
                               <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 6 }}>
                                 {ACTION[item.action].label} via <code>{item.tool}</code>
+                                {canDecide && '. You can change the values. What the change is aimed at is fixed.'}
                               </div>
                               <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>
                                 <tbody>
-                                  {argRows(item.args).map((row) => (
-                                    <tr key={row.key}>
-                                      <td style={{ padding: '3px 10px 3px 0', color: 'var(--ink-3)', verticalAlign: 'top', whiteSpace: 'nowrap' }}>{row.key}</td>
-                                      <td style={{ padding: '3px 0', fontWeight: 600, wordBreak: 'break-word' }}>{row.value}</td>
-                                    </tr>
-                                  ))}
+                                  {argRows(item.args).map((row) => {
+                                    const canEdit = canDecide && editableArg(item.args, row.key);
+                                    const edited = edits[item.id]?.[row.key];
+                                    // A decided review shows what was actually applied.
+                                    const recorded = !open ? readArg((review.decision?.items?.[item.id] as { args?: Record<string, unknown> } | undefined)?.args || {}, row.key) : undefined;
+                                    const changed = recorded !== undefined && showValue(recorded) !== row.value;
+                                    return (
+                                      <tr key={row.key}>
+                                        <td style={{ padding: '4px 10px 4px 0', color: 'var(--ink-3)', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{row.key}</td>
+                                        <td style={{ padding: '3px 0', fontWeight: 600, wordBreak: 'break-word' }}>
+                                          {canEdit ? (
+                                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                              <input
+                                                className="text-input"
+                                                aria-label={row.key}
+                                                value={edited ?? (row.value === '—' ? '' : row.value)}
+                                                onChange={(event) => edit(item, row.key, event.target.value)}
+                                                style={{ flex: 1, minWidth: 0, padding: '4px 6px', fontSize: 12, fontWeight: 600, borderColor: edited !== undefined ? '#b45309' : undefined }}
+                                              />
+                                              {edited !== undefined && (
+                                                <button type="button" title={`The agent proposed: ${row.value}`} onClick={() => edit(item, row.key, null)} style={{ border: 'none', background: 'none', padding: 0, fontSize: 11, color: 'var(--entity-link)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                  Undo edit
+                                                </button>
+                                              )}
+                                            </div>
+                                          ) : changed ? (
+                                            <span>
+                                              {showValue(recorded)} <span style={{ fontWeight: 400, color: 'var(--ink-4)' }}>(edited by the reviewer; the agent proposed {row.value})</span>
+                                            </span>
+                                          ) : (
+                                            row.value
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
                                   {item.missing.map((field) => (
                                     <tr key={field.key}>
                                       <td style={{ padding: '3px 10px 3px 0', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{field.key}</td>
@@ -340,8 +445,11 @@ export function ReviewPanel({ review, onDecided }: Props) {
                                         <QuestionInput field={field} value={value} disabled={!canDecide} onChange={(next) => answer(item.id, field.key, next)} />
                                         {canDecide && suggestion && value !== suggestion && (
                                           <button type="button" className="btn btn-sm" onClick={() => answer(item.id, field.key, suggestion)}>
-                                            Use the agent&apos;s suggestion: {suggestion}
+                                            Back to the agent&apos;s suggestion: {suggestion}
                                           </button>
+                                        )}
+                                        {canDecide && suggestion && value === suggestion && (
+                                          <span style={{ fontSize: 12, color: '#92400e' }}>The agent&apos;s suggestion. Change it if it is wrong.</span>
                                         )}
                                       </div>
                                     </div>

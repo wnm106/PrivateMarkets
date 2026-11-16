@@ -113,6 +113,12 @@ describe('proposals', () => {
     expect(finalArgs(proposal.items[1], decision.items.c2)).toEqual({ entityId: 'e7', value: '5.25' });
   });
 
+  it('lets a reviewer change the value a change sets, but not what it is aimed at', () => {
+    const [, update] = items();
+    const edited = finalArgs(update, { decision: 'APPROVE', args: { entityId: 'someone-else', exceptionId: 'ex-9', overrideReason: 'Corrected by reviewer' }, answers: { value: '6' } });
+    expect(edited).toEqual({ entityId: 'e7', overrideReason: 'Corrected by reviewer', value: '6' });
+  });
+
   it('sets nested answers without touching the original or the prototype', () => {
     const args = { attributes: { CURRENCY: 'USD' } };
     expect(setPath(args, 'attributes.MATURITY_DATE', '2031-06-30')).toEqual({ attributes: { CURRENCY: 'USD', MATURITY_DATE: '2031-06-30' } });

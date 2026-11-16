@@ -219,12 +219,33 @@ export function unanswered(item: ProposalItem, decision: ItemDecision | undefine
   return item.missing.filter((field) => field.required && !present(answers[field.key]));
 }
 
+/**
+ * Settings that say which record or field a change is about. A reviewer can
+ * change the value a change sets, not what it is aimed at: a change to a
+ * different record is a different change, and was never proposed.
+ */
+export function isLockedArg(key: string): boolean {
+  return /Id$/.test(key) || key === 'attributeCode';
+}
+
+/** The reviewer's edited settings with the locked ones put back as they were proposed. */
+function withLockedArgs(item: ProposalItem, edited: Record<string, unknown>): Record<string, unknown> {
+  const args: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(edited)) {
+    if (!isLockedArg(key)) args[key] = value;
+  }
+  for (const [key, value] of Object.entries(item.args)) {
+    if (isLockedArg(key)) args[key] = value;
+  }
+  return args;
+}
+
 /** The tool call for an approved item: the reviewer's edits, then their answers. */
 export function finalArgs(item: ProposalItem, decision: ItemDecision): Record<string, unknown> {
-  let args = decision.args ? { ...decision.args } : { ...item.args };
+  let args = decision.args ? withLockedArgs(item, decision.args) : { ...item.args };
   for (const field of item.missing) {
     const answer = decision.answers?.[field.key];
-    if (present(answer)) args = setPath(args, field.key, answer);
+    if (present(answer) && !isLockedArg(field.key.split('.')[0])) args = setPath(args, field.key, answer);
   }
   return args;
 }
