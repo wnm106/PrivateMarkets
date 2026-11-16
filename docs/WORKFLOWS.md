@@ -149,6 +149,6 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 ## Not built yet
 
 - Loops and steps that run side by side. A graph is one path, each step once.
-- Reconciliation and deal setup templates. The engine supports them; only Data cleanup is written.
+- Reconciliation templates beyond the Halyard cash tie-out brief. The engine supports them. Data cleanup proposes fixes. The demo briefs (morning quality, Halyard single-name, Brightwater close, Harbor NAV, CLO coverage, Halyard cash) only report.
 - Assigning a review to a named person, and telling them it is waiting.
 - A time limit on a review.

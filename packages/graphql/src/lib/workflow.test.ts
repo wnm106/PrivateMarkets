@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { asGraph, evaluateCondition, isReadTool, nextNode, resolveTemplates, validateGraph, type WorkflowGraph } from './workflow-graph';
 import { asDecision, checkDecision, finalArgs, normalizeItems, proposalCounts, setPath, withFoundationGaps } from './workflow-proposal';
-import { WORKFLOW_TEMPLATES } from './workflow-templates';
+import { DEMO_WORKFLOWS, WORKFLOW_TEMPLATES } from './workflow-templates';
 
 const cleanup = (): WorkflowGraph => JSON.parse(JSON.stringify(WORKFLOW_TEMPLATES.find((template) => template.code === 'DATA_CLEANUP')!.graph));
 const messages = (graph: WorkflowGraph, tools?: Set<string>) => validateGraph(graph, tools).map((problem) => problem.message);
@@ -9,6 +9,26 @@ const messages = (graph: WorkflowGraph, tools?: Set<string>) => validateGraph(gr
 describe('validateGraph', () => {
   it('accepts every template', () => {
     for (const template of WORKFLOW_TEMPLATES) expect(validateGraph(asGraph(template.graph))).toEqual([]);
+  });
+
+  it('keeps the demo briefs to a report', () => {
+    expect(DEMO_WORKFLOWS.map((template) => template.code)).toEqual([
+      'DEMO_MORNING_QUALITY',
+      'DEMO_HSCF2_CONCENTRATION',
+      'DEMO_BRIGHTWATER_CLOSE',
+      'DEMO_HARBOR_NAV',
+      'DEMO_CLO_COVERAGE',
+      'DEMO_HSCF2_CASH',
+    ]);
+    for (const template of DEMO_WORKFLOWS) {
+      const agents = template.graph.nodes.filter((node) => node.type === 'agent');
+      expect(agents.length).toBeGreaterThan(0);
+      for (const agent of agents) {
+        expect(agent.config.proposable).toEqual(['report-only']);
+        expect(agent.config.provider).toBe('gemini');
+      }
+      expect(template.graph.nodes.some((node) => node.type === 'apply')).toBe(false);
+    }
   });
 
   it('rejects a loop, a dead end, and a step nothing leads to', () => {
