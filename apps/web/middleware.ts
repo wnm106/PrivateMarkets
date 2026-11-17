@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { CLIENT_ADMIN_PERMISSIONS, isPlatformAdminPath } from '@/lib/admin-access';
 import { loginPath, NEXT_PATH_COOKIE, safeNextPath } from '@/lib/safe-next-path';
 
-const PUBLIC_PATHS = ['/welcome', '/login', '/auth/callback', '/no-access'];
+const PUBLIC_PATHS = ['/welcome', '/login', '/auth/callback', '/no-access', '/portal'];
 
 async function adminAccess(supabase: { schema: (name: string) => any }, userId: string) {
   const { data: profile, error: profileError } = await supabase

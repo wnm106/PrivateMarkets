@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { ReviewPanel } from '@/components/workflows/ReviewPanel';
+import { RunChildren, RunForms } from '@/components/workflows/RunForms';
 import { WorkflowCanvas, type CanvasSelection } from '@/components/workflows/WorkflowCanvas';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { usePublishViewContext } from '@/lib/view-context';
@@ -70,7 +71,8 @@ export default function WorkflowRunPage() {
   const selectedNode = selectedNodeId ? run?.graph?.nodes.find((node) => node.id === selectedNodeId) : undefined;
   const selectedStep = selectedNodeId ? run?.steps.find((step) => step.nodeId === selectedNodeId) : undefined;
   const events = (run?.events || []).filter((event) => (actorFilter === 'ALL' || event.actorType === actorFilter) && (!selectedNodeId || event.nodeId === selectedNodeId));
-  const openReview = run?.reviews.find((review) => review.status === 'OPEN');
+  // With a Split, several paths can each be waiting for a review at once.
+  const openReviews = (run?.reviews || []).filter((review) => review.status === 'OPEN');
   const pastReviews = (run?.reviews || []).filter((review) => review.status !== 'OPEN');
   const status = run ? statusOf(run.status) : null;
 
@@ -113,11 +115,18 @@ export default function WorkflowRunPage() {
           )}
           {run.status === 'QUEUED' && <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 8 }}>Waiting for a worker to pick this up. If it stays queued, check that the job worker is running.</div>}
 
-          {openReview && (
-            <div style={{ marginBottom: 16 }}>
-              <ReviewPanel key={openReview.id} review={openReview} canManage={run.canManage === true} onDecided={load} />
+          {typeof run.input.parentRunId === 'string' && (
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 8 }}>
+              One of the runs <Link href={`/workflows/runs/${run.input.parentRunId}`}>a run split by record</Link> started.
             </div>
           )}
+          {openReviews.map((openReview) => (
+            <div key={openReview.id} style={{ marginBottom: 16 }}>
+              <ReviewPanel review={openReview} canManage={run.canManage === true} onDecided={load} />
+            </div>
+          ))}
+          <RunForms runId={run.id} onAnswered={load} />
+          <RunChildren runId={run.id} />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: 12, alignItems: 'start' }}>
             <div style={{ minWidth: 0 }}>

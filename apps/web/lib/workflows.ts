@@ -74,6 +74,8 @@ export interface ReviewView {
   startedByName?: string | null;
   dueAt?: string | null;
   overdue?: boolean;
+  approvalsRequired?: number;
+  approvals?: Array<{ id: string; name: string; at: string }>;
 }
 
 export interface Assignee {
@@ -160,7 +162,7 @@ export interface ToolOption {
 
 const WORKFLOW_FIELDS = `id clientId code name description publishedVersion latestVersion canManage runCount lastRunAt runSetup`;
 const RUN_FIELDS = `id workflowId workflowName version status currentNode errorMessage openReviews createdAt startedAt finishedAt`;
-const REVIEW_FIELDS = `id runId clientId nodeId workflowName title instructions summary proposal counts itemCount status decision decidedAt decidedByName createdAt canReview blocker assignees assignedToMe separateReviewer startedByName dueAt overdue`;
+const REVIEW_FIELDS = `id runId clientId nodeId workflowName title instructions summary proposal counts itemCount status decision decidedAt decidedByName createdAt canReview blocker assignees assignedToMe separateReviewer startedByName dueAt overdue approvalsRequired approvals`;
 
 export const WORKFLOW_HUB_QUERY = `
   query WorkflowHub {

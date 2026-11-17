@@ -11,7 +11,7 @@ import { ImpersonationBanner } from './ImpersonationBanner';
 import { AttributeInspectProvider } from '@/components/detail/AttributeInspect';
 
 /** Routes rendered without the authenticated application chrome. */
-const BARE_PATHS = ['/welcome', '/login', '/no-access'];
+const BARE_PATHS = ['/welcome', '/login', '/no-access', '/portal'];
 
 export function AppChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || '/';

@@ -49,6 +49,7 @@ Optional settings: `WORKER_CONCURRENCY` (runs side by side, default 5), `WORKER_
 | `workflow.advance` | One client | none | Where the run got to: finished, failed, or waiting for a person. Not put on a schedule. Queued when a run starts and when a review is decided. |
 | `workflow.reviews_due` | Platform | none | How many reviews became overdue, how many people were told, and how many undelivered notes were queued again. Runs every 15 minutes from the `WORKFLOW_REVIEWS_DUE` schedule, which the migration creates. |
 | `workflow.triggers` | Platform | none | How many triggers were checked, how many started a run, and how many were waiting on a run already going. Queued when a feed or data quality scan event is written, and every 5 minutes from the `WORKFLOW_TRIGGERS` schedule, which the migration creates. See [WORKFLOWS.md](WORKFLOWS.md). |
+| `notify.deliver` | One client | `eventId` | How many emails and Slack posts were sent, and what was skipped and why. Queued with each review notice when the client sends by email or Slack. Not put on a schedule. A failed send fails the run so it is tried again; what was sent is not sent twice. |
 
 `assistant.brief` and `assistant.watch` run as the person the note is for. See [who a job runs as](#who-a-job-runs-as). What they follow, and when the summary is sent, is set at Assistant, not on this page. A summary is not sent when nothing they follow has changed.
 

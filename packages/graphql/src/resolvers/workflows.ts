@@ -94,6 +94,8 @@ export function mapReview(row: Row) {
     startedByName: row.started_by_name || null,
     dueAt: row.due_at || null,
     overdue: row.status === 'OPEN' && typeof row.due_at === 'string' && Date.parse(row.due_at) < Date.now(),
+    approvalsRequired: typeof row.approvals_required === 'number' ? row.approvals_required : 1,
+    approvals: Array.isArray(row.approval_names) ? row.approval_names : [],
   };
 }
 
@@ -115,6 +117,41 @@ export function mapTrigger(row: Row) {
     lastJob: row.last_job ?? null,
     canManage: row.can_manage === true,
     createdAt: row.created_at,
+  };
+}
+
+export function mapForm(row: Row) {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    nodeId: row.node_id,
+    workflowName: row.workflow_name || null,
+    title: row.title,
+    instructions: row.instructions || null,
+    fields: Array.isArray(row.fields) ? row.fields : [],
+    status: row.status,
+    answers: row.answers ?? null,
+    note: row.note || null,
+    externalEmail: row.external_email || null,
+    linkActive: row.link_active === true,
+    assignees: Array.isArray(row.assignees) ? row.assignees : [],
+    canAnswer: row.can_answer === true,
+    blocker: typeof row.blocker === 'string' ? row.blocker : null,
+    submittedByName: row.submitted_by_name || row.submitted_by_external || null,
+    submittedAt: row.submitted_at || null,
+    dueAt: row.due_at || null,
+    createdAt: row.created_at,
+  };
+}
+
+export function mapNotificationSettings(row: Row) {
+  return {
+    emailEnabled: row.email_enabled === true,
+    slackConfigured: row.slack_configured === true,
+    canManage: row.can_manage === true,
+    sentLast7Days: Number(row.sent_last_7_days) || 0,
+    failedLast7Days: Number(row.failed_last_7_days) || 0,
+    updatedAt: row.updated_at || null,
   };
 }
 
@@ -244,6 +281,48 @@ export const workflowResolvers = {
       const { data, error } = await context.supabase.rpc('workflow_triggers_list', { p_workflow_id: args.workflowId });
       if (error) throw error;
       return ((data as Row[] | null) || []).map(mapTrigger);
+    },
+
+    workflowForms: async (_: unknown, args: { status?: string | null; runId?: string | null }, context: Context) => {
+      const { data, error } = await context.supabase.rpc('workflow_forms_list', {
+        p_status: args.status === undefined ? 'OPEN' : args.status,
+        p_run_id: args.runId || null,
+      });
+      if (error) throw error;
+      return ((data as Row[] | null) || []).map(mapForm);
+    },
+
+    workflowRunChildren: async (_: unknown, args: { runId: string }, context: Context) => {
+      const { data, error } = await context.supabase.rpc('workflow_run_children', { p_run_id: args.runId });
+      if (error) throw error;
+      return ((data as Row[] | null) || []).map((row) => ({
+        id: row.id,
+        status: row.status,
+        input: row.input ?? {},
+        createdAt: row.created_at,
+        finishedAt: row.finished_at || null,
+        openReviews: Number(row.open_reviews) || 0,
+      }));
+    },
+
+    workflowPortalForm: async (_: unknown, args: { token: string }, context: Context) => {
+      // Only a well-formed token is looked up; anything else is simply not found.
+      if (!/^[0-9a-f]{48}$/.test(String(args.token || ''))) return null;
+      const { data, error } = await context.supabase.rpc('workflow_portal_get', { p_token: args.token });
+      if (error) throw error;
+      return data ?? null;
+    },
+
+    workflowAnalytics: async (_: unknown, args: { days?: number | null }, context: Context) => {
+      const { data, error } = await context.supabase.rpc('workflow_analytics', { p_days: args.days ?? 30 });
+      if (error) throw error;
+      return data ?? { days: args.days ?? 30, workflows: [] };
+    },
+
+    notificationSettings: async (_: unknown, __: unknown, context: Context) => {
+      const { data, error } = await context.supabase.rpc('notification_settings_get');
+      if (error) throw error;
+      return mapNotificationSettings((data as Row) || {});
     },
 
     workflowReviewerChoices: async (_: unknown, args: { clientId?: string | null }, context: Context) => {
@@ -431,6 +510,47 @@ export const workflowResolvers = {
         return { trigger: mapTrigger(data as Row), errors: [] };
       } catch (error) {
         return { trigger: null, errors: [failure(error, 'TRIGGER_SAVE_FAILED')] };
+      }
+    },
+
+    submitWorkflowForm: async (_: unknown, args: { id: string; outcome: string; answers?: unknown; note?: string | null }, context: Context) => {
+      try {
+        const outcome = String(args.outcome || '').toUpperCase();
+        const { data, error } = await context.supabase.rpc('workflow_form_submit', {
+          p_form_id: args.id,
+          p_outcome: outcome,
+          p_answers: args.answers && typeof args.answers === 'object' && !Array.isArray(args.answers) ? args.answers : {},
+          p_note: args.note ?? null,
+        });
+        if (error) throw error;
+        return { form: mapForm(data as Row), errors: [] };
+      } catch (error) {
+        return { form: null, errors: [failure(error, 'FORM_SUBMIT_FAILED')] };
+      }
+    },
+
+    submitWorkflowPortalForm: async (_: unknown, args: { token: string; outcome: string; answers?: unknown; note?: string | null }, context: Context) => {
+      if (!/^[0-9a-f]{48}$/.test(String(args.token || ''))) return { success: false, errors: [{ field: 'token', message: 'This link is not valid.', code: 'NOT_FOUND' }] };
+      const { error } = await context.supabase.rpc('workflow_portal_submit', {
+        p_token: args.token,
+        p_outcome: String(args.outcome || '').toUpperCase(),
+        p_answers: args.answers && typeof args.answers === 'object' && !Array.isArray(args.answers) ? args.answers : {},
+        p_note: args.note ?? null,
+      });
+      if (error) return { success: false, errors: [failure(error, 'FORM_SUBMIT_FAILED')] };
+      return { success: true, errors: [] };
+    },
+
+    saveNotificationSettings: async (_: unknown, args: { emailEnabled: boolean; slackWebhookUrl?: string | null }, context: Context) => {
+      try {
+        const { data, error } = await context.supabase.rpc('notification_settings_save', {
+          p_email_enabled: args.emailEnabled === true,
+          p_slack_webhook_url: args.slackWebhookUrl === undefined ? null : args.slackWebhookUrl ?? null,
+        });
+        if (error) throw error;
+        return { settings: mapNotificationSettings((data as Row) || {}), errors: [] };
+      } catch (error) {
+        return { settings: null, errors: [failure(error, 'NOTIFICATION_SAVE_FAILED')] };
       }
     },
 

@@ -10,7 +10,7 @@
  *   human   the run waits for a person to review what was proposed
  */
 
-export type NodeType = 'start' | 'tool' | 'agent' | 'review' | 'apply' | 'branch' | 'end';
+export type NodeType = 'start' | 'tool' | 'agent' | 'review' | 'apply' | 'branch' | 'parallel' | 'join' | 'http' | 'message' | 'form' | 'end';
 export type NodeKind = 'fixed' | 'agent' | 'human';
 
 export interface WorkflowNode {
@@ -86,8 +86,68 @@ export const NODE_TYPES: readonly NodeTypeDef[] = [
     outcomes: ['true', 'false'],
     defaultConfig: { path: '', op: 'truthy', value: null },
   },
+  {
+    type: 'parallel',
+    label: 'Split',
+    kind: 'fixed',
+    description: 'Starts every path that leaves it. The paths go on side by side: one waiting for a person does not hold up the others.',
+    outcomes: [],
+    defaultConfig: {},
+  },
+  {
+    type: 'join',
+    label: 'Join',
+    kind: 'fixed',
+    description: 'Waits until no path that could still reach it is running, then goes on once.',
+    outcomes: [],
+    defaultConfig: {},
+  },
+  {
+    type: 'form',
+    label: 'Ask for information',
+    kind: 'human',
+    description: 'Asks a person for values on a form and waits for the answer. The form can go to someone outside the firm by a private link.',
+    outcomes: ['submitted', 'declined'],
+    defaultConfig: { title: 'Information needed', instructions: '', fields: [], people: [], roles: [], external: false, externalEmail: '', dueInHours: null },
+  },
+  {
+    type: 'http',
+    label: 'Call a connection',
+    kind: 'fixed',
+    description: 'Sends a request to one of the client\'s connections, with its stored credentials. Only connection addresses can be called.',
+    outcomes: [],
+    defaultConfig: { connection: '', method: 'POST', path: '', body: {}, allowSend: false },
+  },
+  {
+    type: 'message',
+    label: 'Send a message',
+    kind: 'fixed',
+    description: 'Sends an email or a Slack message written from the run. Use it after a review when what is sent needs approving.',
+    outcomes: [],
+    defaultConfig: { channel: 'email', to: [], subject: '', body: '', allowSend: false },
+  },
   { type: 'end', label: 'End', kind: 'fixed', description: 'The run finishes here.', outcomes: [], defaultConfig: {} },
 ];
+
+/** Whether `to` can be reached from `from` by following connections. */
+export function reaches(graph: WorkflowGraph, from: string, to: string): boolean {
+  const seen = new Set<string>();
+  const stack = [from];
+  while (stack.length > 0) {
+    const current = stack.pop() as string;
+    if (current === to) return true;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    for (const edge of graph.edges) if (edge.from === current) stack.push(edge.to);
+  }
+  return false;
+}
+
+/** The steps a Split starts: every connection leaving it. */
+export function splitTargets(graph: WorkflowGraph, nodeId: string): WorkflowNode[] {
+  const ids = [...new Set(graph.edges.filter((edge) => edge.from === nodeId).map((edge) => edge.to))];
+  return ids.map((id) => graph.nodes.find((node) => node.id === id)).filter((node): node is WorkflowNode => Boolean(node));
+}
 
 export function nodeTypeDef(type: string): NodeTypeDef | null {
   return NODE_TYPES.find((def) => def.type === type) || null;
@@ -241,8 +301,45 @@ export function validateGraph(graph: WorkflowGraph, toolNames?: ReadonlySet<stri
         if (count > 1) problems.push({ nodeId: node.id, message: `More than one connection follows "${outcome}".` });
         if (count === 0 && !any) problems.push({ nodeId: node.id, message: `Nothing follows when the outcome is "${outcome}".` });
       }
+    } else if (node.type === 'parallel') {
+      if (out.length < 2) problems.push({ nodeId: node.id, message: 'A Split starts two or more paths. Connect it to each.' });
+      if (out.some((edge) => edge.when)) problems.push({ nodeId: node.id, message: 'Every path from a Split is taken. Remove the outcomes on its connections.' });
     } else if (out.length > 1) {
-      problems.push({ nodeId: node.id, message: 'This step has one outcome, so only one connection can leave it. Use a Condition step to split the path.' });
+      problems.push({ nodeId: node.id, message: 'This step has one outcome, so only one connection can leave it. Use a Condition to choose a path, or a Split to take several.' });
+    }
+    if (node.type === 'join' && graph.edges.filter((edge) => edge.to === node.id).length < 2) {
+      problems.push({ nodeId: node.id, message: 'A Join brings two or more paths together. Connect each path into it.' });
+    }
+    if (node.type === 'http') {
+      if (!String(node.config.connection || '').trim()) problems.push({ nodeId: node.id, message: 'Choose the connection this step calls.' });
+      if (!['GET', 'POST', 'PUT', 'PATCH'].includes(String(node.config.method || 'POST').toUpperCase())) problems.push({ nodeId: node.id, message: 'The method is GET, POST, PUT, or PATCH.' });
+      if (String(node.config.method || 'POST').toUpperCase() !== 'GET' && node.config.allowSend !== true) {
+        problems.push({ nodeId: node.id, message: 'This step sends data outside the platform. Tick "This step sends data outside" to allow it.' });
+      }
+    }
+    if (node.type === 'message') {
+      if (!['email', 'slack'].includes(String(node.config.channel || ''))) problems.push({ nodeId: node.id, message: 'A message goes by email or to Slack.' });
+      if (node.config.channel === 'email' && !(Array.isArray(node.config.to) ? node.config.to.length > 0 : String(node.config.to || '').trim())) {
+        problems.push({ nodeId: node.id, message: 'Say who the email goes to.' });
+      }
+      if (!String(node.config.body || '').trim()) problems.push({ nodeId: node.id, message: 'Write the message.' });
+      if (node.config.allowSend !== true) problems.push({ nodeId: node.id, message: 'This step sends a message outside the platform. Tick "This step sends data outside" to allow it.' });
+    }
+    if (node.type === 'form') {
+      const fields = Array.isArray(node.config.fields) ? (node.config.fields as Array<Record<string, unknown>>) : [];
+      if (fields.length === 0) problems.push({ nodeId: node.id, message: 'Add at least one field to the form.' });
+      const keys = new Set<string>();
+      for (const field of fields) {
+        const key = String(field.key || '');
+        if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(key)) problems.push({ nodeId: node.id, message: `"${key}" is not a usable field key. Use letters, digits, and _.` });
+        else if (keys.has(key)) problems.push({ nodeId: node.id, message: `Two fields share the key "${key}".` });
+        keys.add(key);
+        if (!['text', 'number', 'date', 'choice', 'yesno', 'longtext'].includes(String(field.type || 'text'))) problems.push({ nodeId: node.id, message: `"${key}" has a type the form does not know.` });
+        if (field.type === 'choice' && !(Array.isArray(field.options) && field.options.length > 0)) problems.push({ nodeId: node.id, message: `"${key}" is a choice with nothing to choose from.` });
+      }
+      if (node.config.external === true && !String(node.config.externalEmail || '').trim()) {
+        problems.push({ nodeId: node.id, message: 'Say who outside the firm the form goes to.' });
+      }
     }
 
     const upstream = upstreamOf(graph, node.id);
@@ -272,6 +369,13 @@ export function validateGraph(graph: WorkflowGraph, toolNames?: ReadonlySet<stri
       const placeholder = typeof due === 'string' && WHOLE.test(due.trim());
       if (due !== undefined && due !== null && due !== '' && !placeholder && !(Number(due) > 0)) {
         problems.push({ nodeId: node.id, message: 'The time to review must be a number of hours above zero, or left blank.' });
+      }
+      const approvals = node.config.approvals;
+      if (approvals !== undefined && approvals !== null && approvals !== '' && !(Number.isInteger(Number(approvals)) && Number(approvals) >= 1 && Number(approvals) <= 5)) {
+        problems.push({ nodeId: node.id, message: 'Approvals needed must be a whole number from 1 to 5.' });
+      }
+      if (node.config.reassignWhenOverdue === true && (!Array.isArray(node.config.escalateRoles) || node.config.escalateRoles.length === 0 || !node.config.dueInHours)) {
+        problems.push({ nodeId: node.id, message: 'Handing an overdue review on needs hours to review and at least one role under "Also tell when overdue".' });
       }
     }
     if (node.type === 'apply') {
@@ -401,6 +505,10 @@ export interface ReviewRouting {
   dueInHours: number | null;
   /** Role codes also told when the review is overdue. */
   escalateRoles: string[];
+  /** How many different people must approve. 1 to 5. */
+  approvals: number;
+  /** Hand an overdue review to the escalation roles, as well as telling them. */
+  reassignWhenOverdue: boolean;
 }
 
 function textList(value: unknown): string[] {
@@ -426,5 +534,7 @@ export function reviewRouting(config: Record<string, unknown>, scope?: RunScope)
     separateReviewer: config.separateReviewer !== false,
     dueInHours: Number.isFinite(hours) && hours > 0 ? hours : null,
     escalateRoles: textList(fill(config.escalateRoles)).map((code) => code.toUpperCase()),
+    approvals: Math.min(5, Math.max(1, Math.floor(Number(fill(config.approvals)) || 1))),
+    reassignWhenOverdue: config.reassignWhenOverdue === true,
   };
 }

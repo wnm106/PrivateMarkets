@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { LoadedRun, ReviewRow, StepRow, WorkflowStore } from './engine';
+import type { FormRow, LoadedRun, ReviewRow, StepRow, WorkflowStore } from './engine';
 
 /**
  * The workflow store on Supabase. Every call is one of the workflow_worker_*
@@ -31,6 +31,20 @@ export function toReview(row: Row): ReviewRow {
       ? (row.unassignable as Row[]).map((entry) => ({ person: String(entry.person ?? ''), reason: String(entry.reason ?? '') }))
       : undefined,
     dueAt: text(row.due_at),
+  };
+}
+
+export function toForm(row: Row): FormRow {
+  return {
+    id: String(row.id),
+    status: String(row.status),
+    answers: row.answers && typeof row.answers === 'object' ? (row.answers as Record<string, unknown>) : null,
+    note: text(row.note),
+    created: row.created === true,
+    token: text(row.token),
+    externalEmail: text(row.external_email),
+    title: String(row.title || 'Information needed'),
+    submittedBy: text(row.submitted_by),
   };
 }
 
@@ -97,6 +111,15 @@ export function supabaseWorkflowStore(supabase: SupabaseClient, leaseSeconds = 9
       });
       if (!row) throw new Error('The review could not be opened.');
       return toReview(row);
+    },
+    async spawn(runId, inputs) {
+      const ids = await call<unknown[] | null>('workflow_worker_spawn', { p_parent_run_id: runId, p_inputs: inputs });
+      return (ids || []).map(String);
+    },
+    async openForm(runId, nodeId, spec) {
+      const row = await call<Row | null>('workflow_worker_form', { p_run_id: runId, p_node_id: nodeId, p_spec: spec });
+      if (!row) throw new Error('The form could not be opened.');
+      return toForm(row);
     },
   };
 }

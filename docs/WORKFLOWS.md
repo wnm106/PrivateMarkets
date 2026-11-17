@@ -6,11 +6,11 @@ Three kinds of step, drawn in three colours everywhere a workflow is shown:
 
 | Kind | Steps | What it does |
 |---|---|---|
-| Fixed | Run a tool, Condition, Apply approved changes, Start, End | The same thing every run |
+| Fixed | Run a tool, Condition, Split, Join, Apply approved changes, Call a connection, Send a message, Start, End | The same thing every run |
 | Agent | Agent | A model reads with the tools the step lists and proposes changes. It has no tool that changes data |
-| Human | Human review | The run stops until a person approves or rejects what was proposed |
+| Human | Human review, Ask for information | The run stops until a person approves what was proposed, or answers a form |
 
-The rule the engine keeps: **an agent proposes, a person approves, a fixed step applies.** The only other way to change data is a Run a tool step whose author ticked "This step may change data".
+The rule the engine keeps: **an agent proposes, a person approves, a fixed step applies.** The only other way to change data is a Run a tool step whose author ticked "This step may change data". The only way to send data outside the platform is a Call a connection or Send a message step whose author ticked "This step sends data outside".
 
 ## Parts
 
@@ -20,6 +20,9 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 | Service accounts | `supabase/migrations/20261116130000_workflow_service_accounts.sql` | Which user each client's steps run as, the Workflow Service role, and the checks on people |
 | Who reviews | `supabase/migrations/20261117010000_workflow_review_routing.sql`, `apps/web/components/workflows/ReviewerPicker.tsx` | Who a review is for, keeping the starter apart, due dates, and reassigning |
 | Review notices | `supabase/migrations/20261117020000_workflow_review_notices.sql`, `packages/worker/src/assistant.ts` | Telling people a review is waiting or overdue |
+| Approvals, delivery | `supabase/migrations/20261117040000_workflow_review_approvals.sql`, `20261117050000_notification_delivery.sql`, `packages/worker/src/notify.ts` | More than one approval, handing an overdue review on, and sending notices by email and Slack |
+| Forms, split runs, outbound | `supabase/migrations/20261117070000_workflow_forms_and_outbound.sql`, `packages/worker/src/workflow/outbound.ts`, `apps/web/app/portal` | Ask for information, the portal, one run per record, Call a connection, Send a message |
+| Analytics | `supabase/migrations/20261117080000_workflow_analytics.sql`, `apps/web/app/workflows/analytics` | How each workflow is doing |
 | Triggers | `supabase/migrations/20261117030000_workflow_triggers.sql`, `apps/web/components/workflows/WorkflowTriggers.tsx` | Starting a workflow when a feed event arrives or a data quality scan finds new failures |
 | Tables and functions | `supabase/migrations/20261116120000_workflows.sql` | `ops.workflows`, `workflow_versions`, `workflow_runs`, `workflow_steps`, `workflow_events`, `workflow_reviews`, reached only through the `workflow_*` functions |
 | Record filters | `packages/graphql/src/lib/workflow-filters.ts`, `packages/mcp-server/src/tools/selection-tools.ts` | The filters a run is started with, and the step that turns them into the records it works on |
@@ -109,7 +112,9 @@ Two cases are kept apart all the way down:
 
 Select records also reports any code or id that matched nothing, and says when the filters match more records than the limit. A selected record a workflow does not apply to is left out and named: a position passed to Fund reconciliation is listed as not a fund.
 
-An agent works through the selected records in one step, within its round limit, and everything it proposes goes to one review. For a large selection, start several runs with narrower filters. A run does not yet split itself up.
+An agent works through the selected records in one step, within its round limit, and everything it proposes goes to one review.
+
+For a large selection, tick **One run per record** on the Start step. A run started on several records then starts one run for each record, up to 500, each with filters naming that record, and ends. Each run has its own agent pass and its own review, so reviewers approve record by record and one record's problem does not hold up the rest. The parent run's page lists them; each says it came from a split run. Records must be chosen: a run with no filters is refused.
 
 The templates, all built this way:
 
@@ -136,6 +141,9 @@ New workflow offers the templates. The editor is a canvas: add steps from the ba
 - Publishing a version makes it the one new runs use. A run keeps the version it started on.
 - Try it runs the version on screen without publishing it.
 - A workflow runs each step once. There are no loops.
+- **Split** starts every path leaving it. The paths go on side by side: a path waiting for a review or a form does not hold up the others. **Join** brings paths back together; it goes on once no path that could still reach it is running, so a path a Condition sent elsewhere is not waited for. A run waits when every path left is waiting, and finishes when no path is left and one reached End. The worker still runs one step at a time; side by side means no path waits on another.
+- **Compare** what is on screen with any version, under the editor: steps added, removed, renamed, or with changed settings, and connections added or removed. Where a step sits on the canvas is not a change.
+- **Export** downloads the workflow as a file; **Import** on `/workflows` makes a new, unpublished workflow from one. This is how a workflow moves from one environment to another. People named on review and form steps are left out, since people differ between environments; roles are kept.
 
 A step's settings can read the run's input and any earlier step's result: `{{input.limit}}`, `{{steps.scan.totalCount}}`. Which records a step works on comes from Select records, not from the input. A setting that is only a placeholder keeps its type, so a number stays a number. A setting whose value is missing is left out, and the tool uses its own default.
 
@@ -295,6 +303,8 @@ A Human review step says who may decide it:
 | The person who started the run cannot review it | On by default. For a scheduled run, the starter is whoever created the schedule. Turn it off only for a client with one reviewer |
 | Hours to review | Gives the review a due date. It shows as due, then overdue. When it passes, the reviewers are told once. Nothing is decided |
 | Also tell when overdue | Roles whose holders are told too when the review passes its due date, so they can chase or reassign it |
+| When it is overdue, hand it to those roles | The review is reassigned to the escalation roles when it passes its due date, as well as them being told |
+| Approvals needed | How many different people must approve, 1 to 5. Each approves the same set of changes. Anyone who may decide can reject, and that ends the review. If a later approver changes what is approved, the count starts again from them. The review shows who has approved and how many more are needed |
 
 The database holds every decision to these rules, in `ops.workflow_review_blocker`. The page and the API only show what it says, so the same reason appears on the review, in the list, and when a decision is refused: "You started this run, so someone else has to review it", or "This review is assigned to Operations lead". A tenant admin is held to them too.
 
@@ -316,6 +326,8 @@ Nobody has to watch the list. A review is announced as a note in each person's a
 
 On the home page, a review you can decide is under Needs you. An overdue one goes to the top, marked as when it was due.
 
+**Email and Slack.** Under **Review notices** on `/workflows`, someone who manages workflows can also send each notice by email to the reviewer's sign-in address, and to one Slack channel by its incoming webhook. Email needs `RESEND_API_KEY` and `NOTIFY_EMAIL_FROM` on the worker, and `APP_URL` for full links. Only a `https://hooks.slack.com/` address is accepted, and it is never shown again once saved. Each notice queues `notify.deliver`, which records every send; a recipient already sent to is not sent to again, and a failed send is tried again.
+
 The overdue notices come from the platform job `workflow.reviews_due`, on a schedule the migration creates (`WORKFLOW_REVIEWS_DUE`, every 15 minutes). The same job sends again any note that was not delivered in the last two weeks, to anyone still in that client and in no other. A note about a review that has been decided since is not sent. Each notice is also kept in the run's history.
 
 Underneath, a notice is an `ops.activity_events` row with `recipients` set, in `supabase/migrations/20261117020000_workflow_review_notices.sql`. Any other part of the platform can address a note to people the same way.
@@ -330,6 +342,30 @@ The review shows the agent's own summary, then a table of every proposed change 
 - Apply is enabled once every change has a decision.
 
 Approving records the decision and the run continues down its `approved` path. Rejecting everything, or approving nothing, takes the `rejected` path.
+
+## Asking for information
+
+**Ask for information** puts a form in front of a person and waits. A field is text, long text, number, date, a choice, or yes or no, and can be required. Later steps read the answers as `{{steps.<step>.answers.<key>}}`. The step has two outcomes, submitted and declined; a decline needs a note.
+
+| Who answers | How |
+|---|---|
+| People or roles in the client | The form shows under Forms waiting on `/workflows` and on the run's page, for those people. Blank means anyone with `workflow.review` |
+| Someone outside the firm | A private link to `/portal/<token>`, emailed to the address the step names when the worker can send email. Otherwise the link is kept in the run's history for someone in the firm to pass on. Someone who manages workflows can also answer for them |
+
+The portal needs no sign-in: the link is the key. Its token is random, only its SHA-256 is stored, it expires in 14 days, and it stops working once the form is answered. It shows the form's title, instructions, fields, due date, and the client's name, and nothing else. Answers are checked against the fields in the page and again in the database. Cancelling the run closes its forms.
+
+## Sending outside the platform
+
+Two fixed steps send data out. Each needs its author to tick **This step sends data outside**. Put them after a review when what is sent needs approving.
+
+| Step | Sends |
+|---|---|
+| Call a connection | A GET, POST, PUT, or PATCH to one of the client's HTTP connections (set up under Load data), with its stored credential. The path is added to the connection's address and cannot leave it. https only, no private or internal hosts, no redirects, 30 seconds at most. The response is the step's result |
+| Send a message | An email to up to 50 addresses, or a post to the client's Slack channel. The text is written from the run with placeholders. Email needs the worker's email settings |
+
+## Analytics
+
+`/workflows/analytics` shows, per workflow over the last 7, 30, 90, or 365 days: runs and how they finished, the typical and slowest-10% run time, how long reviews typically take, how many went overdue, the share of proposed changes approved, the three slowest steps with their failures, and the commonest failure.
 
 ## Who a step runs as
 
@@ -389,12 +425,14 @@ A trigger starts a workflow when a feed event arrives, or when a data quality sc
 |---|---|---|
 | A data quality scan finds new failures | A `dq.scan` finds records that began failing a rule, or lost a required value, since the day before | Severity, rule codes, types of record |
 | A feed does something | A feed loads a file, has one waiting for review, fails, or is late | Which of those, feed codes |
+| A compliance rule is breached | A soft or hard breach where the result before it, for the same rule, record, and grouping, was not a breach | Rule codes, soft or hard |
+| A value changes | A new current value is recorded for one of the attributes the trigger names | 1 to 20 attribute codes (required), types of record |
 
 Data quality is checked live, and the exceptions table holds only failures a person accepted. So "new" comes from the scan, which compares each record with the day before. Each `dq.scan` that finds something new records one `DQ_NEW_FAILURES` event listing those records (up to 500), with the rules they fail. Schedule the scan once a day: a second scan the same day reports the same new failures again.
 
 Events are not acted on one at a time. Everything new since the trigger last fired goes into **one run**, up to 500 events or records. A scan that finds 300 records failing starts one run, not 300.
 
-- **What the run covers.** A run started by data quality failures is given those records as `filters.entityIds`, added to any filters in the trigger's input, so Select records picks them and nothing else. A record fits when one of its failing rules matches the trigger's severities and rule codes. A record that only lost a required value has no rule, so it fits only a trigger that names no severity or rule. A run started by a feed gets the trigger's input as it is, like a schedule's.
+- **What the run covers.** A run started by data quality failures, a breach, or a value change is given those records as `filters.entityIds`, added to any filters in the trigger's input, so Select records picks them and nothing else. A record fits when one of its failing rules matches the trigger's severities and rule codes. A record that only lost a required value has no rule, so it fits only a trigger that names no severity or rule. A run started by a feed gets the trigger's input as it is, like a schedule's.
 - **What started it.** Steps can read `{{input.trigger}}`: the trigger's name, its source, how many events or records there were, and up to 50 of them (the record, its rules and severities, and how many required values it lost; or the feed, file, and what happened).
 - **One run at a time.** While a run a trigger started is queued, running, or waiting for a review, the trigger starts nothing. New events wait, and the next run takes all of them. The trigger's line on the page says so.
 - **Who it runs as.** Runs start as whoever last saved the trigger, through the same `workflow.start` job a schedule uses, with the same checks. If that person can no longer run workflows, the start fails and the trigger shows why.
@@ -419,14 +457,13 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 
 ## Not built yet
 
-- Loops and steps that run side by side. A graph is one path, each step once.
+- Loops. A graph runs each step once.
+- Steps on parallel paths running at the same moment. Paths do not wait on one another, but the worker runs one step at a time.
 - A deal setup template. The engine supports it.
-- Splitting a large selection into several runs, or one run per record. A run works through its whole selection in one pass.
 - Filtering by an attribute's value (every fund of one strategy). Filters are by type, code, id, and name.
-- Starting a workflow when a record's value changes, or when a compliance breach opens. Triggers watch feeds and data quality scans.
 - Run workflow on rows selected in a list. Lists have no row selection; it is on each record's page.
 - Checking the notes against the reconciliation after a reviewer rejects a change. The stored outcome line is the check.
-- Telling a reviewer by email or another messaging service. Notes go to the assistant briefing in the app.
-- Acting on an overdue review. People are told; nothing is reassigned or decided by itself.
 - Choosing an escalation role that does not grant `workflow.review`. The editor offers only roles that do, though the database accepts any.
-- More than one approval on a review (two people, or one after another).
+- Approvals in a set order (first a preparer, then a checker). Approvals are counted, in any order.
+- A form field that is a file upload.
+- Promoting a workflow between environments in one step. Export and Import move it as a file.

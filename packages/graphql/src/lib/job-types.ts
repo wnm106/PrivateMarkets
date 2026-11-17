@@ -133,6 +133,15 @@ export const JOB_TYPES: readonly JobTypeDef[] = [
     payloadExample: {},
   },
   {
+    code: 'notify.deliver',
+    label: 'Send a notice',
+    description:
+      'Sends one review notice by email and to Slack, on the channels the client turned on. Queued with each notice. Email needs RESEND_API_KEY and NOTIFY_EMAIL_FROM on the worker.',
+    scope: 'CLIENT',
+    payloadExample: { eventId: '' },
+    schedulable: false,
+  },
+  {
     code: 'workflow.advance',
     label: 'Advance a workflow run',
     description: 'Moves one workflow run forward until it finishes, fails, or waits for a person. Queued when a run starts and when a review is decided.',

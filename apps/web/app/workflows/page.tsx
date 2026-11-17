@@ -3,7 +3,10 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { NotificationSettings } from '@/components/workflows/NotificationSettings';
+import { RunForms } from '@/components/workflows/RunForms';
 import { StartRunDialog } from '@/components/workflows/StartRunDialog';
+import { freeCode, readExport } from '@/lib/workflow-versions';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { usePublishViewContext } from '@/lib/view-context';
 import {
@@ -82,6 +85,33 @@ export default function WorkflowsPage() {
     router.push(`/workflows/${data.saveWorkflow.workflow.id}`);
   };
 
+  // A workflow exported from another environment becomes a new workflow here, unpublished.
+  const importFile = async (text: string) => {
+    const read = readExport(text);
+    if (!read.ok) {
+      setMessage(read.message);
+      return;
+    }
+    setBusy(true);
+    const code = freeCode(read.value.code, new Set((hub?.workflows || []).map((workflow) => workflow.code)));
+    const { data, error } = await graphqlMutation<{ saveWorkflow: { workflow: { id: string } | null; errors: MutationErrors } }>(SAVE_WORKFLOW, {
+      input: {
+        name: read.value.name,
+        code,
+        description: read.value.description,
+        graph: read.value.graph,
+        changeNote: `Imported from a file${read.value.exportedFromVersion ? ` (version ${read.value.exportedFromVersion} there)` : ''}`,
+      },
+    });
+    setBusy(false);
+    const problem = error?.message || data?.saveWorkflow.errors[0]?.message;
+    if (problem || !data?.saveWorkflow.workflow) {
+      setMessage(problem || 'The workflow could not be imported.');
+      return;
+    }
+    router.push(`/workflows/${data.saveWorkflow.workflow.id}`);
+  };
+
   const reviews = hub?.workflowReviews || [];
   // Yours to decide come first; the server already orders by due date within each group.
   const yours = reviews.filter((review) => review.canReview);
@@ -105,9 +135,20 @@ export default function WorkflowsPage() {
             </div>
           </div>
         </div>
-        <button type="button" className="btn btn-primary" style={{ whiteSpace: 'nowrap' }} onClick={() => setPicking(!picking)} disabled={!hub}>
-          New workflow
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Link href="/workflows/analytics" className="btn" style={{ whiteSpace: 'nowrap' }}>Analytics</Link>
+          <label className="btn" style={{ whiteSpace: 'nowrap', cursor: hub && !busy ? 'pointer' : 'default' }} title="Import a workflow exported from another environment">
+            Import
+            <input type="file" accept="application/json,.json" style={{ display: 'none' }} disabled={!hub || busy} onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void file.text().then(importFile);
+            }} />
+          </label>
+          <button type="button" className="btn btn-primary" style={{ whiteSpace: 'nowrap' }} onClick={() => setPicking(!picking)} disabled={!hub}>
+            New workflow
+          </button>
+        </div>
       </div>
 
       {message && <div role="alert" style={{ color: 'var(--red)', margin: '12px 0' }}>{message}</div>}
@@ -157,6 +198,10 @@ export default function WorkflowsPage() {
               )}
             </div>
           )}
+
+          <RunForms />
+
+          <NotificationSettings />
 
           <div style={sectionTitle}>Workflows</div>
           {hub.workflows.length === 0 ? (

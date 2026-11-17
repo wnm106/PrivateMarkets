@@ -3,7 +3,7 @@ import { WORKFLOW_TEMPLATES } from '@tapestrai/graphql/src/lib/workflow-template
 import type { ReviewRouting } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { normalizeItems } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { runAgentStep, type AgentModel, type ModelTurn } from './agent';
-import { RunBusyError, advanceRun, message, type Actor, type AgentRequest, type EngineDeps, type LoadedRun, type ReviewRow, type StepRow, type WorkflowStore } from './engine';
+import { RunBusyError, advanceRun, message, type Actor, type AgentRequest, type EngineDeps, type FormRow, type LoadedRun, type ReviewRow, type StepRow, type WorkflowStore } from './engine';
 import { checkListValues } from './list-check';
 import { signReason, workflowTools } from './tools';
 
@@ -15,6 +15,8 @@ function memoryStore(graph: unknown, input: Record<string, unknown> = {}) {
   const steps = new Map<string, StepRow>();
   const reviews: ReviewRow[] = [];
   const routings: ReviewRouting[] = [];
+  const spawned: Array<Record<string, unknown>> = [];
+  const forms: Array<FormRow & { nodeId: string }> = [];
   const events: Array<{ nodeId: string | null; type: string; actor: string; actorId: string | null; summary: string }> = [];
   const store: WorkflowStore = {
     async load(_runId, owner): Promise<LoadedRun | 'busy' | 'done' | null> {
@@ -46,6 +48,18 @@ function memoryStore(graph: unknown, input: Record<string, unknown> = {}) {
     async event(_runId, nodeId, type, actor, actorId, summary) {
       events.push({ nodeId, type, actor, actorId, summary });
     },
+    async spawn(_runId, inputs) {
+      spawned.push(...inputs);
+      return inputs.map((_, index) => `child-${index + 1}`);
+    },
+    async openForm(_runId, nodeId, spec) {
+      const existing = forms.find((form) => form.nodeId === nodeId);
+      if (existing) return { ...existing, created: false, token: null };
+      const form = { nodeId, id: `form-${nodeId}`, status: 'OPEN', answers: null, note: null, created: true, token: spec.external ? 'a'.repeat(48) : null,
+        externalEmail: spec.external ? String(spec.externalEmail) : null, title: String(spec.title), submittedBy: null };
+      forms.push(form);
+      return { ...form };
+    },
     async openReview(_runId, nodeId, _title, _instructions, _summary, proposal, routing) {
       routings.push(routing);
       const review: ReviewRow = { id: `review-${nodeId}`, nodeId, status: 'OPEN', proposal, decision: null, decidedBy: null };
@@ -53,7 +67,7 @@ function memoryStore(graph: unknown, input: Record<string, unknown> = {}) {
       return { ...review, assignees: routing.people.map((id) => `Person ${id}`), unassignable: [] };
     },
   };
-  return { store, run, steps, reviews, events, routings };
+  return { store, run, steps, reviews, events, routings, spawned, forms };
 }
 
 const EXCEPTION = { id: 'ex-1', entityCode: 'LOAN-7', ruleCode: 'MATURITY_REQUIRED', exceptionMessage: 'Maturity date is missing' };
@@ -151,7 +165,7 @@ describe('advanceRun', () => {
     const { deps: engine } = deps(memory.store);
 
     expect(await advanceRun('run-1', 'job-1', engine)).toMatchObject({ status: 'WAITING' });
-    expect(memory.routings).toEqual([{ people: ['user-9'], roles: ['OPS_LEAD'], separateReviewer: true, dueInHours: 24, escalateRoles: [] }]);
+    expect(memory.routings).toEqual([{ people: ['user-9'], roles: ['OPS_LEAD'], separateReviewer: true, dueInHours: 24, escalateRoles: [], approvals: 1, reassignWhenOverdue: false }]);
     expect(memory.events.find((event) => event.type === 'review.requested')?.summary).toBe('Waiting for Person user-9 to review 2 proposed changes');
   });
 
@@ -525,5 +539,141 @@ describe('linked changes when applying', () => {
     const output = memory.steps.get('apply')?.output as { applied: number; failed: number; results: Array<{ id: string; error?: string }> };
     expect(output).toMatchObject({ applied: 0, failed: 2 });
     expect(output.results.find((row) => row.id === 'set')?.error).toMatch(/Not attempted, because "Add Energy" could not be applied first/);
+  });
+});
+
+function graphOf(nodes: Array<[string, string, Record<string, unknown>?]>, edges: Array<[string, string, string?]>) {
+  return {
+    nodes: nodes.map(([id, type, config], index) => ({ id, type, label: id, position: { x: index * 100, y: 0 }, config: config || {} })),
+    edges: edges.map(([from, to, when], index) => ({ id: `e${index}`, from, to, ...(when ? { when } : {}) })),
+  };
+}
+
+function fakeOutbound() {
+  const sent: Array<{ kind: string; to?: string[]; subject?: string; text: string }> = [];
+  return {
+    sent,
+    outbound: {
+      async http(call: { path: string }) {
+        sent.push({ kind: 'http', text: call.path });
+        return { status: 200, body: { ok: true } };
+      },
+      async email(to: string[], subject: string, text: string) {
+        sent.push({ kind: 'email', to, subject, text });
+      },
+      async slack(_clientId: string, text: string) {
+        sent.push({ kind: 'slack', text });
+      },
+      formLink: (token: string) => `https://app.example.com/portal/${token}`,
+    },
+  };
+}
+
+describe('paths, splits, forms, and messages', () => {
+  it('goes on down one path while the other waits for a review, and joins once both are done', async () => {
+    const graph = graphOf(
+      [
+        ['start', 'start'],
+        ['split', 'parallel'],
+        ['scan', 'tool', { tool: 'list_dq_exceptions', args: {} }],
+        ['investigate', 'agent', { instructions: 'Look', tools: ['get_entity'] }],
+        ['review', 'review', { source: 'investigate' }],
+        ['join', 'join'],
+        ['end', 'end'],
+      ],
+      [['start', 'split'], ['split', 'scan'], ['split', 'investigate'], ['investigate', 'review'], ['scan', 'join'], ['review', 'join'], ['join', 'end']],
+    );
+    const memory = memoryStore(graph);
+    const { deps: engine, calls } = deps(memory.store);
+
+    expect(await advanceRun('run-1', 'job-1', engine)).toMatchObject({ status: 'WAITING', waitingOn: 'review' });
+    // The other path ran while the review waited, and the join did not.
+    expect(calls.some((call) => call.name === 'list_dq_exceptions')).toBe(true);
+    expect(memory.steps.get('scan')?.status).toBe('SUCCEEDED');
+    expect(memory.steps.get('join')).toBeUndefined();
+
+    const [review] = memory.reviews;
+    review.status = 'REJECTED';
+    review.decidedBy = 'reviewer';
+    review.decision = { items: {} };
+    expect(await advanceRun('run-1', 'job-2', engine)).toMatchObject({ status: 'SUCCEEDED' });
+    expect(memory.steps.get('join')?.status).toBe('SUCCEEDED');
+  });
+
+  it('splits a run into one run per chosen record and ends it', async () => {
+    const graph = graphOf([['start', 'start', { runPerRecord: true }], ['scan', 'tool', { tool: 'list_dq_exceptions', args: {} }], ['end', 'end']], [['start', 'scan'], ['scan', 'end']]);
+    const memory = memoryStore(graph, { filters: { entityCodes: ['A', 'B'] }, periodEnd: '2026-09-30' });
+    const { deps: engine, calls } = deps(memory.store, {
+      tools: {
+        names: () => new Set(['find_records', 'list_dq_exceptions']),
+        async run(name, args, actor, permission) {
+          calls.push({ name, args, actor, permission });
+          return name === 'find_records' ? { filtered: true, entityIds: ['e-a', 'e-b'] } : {};
+        },
+      },
+    });
+    expect(await advanceRun('run-1', 'job-1', engine)).toMatchObject({ status: 'SUCCEEDED' });
+    expect(memory.spawned).toEqual([
+      { periodEnd: '2026-09-30', filters: { entityIds: ['e-a'] } },
+      { periodEnd: '2026-09-30', filters: { entityIds: ['e-b'] } },
+    ]);
+    // The rest of the parent run does not run; each child does it.
+    expect(calls.filter((call) => call.name === 'list_dq_exceptions')).toHaveLength(0);
+    expect(memory.events.find((event) => event.type === 'run.split')?.summary).toBe('Started 2 runs, one for each record');
+  });
+
+  it('runs a child as usual, and refuses to split a run with no records chosen', async () => {
+    const graph = graphOf([['start', 'start', { runPerRecord: true }], ['end', 'end']], [['start', 'end']]);
+    const child = memoryStore(graph, { parentRunId: 'run-0', filters: { entityIds: ['e-a'] } });
+    expect(await advanceRun('run-1', 'job-1', deps(child.store).deps)).toMatchObject({ status: 'SUCCEEDED' });
+    expect(child.spawned).toEqual([]);
+    const none = memoryStore(graph, {});
+    expect(await advanceRun('run-1', 'job-1', deps(none.store).deps)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('needs records chosen') });
+  });
+
+  it('emails an outside form its private link, waits, and goes on with the answers', async () => {
+    const graph = graphOf(
+      [
+        ['start', 'start'],
+        ['ask', 'form', { title: 'NAV confirmation', external: true, externalEmail: '{{input.admin}}', fields: [{ key: 'nav', label: 'NAV', type: 'number', required: true }] }],
+        ['end', 'end'],
+      ],
+      [['start', 'ask'], ['ask', 'end']],
+    );
+    const memory = memoryStore(graph, { admin: 'ops@admin.example' });
+    const { outbound, sent } = fakeOutbound();
+    const { deps: engine } = deps(memory.store, { outbound });
+
+    expect(await advanceRun('run-1', 'job-1', engine)).toMatchObject({ status: 'WAITING', waitingOn: 'ask' });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ kind: 'email', to: ['ops@admin.example'], subject: 'NAV confirmation' });
+    expect(sent[0].text).toContain(`https://app.example.com/portal/${'a'.repeat(48)}`);
+
+    // Waiting again sends nothing more.
+    expect(await advanceRun('run-1', 'job-2', engine)).toMatchObject({ status: 'WAITING' });
+    expect(sent).toHaveLength(1);
+
+    Object.assign(memory.forms[0], { status: 'SUBMITTED', answers: { nav: 125000000 } });
+    expect(await advanceRun('run-1', 'job-3', engine)).toMatchObject({ status: 'SUCCEEDED' });
+    expect(memory.steps.get('ask')?.output).toMatchObject({ outcome: 'submitted', answers: { nav: 125000000 } });
+  });
+
+  it('sends a message written from the run, and only when the author allowed it', async () => {
+    const graph = (allowSend: boolean) =>
+      graphOf(
+        [
+          ['start', 'start'],
+          ['tell', 'message', { channel: 'email', to: '{{input.to}}', subject: 'Close for {{input.fund}}', body: 'The close for {{input.fund}} is done.', allowSend }],
+          ['end', 'end'],
+        ],
+        [['start', 'tell'], ['tell', 'end']],
+      );
+    const memory = memoryStore(graph(true), { to: 'a@example.com, b@example.com', fund: 'HSCF2' });
+    const { outbound, sent } = fakeOutbound();
+    expect(await advanceRun('run-1', 'job-1', deps(memory.store, { outbound }).deps)).toMatchObject({ status: 'SUCCEEDED' });
+    expect(sent).toEqual([{ kind: 'email', to: ['a@example.com', 'b@example.com'], subject: 'Close for HSCF2', text: 'The close for HSCF2 is done.' }]);
+
+    const refused = memoryStore(graph(false), { to: 'a@example.com', fund: 'X' });
+    expect(await advanceRun('run-1', 'job-1', deps(refused.store, { outbound }).deps)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('sends') });
   });
 });

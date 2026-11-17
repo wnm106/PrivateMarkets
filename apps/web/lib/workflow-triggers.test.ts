@@ -16,5 +16,8 @@ describe('workflow triggers', () => {
     );
     assert.equal(triggerSummary({ source: 'FEED', match: { feedCodes: ['NAV_PACK'], kinds: ['FEED_LOADED', 'FEED_LATE'] } }), 'When NAV_PACK loads a file or is late');
     assert.equal(triggerSummary({ source: 'FEED', match: {} }), 'When any feed loads, fails, is late, or has a file for review');
+    assert.equal(triggerSummary({ source: 'BREACH', match: { ruleCodes: ['SINGLE_NAME'], statuses: ['HARD_BREACH'] } }), 'When SINGLE_NAME has a new hard breach');
+    assert.equal(triggerSummary({ source: 'BREACH', match: {} }), 'When any compliance rule has a new breach');
+    assert.equal(triggerSummary({ source: 'VALUE_CHANGE', match: { attributeCodes: ['NAV'], domainCodes: ['FUND'] } }), 'When a new value is recorded for NAV on FUND records');
   });
 });

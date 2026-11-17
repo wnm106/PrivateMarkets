@@ -2838,6 +2838,16 @@ type Query {
   workflowReviewerChoices(clientId: ID): WorkflowReviewerChoices!
   """What starts this workflow when something happens: feed events or new data quality failures."""
   workflowTriggers(workflowId: ID!): [WorkflowTrigger!]!
+  """Where this client's review notices are sent besides the assistant: email and Slack."""
+  notificationSettings: NotificationSettings!
+  """How each workflow did over the last days (default 30): runs, durations, review times, overdue reviews, approvals, slowest steps, commonest failure."""
+  workflowAnalytics(days: Int): JSON!
+  """Forms workflow steps are waiting on. status defaults to OPEN; runId keeps one run's."""
+  workflowForms(status: String, runId: ID): [WorkflowForm!]!
+  """The runs a run was split into, one per record: [{ id, status, input, createdAt, finishedAt, openReviews }]."""
+  workflowRunChildren(runId: ID!): JSON!
+  """A form by its private link, for someone outside the firm. Null when the link is wrong, used, or expired. Needs no sign-in."""
+  workflowPortalForm(token: String!): JSON
   """Places files arrive from, for the caller's clients. Stored credentials are never returned."""
   feedConnections: [FeedConnection!]!
   feeds: [Feed!]!
@@ -3159,6 +3169,12 @@ type Mutation {
   """Creates (no id) or changes a trigger. It starts runs as the caller."""
   saveWorkflowTrigger(input: SaveWorkflowTriggerInput!): WorkflowTriggerResult!
   deleteWorkflowTrigger(id: ID!): MutationResult!
+  """Turns email on or off, and sets the Slack address. Leave slackWebhookUrl out to keep the saved one; an empty string removes it."""
+  saveNotificationSettings(emailEnabled: Boolean!, slackWebhookUrl: String): NotificationSettingsResult!
+  """Answers a form, or declines it. The run goes on down the submitted or declined path."""
+  submitWorkflowForm(id: ID!, outcome: String!, answers: JSON, note: String): WorkflowFormResult!
+  """Answers a form by its private link. Needs no sign-in. The link stops working once used."""
+  submitWorkflowPortalForm(token: String!, outcome: String!, answers: JSON, note: String): MutationResult!
 
   # Feeds: files that arrive on their own
   saveFeedConnection(input: SaveFeedConnectionInput!): FeedConnectionResult!
@@ -4927,6 +4943,10 @@ type WorkflowReview {
   startedByName: String
   dueAt: DateTime
   overdue: Boolean!
+  """How many different people must approve."""
+  approvalsRequired: Int!
+  """[{ id, name, at }] of each approval so far."""
+  approvals: JSON!
 }
 
 type WorkflowTrigger {
@@ -4934,11 +4954,11 @@ type WorkflowTrigger {
   clientId: ID!
   workflowId: ID!
   name: String!
-  """FEED or DQ_FAILURES."""
+  """FEED, DQ_FAILURES, BREACH, or VALUE_CHANGE."""
   source: String!
-  """FEED: { kinds, feedCodes }. DQ_FAILURES: { severities, ruleCodes, domainCodes }. An empty list matches everything."""
+  """FEED: { kinds, feedCodes }. DQ_FAILURES: { severities, ruleCodes, domainCodes }. BREACH: { ruleCodes, statuses }. VALUE_CHANGE: { attributeCodes, domainCodes }. An empty list matches everything, except attributeCodes."""
   match: JSON!
-  """What each run starts with, as for a schedule. For DQ_FAILURES the records are added to filters.entityIds."""
+  """What each run starts with, as for a schedule. For every source but FEED, the records that started the run are added to filters.entityIds."""
   input: JSON!
   isActive: Boolean!
   """The person runs are started as."""
@@ -4967,6 +4987,52 @@ input SaveWorkflowTriggerInput {
 
 type WorkflowTriggerResult {
   trigger: WorkflowTrigger
+  errors: [MutationError!]!
+}
+
+type WorkflowForm {
+  id: ID!
+  runId: ID!
+  nodeId: String!
+  workflowName: String
+  title: String!
+  instructions: String
+  """[{ key, label, type: text|longtext|number|date|choice|yesno, required, options }]"""
+  fields: JSON!
+  """OPEN, SUBMITTED, DECLINED, or CANCELLED."""
+  status: String!
+  answers: JSON
+  note: String
+  """Set when the form went to someone outside the firm."""
+  externalEmail: String
+  """The private link still works."""
+  linkActive: Boolean!
+  assignees: JSON!
+  canAnswer: Boolean!
+  blocker: String
+  submittedByName: String
+  submittedAt: DateTime
+  dueAt: DateTime
+  createdAt: DateTime!
+}
+
+type WorkflowFormResult {
+  form: WorkflowForm
+  errors: [MutationError!]!
+}
+
+type NotificationSettings {
+  emailEnabled: Boolean!
+  """Whether a Slack address is saved. The address itself is never returned."""
+  slackConfigured: Boolean!
+  canManage: Boolean!
+  sentLast7Days: Int!
+  failedLast7Days: Int!
+  updatedAt: DateTime
+}
+
+type NotificationSettingsResult {
+  settings: NotificationSettings
   errors: [MutationError!]!
 }
 

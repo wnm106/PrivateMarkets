@@ -4,6 +4,7 @@ import { runAgentStep, type AgentModel } from './agent';
 import { claudeModel } from './claude';
 import { RunBusyError, advanceRun, type EngineDeps } from './engine';
 import { geminiModel } from './gemini';
+import { workflowOutbound } from './outbound';
 import { supabaseWorkflowStore } from './store';
 import { workflowTools, type ToolEnv, type WorkflowTools } from './tools';
 
@@ -43,6 +44,7 @@ export function engineDeps(supabase: SupabaseClient, tools: WorkflowTools = work
     tools,
     agent: (request) => runAgentStep(request, { tools, model }),
     foundation: (args, actor) => tools.foundation(args, actor),
+    outbound: workflowOutbound({ supabase }),
   };
 }
 

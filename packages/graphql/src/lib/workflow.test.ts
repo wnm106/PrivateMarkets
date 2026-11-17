@@ -185,8 +185,19 @@ describe('reviewRouting', () => {
       separateReviewer: true,
       dueInHours: 48,
       escalateRoles: ['HEAD_OF_OPS'],
+      approvals: 1,
+      reassignWhenOverdue: false,
     });
-    expect(reviewRouting({ separateReviewer: false, dueInHours: 0 })).toEqual({ people: [], roles: [], separateReviewer: false, dueInHours: null, escalateRoles: [] });
+    expect(reviewRouting({ separateReviewer: false, dueInHours: 0, approvals: '2', reassignWhenOverdue: true })).toEqual({
+      people: [],
+      roles: [],
+      separateReviewer: false,
+      dueInHours: null,
+      escalateRoles: [],
+      approvals: 2,
+      reassignWhenOverdue: true,
+    });
+    expect(reviewRouting({ approvals: 9 }).approvals).toBe(5);
   });
 
   it('refuses a time to review that is not a positive number of hours', () => {
@@ -201,5 +212,51 @@ describe('reviewRouting', () => {
     expect(problemsWith(24)).toEqual([]);
     expect(problemsWith('{{input.hours}}')).toEqual([]);
     expect(problemsWith(null)).toEqual([]);
+  });
+
+  it('holds approvals to 1 through 5, and overdue hand-over to a due date and a role', () => {
+    const graph = cleanup();
+    const review = graph.nodes.find((node) => node.type === 'review')!;
+    const problemsWith = (patch: Record<string, unknown>) => {
+      review.config = { ...review.config, dueInHours: null, escalateRoles: [], reassignWhenOverdue: false, approvals: 1, ...patch };
+      return validateGraph(graph).filter((problem) => problem.nodeId === review.id).map((problem) => problem.message);
+    };
+    expect(problemsWith({ approvals: 2 })).toEqual([]);
+    expect(problemsWith({ approvals: 6 })).toEqual(['Approvals needed must be a whole number from 1 to 5.']);
+    expect(problemsWith({ approvals: 1.5 })).toHaveLength(1);
+    expect(problemsWith({ reassignWhenOverdue: true })).toHaveLength(1);
+    expect(problemsWith({ reassignWhenOverdue: true, dueInHours: 24, escalateRoles: ['HEAD_OF_OPS'] })).toEqual([]);
+  });
+});
+
+describe('splits, joins, forms, and outbound steps', () => {
+  const build = (nodes: Array<[string, string, Record<string, unknown>?]>, edges: Array<[string, string, string?]>): WorkflowGraph => ({
+    nodes: nodes.map(([id, type, config]) => ({ id, type: type as never, label: id, position: { x: 0, y: 0 }, config: config || {} })),
+    edges: edges.map(([from, to, when], index) => ({ id: `e${index}`, from, to, ...(when ? { when } : {}) })),
+  });
+
+  it('lets a Split start several paths and a Join bring them back', () => {
+    const graph = build(
+      [['start', 'start'], ['split', 'parallel'], ['a', 'end'], ['b', 'end']],
+      [['start', 'split'], ['split', 'a'], ['split', 'b']],
+    );
+    expect(messages(graph)).toEqual([]);
+    expect(messages(build([['start', 'start'], ['split', 'parallel'], ['end', 'end']], [['start', 'split'], ['split', 'end']]))).toContain('A Split starts two or more paths. Connect it to each.');
+    expect(messages(build([['start', 'start'], ['join', 'join'], ['end', 'end']], [['start', 'join'], ['join', 'end']]))).toContain('A Join brings two or more paths together. Connect each path into it.');
+    expect(messages(build([['start', 'start'], ['t', 'tool', { tool: 'get_entity' }], ['a', 'end'], ['b', 'end']], [['start', 't'], ['t', 'a'], ['t', 'b']]))[0]).toMatch(/or a Split to take several/);
+  });
+
+  it('holds outbound steps to an explicit allow, and forms to usable fields', () => {
+    const one = (type: string, config: Record<string, unknown>) => messages(build([['start', 'start'], ['x', type, config], ['end', 'end']], [['start', 'x'], ['x', 'end']]));
+    expect(one('http', { connection: 'ADMIN', method: 'POST' })).toEqual(['This step sends data outside the platform. Tick "This step sends data outside" to allow it.']);
+    expect(one('http', { connection: 'ADMIN', method: 'GET' })).toEqual([]);
+    expect(one('message', { channel: 'email', to: '', body: 'x', allowSend: true })).toEqual(['Say who the email goes to.']);
+    expect(one('message', { channel: 'slack', body: 'Done', allowSend: true })).toEqual([]);
+    expect(one('form', { fields: [] })).toEqual(['Add at least one field to the form.']);
+    expect(one('form', { fields: [{ key: 'nav', type: 'number' }, { key: 'nav' }, { key: 'pick', type: 'choice' }] })).toEqual([
+      'Two fields share the key "nav".',
+      '"pick" is a choice with nothing to choose from.',
+    ]);
+    expect(one('form', { fields: [{ key: 'nav' }], external: true })).toEqual(['Say who outside the firm the form goes to.']);
   });
 });

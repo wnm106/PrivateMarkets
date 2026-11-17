@@ -98,6 +98,14 @@ export function ReviewerPicker({ clientId, people, roles, onChange, rolesOnly = 
   );
 }
 
+/** "Approved by Ada. Needs 1 more approval." */
+export function approvalLine(approvals: Array<{ name: string }>, required: number, open: boolean): string {
+  if (approvals.length === 0) return `Needs ${required} approvals`;
+  const by = `Approved by ${approvals.map((entry) => entry.name).join(', ')}`;
+  const left = required - approvals.length;
+  return open && left > 0 ? `${by}. Needs ${left} more ${left === 1 ? 'approval' : 'approvals'}` : by;
+}
+
 interface AssignmentProps {
   review: ReviewView;
   /** The run's caller manages workflows, so can reassign whatever the review says. */
@@ -151,6 +159,11 @@ export function ReviewAssignment({ review, canManage, onChanged }: AssignmentPro
         {due && <span style={{ fontWeight: 600, color: review.overdue ? '#b91c1c' : 'var(--ink-3)' }}>{due}</span>}
         {review.separateReviewer && review.startedByName && <span>Not {review.startedByName}, who started the run</span>}
         {!open && review.decidedByName && <span>Decided by {review.decidedByName}</span>}
+        {(review.approvalsRequired ?? 1) > 1 && (
+          <span style={{ fontWeight: 600, color: 'var(--ink-2)' }}>
+            {approvalLine(review.approvals || [], review.approvalsRequired ?? 1, open)}
+          </span>
+        )}
         {canReassign && !editing && (
           <button type="button" onClick={start} style={{ border: 'none', background: 'none', padding: 0, fontSize: 12, fontWeight: 600, color: 'var(--entity-link)', cursor: 'pointer' }}>
             Reassign

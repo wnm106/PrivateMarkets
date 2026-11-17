@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
-import { FEED_KINDS, SEVERITIES, codeList, triggerSummary, type TriggerView } from '@/lib/workflow-triggers';
+import { BREACH_STATUSES, FEED_KINDS, SEVERITIES, TRIGGER_SOURCES, codeList, triggerSummary, type TriggerSource, type TriggerView } from '@/lib/workflow-triggers';
 import { when, type MutationErrors } from '@/lib/workflows';
 
 /**
@@ -20,8 +20,10 @@ const DELETE_TRIGGER = `mutation DeleteWorkflowTrigger($id: ID!) { deleteWorkflo
 interface Draft {
   id: string | null;
   name: string;
-  source: 'FEED' | 'DQ_FAILURES';
+  source: TriggerSource;
   kinds: string[];
+  statuses: string[];
+  attributeCodes: string;
   feedCodes: string;
   severities: string[];
   ruleCodes: string;
@@ -36,6 +38,8 @@ function draftFrom(trigger: TriggerView | null): Draft {
     name: trigger?.name ?? '',
     source: trigger?.source ?? 'DQ_FAILURES',
     kinds: trigger?.match.kinds ?? [],
+    statuses: trigger?.match.statuses ?? [],
+    attributeCodes: (trigger?.match.attributeCodes ?? []).join(', '),
     feedCodes: (trigger?.match.feedCodes ?? []).join(', '),
     severities: trigger?.match.severities ?? [],
     ruleCodes: (trigger?.match.ruleCodes ?? []).join(', '),
@@ -90,7 +94,11 @@ export function WorkflowTriggers({ workflowId, published, canManage }: Props) {
     const match =
       draft.source === 'FEED'
         ? { kinds: draft.kinds, feedCodes: codeList(draft.feedCodes) }
-        : { severities: draft.severities, ruleCodes: codeList(draft.ruleCodes), domainCodes: codeList(draft.domainCodes) };
+        : draft.source === 'BREACH'
+          ? { statuses: draft.statuses, ruleCodes: codeList(draft.ruleCodes) }
+          : draft.source === 'VALUE_CHANGE'
+            ? { attributeCodes: codeList(draft.attributeCodes), domainCodes: codeList(draft.domainCodes) }
+            : { severities: draft.severities, ruleCodes: codeList(draft.ruleCodes), domainCodes: codeList(draft.domainCodes) };
     setSaving(true);
     setMessage('');
     const { data, error } = await graphqlMutation<{ saveWorkflowTrigger: { errors: MutationErrors } }>(SAVE_TRIGGER, {
@@ -128,7 +136,7 @@ export function WorkflowTriggers({ workflowId, published, canManage }: Props) {
         )}
       </div>
       <div style={{ ...hint, marginBottom: 8 }}>
-        Starts a run of the published version when a feed event arrives, or when a data quality scan finds records that began failing since the day before. Everything new since the last run goes into one run, which starts as the person who saved the trigger. For data quality, the run works on those records.
+        Starts a run of the published version when a data quality scan finds new failures, a compliance rule is breached, a value changes, or a feed does something. Everything new since the last run goes into one run, which starts as the person who saved the trigger. Except for feeds, the run works on the records that started it.
         {!published && <strong style={{ color: '#b45309' }}> This workflow is not published, so its triggers start nothing yet.</strong>}
       </div>
       {message && <div role="alert" style={{ fontSize: 12, color: 'var(--red)', marginBottom: 8 }}>{message}</div>}
@@ -175,19 +183,50 @@ export function WorkflowTriggers({ workflowId, published, canManage }: Props) {
           </label>
           <div style={{ display: 'grid', gap: 4 }}>
             <span style={label}>Start when</span>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <label style={tick}>
-                <input type="radio" checked={draft.source === 'DQ_FAILURES'} onChange={() => set({ source: 'DQ_FAILURES' })} />
-                A data quality scan finds new failures
-              </label>
-              <label style={tick}>
-                <input type="radio" checked={draft.source === 'FEED'} onChange={() => set({ source: 'FEED' })} />
-                A feed does something
-              </label>
+            <div style={{ display: 'grid', gap: 4 }}>
+              {TRIGGER_SOURCES.map((source) => (
+                <label key={source.code} style={tick}>
+                  <input type="radio" checked={draft.source === source.code} onChange={() => set({ source: source.code })} />
+                  {source.label}
+                </label>
+              ))}
             </div>
           </div>
 
-          {draft.source === 'FEED' ? (
+          {draft.source === 'BREACH' && (
+            <>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <span style={label}>Breach</span>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  {BREACH_STATUSES.map((status) => (
+                    <label key={status.code} style={tick}>
+                      <input type="checkbox" checked={draft.statuses.includes(status.code)} onChange={(event) => set({ statuses: toggle(draft.statuses, status.code, event.target.checked) })} />
+                      {status.label}
+                    </label>
+                  ))}
+                </div>
+                <span style={hint}>Tick none for either. Only a new breach counts: one where the result before it, for the same rule and record, was not a breach.</span>
+              </div>
+              <label style={{ display: 'grid', gap: 4 }}>
+                <span style={label}>Rule codes</span>
+                <input className="text-input" value={draft.ruleCodes} onChange={(event) => set({ ruleCodes: event.target.value })} placeholder="Blank for every rule" />
+              </label>
+            </>
+          )}
+          {draft.source === 'VALUE_CHANGE' && (
+            <>
+              <label style={{ display: 'grid', gap: 4 }}>
+                <span style={label}>Attributes</span>
+                <input className="text-input" value={draft.attributeCodes} onChange={(event) => set({ attributeCodes: event.target.value })} placeholder="NAV, FUND_STATUS" />
+                <span style={hint}>Name 1 to 20 attribute codes. A new current value recorded for any of them starts a run.</span>
+              </label>
+              <label style={{ display: 'grid', gap: 4 }}>
+                <span style={label}>Types of record</span>
+                <input className="text-input" value={draft.domainCodes} onChange={(event) => set({ domainCodes: event.target.value })} placeholder="Blank for every type, or FUND, POSITION" />
+              </label>
+            </>
+          )}
+          {draft.source === 'BREACH' || draft.source === 'VALUE_CHANGE' ? null : draft.source === 'FEED' ? (
             <>
               <div style={{ display: 'grid', gap: 4 }}>
                 <span style={label}>The feed</span>
@@ -233,7 +272,7 @@ export function WorkflowTriggers({ workflowId, published, canManage }: Props) {
             <span style={label}>What each run starts with</span>
             <textarea className="text-input" rows={4} spellCheck={false} style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }} value={draft.input} onChange={(event) => set({ input: event.target.value })} />
             <span style={hint}>
-              The same as a schedule's input, such as {'{ "periodEnd": "" }'}. A run started by data quality failures is also given those records in filters.entityIds, and steps can read what started it as {'{{input.trigger}}'}.
+              The same as a schedule's input, such as {'{ "periodEnd": "" }'}. A run started by anything but a feed is also given the records that started it in filters.entityIds, and steps can read what started it as {'{{input.trigger}}'}.
             </span>
           </label>
           <label style={tick}>

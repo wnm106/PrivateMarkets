@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NODE_TYPES, validateGraph, type NodeType, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { EdgeInspector, NodeInspector } from '@/components/workflows/NodeInspector';
 import { StartRunDialog } from '@/components/workflows/StartRunDialog';
+import { VersionTools } from '@/components/workflows/VersionTools';
 import { WorkflowTriggers } from '@/components/workflows/WorkflowTriggers';
 import { WorkflowCanvas, type CanvasSelection } from '@/components/workflows/WorkflowCanvas';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
@@ -400,6 +401,18 @@ export default function WorkflowEditorPage() {
           )}
 
           <WorkflowTriggers workflowId={id} published={workflow?.publishedVersion != null} canManage={canManage} />
+          {workflow && (
+            <VersionTools
+              workflowId={id}
+              code={workflow.code}
+              name={name || workflow.name}
+              description={workflow.description ?? null}
+              version={dirty ? null : workflow.version}
+              graph={graph}
+              versions={workflow.versions.map((entry) => entry.version)}
+              publishedVersion={workflow.publishedVersion}
+            />
+          )}
 
           {canManage && (
             <div style={{ marginTop: 24 }}>

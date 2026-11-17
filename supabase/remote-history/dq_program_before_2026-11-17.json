@@ -1,0 +1,767 @@
+{
+ "taken": "2026-11-17",
+ "note": "State before 20261117060000_data_quality_program. Rules as they were, and every attribute and template assignment that was marked required.",
+ "dq_rules": [
+  {
+   "attribute_code": null,
+   "auto_remediate": false,
+   "created_at": "2026-09-21 15:29:07.789821+00",
+   "domain_code": "DEAL",
+   "id": "ec193db9-33cb-416e-9b3c-b0f346dc0eed",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "DEAL_DATE_NOT_FUTURE",
+   "rule_description": "Deal date cannot be in the future",
+   "rule_expression": "DEAL_DATE <= CURRENT_DATE",
+   "rule_name": "Deal Date Not Future",
+   "rule_severity": "MEDIUM",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": null,
+   "auto_remediate": false,
+   "created_at": "2026-09-21 15:29:07.789821+00",
+   "domain_code": "FUND",
+   "id": "8e072e2a-9e29-4a22-8b92-6a3ed1cca159",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "FUND_NAV_NOT_NULL",
+   "rule_description": "Fund must have a NAV value",
+   "rule_expression": "nav IS NOT NULL",
+   "rule_name": "Fund NAV Required",
+   "rule_severity": "CRITICAL",
+   "rule_type": "COMPLETENESS",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "COUNTRY",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:31.441996+00",
+   "domain_code": "ISSUER",
+   "id": "8181829b-7aa5-4451-adf6-fda3ac6bf752",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "ISSUER_COUNTRY_ISO",
+   "rule_description": "Country of incorporation should be an ISO country code such as US, not a country name.",
+   "rule_expression": "COUNTRY IS NULL OR COUNTRY IN ('US','GB','DE','FR','IE','LU','KY','NL','CH','SE','NO','DK','FI','IT','ES','PT','BE','AT','JP','AU','SG','HK','CN','CA','BM','JE','GG','IN','BR','MX','KR','NZ')",
+   "rule_name": "Country Is ISO Code",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "INTEREST_COVERAGE_RATIO",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:31.441996+00",
+   "domain_code": "ISSUER",
+   "id": "02b2db22-35a7-49d8-99b8-a464373c3852",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "ISSUER_COVERAGE_NONNEGATIVE",
+   "rule_description": "Interest coverage should not be stored as a negative number.",
+   "rule_expression": "INTEREST_COVERAGE_RATIO IS NULL OR INTEREST_COVERAGE_RATIO >= 0",
+   "rule_name": "Interest Coverage Not Negative",
+   "rule_severity": "MEDIUM",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "FINANCIAL_REPORTING_PERIOD_DATE",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:31.441996+00",
+   "domain_code": "ISSUER",
+   "id": "e1874adf-2c17-4966-8b29-6a327d20b5fc",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "ISSUER_FINANCIALS_NOT_FUTURE",
+   "rule_description": "The latest financial statement date cannot be in the future.",
+   "rule_expression": "FINANCIAL_REPORTING_PERIOD_DATE IS NULL OR FINANCIAL_REPORTING_PERIOD_DATE <= CURRENT_DATE",
+   "rule_name": "Financials Not Future Dated",
+   "rule_severity": "HIGH",
+   "rule_type": "TIMELINESS",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "LEI",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:31.441996+00",
+   "domain_code": "ISSUER",
+   "id": "effe938f-e0dd-4fbe-923b-6397a1a03464",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "ISSUER_LEI_FORMAT",
+   "rule_description": "A Legal Entity Identifier is 20 characters, and the last two are check digits. Blank LEIs are a completeness gap, not a format error.",
+   "rule_expression": "LEI IS NULL OR LEI ~ '^[A-Z0-9]{18}[0-9]{2}$'",
+   "rule_name": "LEI Format",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "TOTAL_NET_LEVERAGE_RATIO",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:31.441996+00",
+   "domain_code": "ISSUER",
+   "id": "47dd1e2f-192b-42fd-b249-3d4516bd0df4",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "ISSUER_LEVERAGE_NONNEGATIVE",
+   "rule_description": "Total net leverage is a ratio of debt to EBITDA and should not be stored as a negative number.",
+   "rule_expression": "TOTAL_NET_LEVERAGE_RATIO IS NULL OR TOTAL_NET_LEVERAGE_RATIO >= 0",
+   "rule_name": "Net Leverage Not Negative",
+   "rule_severity": "MEDIUM",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "MARKET_CAP",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:31.441996+00",
+   "domain_code": "ISSUER",
+   "id": "0d42896c-bdde-4930-b240-59604914e863",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "ISSUER_MARKET_CAP_NONNEGATIVE",
+   "rule_description": "Market capitalization must be present and cannot be negative.",
+   "rule_expression": "MARKET_CAP IS NOT NULL AND MARKET_CAP >= 0",
+   "rule_name": "Market Cap Not Negative",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "CREDIT_RATING",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:31.441996+00",
+   "domain_code": "ISSUER",
+   "id": "8eb35b2a-bf81-403d-bffb-2eb5e5bae1e4",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "ISSUER_RATING_SCALE",
+   "rule_description": "Credit rating should be a known scale point, including NR when the issuer is unrated.",
+   "rule_expression": "CREDIT_RATING IS NULL OR CREDIT_RATING IN ('AAA','AA+','AA','AA-','A+','A','A-','BBB+','BBB','BBB-','BB+','BB','BB-','B+','B','B-','CCC+','CCC','CCC-','CC','C','D','NR','AA_PLUS','AA_MINUS','A_PLUS','A_MINUS','BBB_PLUS','BBB_MINUS','BB_PLUS','BB_MINUS','B_PLUS','B_MINUS','CCC_PLUS','CCC_MINUS')",
+   "rule_name": "Rating On The Scale",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "SECTOR",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:31.441996+00",
+   "domain_code": "ISSUER",
+   "id": "cd11b11d-0e52-4351-abfb-989fb6720d4f",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "ISSUER_SECTOR_GICS",
+   "rule_description": "Sector should be a GICS sector so concentration reports group the same way every time.",
+   "rule_expression": "SECTOR IS NULL OR SECTOR IN ('INDUSTRIALS','INFORMATION_TECHNOLOGY','ENERGY','MATERIALS','FINANCIALS','COMMUNICATION_SERVICES','UTILITIES','REAL_ESTATE','HEALTH_CARE','CONSUMER_STAPLES','CONSUMER_DISCRETIONARY')",
+   "rule_name": "Sector Is GICS",
+   "rule_severity": "MEDIUM",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "COST_BASIS",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "POSITION",
+   "id": "515904f8-1977-4e7b-87a1-11d44d1e1cfa",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "POSITION_COST_NONNEGATIVE",
+   "rule_description": "Cost basis cannot be negative.",
+   "rule_expression": "COST_BASIS IS NULL OR COST_BASIS >= 0",
+   "rule_name": "Cost Basis Not Negative",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "POSITION_CURRENCY",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "POSITION",
+   "id": "da6937f0-f422-41c2-8be1-e7063f4d53bc",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "POSITION_CURRENCY_ISO",
+   "rule_description": "Position currency should be an ISO code such as USD.",
+   "rule_expression": "POSITION_CURRENCY IS NULL OR POSITION_CURRENCY IN ('USD','EUR','GBP','JPY','AUD','NOK','SGD','CAD','CHF','SEK','DKK','HKD')",
+   "rule_name": "Position Currency Is ISO",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "DAILY_RETURN",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "POSITION",
+   "id": "c2ee9f20-77db-4985-a251-bdc7376217f8",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "POSITION_DAILY_RETURN_RANGE",
+   "rule_description": "Daily return is a percent and should sit between -100 and 100. A larger number is usually a units error.",
+   "rule_expression": "DAILY_RETURN IS NULL OR DAILY_RETURN >= -100 AND DAILY_RETURN <= 100",
+   "rule_name": "Daily Return In Range",
+   "rule_severity": "MEDIUM",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "FUNDED_PAR_AMOUNT",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "POSITION",
+   "id": "36ca9f5f-2eb3-4669-b222-9c49057f539b",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "POSITION_FUNDED_PAR_NONNEGATIVE",
+   "rule_description": "Funded par cannot be negative.",
+   "rule_expression": "FUNDED_PAR_AMOUNT IS NULL OR FUNDED_PAR_AMOUNT >= 0",
+   "rule_name": "Funded Par Not Negative",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "MARKET_VALUE",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "POSITION",
+   "id": "6d94d9d0-a950-4930-9eb6-9c297936b56f",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "POSITION_MARKET_VALUE_NONNEGATIVE",
+   "rule_description": "Position market value cannot be negative in this long-only book.",
+   "rule_expression": "MARKET_VALUE IS NULL OR MARKET_VALUE >= 0",
+   "rule_name": "Market Value Not Negative",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "METRIC_DATE",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "POSITION",
+   "id": "d24d1742-a9df-4332-98d5-89a1ad96c1ce",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "POSITION_METRIC_NOT_FUTURE",
+   "rule_description": "The date the position metrics were measured cannot be in the future.",
+   "rule_expression": "METRIC_DATE IS NULL OR METRIC_DATE <= CURRENT_DATE",
+   "rule_name": "Metric Date Not Future",
+   "rule_severity": "HIGH",
+   "rule_type": "TIMELINESS",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "FAIR_MARKET_PRICE",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "POSITION",
+   "id": "b0c321da-1401-4567-aaf7-c965864b8e7e",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "POSITION_PRICE_NONNEGATIVE",
+   "rule_description": "Fair market price cannot be negative.",
+   "rule_expression": "FAIR_MARKET_PRICE IS NULL OR FAIR_MARKET_PRICE >= 0",
+   "rule_name": "Fair Price Not Negative",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "QUANTITY",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "POSITION",
+   "id": "38562218-a555-43a8-82cd-edeeca613a32",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "POSITION_QUANTITY_NONNEGATIVE",
+   "rule_description": "Position quantity cannot be negative in this long-only book.",
+   "rule_expression": "QUANTITY IS NULL OR QUANTITY >= 0",
+   "rule_name": "Quantity Not Negative",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "TRADE_DATE",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "POSITION",
+   "id": "bdc19f5b-2d3f-40ee-a0a5-108b6cb931f4",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "POSITION_TRADE_NOT_FUTURE",
+   "rule_description": "Trade date cannot be in the future.",
+   "rule_expression": "TRADE_DATE IS NULL OR TRADE_DATE <= CURRENT_DATE",
+   "rule_name": "Trade Date Not Future",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "POSITION_TYPE",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "POSITION",
+   "id": "1e6e3ba3-d154-45fa-b8fa-5f4b0c130edc",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "POSITION_TYPE_ALLOWED",
+   "rule_description": "Position type should be Equity, Debt, or Other.",
+   "rule_expression": "POSITION_TYPE IS NULL OR POSITION_TYPE IN ('EQUITY','DEBT','OTHER')",
+   "rule_name": "Position Type Known",
+   "rule_severity": "MEDIUM",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "VALUATION_HIERARCHY_LEVEL",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "POSITION",
+   "id": "57062bc2-3fde-42c1-a1f5-3be3ab20bfc0",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "POSITION_VALUATION_LEVEL",
+   "rule_description": "GAAP fair-value level should be Level 1, Level 2, or Level 3.",
+   "rule_expression": "VALUATION_HIERARCHY_LEVEL IS NULL OR VALUATION_HIERARCHY_LEVEL IN ('Level_1','Level_2','Level_3','1','2','3')",
+   "rule_name": "Valuation Level Known",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": null,
+   "auto_remediate": false,
+   "created_at": "2026-09-21 15:29:07.789821+00",
+   "domain_code": "PRICE",
+   "id": "913e916a-7238-4805-96af-316998ef75c2",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "PRICE_NOT_NEGATIVE",
+   "rule_description": "Price values cannot be negative",
+   "rule_expression": "price >= 0",
+   "rule_name": "Price Not Negative",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "COUPON_RATE",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "SECURITY",
+   "id": "0eb67643-aa0f-4bc2-8c41-87f0ed5a0a49",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "SECURITY_COUPON_NONNEGATIVE",
+   "rule_description": "Coupon rate cannot be negative.",
+   "rule_expression": "COUPON_RATE IS NULL OR COUPON_RATE >= 0",
+   "rule_name": "Coupon Not Negative",
+   "rule_severity": "MEDIUM",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "CURRENCY",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "SECURITY",
+   "id": "cb875695-b013-4f55-8e2f-b49873dae947",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "SECURITY_CURRENCY_ISO",
+   "rule_description": "Denomination currency should be an ISO code such as USD.",
+   "rule_expression": "CURRENCY IS NULL OR CURRENCY IN ('USD','EUR','GBP','JPY','AUD','NOK','SGD','CAD','CHF','SEK','DKK','HKD')",
+   "rule_name": "Currency Is ISO",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "CUSIP",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "SECURITY",
+   "id": "f4f66156-781d-4809-aaf4-ebedbe725411",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "SECURITY_CUSIP_FORMAT",
+   "rule_description": "A CUSIP is nine letters or digits.",
+   "rule_expression": "CUSIP IS NULL OR CUSIP ~ '^[A-Z0-9]{9}$'",
+   "rule_name": "CUSIP Format",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "INSTRUMENT_TYPE",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "SECURITY",
+   "id": "bce89d80-2058-44b7-a3ae-b13837e00b0b",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "SECURITY_INSTRUMENT_TYPE",
+   "rule_description": "Instrument type should be one of the standard classifications used for exposure reports.",
+   "rule_expression": "INSTRUMENT_TYPE IS NULL OR INSTRUMENT_TYPE IN ('BOND','LOAN','EQUITY','DERIVATIVE','UNITRANCHE','REVOLVING_CREDIT','MEZZANINE','PREFERRED_EQUITY')",
+   "rule_name": "Instrument Type Known",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "ISIN",
+   "auto_remediate": false,
+   "created_at": "2026-09-21 15:29:07.789821+00",
+   "domain_code": "SECURITY",
+   "id": "c0d96bc1-f6a7-4a01-ae34-8f26f169dd17",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "SECURITY_ISIN_FORMAT",
+   "rule_description": "When an ISIN is present it must be 12 characters: two letters, nine letters or digits, and a numeric check digit.",
+   "rule_expression": "ISIN IS NULL OR ISIN ~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$'",
+   "rule_name": "ISIN Format Validation",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "ISSUANCE_DATE",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "SECURITY",
+   "id": "4a02b2d2-36e9-44c6-8a12-c2b339877056",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "SECURITY_ISSUANCE_NOT_FUTURE",
+   "rule_description": "Issuance date cannot be in the future.",
+   "rule_expression": "ISSUANCE_DATE IS NULL OR ISSUANCE_DATE <= CURRENT_DATE",
+   "rule_name": "Issuance Not Future",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "MATURITY_DATE",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "SECURITY",
+   "id": "9b9621b2-aca0-4076-a637-1f0d6c36efb9",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "SECURITY_MATURITY_PLAUSIBLE",
+   "rule_description": "Maturity should be a real date on or after 1990. Dates before that are almost always a bad load.",
+   "rule_expression": "MATURITY_DATE IS NULL OR MATURITY_DATE >= '1990-01-01'",
+   "rule_name": "Maturity Is Plausible",
+   "rule_severity": "MEDIUM",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "PRICE",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "SECURITY",
+   "id": "d7eb891a-0987-4427-afeb-5e5a22f11261",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "SECURITY_PRICE_NONNEGATIVE",
+   "rule_description": "A security price cannot be negative.",
+   "rule_expression": "PRICE IS NULL OR PRICE >= 0",
+   "rule_name": "Price Not Negative",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "ORIGINAL_PRINCIPAL_AMOUNT",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "SECURITY",
+   "id": "8ac0b638-0c8a-497f-9c2c-dbcc71b85961",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "SECURITY_PRINCIPAL_POSITIVE",
+   "rule_description": "Original principal, when present, has to be greater than zero.",
+   "rule_expression": "ORIGINAL_PRINCIPAL_AMOUNT IS NULL OR ORIGINAL_PRINCIPAL_AMOUNT > 0",
+   "rule_name": "Original Principal Positive",
+   "rule_severity": "HIGH",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  },
+  {
+   "attribute_code": "SPREAD_BPS",
+   "auto_remediate": false,
+   "created_at": "2026-10-16 13:25:44.687394+00",
+   "domain_code": "SECURITY",
+   "id": "28a7bbd2-0843-470e-9d9e-d22e8da003b5",
+   "is_active": true,
+   "metadata": {},
+   "rule_code": "SECURITY_SPREAD_NONNEGATIVE",
+   "rule_description": "Credit spread in basis points cannot be negative.",
+   "rule_expression": "SPREAD_BPS IS NULL OR SPREAD_BPS >= 0",
+   "rule_name": "Spread Not Negative",
+   "rule_severity": "MEDIUM",
+   "rule_type": "VALIDITY",
+   "threshold_value": null
+  }
+ ],
+ "required_attributes": [
+  {
+   "attribute_code": "AMOUNT",
+   "domain_code": "CASH_FLOW"
+  },
+  {
+   "attribute_code": "CASHFLOW_DATE",
+   "domain_code": "CASH_FLOW"
+  },
+  {
+   "attribute_code": "CASHFLOW_TYPE",
+   "domain_code": "CASH_FLOW"
+  },
+  {
+   "attribute_code": "NAV",
+   "domain_code": "FUND"
+  },
+  {
+   "attribute_code": "NAV_DATE",
+   "domain_code": "FUND"
+  }
+ ],
+ "required_template_assignments": [
+  {
+   "attribute_code": "AMORT_DATE",
+   "domain_code": "AMORTIZATION",
+   "template_code": "AMORTIZATION_STANDARD"
+  },
+  {
+   "attribute_code": "AMORT_PRINCIPAL_AMOUNT",
+   "domain_code": "AMORTIZATION",
+   "template_code": "AMORTIZATION_STANDARD"
+  },
+  {
+   "attribute_code": "AMORT_TYPE",
+   "domain_code": "AMORTIZATION",
+   "template_code": "AMORTIZATION_STANDARD"
+  },
+  {
+   "attribute_code": "CALL_DATE",
+   "domain_code": "CALL_SCHEDULE",
+   "template_code": "CALL_SCHEDULE_STANDARD"
+  },
+  {
+   "attribute_code": "CALL_PROVISION",
+   "domain_code": "CALL_SCHEDULE",
+   "template_code": "CALL_SCHEDULE_STANDARD"
+  },
+  {
+   "attribute_code": "CONDITION_STATUS",
+   "domain_code": "CLOSING_CONDITION",
+   "template_code": "CLOSING_CONDITION_STANDARD"
+  },
+  {
+   "attribute_code": "CONDITION_WORKSTREAM",
+   "domain_code": "CLOSING_CONDITION",
+   "template_code": "CLOSING_CONDITION_STANDARD"
+  },
+  {
+   "attribute_code": "COVENANT_DIRECTION",
+   "domain_code": "DEAL_COVENANT",
+   "template_code": "DEAL_COVENANT_STANDARD"
+  },
+  {
+   "attribute_code": "COVENANT_LEVEL",
+   "domain_code": "DEAL_COVENANT",
+   "template_code": "DEAL_COVENANT_STANDARD"
+  },
+  {
+   "attribute_code": "DOC_STATUS",
+   "domain_code": "DEAL_DOCUMENT",
+   "template_code": "DEAL_DOCUMENT_STANDARD"
+  },
+  {
+   "attribute_code": "TRANCHE_RANK",
+   "domain_code": "DEAL_TRANCHE",
+   "template_code": "DEAL_TRANCHE_STANDARD"
+  },
+  {
+   "attribute_code": "TRANCHE_SIZE",
+   "domain_code": "DEAL_TRANCHE",
+   "template_code": "DEAL_TRANCHE_STANDARD"
+  },
+  {
+   "attribute_code": "DRAW_AMOUNT",
+   "domain_code": "EXPECTED_DRAW",
+   "template_code": "EXPECTED_DRAW_STANDARD"
+  },
+  {
+   "attribute_code": "DRAW_DATE",
+   "domain_code": "EXPECTED_DRAW",
+   "template_code": "EXPECTED_DRAW_STANDARD"
+  },
+  {
+   "attribute_code": "FACTOR_DATE",
+   "domain_code": "FACTOR_SCHEDULE",
+   "template_code": "FACTOR_SCHEDULE_STANDARD"
+  },
+  {
+   "attribute_code": "FACTOR_KIND",
+   "domain_code": "FACTOR_SCHEDULE",
+   "template_code": "FACTOR_SCHEDULE_STANDARD"
+  },
+  {
+   "attribute_code": "FACTOR_VALUE",
+   "domain_code": "FACTOR_SCHEDULE",
+   "template_code": "FACTOR_SCHEDULE_STANDARD"
+  },
+  {
+   "attribute_code": "NAV",
+   "domain_code": "FUND",
+   "template_code": "FUND_STANDARD"
+  },
+  {
+   "attribute_code": "NAV_DATE",
+   "domain_code": "FUND",
+   "template_code": "FUND_STANDARD"
+  },
+  {
+   "attribute_code": "CONTRACT_AMOUNT",
+   "domain_code": "INTEREST_CONTRACT",
+   "template_code": "INTEREST_CONTRACT_STANDARD"
+  },
+  {
+   "attribute_code": "CONTRACT_EFFECTIVE_DATE",
+   "domain_code": "INTEREST_CONTRACT",
+   "template_code": "INTEREST_CONTRACT_STANDARD"
+  },
+  {
+   "attribute_code": "CONTRACT_END_DATE",
+   "domain_code": "INTEREST_CONTRACT",
+   "template_code": "INTEREST_CONTRACT_STANDARD"
+  },
+  {
+   "attribute_code": "CONTRACT_KIND",
+   "domain_code": "INTEREST_CONTRACT",
+   "template_code": "INTEREST_CONTRACT_STANDARD"
+  },
+  {
+   "attribute_code": "CONTRACT_PAYMENT_DATE",
+   "domain_code": "INTEREST_CONTRACT",
+   "template_code": "INTEREST_CONTRACT_STANDARD"
+  },
+  {
+   "attribute_code": "CONTRACT_SEQUENCE",
+   "domain_code": "INTEREST_CONTRACT",
+   "template_code": "INTEREST_CONTRACT_STANDARD"
+  },
+  {
+   "attribute_code": "COUNTRY",
+   "domain_code": "ISSUER",
+   "template_code": "ISSUER_STANDARD"
+  },
+  {
+   "attribute_code": "ISSUER_LEGAL_NAME",
+   "domain_code": "ISSUER",
+   "template_code": "ISSUER_STANDARD"
+  },
+  {
+   "attribute_code": "LEI",
+   "domain_code": "ISSUER",
+   "template_code": "ISSUER_STANDARD"
+  },
+  {
+   "attribute_code": "SECTOR",
+   "domain_code": "ISSUER",
+   "template_code": "ISSUER_STANDARD"
+  },
+  {
+   "attribute_code": "MARKET_VALUE",
+   "domain_code": "POSITION",
+   "template_code": "POSITION_STANDARD"
+  },
+  {
+   "attribute_code": "POSITION_CURRENCY",
+   "domain_code": "POSITION",
+   "template_code": "POSITION_STANDARD"
+  },
+  {
+   "attribute_code": "TRADE_DATE",
+   "domain_code": "POSITION",
+   "template_code": "POSITION_STANDARD"
+  },
+  {
+   "attribute_code": "REPORT_DUE_DATE",
+   "domain_code": "REPORTING_OBLIGATION",
+   "template_code": "REPORTING_OBLIGATION_STANDARD"
+  },
+  {
+   "attribute_code": "CURRENCY",
+   "domain_code": "SECURITY",
+   "template_code": "SECURITY_STANDARD"
+  },
+  {
+   "attribute_code": "INSTRUMENT_TYPE",
+   "domain_code": "SECURITY",
+   "template_code": "SECURITY_STANDARD"
+  },
+  {
+   "attribute_code": "MATURITY_DATE",
+   "domain_code": "SECURITY",
+   "template_code": "SECURITY_STANDARD"
+  },
+  {
+   "attribute_code": "AMOUNT",
+   "domain_code": "CASH_FLOW",
+   "template_code": "STANDARD_CASHFLOW"
+  },
+  {
+   "attribute_code": "CASHFLOW_DATE",
+   "domain_code": "CASH_FLOW",
+   "template_code": "STANDARD_CASHFLOW"
+  },
+  {
+   "attribute_code": "CASHFLOW_TYPE",
+   "domain_code": "CASH_FLOW",
+   "template_code": "STANDARD_CASHFLOW"
+  },
+  {
+   "attribute_code": "CURRENCY",
+   "domain_code": "SECURITY",
+   "template_code": "STANDARD_CASHFLOW"
+  },
+  {
+   "attribute_code": "STATEMENT_END",
+   "domain_code": "STATEMENT_PERIOD",
+   "template_code": "STATEMENT_PERIOD_STANDARD"
+  },
+  {
+   "attribute_code": "STATEMENT_REVENUE",
+   "domain_code": "STATEMENT_PERIOD",
+   "template_code": "STATEMENT_PERIOD_STANDARD"
+  },
+  {
+   "attribute_code": "ORDER_ALLOCATED_AMOUNT",
+   "domain_code": "SYNDICATE_ORDER",
+   "template_code": "SYNDICATE_ORDER_STANDARD"
+  },
+  {
+   "attribute_code": "ORDER_AMOUNT",
+   "domain_code": "SYNDICATE_ORDER",
+   "template_code": "SYNDICATE_ORDER_STANDARD"
+  },
+  {
+   "attribute_code": "SEAT_ROLE",
+   "domain_code": "SYNDICATE_SEAT",
+   "template_code": "SYNDICATE_SEAT_STANDARD"
+  }
+ ]
+}

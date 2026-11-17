@@ -3,8 +3,10 @@ import {
   evaluateCondition,
   isReadTool,
   nextNode,
+  reaches,
   resolveTemplates,
   reviewRouting,
+  splitTargets,
   validateGraph,
   type ReviewRouting,
   type RunScope,
@@ -101,6 +103,43 @@ export interface WorkflowStore {
   saveRun(runId: string, owner: string, patch: RunPatch, release?: boolean): Promise<string | null>;
   event(runId: string, nodeId: string | null, type: string, actor: ActorType, actorId: string | null, summary: string, detail?: unknown): Promise<void>;
   openReview(runId: string, nodeId: string, title: string, instructions: string, summary: string, proposal: unknown, routing: ReviewRouting): Promise<ReviewRow>;
+  /** Starts one child run per input. Returns their ids. Calling it again returns the same children. */
+  spawn(runId: string, inputs: Array<Record<string, unknown>>): Promise<string[]>;
+  /** Opens the step's form, or returns the one already open. A new external form carries its link token, once. */
+  openForm(runId: string, nodeId: string, spec: Record<string, unknown>): Promise<FormRow>;
+}
+
+export interface FormRow {
+  id: string;
+  status: string;
+  answers: Record<string, unknown> | null;
+  note: string | null;
+  created: boolean;
+  token: string | null;
+  externalEmail: string | null;
+  title: string;
+  submittedBy: string | null;
+}
+
+/** A request to one of the client's connections. */
+export interface HttpCall {
+  clientId: string;
+  connection: string;
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/**
+ * What sends data outside the platform. Each throws with a reason when it
+ * cannot send. Left out, the steps that need it fail and say so.
+ */
+export interface Outbound {
+  http(call: HttpCall): Promise<{ status: number; body: unknown }>;
+  email(to: string[], subject: string, text: string): Promise<void>;
+  slack(clientId: string, text: string): Promise<void>;
+  /** The full address of a form's private link. */
+  formLink(token: string): string;
 }
 
 /**
@@ -148,6 +187,7 @@ export interface EngineDeps {
   agent(request: AgentRequest): Promise<AgentResult>;
   /** What the entity type behind a proposed creation requires. Empty when it cannot be found. */
   foundation(args: Record<string, unknown>, actor: Actor): Promise<FoundationAttribute[]>;
+  outbound?: Outbound;
 }
 
 export interface AdvanceResult {
@@ -198,7 +238,7 @@ export function clampOutput(value: unknown): unknown {
   return { truncated: true, note: `The result was ${serialized.length} characters and was cut to fit.`, preview: serialized.slice(0, MAX_OUTPUT_CHARS) };
 }
 
-type StepOutcome = { wait: true; reason: string } | { wait?: false; outcome: string | null; output: unknown };
+type StepOutcome = { wait: true; reason: string } | { wait?: false; outcome: string | null; output: unknown; finish?: boolean };
 
 interface StepContext {
   run: LoadedRun;
@@ -388,10 +428,145 @@ async function runApply(node: WorkflowNode, ctx: StepContext): Promise<StepOutco
   };
 }
 
+/** The most records one run can be split into. */
+export const MAX_CHILD_RUNS = 500;
+
+/**
+ * A Start step set to run once per record: the chosen records become child
+ * runs, one each, and this run ends. A child (it has parentRunId) runs as usual.
+ */
+async function runStart(node: WorkflowNode, ctx: StepContext): Promise<StepOutcome> {
+  if (node.config.runPerRecord !== true || ctx.run.input.parentRunId) return { outcome: null, output: ctx.run.input };
+  const filters = record(ctx.run.input.filters);
+  if (Object.keys(filters).length === 0) throw new Error('This workflow runs once per record, so a run needs records chosen.');
+  const actor: Actor = { userId: ctx.run.startedBy, clientId: ctx.run.clientId };
+  const found = record(await ctx.deps.tools.run('find_records', { ...filters, limit: MAX_CHILD_RUNS }, actor, 'read'));
+  const ids = (Array.isArray(found.entityIds) ? found.entityIds : []).map(String);
+  if (ids.length === 0) return { outcome: null, output: { children: [], note: 'The filters chose no records, so no runs were started.' }, finish: true };
+  const { filters: _drop, ...rest } = ctx.run.input;
+  const children = await ctx.deps.store.spawn(
+    ctx.run.id,
+    ids.map((entityId) => ({ ...rest, filters: { entityIds: [entityId] } })),
+  );
+  await ctx.deps.store.event(ctx.run.id, node.id, 'run.split', 'SYSTEM', null, `Started ${children.length} run${children.length === 1 ? '' : 's'}, one for each record`, {
+    children,
+    ...(typeof found.note === 'string' ? { note: found.note } : {}),
+  });
+  return { outcome: null, output: { children, records: ids.length }, finish: true };
+}
+
+function fieldsOf(node: WorkflowNode): Array<Record<string, unknown>> {
+  return (Array.isArray(node.config.fields) ? node.config.fields : []).filter((field): field is Record<string, unknown> => Boolean(field) && typeof field === 'object');
+}
+
+async function runForm(node: WorkflowNode, ctx: StepContext): Promise<StepOutcome> {
+  const { store } = ctx.deps;
+  const config = record(resolveTemplates(node.config, ctx.scope));
+  const form = await store.openForm(ctx.run.id, node.id, {
+    title: config.title || node.label,
+    instructions: config.instructions || '',
+    fields: fieldsOf(node),
+    people: Array.isArray(config.people) ? config.people : [],
+    roles: Array.isArray(config.roles) ? config.roles : [],
+    external: node.config.external === true,
+    externalEmail: config.externalEmail || '',
+    dueInHours: config.dueInHours ?? null,
+  });
+  if (form.created && form.token && form.externalEmail) {
+    const outbound = ctx.deps.outbound;
+    const link = outbound ? outbound.formLink(form.token) : null;
+    let sent = false;
+    if (outbound && link) {
+      try {
+        await outbound.email([form.externalEmail], form.title, [
+          'Hello,',
+          '',
+          `You have been asked to fill in "${form.title}".`,
+          ...(typeof config.instructions === 'string' && config.instructions ? ['', config.instructions] : []),
+          '',
+          `Open the form: ${link}`,
+          '',
+          'The link works once and expires in 14 days.',
+        ].join('\n'));
+        sent = true;
+      } catch (error) {
+        await store.event(ctx.run.id, node.id, 'form.not_sent', 'SYSTEM', null, `The link could not be emailed to ${form.externalEmail}. ${message(error)}`);
+      }
+    }
+    // Kept in the run's history so someone in the firm can pass it on when it was not emailed.
+    await store.event(ctx.run.id, node.id, 'form.link', 'SYSTEM', null, sent ? `Emailed the form's link to ${form.externalEmail}` : `Send this link to ${form.externalEmail}`, {
+      link: link || `/portal/${form.token}`,
+      emailed: sent,
+    });
+  }
+  if (form.status === 'OPEN') return { wait: true, reason: node.id };
+  if (form.status === 'CANCELLED') throw new Error('The form was cancelled.');
+  const outcome = form.status === 'SUBMITTED' ? 'submitted' : 'declined';
+  return { outcome, output: { outcome, answers: form.answers || {}, note: form.note, formId: form.id, answeredBy: form.submittedBy || form.externalEmail } };
+}
+
+async function runHttp(node: WorkflowNode, ctx: StepContext): Promise<StepOutcome> {
+  const outbound = ctx.deps.outbound;
+  if (!outbound) throw new Error('This worker cannot call connections.');
+  const method = String(node.config.method || 'POST').toUpperCase();
+  if (method !== 'GET' && node.config.allowSend !== true) throw new Error('This step sends data outside the platform and is not allowed to.');
+  const path = String(resolveTemplates(node.config.path || '', ctx.scope) ?? '');
+  const body = method === 'GET' ? undefined : resolveTemplates(node.config.body ?? {}, ctx.scope);
+  const connection = String(node.config.connection || '');
+  const result = await outbound.http({ clientId: ctx.run.clientId, connection, method, path, body });
+  await ctx.deps.store.event(ctx.run.id, node.id, 'http.called', 'SYSTEM', ctx.run.startedBy, `${method} ${connection}${path}: ${result.status}`, { connection, method, path, status: result.status });
+  return { outcome: null, output: clampOutput(result) };
+}
+
+/** Email addresses from a setting: a list, a comma-separated string, or a placeholder for either. */
+export function emailList(value: unknown): string[] {
+  const flat = (Array.isArray(value) ? value : [value]).flat(2);
+  const out: string[] = [];
+  for (const item of flat) {
+    for (const part of String(item ?? '').split(/[\s,;]+/)) {
+      const address = part.trim().toLowerCase();
+      if (address && !out.includes(address)) out.push(address);
+    }
+  }
+  return out;
+}
+
+async function runMessage(node: WorkflowNode, ctx: StepContext): Promise<StepOutcome> {
+  const outbound = ctx.deps.outbound;
+  if (!outbound) throw new Error('This worker cannot send messages.');
+  if (node.config.allowSend !== true) throw new Error('This step sends a message outside the platform and is not allowed to.');
+  const text = String(resolveTemplates(node.config.body || '', ctx.scope) ?? '');
+  if (!text.trim()) throw new Error('The message is empty once the run\'s values are filled in.');
+  if (node.config.channel === 'slack') {
+    await outbound.slack(ctx.run.clientId, text);
+    await ctx.deps.store.event(ctx.run.id, node.id, 'message.sent', 'SYSTEM', ctx.run.startedBy, 'Posted to Slack', { channel: 'slack' });
+    return { outcome: null, output: { channel: 'slack', sent: true } };
+  }
+  const to = emailList(resolveTemplates(node.config.to, ctx.scope));
+  const bad = to.filter((address) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address));
+  if (to.length === 0) throw new Error('There is nobody to email once the run\'s values are filled in.');
+  if (bad.length > 0) throw new Error(`Not an email address: ${bad.join(', ')}.`);
+  if (to.length > 50) throw new Error('A message step emails at most 50 people.');
+  const subject = String(resolveTemplates(node.config.subject || node.label, ctx.scope) ?? node.label).slice(0, 200);
+  await outbound.email(to, subject, text);
+  await ctx.deps.store.event(ctx.run.id, node.id, 'message.sent', 'SYSTEM', ctx.run.startedBy, `Emailed ${to.join(', ')}`, { channel: 'email', to, subject });
+  return { outcome: null, output: { channel: 'email', to, subject, sent: true } };
+}
+
 async function runNode(node: WorkflowNode, ctx: StepContext): Promise<StepOutcome> {
   switch (node.type) {
     case 'start':
-      return { outcome: null, output: ctx.run.input };
+      return runStart(node, ctx);
+    case 'parallel':
+      return { outcome: null, output: { paths: splitTargets(ctx.graph, node.id).map((target) => target.id) } };
+    case 'join':
+      return { outcome: null, output: { joined: ctx.graph.edges.filter((edge) => edge.to === node.id).map((edge) => edge.from) } };
+    case 'form':
+      return runForm(node, ctx);
+    case 'http':
+      return runHttp(node, ctx);
+    case 'message':
+      return runMessage(node, ctx);
     case 'end':
       return { outcome: null, output: null };
     case 'branch': {
@@ -411,6 +586,34 @@ async function runNode(node: WorkflowNode, ctx: StepContext): Promise<StepOutcom
   }
 }
 
+/** Where a run's paths stand, kept in its context between passes. */
+const PATHS = '_paths';
+interface Paths {
+  /** Steps to run next, including ones waiting for a person. */
+  active: string[];
+  /** Joins some path has reached, waiting for the paths that can still reach them. */
+  parked: string[];
+  /** A path has reached End. */
+  ended: boolean;
+}
+
+function readPaths(value: unknown): Paths | null {
+  const raw = record(value);
+  if (!Array.isArray(raw.active)) return null;
+  return {
+    active: raw.active.map(String),
+    parked: Array.isArray(raw.parked) ? raw.parked.map(String) : [],
+    ended: raw.ended === true,
+  };
+}
+
+/**
+ * Walks the run. With no Split in the graph this is one path, step by step.
+ * A Split starts every path leaving it; each goes on by itself, and one that
+ * waits for a person does not hold up the others. A Join goes on once no path
+ * still running can reach it. The run waits when every path left is waiting,
+ * and finishes when no path is left and one reached End.
+ */
 export async function advanceRun(runId: string, owner: string, deps: EngineDeps): Promise<AdvanceResult> {
   const { store } = deps;
   const loaded = await store.load(runId, owner);
@@ -420,8 +623,10 @@ export async function advanceRun(runId: string, owner: string, deps: EngineDeps)
 
   const run = loaded;
   const graph = asGraph(run.graph);
-  const scope: RunScope = { input: run.input, steps: { ...run.context } };
+  const { [PATHS]: savedPaths, ...stepOutputs } = run.context;
+  const scope: RunScope = { input: run.input, steps: { ...stepOutputs } };
   const steps = new Map(run.steps.map((step) => [step.nodeId, step]));
+  const byId = new Map(graph.nodes.map((node) => [node.id, node]));
   let ran = 0;
 
   const fail = async (nodeId: string | null, error: string): Promise<AdvanceResult> => {
@@ -433,14 +638,63 @@ export async function advanceRun(runId: string, owner: string, deps: EngineDeps)
   const problems = validateGraph(graph, deps.tools.names());
   if (problems.length > 0) return fail(problems[0].nodeId, `This version of the workflow cannot run. ${problems[0].message}`);
 
-  let node = (run.currentNode && graph.nodes.find((candidate) => candidate.id === run.currentNode)) || graph.nodes.find((candidate) => candidate.type === 'start');
-  if (!node) return fail(null, 'The workflow has no Start step.');
-  if ((await store.saveRun(runId, owner, { status: 'RUNNING', currentNode: node.id })) !== 'RUNNING') {
+  const startNode = graph.nodes.find((candidate) => candidate.type === 'start');
+  if (!startNode) return fail(null, 'The workflow has no Start step.');
+  const resumed = readPaths(savedPaths);
+  const first = (run.currentNode && byId.get(run.currentNode)) || startNode;
+  const paths: Paths = resumed && resumed.active.length + resumed.parked.length > 0 ? resumed : { active: [first.id], parked: [], ended: false };
+  const waiting: string[] = [];
+  let lastNode: string | null = paths.active[0] ?? null;
+
+  if ((await store.saveRun(runId, owner, { status: 'RUNNING', currentNode: paths.active[0] ?? first.id })) !== 'RUNNING') {
     await store.saveRun(runId, owner, {}, true);
     return { status: 'CANCELLED', steps: ran };
   }
 
+  const savePaths = () => store.saveRun(runId, owner, { context: { [PATHS]: { active: [...waiting, ...paths.active], parked: paths.parked, ended: paths.ended } } });
+  // A Join goes on once no step still to run, or waiting, can reach it.
+  const releaseJoins = () => {
+    for (const joinId of [...paths.parked]) {
+      const heads = [...paths.active, ...waiting];
+      if (!heads.some((head) => head !== joinId && reaches(graph, head, joinId))) {
+        paths.parked = paths.parked.filter((id) => id !== joinId);
+        paths.active.push(joinId);
+      }
+    }
+  };
+  const enqueue = (target: WorkflowNode) => {
+    if (target.type === 'join') {
+      if (!paths.parked.includes(target.id) && !paths.active.includes(target.id) && steps.get(target.id)?.status !== 'SUCCEEDED') paths.parked.push(target.id);
+    } else if (!paths.active.includes(target.id) && !waiting.includes(target.id)) {
+      paths.active.push(target.id);
+    }
+  };
+
   for (;;) {
+    if (paths.active.length === 0) {
+      releaseJoins();
+      if (paths.active.length === 0) {
+        if (waiting.length > 0) {
+          await store.saveRun(runId, owner, { status: 'WAITING', currentNode: waiting[0], context: { [PATHS]: { active: waiting, parked: paths.parked, ended: paths.ended } } }, true);
+          return { status: 'WAITING', steps: ran, waitingOn: waiting.join(',') };
+        }
+        if (paths.ended) {
+          await store.event(runId, null, 'run.finished', 'SYSTEM', null, 'Run finished');
+          await store.saveRun(runId, owner, { status: 'SUCCEEDED', context: { [PATHS]: { active: [], parked: [], ended: true } } }, true);
+          return { status: 'SUCCEEDED', steps: ran };
+        }
+        return fail(lastNode, 'Every path stopped before reaching End.');
+      }
+    }
+
+    const node = byId.get(paths.active.shift() as string);
+    if (!node) return fail(null, 'A path points at a step that is not in this version.');
+    lastNode = node.id;
+    if ((await store.saveRun(runId, owner, { currentNode: node.id })) !== 'RUNNING') {
+      await store.saveRun(runId, owner, {}, true);
+      return { status: 'CANCELLED', steps: ran };
+    }
+
     const step = steps.get(node.id);
     let outcome: string | null;
 
@@ -466,12 +720,15 @@ export async function advanceRun(runId: string, owner: string, deps: EngineDeps)
 
       if (result.wait) {
         await store.saveStep(runId, owner, node.id, { status: 'WAITING' });
-        await store.saveRun(runId, owner, { status: 'WAITING', currentNode: node.id }, true);
-        return { status: 'WAITING', steps: ran, waitingOn: result.reason };
+        waiting.push(node.id);
+        releaseJoins();
+        await savePaths();
+        continue;
       }
 
       outcome = result.outcome;
       scope.steps[node.id] = result.output;
+      steps.set(node.id, { nodeId: node.id, status: 'SUCCEEDED', outcome, output: result.output, state: null });
       ran += 1;
       const held = await store.saveStep(runId, owner, node.id, { status: 'SUCCEEDED', outcome, output: result.output, state: null });
       if (!held) return { status: 'CANCELLED', steps: ran };
@@ -479,20 +736,25 @@ export async function advanceRun(runId: string, owner: string, deps: EngineDeps)
       if (node.type !== 'start' && node.type !== 'end') {
         await store.event(runId, node.id, 'step.finished', 'SYSTEM', null, outcome ? `Finished "${node.label}": ${outcome}` : `Finished "${node.label}"`);
       }
+
+      if (result.finish) {
+        // The run's work was handed on (it was split by record). Nothing after this runs.
+        await store.event(runId, node.id, 'run.finished', 'SYSTEM', null, 'Run finished');
+        await store.saveRun(runId, owner, { status: 'SUCCEEDED', context: { [PATHS]: { active: [], parked: [], ended: true } } }, true);
+        return { status: 'SUCCEEDED', steps: ran };
+      }
     }
 
     if (node.type === 'end') {
-      await store.event(runId, node.id, 'run.finished', 'SYSTEM', null, 'Run finished');
-      await store.saveRun(runId, owner, { status: 'SUCCEEDED', currentNode: node.id }, true);
-      return { status: 'SUCCEEDED', steps: ran };
+      paths.ended = true;
+    } else if (node.type === 'parallel') {
+      for (const target of splitTargets(graph, node.id)) enqueue(target);
+    } else {
+      const next = nextNode(graph, node.id, outcome);
+      if (!next) return fail(node.id, `Nothing follows "${node.label}"${outcome ? ` when the outcome is "${outcome}"` : ''}.`);
+      enqueue(next);
     }
-
-    const next = nextNode(graph, node.id, outcome);
-    if (!next) return fail(node.id, `Nothing follows "${node.label}"${outcome ? ` when the outcome is "${outcome}"` : ''}.`);
-    if ((await store.saveRun(runId, owner, { currentNode: next.id })) !== 'RUNNING') {
-      await store.saveRun(runId, owner, {}, true);
-      return { status: 'CANCELLED', steps: ran };
-    }
-    node = next;
+    releaseJoins();
+    await savePaths();
   }
 }

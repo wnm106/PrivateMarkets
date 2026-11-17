@@ -149,6 +149,12 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, clientId
             <input type="checkbox" disabled={readOnly} checked={config.requiresRecords === true} onChange={(event) => set({ requiresRecords: event.target.checked })} />
             A run must have records chosen. It cannot run on everything.
           </label>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13 }}>
+            <input type="checkbox" style={{ marginTop: 3 }} disabled={readOnly} checked={config.runPerRecord === true} onChange={(event) => set({ runPerRecord: event.target.checked })} />
+            <span>
+              One run per record. A run started on several records starts a run for each of them, up to 500, and ends. Each has its own review. Records must be chosen.
+            </span>
+          </label>
           <Field name="Also ask for" help='Other values a run is asked for, as { "inputs": [{ "key": "periodEnd", "label": "Period end", "type": "date" }] }. type is text, date, or number. Steps read each as {{input.key}}.'>
             <JsonField value={{ inputs: Array.isArray(config.inputs) ? config.inputs : [] }} onChange={(value) => set({ inputs: Array.isArray(value.inputs) ? value.inputs : [] })} rows={4} />
           </Field>
@@ -181,6 +187,113 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, clientId
               <span>This step may change data. It runs without a review. The person who starts the run must be allowed to edit records.</span>
             </label>
           )}
+        </>
+      )}
+
+      {node.type === 'parallel' && (
+        <div style={hint}>
+          Connect this step to the first step of each path. Every path starts, and each goes on by itself: one waiting for a person does not hold up the others. Bring the paths
+          together with a Join, or let each end at End.
+        </div>
+      )}
+
+      {node.type === 'join' && (
+        <div style={hint}>
+          Connect the last step of each path into this one. It goes on once no path that could still reach it is running, so a path a Condition sent elsewhere is not waited for.
+        </div>
+      )}
+
+      {node.type === 'http' && (
+        <>
+          <Field name="Connection" help="The code of one of this client's HTTP connections, set up under Load data. Its base address and stored credential are used.">
+            <input className="text-input" style={full} value={String(config.connection || '')} onChange={(event) => set({ connection: event.target.value.trim().toUpperCase() })} />
+          </Field>
+          <Field name="Method">
+            <select className="text-input" style={full} value={String(config.method || 'POST')} onChange={(event) => set({ method: event.target.value })}>
+              {['GET', 'POST', 'PUT', 'PATCH'].map((method) => (
+                <option key={method} value={method}>{method}</option>
+              ))}
+            </select>
+          </Field>
+          <Field name="Path" help="Added to the connection's address, such as /queries. It cannot leave that address. Use {{input.key}} or {{steps.id.field}} for values from the run.">
+            <input className="text-input" style={full} value={String(config.path || '')} onChange={(event) => set({ path: event.target.value })} />
+          </Field>
+          {String(config.method || 'POST') !== 'GET' && (
+            <Field name="Body" help="Sent as JSON. Placeholders are filled from the run.">
+              <JsonField value={config.body} onChange={(body) => set({ body })} rows={6} />
+            </Field>
+          )}
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, background: 'var(--badge-warn-bg)', color: 'var(--badge-warn-fg)', padding: 8, borderRadius: 6 }}>
+            <input type="checkbox" checked={config.allowSend === true} onChange={(event) => set({ allowSend: event.target.checked })} />
+            <span>This step sends data outside the platform. Put it after a review when what is sent needs approving.</span>
+          </label>
+        </>
+      )}
+
+      {node.type === 'message' && (
+        <>
+          <Field name="Send by">
+            <select className="text-input" style={full} value={String(config.channel || 'email')} onChange={(event) => set({ channel: event.target.value })}>
+              <option value="email">Email</option>
+              <option value="slack">Slack (this client's channel)</option>
+            </select>
+          </Field>
+          {config.channel !== 'slack' && (
+            <>
+              <Field name="To" help="Email addresses, separated by commas, or a placeholder such as {{input.adminEmail}}. At most 50.">
+                <input className="text-input" style={full} value={Array.isArray(config.to) ? config.to.join(', ') : String(config.to || '')} onChange={(event) => set({ to: event.target.value })} />
+              </Field>
+              <Field name="Subject">
+                <input className="text-input" style={full} value={String(config.subject || '')} onChange={(event) => set({ subject: event.target.value })} />
+              </Field>
+            </>
+          )}
+          <Field name="Message" help="Placeholders are filled from the run, such as {{steps.reconcile.summary}}.">
+            <textarea className="text-input" rows={7} style={{ ...full, fontSize: 12 }} value={String(config.body || '')} onChange={(event) => set({ body: event.target.value })} />
+          </Field>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, background: 'var(--badge-warn-bg)', color: 'var(--badge-warn-fg)', padding: 8, borderRadius: 6 }}>
+            <input type="checkbox" checked={config.allowSend === true} onChange={(event) => set({ allowSend: event.target.checked })} />
+            <span>This step sends data outside the platform. Put it after a review when what is sent needs approving.</span>
+          </label>
+        </>
+      )}
+
+      {node.type === 'form' && (
+        <>
+          <Field name="Title">
+            <input className="text-input" style={full} value={String(config.title || '')} onChange={(event) => set({ title: event.target.value })} />
+          </Field>
+          <Field name="What to ask" help="Shown above the form. Placeholders are filled from the run.">
+            <textarea className="text-input" rows={3} style={{ ...full, fontSize: 12 }} value={String(config.instructions || '')} onChange={(event) => set({ instructions: event.target.value })} />
+          </Field>
+          <Field
+            name="Fields"
+            help='As { "fields": [{ "key": "nav", "label": "NAV", "type": "number", "required": true }] }. type is text, longtext, number, date, choice (with "options"), or yesno. Later steps read the answers as {{steps.this.answers.key}}.'
+          >
+            <JsonField value={{ fields: Array.isArray(config.fields) ? config.fields : [] }} onChange={(value) => set({ fields: Array.isArray(value.fields) ? value.fields : [] })} rows={8} />
+          </Field>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
+            <input type="checkbox" style={{ marginTop: 2 }} checked={config.external === true} onChange={(event) => set({ external: event.target.checked })} />
+            <span>Send it to someone outside the firm, by a private link. The link works once and expires in 14 days.</span>
+          </label>
+          {config.external === true ? (
+            <Field name="Their email" help="Or a placeholder such as {{input.adminEmail}}. The link is emailed when the worker can send email; otherwise it is kept in the run's history to pass on.">
+              <input className="text-input" style={full} value={String(config.externalEmail || '')} onChange={(event) => set({ externalEmail: event.target.value })} />
+            </Field>
+          ) : (
+            <div style={{ display: 'grid', gap: 4 }}>
+              <span style={label}>Who fills it in</span>
+              <ReviewerPicker clientId={clientId} people={list(config.people)} roles={list(config.roles)} onChange={(next) => set({ people: next.people, roles: next.roles })} />
+              <span style={hint}>Tick nobody for anyone who holds the review permission.</span>
+            </div>
+          )}
+          <Field name="Hours to answer" help="Shown as due, then overdue. Leave blank for no due date.">
+            <input className="text-input" style={full} inputMode="decimal" value={config.dueInHours === undefined || config.dueInHours === null ? '' : String(config.dueInHours)} onChange={(event) => {
+              const text = event.target.value.trim();
+              set({ dueInHours: text === '' ? null : Number.isFinite(Number(text)) ? Number(text) : text });
+            }} />
+          </Field>
+          <div style={hint}>Connect the step's submitted and declined outcomes, or one connection for both.</div>
         </>
       )}
 
@@ -264,6 +377,17 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, clientId
             <ReviewerPicker rolesOnly clientId={clientId} people={[]} roles={list(config.escalateRoles)} onChange={(next) => set({ escalateRoles: next.roles })} />
             <span style={hint}>People holding these roles are told once the review passes its due date, so they can chase it or reassign it.</span>
           </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
+            <input type="checkbox" style={{ marginTop: 2 }} checked={config.reassignWhenOverdue === true} onChange={(event) => set({ reassignWhenOverdue: event.target.checked })} />
+            <span>When it is overdue, hand it to those roles as well as telling them.</span>
+          </label>
+          <Field name="Approvals needed" help="How many different people must approve the same changes. Any one of them can reject. If someone changes what is approved, the count starts again.">
+            <select className="text-input" style={full} value={String(config.approvals ?? 1)} onChange={(event) => set({ approvals: Number(event.target.value) })}>
+              {[1, 2, 3, 4, 5].map((count) => (
+                <option key={count} value={count}>{count === 1 ? 'One person' : `${count} people`}</option>
+              ))}
+            </select>
+          </Field>
         </>
       )}
 
