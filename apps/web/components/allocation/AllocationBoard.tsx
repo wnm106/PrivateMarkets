@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION } from '@/lib/graphql';
 import { domainHref } from '@/lib/domain-routes';
@@ -243,8 +243,10 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const asOfDate = useTemporalStore((state) => state.asOfDate);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [holds, setHolds] = useState<Record<string, number>>({});
+  const [baselineHolds, setBaselineHolds] = useState<Record<string, number>>({});
   const [adjustments, setAdjustments] = useState<Adjustment[]>([]);
   const [seeded, setSeeded] = useState(false);
+  const requestId = useRef(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -265,6 +267,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   }, [live.pages, tab]);
 
   const load = useCallback(async (local: { holds: Record<string, number>; adjustments: Adjustment[] } | null) => {
+    const id = ++requestId.current;
     setLoading(true);
     const variables: Record<string, unknown> = { dealId, asOfDate };
     if (local) {
@@ -279,6 +282,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       }));
     }
     const result = await graphqlQuery<{ previewAllocation: Preview }>(PREVIEW, variables, 'network-only');
+    if (id !== requestId.current) return;
     const message = result.error?.message;
     const data = result.data?.previewAllocation;
     if (message || !data) {
@@ -292,6 +296,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       const nextHolds: Record<string, number> = {};
       for (const tranche of data.tranches) nextHolds[tranche.id] = tranche.holdPct;
       setHolds(nextHolds);
+      setBaselineHolds(nextHolds);
       setAdjustments(data.adjustments || []);
       setExpanded(new Set(data.rows.filter((row) => row.level === 'PORTFOLIO').map((row) => row.fundId)));
       setSelected(data.rows[0]?.fundId || null);
@@ -330,7 +335,16 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       setError(message);
       return;
     }
+    setBaselineHolds({ ...holds });
     setNotice('Allocation saved.');
+  };
+
+  const resetAllocation = () => {
+    setHolds(baselineHolds);
+    setAdjustments([]);
+    setEdit(null);
+    setError(null);
+    setNotice('Allocation reset to the engine proposal. Commit allocation to save it.');
   };
 
   const title = preview?.dealName || dealName || 'Allocation';
@@ -346,6 +360,10 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
     { label: title },
   ]);
   const tranches = preview?.tranches || [];
+  const holdsMatchBaseline = tranches.every((tranche) => (
+    Math.abs((holds[tranche.id] ?? tranche.holdPct) - (baselineHolds[tranche.id] ?? tranche.holdPct)) < 1e-6
+  ));
+  const allocationDirty = adjustments.length > 0 || !holdsMatchBaseline;
   const facility = preview?.facilitySize || 0;
   const blended = facility ? tranches.reduce((total, tranche) => total + tranche.size * (holds[tranche.id] ?? tranche.holdPct), 0) / facility : 0;
   const stageIndex = STAGES.indexOf(preview?.stage || '');
@@ -591,10 +609,14 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
 
           <section className="da-sec">
             <div className="da-sechead">
-              <h2>Allocation grid</h2>
+              <div>
+                <h2>Allocation grid</h2>
+                <p>The allocation engine caps each fund at its pro forma limit and spreads the rest of that tranche across the other eligible portfolios.</p>
+              </div>
               <div className="page-actions">
                 <button type="button" className="btn" onClick={() => setExpanded(new Set(preview.rows.filter((row) => row.level === 'PORTFOLIO').map((row) => row.fundId)))}>Expand all</button>
                 <button type="button" className="btn" onClick={() => setExpanded(new Set())}>Collapse all</button>
+                <button type="button" className="btn" disabled={!allocationDirty} onClick={resetAllocation}>Reset allocation</button>
                 <button type="button" className="btn" disabled={!adjustments.length} onClick={() => setAdjustments([])}>Clear adjustments</button>
                 <button type="button" className="btn btn-primary" disabled={saving} onClick={() => { void commit(); }}>{saving ? 'Saving…' : 'Commit allocation'}</button>
               </div>

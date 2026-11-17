@@ -2,10 +2,12 @@
  * Progressive-fill allocation.
  *
  * Each tranche hold is shared across eligible portfolios in proportion to
- * available capital. A portfolio that would exceed a cap is scaled back and
- * the remainder is shared again. Sleeve amounts are filled inside the
- * portfolio total. Manual overrides lock a cell. Exclusions remove a fund
- * and the amount moves to whoever is still eligible.
+ * available capital. A portfolio that would exceed its pro forma single-issuer
+ * limit (or a tighter liquidity, sponsor, or unfunded cap) is scaled back to
+ * that limit, and the residual of that tranche is shared again across the
+ * portfolios that are still eligible and still under their cap. Sleeve amounts
+ * are filled inside the portfolio total. Manual overrides lock a cell.
+ * Exclusions remove a fund and the amount moves to whoever is still eligible.
  *
  * Money is in one unit throughout. Two-decimal rounding uses largest
  * remainder so sleeve amounts add up to the portfolio amount.
@@ -268,7 +270,7 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
     const issuer = portfolio.issuerLimit * sleeve.nav;
     return available <= issuer
       ? { value: available, why: 'available capital' }
-      : { value: issuer, why: 'single-issuer concentration limit' };
+      : { value: issuer, why: 'pro forma single-issuer limit' };
   };
   const sleeveEligible = (portfolio: AllocationPortfolio, sleeve: AllocationSleeve, trancheIndex: number) => {
     const tranche = tranches[trancheIndex];
@@ -281,9 +283,14 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
     portfolio.sleeves.some((sleeve) => sleeveEligible(portfolio, sleeve, trancheIndex))
   );
   const portfolioCap = (portfolio: AllocationPortfolio) => {
+    const sleeveCaps = portfolio.sleeves.map((sleeve) => sleeveCap(portfolio, sleeve));
+    const sleeveReasons = [...new Set(sleeveCaps.map((cap) => cap.why))];
     const parts = [
-      { value: sum(portfolio.sleeves.map((sleeve) => sleeveCap(portfolio, sleeve).value)), why: 'sub-portfolio capacity' },
-      { value: portfolio.issuerLimit * portfolio.nav, why: 'single-issuer concentration limit' },
+      {
+        value: sum(sleeveCaps.map((cap) => cap.value)),
+        why: sleeveReasons.length === 1 ? sleeveReasons[0] : 'sub-portfolio capacity',
+      },
+      { value: portfolio.issuerLimit * portfolio.nav, why: 'pro forma single-issuer limit' },
       { value: portfolio.sponsorLimit * portfolio.nav - portfolio.sponsorExposure, why: 'sponsor concentration limit' },
     ];
     const tightest = parts.reduce((best, part) => (part.value < best.value ? part : best));
@@ -379,7 +386,13 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
             0,
             Math.min(capPerTranche[portfolioIndex][trancheIndex], portfolioFill!.alloc[portfolioIndex][trancheIndex] - leftover),
           );
-          capWhy[portfolioIndex][trancheIndex] = 'sub-portfolio capacity';
+          const reasons = portfolio.sleeves.flatMap((sleeve, sleeveIndex) => {
+            const fillResult = sleeveFills[portfolioIndex];
+            const binding = fillResult.flagTotal[sleeveIndex] || fillResult.flagPerTranche[sleeveIndex][trancheIndex];
+            return binding ? [sleeveCap(portfolio, sleeve).why] : [];
+          });
+          const unique = [...new Set(reasons)];
+          capWhy[portfolioIndex][trancheIndex] = unique.length === 1 ? unique[0] : 'sub-portfolio capacity';
           changed = true;
         }
       });

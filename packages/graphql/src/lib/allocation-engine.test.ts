@@ -118,6 +118,117 @@ describe('allocation engine', () => {
     expect(moved).toBeCloseTo(system - 10, 1);
   });
 
+  it('caps a fund at its pro forma limit and spreads that tranche’s residual across the other eligible portfolios', () => {
+    const tight: AllocationPortfolio = {
+      id: 'tight',
+      name: 'Tight Limit',
+      nav: 1000,
+      issuerLimit: 0.02,
+      sponsorLimit: 1,
+      unfundedLimit: 1,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['LOAN'],
+      denyNote: '',
+      sleeves: [{
+        id: 'tight-main', name: 'Main', nav: 1000, cash: 400, undrawn: 0, line: 0, reserve: 0,
+        allowed: ['LOAN'], denyNote: '',
+      }],
+    };
+    const roomy: AllocationPortfolio = {
+      id: 'roomy',
+      name: 'Room to Spare',
+      nav: 1000,
+      issuerLimit: 0.5,
+      sponsorLimit: 1,
+      unfundedLimit: 1,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['LOAN'],
+      denyNote: '',
+      sleeves: [{
+        id: 'roomy-main', name: 'Main', nav: 1000, cash: 400, undrawn: 0, line: 0, reserve: 0,
+        allowed: ['LOAN'], denyNote: '',
+      }],
+    };
+    const blocked: AllocationPortfolio = {
+      id: 'blocked',
+      name: 'Mandate Block',
+      nav: 5000,
+      issuerLimit: 0.5,
+      sponsorLimit: 1,
+      unfundedLimit: 1,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['WARRANT'],
+      denyNote: 'Mandate does not permit loans',
+      sleeves: [{
+        id: 'blocked-main', name: 'Main', nav: 5000, cash: 2000, undrawn: 0, line: 0, reserve: 0,
+        allowed: ['WARRANT'], denyNote: 'Mandate does not permit loans',
+      }],
+    };
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [tight, roomy, blocked],
+    });
+
+    expect(cell(result, 'tight', 'tl').amount).toBeCloseTo(20, 2);
+    expect(cell(result, 'tight', 'tl').capReason).toBe('pro forma single-issuer limit');
+    expect(cell(result, 'roomy', 'tl').amount).toBeCloseTo(80, 2);
+    expect(cell(result, 'blocked', 'tl').amount).toBe(0);
+    expect(cell(result, 'blocked', 'tl').eligible).toBe(false);
+    expect(result.tranches[0].allocated).toBeCloseTo(100, 2);
+    expect(result.unallocated).toBeCloseTo(0, 2);
+  });
+
+  it('splits a capped tranche’s residual across the remaining eligible portfolios in proportion to available capital', () => {
+    const fund = (id: string, cash: number, issuerLimit: number): AllocationPortfolio => ({
+      id,
+      name: id,
+      nav: 1000,
+      issuerLimit,
+      sponsorLimit: 1,
+      unfundedLimit: 1,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['LOAN'],
+      denyNote: '',
+      sleeves: [{
+        id: `${id}-main`, name: 'Main', nav: 1000, cash, undrawn: 0, line: 0, reserve: 0,
+        allowed: ['LOAN'], denyNote: '',
+      }],
+    });
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [
+        fund('small', 100, 0.01),
+        fund('mid', 100, 0.5),
+        fund('large', 300, 0.5),
+      ],
+    });
+
+    expect(cell(result, 'small', 'tl').amount).toBeCloseTo(10, 2);
+    expect(cell(result, 'small', 'tl').capReason).toBe('pro forma single-issuer limit');
+    expect(cell(result, 'mid', 'tl').amount).toBeCloseTo(22.5, 2);
+    expect(cell(result, 'large', 'tl').amount).toBeCloseTo(67.5, 2);
+    expect(result.allocated).toBeCloseTo(100, 2);
+  });
+
+  it('keeps every Halyard portfolio inside its pro forma limit when the hold is the whole facility', () => {
+    const result = allocate({
+      tranches: halyardTranches.map((tranche) => ({ ...tranche, holdPct: 100 })),
+      portfolios,
+    });
+    for (const portfolio of portfolios) {
+      const row = result.rows.find((item) => item.fundId === portfolio.id);
+      expect(row).toBeTruthy();
+      expect(row!.total).toBeLessThanOrEqual(portfolio.issuerLimit * portfolio.nav + 0.02);
+    }
+    const placed = result.rows.filter((row) => row.level === 'PORTFOLIO').reduce((total, row) => total + row.total, 0);
+    expect(placed).toBeCloseTo(result.allocated, 2);
+    expect(result.allocated).toBeGreaterThan(result.targetHold * 0.9);
+  });
+
   it('removes an excluded portfolio and leaves the warrant off a fund that cannot hold it', () => {
     const result = allocate(halyard([
       { fundId: 'poc', trancheId: '*', type: 'exclude', reason: 'MAND' },
