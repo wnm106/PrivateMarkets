@@ -2,10 +2,14 @@
  * Progressive-fill allocation.
  *
  * Each tranche hold is shared across eligible portfolios in proportion to
- * available capital. A portfolio that would exceed a cap is scaled back and
- * the remainder is shared again. Sleeve amounts are filled inside the
- * portfolio total. Manual overrides lock a cell. Exclusions remove a fund
- * and the amount moves to whoever is still eligible.
+ * available capital. When a fund carries compliance capacity pools, each
+ * security is capped at the lowest remaining capacity of the rules that
+ * security would make worse, and securities that share a rule share that
+ * rule's capacity. The residual of a capped tranche is shared again across
+ * the portfolios that are still eligible and still under their capacity.
+ * Sleeve amounts are filled inside the portfolio total. Manual overrides
+ * lock a cell. Exclusions remove a fund and the amount moves to whoever is
+ * still eligible.
  *
  * Money is in one unit throughout. Two-decimal rounding uses largest
  * remainder so sleeve amounts add up to the portfolio amount.
@@ -21,6 +25,14 @@ export interface AllocationTranche {
   instrumentType: string;
 }
 
+/** One compliance rule's remaining room, shared by the tranches it covers. */
+export interface AllocationCapacityPool {
+  trancheIds: string[];
+  /** Additional amount, in the same unit as the tranche sizes. Already the rule's capacity. */
+  capacity: number;
+  ruleName: string;
+}
+
 export interface AllocationSleeve {
   id: string;
   name: string;
@@ -31,6 +43,11 @@ export interface AllocationSleeve {
   reserve: number;
   allowed: string[];
   denyNote: string;
+  /**
+   * Present when caps come from compliance.fund_security_capacities.
+   * An empty list means no rule constrains this sleeve.
+   */
+  capacityPools?: AllocationCapacityPool[];
 }
 
 export interface AllocationPortfolio {
@@ -46,6 +63,11 @@ export interface AllocationPortfolio {
   allowed: string[];
   denyNote: string;
   sleeves: AllocationSleeve[];
+  /**
+   * Present when caps come from compliance.fund_security_capacities.
+   * Issuer, sponsor, and unfunded limits on the fund are not applied on top.
+   */
+  capacityPools?: AllocationCapacityPool[];
 }
 
 export type AdjustmentType = 'override' | 'exclude';
@@ -72,6 +94,8 @@ export interface AllocationCellResult {
   amount: number;
   systemAmount: number;
   capReason: string | null;
+  /** Every child fund in this tranche is overridden and the children do not sum to this amount. */
+  imbalance: boolean;
   exclusionKind: string | null;
   exclusionCode: string | null;
   exclusionText: string | null;
@@ -139,12 +163,21 @@ function portfolioAvailable(portfolio: AllocationPortfolio): number {
   return sum(portfolio.sleeves.map(sleeveAvailable));
 }
 
+interface FillPool {
+  members: number[];
+  cap: number;
+  label: string;
+}
+
 interface FillInput {
   targets: number[];
   weight: number[];
   capTotal: number[];
   capPerTranche: number[][];
   eligible: boolean[][];
+  /** Per participant, the shared compliance capacities that cover a subset of tranches. */
+  pools?: FillPool[][];
+  capWhy?: string[][];
 }
 
 interface FillResult {
@@ -192,6 +225,17 @@ function fill(input: FillInput): FillResult {
       }
     }
     for (let index = 0; index < count; index += 1) {
+      for (const pool of input.pools?.[index] || []) {
+        const taken = sum(pool.members.map((tranche) => tentative[index][tranche] || 0));
+        if (taken > pool.cap + 1e-9 && taken > 0) {
+          const scale = Math.max(0, pool.cap) / taken;
+          for (const tranche of pool.members) {
+            tentative[index][tranche] *= scale;
+            flagPerTranche[index][tranche] = true;
+            if (input.capWhy) input.capWhy[index][tranche] = pool.label;
+          }
+        }
+      }
       const taken = sum(tentative[index]);
       if (taken > remainingCap[index] + 1e-9) {
         const scale = remainingCap[index] / taken;
@@ -237,12 +281,70 @@ interface RawRow {
   override: Array<AllocationAdjustment | null>;
   why: Array<{ kind: string; code?: string; text: string } | null>;
   cap: Array<string | null>;
+  imbalance: boolean[];
 }
 
 interface RawResult {
   targets: number[];
   rows: Map<string, RawRow>;
   totals: number[];
+}
+
+interface ResolvedCaps {
+  capTotal: number;
+  totalWhy: string;
+  capPerTranche: number[];
+  whyPerTranche: string[];
+  pools: FillPool[];
+}
+
+/** Funding room, then the lowest compliance capacity on each security, with shared rules kept intact. */
+function resolveComplianceCaps(
+  pools: AllocationCapacityPool[],
+  trancheIds: string[],
+  fundingCap: number,
+): ResolvedCaps {
+  const indexOf = new Map(trancheIds.map((id, index) => [id, index]));
+  const perCap = trancheIds.map(() => Number.POSITIVE_INFINITY);
+  const perWhy = trancheIds.map(() => '');
+  let total = fundingCap;
+  let totalWhy = 'available capital';
+  const fillPools: FillPool[] = [];
+  for (const pool of pools) {
+    const members = [...new Set(
+      pool.trancheIds
+        .map((id) => indexOf.get(id))
+        .filter((index): index is number => index !== undefined),
+    )];
+    if (!members.length || !Number.isFinite(pool.capacity)) continue;
+    const capacity = Math.max(0, pool.capacity);
+    fillPools.push({ members, cap: capacity, label: pool.ruleName });
+    if (members.length === trancheIds.length && capacity < total) {
+      total = capacity;
+      totalWhy = pool.ruleName;
+    }
+    for (const member of members) {
+      if (capacity < perCap[member]) {
+        perCap[member] = capacity;
+        perWhy[member] = pool.ruleName;
+      }
+    }
+  }
+  const cappedTotal = Math.max(0, total);
+  perCap.forEach((cap, index) => {
+    if (cappedTotal < cap) {
+      perCap[index] = cappedTotal;
+      perWhy[index] = totalWhy;
+    }
+  });
+  return { capTotal: cappedTotal, totalWhy, capPerTranche: perCap, whyPerTranche: perWhy, pools: fillPools };
+}
+
+function poolsAfterLocks(pools: FillPool[], locks: Array<number | null>): FillPool[] {
+  return pools.map((pool) => ({
+    ...pool,
+    cap: Math.max(0, pool.cap - sum(pool.members.map((tranche) => locks[tranche] || 0))),
+  }));
 }
 
 function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]): RawResult {
@@ -268,7 +370,7 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
     const issuer = portfolio.issuerLimit * sleeve.nav;
     return available <= issuer
       ? { value: available, why: 'available capital' }
-      : { value: issuer, why: 'single-issuer concentration limit' };
+      : { value: issuer, why: 'pro forma single-issuer limit' };
   };
   const sleeveEligible = (portfolio: AllocationPortfolio, sleeve: AllocationSleeve, trancheIndex: number) => {
     const tranche = tranches[trancheIndex];
@@ -281,9 +383,14 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
     portfolio.sleeves.some((sleeve) => sleeveEligible(portfolio, sleeve, trancheIndex))
   );
   const portfolioCap = (portfolio: AllocationPortfolio) => {
+    const sleeveCaps = portfolio.sleeves.map((sleeve) => sleeveCap(portfolio, sleeve));
+    const sleeveReasons = [...new Set(sleeveCaps.map((cap) => cap.why))];
     const parts = [
-      { value: sum(portfolio.sleeves.map((sleeve) => sleeveCap(portfolio, sleeve).value)), why: 'sub-portfolio capacity' },
-      { value: portfolio.issuerLimit * portfolio.nav, why: 'single-issuer concentration limit' },
+      {
+        value: sum(sleeveCaps.map((cap) => cap.value)),
+        why: sleeveReasons.length === 1 ? sleeveReasons[0] : 'sub-portfolio capacity',
+      },
+      { value: portfolio.issuerLimit * portfolio.nav, why: 'pro forma single-issuer limit' },
       { value: portfolio.sponsorLimit * portfolio.nav - portfolio.sponsorExposure, why: 'sponsor concentration limit' },
     ];
     const tightest = parts.reduce((best, part) => (part.value < best.value ? part : best));
@@ -300,12 +407,28 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
   });
 
   const unfundedSize = sum(tranches.filter((tranche) => tranche.unfunded).map((tranche) => tranche.size)) || 1;
-  const capPerTranche = portfolios.map((portfolio) => tranches.map((tranche) => (
-    tranche.unfunded
-      ? Math.max(0, portfolio.unfundedLimit * portfolio.nav - portfolio.unfundedExposure) * tranche.size / unfundedSize
-      : Number.POSITIVE_INFINITY
-  )));
-  const capWhy: string[][] = portfolios.map(() => tranches.map((tranche) => (tranche.unfunded ? 'unfunded commitment limit' : '')));
+  const trancheIds = tranches.map((tranche) => tranche.id);
+  const compliance = portfolios.some((portfolio) => Array.isArray(portfolio.capacityPools));
+  const compliancePlan = compliance
+    ? portfolios.map((portfolio) => resolveComplianceCaps(portfolio.capacityPools ?? [], trancheIds, portfolioAvailable(portfolio)))
+    : null;
+  const sleevePlan = compliance
+    ? portfolios.map((portfolio) => portfolio.sleeves.map((sleeve) => resolveComplianceCaps(
+      sleeve.capacityPools ?? [],
+      trancheIds,
+      sleeveAvailable(sleeve),
+    )))
+    : null;
+  const capPerTranche = compliancePlan
+    ? compliancePlan.map((plan) => plan.capPerTranche.slice())
+    : portfolios.map((portfolio) => tranches.map((tranche) => (
+      tranche.unfunded
+        ? Math.max(0, portfolio.unfundedLimit * portfolio.nav - portfolio.unfundedExposure) * tranche.size / unfundedSize
+        : Number.POSITIVE_INFINITY
+    )));
+  const capWhy: string[][] = compliancePlan
+    ? compliancePlan.map((plan) => plan.whyPerTranche.slice())
+    : portfolios.map(() => tranches.map((tranche) => (tranche.unfunded ? 'unfunded commitment limit' : '')));
 
   let portfolioFill: FillResult | null = null;
   let sleeveFills: Array<FillResult & { locks: Array<Array<number | null>> }> = [];
@@ -317,8 +440,12 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
     portfolioFill = fill({
       targets: targets.map((target, trancheIndex) => Math.max(0, target - lockedByTranche[trancheIndex])),
       weight: portfolios.map(portfolioAvailable),
-      capTotal: portfolios.map((portfolio, portfolioIndex) => Math.max(0, portfolioCap(portfolio).value - lockedByPortfolio[portfolioIndex])),
+      capTotal: portfolios.map((portfolio, portfolioIndex) => Math.max(0, (
+        compliancePlan ? compliancePlan[portfolioIndex].capTotal : portfolioCap(portfolio).value
+      ) - lockedByPortfolio[portfolioIndex])),
       capPerTranche,
+      pools: compliancePlan?.map((plan, portfolioIndex) => poolsAfterLocks(plan.pools, locks[portfolioIndex])),
+      capWhy,
       eligible: portfolios.map((portfolio, portfolioIndex) => tranches.map((_, trancheIndex) => (
         portfolioEligible(portfolio, trancheIndex) && locks[portfolioIndex][trancheIndex] === null
       ))),
@@ -333,8 +460,15 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
         return cell && sleeveEligible(portfolio, sleeve, trancheIndex) && cell.amount != null ? cell.amount : null;
       }));
       tranches.forEach((_, trancheIndex) => {
+        const eligibleIndexes = portfolio.sleeves
+          .map((sleeve, sleeveIndex) => sleeveIndex)
+          .filter((sleeveIndex) => sleeveEligible(portfolio, portfolio.sleeves[sleeveIndex], trancheIndex));
+        const allLocked = eligibleIndexes.length > 0
+          && eligibleIndexes.every((sleeveIndex) => sleeveLocks[sleeveIndex][trancheIndex] !== null);
         const locked = sum(sleeveLocks.map((row) => row[trancheIndex] || 0));
-        if (locked > portfolioAmounts[portfolioIndex][trancheIndex] + 1e-9 && locked > 0) {
+        // Overridden children keep the amount that was typed. When every child is
+        // overridden, a gap against the parent is reported instead of being scaled away.
+        if (!allLocked && locked > portfolioAmounts[portfolioIndex][trancheIndex] + 1e-9 && locked > 0) {
           const scale = portfolioAmounts[portfolioIndex][trancheIndex] / locked;
           sleeveLocks.forEach((row) => {
             if (row[trancheIndex] !== null) row[trancheIndex] = (row[trancheIndex] as number) * scale;
@@ -357,11 +491,17 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
       });
       const lockedByTranche = tranches.map((_, trancheIndex) => sum(sleeveLocks.map((row) => row[trancheIndex] || 0)));
       const lockedBySleeve = sleeveLocks.map((row) => sum(row.map((value) => value || 0)));
+      const sleeveCaps = sleevePlan?.[portfolioIndex];
       const result = fill({
         targets: tranches.map((_, trancheIndex) => Math.max(0, portfolioAmounts[portfolioIndex][trancheIndex] - lockedByTranche[trancheIndex])),
         weight: portfolio.sleeves.map(sleeveAvailable),
-        capTotal: portfolio.sleeves.map((sleeve, sleeveIndex) => Math.max(0, sleeveCap(portfolio, sleeve).value - lockedBySleeve[sleeveIndex])),
-        capPerTranche: portfolio.sleeves.map(() => tranches.map(() => Number.POSITIVE_INFINITY)),
+        capTotal: portfolio.sleeves.map((sleeve, sleeveIndex) => Math.max(0, (
+          sleeveCaps ? sleeveCaps[sleeveIndex].capTotal : sleeveCap(portfolio, sleeve).value
+        ) - lockedBySleeve[sleeveIndex])),
+        capPerTranche: sleeveCaps
+          ? sleeveCaps.map((plan) => plan.capPerTranche)
+          : portfolio.sleeves.map(() => tranches.map(() => Number.POSITIVE_INFINITY)),
+        pools: sleeveCaps?.map((plan, sleeveIndex) => poolsAfterLocks(plan.pools, sleeveLocks[sleeveIndex])),
         eligible: portfolio.sleeves.map((sleeve, sleeveIndex) => tranches.map((_, trancheIndex) => (
           sleeveEligible(portfolio, sleeve, trancheIndex) && sleeveLocks[sleeveIndex][trancheIndex] === null
         ))),
@@ -379,7 +519,21 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
             0,
             Math.min(capPerTranche[portfolioIndex][trancheIndex], portfolioFill!.alloc[portfolioIndex][trancheIndex] - leftover),
           );
-          capWhy[portfolioIndex][trancheIndex] = 'sub-portfolio capacity';
+          const reasons = portfolio.sleeves.flatMap((sleeve, sleeveIndex) => {
+            const fillResult = sleeveFills[portfolioIndex];
+            const binding = fillResult.flagTotal[sleeveIndex] || fillResult.flagPerTranche[sleeveIndex][trancheIndex];
+            if (!binding) return [];
+            const planned = sleevePlan?.[portfolioIndex]?.[sleeveIndex];
+            if (planned) {
+              const reason = fillResult.flagPerTranche[sleeveIndex][trancheIndex]
+                ? planned.whyPerTranche[trancheIndex] || planned.totalWhy
+                : planned.totalWhy;
+              return reason ? [reason] : [];
+            }
+            return [sleeveCap(portfolio, sleeve).why];
+          });
+          const unique = [...new Set(reasons)];
+          capWhy[portfolioIndex][trancheIndex] = unique.length === 1 ? unique[0] : 'sub-portfolio capacity';
           changed = true;
         }
       });
@@ -447,7 +601,24 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
         row[trancheIndex] = row[trancheIndex] / 100;
       });
     });
-    const amounts = tranches.map((_, trancheIndex) => sum(sleeveAmounts.map((row) => row[trancheIndex])));
+    const amounts = tranches.map((_, trancheIndex) => {
+      const sleeveSum = sum(sleeveAmounts.map((row) => row[trancheIndex]));
+      const eligibleIndexes = portfolio.sleeves
+        .map((sleeve, sleeveIndex) => sleeveIndex)
+        .filter((sleeveIndex) => sleeveEligible(portfolio, portfolio.sleeves[sleeveIndex], trancheIndex));
+      const allLocked = eligibleIndexes.length > 0
+        && eligibleIndexes.every((sleeveIndex) => sleeveFills[portfolioIndex].locks[sleeveIndex][trancheIndex] !== null);
+      return allLocked ? portfolioAmounts[portfolioIndex][trancheIndex] : sleeveSum;
+    });
+    const imbalance = tranches.map((_, trancheIndex) => {
+      const sleeveSum = sum(sleeveAmounts.map((row) => row[trancheIndex]));
+      const eligibleIndexes = portfolio.sleeves
+        .map((sleeve, sleeveIndex) => sleeveIndex)
+        .filter((sleeveIndex) => sleeveEligible(portfolio, portfolio.sleeves[sleeveIndex], trancheIndex));
+      const allLocked = eligibleIndexes.length > 0
+        && eligibleIndexes.every((sleeveIndex) => sleeveFills[portfolioIndex].locks[sleeveIndex][trancheIndex] !== null);
+      return allLocked && Math.abs(sleeveSum - portfolioAmounts[portfolioIndex][trancheIndex]) > 0.01;
+    });
     const eligible = tranches.map((_, trancheIndex) => portfolioEligible(portfolio, trancheIndex));
     const cap = portfolioCap(portfolio);
     rows.set(portfolio.id, {
@@ -458,14 +629,18 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
       excludedEntirely: exclusion(portfolio.id, '*'),
       override: tranches.map((tranche, trancheIndex) => (eligible[trancheIndex] ? override(portfolio.id, tranche.id) : null)),
       why: tranches.map((_, trancheIndex) => (eligible[trancheIndex] ? null : parentReason(portfolio, trancheIndex))),
+      imbalance,
       cap: tranches.map((_, trancheIndex) => {
         if (!eligible[trancheIndex] || locks[portfolioIndex][trancheIndex] !== null) return null;
         if (portfolioFill!.flagPerTranche[portfolioIndex][trancheIndex]) return capWhy[portfolioIndex][trancheIndex] || null;
-        if (portfolioFill!.flagTotal[portfolioIndex] && amounts[trancheIndex] > 0) return cap.why;
+        if (portfolioFill!.flagTotal[portfolioIndex] && amounts[trancheIndex] > 0) {
+          return compliancePlan ? compliancePlan[portfolioIndex].totalWhy : cap.why;
+        }
         return null;
       }),
     });
     portfolio.sleeves.forEach((sleeve, sleeveIndex) => {
+      if (sleeve.id === portfolio.id) return;
       const sleeveEligibleFlags = tranches.map((_, trancheIndex) => sleeveEligible(portfolio, sleeve, trancheIndex));
       const sleeveCapResult = sleeveCap(portfolio, sleeve);
       rows.set(sleeve.id, {
@@ -476,14 +651,18 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
         excludedEntirely: exclusion(sleeve.id, '*'),
         override: tranches.map((tranche, trancheIndex) => (sleeveEligibleFlags[trancheIndex] ? override(sleeve.id, tranche.id) : null)),
         why: tranches.map((_, trancheIndex) => (sleeveEligibleFlags[trancheIndex] ? null : sleeveReason(portfolio, sleeve, trancheIndex))),
-        cap: tranches.map((_, trancheIndex) => (
-          sleeveEligibleFlags[trancheIndex]
-          && sleeveFills[portfolioIndex].locks[sleeveIndex][trancheIndex] === null
-          && sleeveFills[portfolioIndex].flagTotal[sleeveIndex]
-          && sleeveAmounts[sleeveIndex][trancheIndex] > 0
-            ? sleeveCapResult.why
-            : null
-        )),
+        imbalance: tranches.map(() => false),
+        cap: tranches.map((_, trancheIndex) => {
+          const fillResult = sleeveFills[portfolioIndex];
+          if (!sleeveEligibleFlags[trancheIndex] || fillResult.locks[sleeveIndex][trancheIndex] !== null) return null;
+          if (sleeveAmounts[sleeveIndex][trancheIndex] <= 0) return null;
+          const planned = sleevePlan?.[portfolioIndex]?.[sleeveIndex];
+          if (fillResult.flagPerTranche[sleeveIndex][trancheIndex]) {
+            return planned?.whyPerTranche[trancheIndex] || planned?.totalWhy || null;
+          }
+          if (fillResult.flagTotal[sleeveIndex]) return planned?.totalWhy || sleeveCapResult.why;
+          return null;
+        }),
       });
     });
     tranches.forEach((_, trancheIndex) => {
@@ -509,6 +688,7 @@ function cellFrom(
     amount: raw.amounts[trancheIndex],
     systemAmount,
     capReason: raw.cap[trancheIndex],
+    imbalance: Boolean(raw.imbalance[trancheIndex]),
     exclusionKind: why ? why.kind : null,
     exclusionCode: why?.code || null,
     exclusionText: why ? why.text : null,
@@ -538,6 +718,7 @@ export function allocate(request: AllocationRequest): AllocationResult {
       cells: request.tranches.map((tranche, index) => cellFrom(tranche.id, portfolioRow, systemRow, index)),
     });
     for (const sleeve of portfolio.sleeves) {
+      if (sleeve.id === portfolio.id) continue;
       const sleeveRow = final.rows.get(sleeve.id);
       if (!sleeveRow) continue;
       rows.push({

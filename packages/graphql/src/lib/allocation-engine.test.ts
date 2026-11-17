@@ -77,6 +77,31 @@ function cell(result: ReturnType<typeof allocate>, fundId: string, trancheId: st
 }
 
 describe('allocation engine', () => {
+  it('lists a fund with no child funds as one row', () => {
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 10, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [{
+        id: 'solo',
+        name: 'Solo',
+        nav: 100,
+        issuerLimit: 1,
+        sponsorLimit: 1,
+        unfundedLimit: 1,
+        sponsorExposure: 0,
+        unfundedExposure: 0,
+        allowed: ['LOAN'],
+        denyNote: '',
+        sleeves: [{
+          id: 'solo', name: 'Solo', nav: 100, cash: 50, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '',
+        }],
+      }],
+    });
+    const rows = result.rows.filter((row) => row.fundId === 'solo');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].level).toBe('PORTFOLIO');
+    expect(rows[0].total).toBeCloseTo(10, 2);
+  });
+
   it('places the Halyard hold inside each fund mandate and keeps sleeve amounts inside the portfolio', () => {
     const result = allocate(halyard());
     expect(result.facilitySize).toBe(210);
@@ -116,6 +141,245 @@ describe('allocation engine', () => {
       .filter((portfolio) => portfolio.id !== 'mdl')
       .reduce((total, portfolio) => total + cell(result, portfolio.id, 'tl').amount - cell(clean, portfolio.id, 'tl').amount, 0);
     expect(moved).toBeCloseTo(system - 10, 1);
+  });
+
+  it('caps a fund at its pro forma limit and spreads that tranche’s residual across the other eligible portfolios', () => {
+    const tight: AllocationPortfolio = {
+      id: 'tight',
+      name: 'Tight Limit',
+      nav: 1000,
+      issuerLimit: 0.02,
+      sponsorLimit: 1,
+      unfundedLimit: 1,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['LOAN'],
+      denyNote: '',
+      sleeves: [{
+        id: 'tight-main', name: 'Main', nav: 1000, cash: 400, undrawn: 0, line: 0, reserve: 0,
+        allowed: ['LOAN'], denyNote: '',
+      }],
+    };
+    const roomy: AllocationPortfolio = {
+      id: 'roomy',
+      name: 'Room to Spare',
+      nav: 1000,
+      issuerLimit: 0.5,
+      sponsorLimit: 1,
+      unfundedLimit: 1,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['LOAN'],
+      denyNote: '',
+      sleeves: [{
+        id: 'roomy-main', name: 'Main', nav: 1000, cash: 400, undrawn: 0, line: 0, reserve: 0,
+        allowed: ['LOAN'], denyNote: '',
+      }],
+    };
+    const blocked: AllocationPortfolio = {
+      id: 'blocked',
+      name: 'Mandate Block',
+      nav: 5000,
+      issuerLimit: 0.5,
+      sponsorLimit: 1,
+      unfundedLimit: 1,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['WARRANT'],
+      denyNote: 'Mandate does not permit loans',
+      sleeves: [{
+        id: 'blocked-main', name: 'Main', nav: 5000, cash: 2000, undrawn: 0, line: 0, reserve: 0,
+        allowed: ['WARRANT'], denyNote: 'Mandate does not permit loans',
+      }],
+    };
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [tight, roomy, blocked],
+    });
+
+    expect(cell(result, 'tight', 'tl').amount).toBeCloseTo(20, 2);
+    expect(cell(result, 'tight', 'tl').capReason).toBe('pro forma single-issuer limit');
+    expect(cell(result, 'roomy', 'tl').amount).toBeCloseTo(80, 2);
+    expect(cell(result, 'blocked', 'tl').amount).toBe(0);
+    expect(cell(result, 'blocked', 'tl').eligible).toBe(false);
+    expect(result.tranches[0].allocated).toBeCloseTo(100, 2);
+    expect(result.unallocated).toBeCloseTo(0, 2);
+  });
+
+  it('splits a capped tranche’s residual across the remaining eligible portfolios in proportion to available capital', () => {
+    const fund = (id: string, cash: number, issuerLimit: number): AllocationPortfolio => ({
+      id,
+      name: id,
+      nav: 1000,
+      issuerLimit,
+      sponsorLimit: 1,
+      unfundedLimit: 1,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['LOAN'],
+      denyNote: '',
+      sleeves: [{
+        id: `${id}-main`, name: 'Main', nav: 1000, cash, undrawn: 0, line: 0, reserve: 0,
+        allowed: ['LOAN'], denyNote: '',
+      }],
+    });
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [
+        fund('small', 100, 0.01),
+        fund('mid', 100, 0.5),
+        fund('large', 300, 0.5),
+      ],
+    });
+
+    expect(cell(result, 'small', 'tl').amount).toBeCloseTo(10, 2);
+    expect(cell(result, 'small', 'tl').capReason).toBe('pro forma single-issuer limit');
+    expect(cell(result, 'mid', 'tl').amount).toBeCloseTo(22.5, 2);
+    expect(cell(result, 'large', 'tl').amount).toBeCloseTo(67.5, 2);
+    expect(result.allocated).toBeCloseTo(100, 2);
+  });
+
+  it('keeps every Halyard portfolio inside its pro forma limit when the hold is the whole facility', () => {
+    const result = allocate({
+      tranches: halyardTranches.map((tranche) => ({ ...tranche, holdPct: 100 })),
+      portfolios,
+    });
+    for (const portfolio of portfolios) {
+      const row = result.rows.find((item) => item.fundId === portfolio.id);
+      expect(row).toBeTruthy();
+      expect(row!.total).toBeLessThanOrEqual(portfolio.issuerLimit * portfolio.nav + 0.02);
+    }
+    const placed = result.rows.filter((row) => row.level === 'PORTFOLIO').reduce((total, row) => total + row.total, 0);
+    expect(placed).toBeCloseTo(result.allocated, 2);
+    expect(result.allocated).toBeGreaterThan(result.targetHold * 0.9);
+  });
+
+  it('caps a fund at the lowest compliance-rule capacity and does not apply the fund limit on its own', () => {
+    const sleeveFor = (id: string) => ({
+      id, name: id, nav: 1000, cash: 400, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '',
+    });
+    const fund = (
+      id: string,
+      pools: AllocationPortfolio['capacityPools'],
+    ): AllocationPortfolio => ({
+      id,
+      name: id,
+      nav: 1000,
+      issuerLimit: 0.01,
+      sponsorLimit: 0.01,
+      unfundedLimit: 0.01,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['LOAN'],
+      denyNote: '',
+      sleeves: [sleeveFor(`${id}-main`)],
+      capacityPools: pools,
+    });
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [
+        fund('tight', [
+          { trancheIds: ['tl'], capacity: 30, ruleName: 'Single-issuer share of NAV' },
+          { trancheIds: ['tl'], capacity: 12, ruleName: 'Sector share of invested book' },
+        ]),
+        fund('roomy', [
+          { trancheIds: ['tl'], capacity: 500, ruleName: 'Single-issuer share of NAV' },
+        ]),
+      ],
+    });
+    expect(cell(result, 'tight', 'tl').amount).toBeCloseTo(12, 2);
+    expect(cell(result, 'tight', 'tl').capReason).toBe('Sector share of invested book');
+    expect(cell(result, 'roomy', 'tl').amount).toBeCloseTo(88, 2);
+    expect(result.allocated).toBeCloseTo(100, 2);
+  });
+
+  it('shares one compliance capacity across the securities in that rule and redistributes the residual', () => {
+    const sleeveFor = (id: string) => ({
+      id, name: id, nav: 1000, cash: 500, undrawn: 0, line: 0, reserve: 0,
+      allowed: ['LOAN', 'DELAYED_DRAW_TERM_LOAN'], denyNote: '',
+    });
+    const fund = (id: string, pools: AllocationPortfolio['capacityPools']): AllocationPortfolio => ({
+      id,
+      name: id,
+      nav: 1000,
+      issuerLimit: 1,
+      sponsorLimit: 1,
+      unfundedLimit: 1,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['LOAN', 'DELAYED_DRAW_TERM_LOAN'],
+      denyNote: '',
+      sleeves: [sleeveFor(`${id}-main`)],
+      capacityPools: pools,
+    });
+    const shared = { trancheIds: ['tl', 'ddtl'], capacity: 20, ruleName: 'Single-issuer share of NAV' };
+    const unfunded = { trancheIds: ['ddtl'], capacity: 8, ruleName: 'Pro Forma Unfunded Commitments' };
+    const result = allocate({
+      tranches: [
+        { id: 'tl', name: 'Term Loan', size: 40, holdPct: 100, unfunded: false, instrumentType: 'LOAN' },
+        { id: 'ddtl', name: 'Delayed Draw', size: 40, holdPct: 100, unfunded: true, instrumentType: 'DELAYED_DRAW_TERM_LOAN' },
+      ],
+      portfolios: [
+        fund('tight', [shared, unfunded]),
+        fund('roomy', [
+          { trancheIds: ['tl', 'ddtl'], capacity: 500, ruleName: 'Single-issuer share of NAV' },
+          { trancheIds: ['ddtl'], capacity: 500, ruleName: 'Pro Forma Unfunded Commitments' },
+        ]),
+      ],
+    });
+    const tightLoan = cell(result, 'tight', 'tl').amount;
+    const tightDraw = cell(result, 'tight', 'ddtl').amount;
+    expect(tightDraw).toBeLessThanOrEqual(8.02);
+    expect(tightLoan + tightDraw).toBeCloseTo(20, 1);
+    expect(cell(result, 'roomy', 'tl').amount + cell(result, 'roomy', 'ddtl').amount).toBeCloseTo(60, 1);
+    expect(result.allocated).toBeCloseTo(80, 2);
+  });
+
+  it('splits a child override across the children that were not overridden', () => {
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [{
+        id: 'p', name: 'Parent', nav: 1000,
+        issuerLimit: 1, sponsorLimit: 1, unfundedLimit: 1, sponsorExposure: 0, unfundedExposure: 0,
+        allowed: ['LOAN'], denyNote: '',
+        sleeves: [
+          { id: 'a', name: 'A', nav: 500, cash: 200, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '' },
+          { id: 'b', name: 'B', nav: 500, cash: 200, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '' },
+        ],
+      }],
+      adjustments: [
+        { fundId: 'p', trancheId: 'tl', type: 'override', amount: 100 },
+        { fundId: 'a', trancheId: 'tl', type: 'override', amount: 40 },
+      ],
+    });
+    expect(cell(result, 'p', 'tl').amount).toBeCloseTo(100, 2);
+    expect(cell(result, 'p', 'tl').imbalance).toBe(false);
+    expect(cell(result, 'a', 'tl').amount).toBeCloseTo(40, 2);
+    expect(cell(result, 'b', 'tl').amount).toBeCloseTo(60, 2);
+  });
+
+  it('highlights the parent when every child override misses the parent amount', () => {
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [{
+        id: 'p', name: 'Parent', nav: 1000,
+        issuerLimit: 1, sponsorLimit: 1, unfundedLimit: 1, sponsorExposure: 0, unfundedExposure: 0,
+        allowed: ['LOAN'], denyNote: '',
+        sleeves: [
+          { id: 'a', name: 'A', nav: 500, cash: 200, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '' },
+          { id: 'b', name: 'B', nav: 500, cash: 200, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '' },
+        ],
+      }],
+      adjustments: [
+        { fundId: 'p', trancheId: 'tl', type: 'override', amount: 100 },
+        { fundId: 'a', trancheId: 'tl', type: 'override', amount: 80 },
+        { fundId: 'b', trancheId: 'tl', type: 'override', amount: 80 },
+      ],
+    });
+    expect(cell(result, 'p', 'tl').amount).toBeCloseTo(100, 2);
+    expect(cell(result, 'p', 'tl').imbalance).toBe(true);
+    expect(cell(result, 'a', 'tl').amount).toBeCloseTo(80, 2);
+    expect(cell(result, 'b', 'tl').amount).toBeCloseTo(80, 2);
   });
 
   it('removes an excluded portfolio and leaves the warrant off a fund that cannot hold it', () => {
