@@ -9196,6 +9196,7 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 @media (max-width: 1000px) { .fs-main { grid-template-columns: 1fr; } .fs-brow { grid-template-columns: 1fr; } }
 
 /* Deal pipeline — strategy by stage, matching the allocation sample. */
+.pipe .da-ribbon .da-fact { border: 0; }
 .pipe {
   --line: #b6c2d0;
   --bg-alt: #e3eaf2;
