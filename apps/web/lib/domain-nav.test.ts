@@ -70,6 +70,22 @@ describe('nestDomainLinks', () => {
     ]);
   });
 
+  it('lists the forward rate under the curve in Market data', () => {
+    const rows = nestDomainLinks([
+      item({ code: 'SECURITY', name: 'Security', groupName: 'Securities & market data', groupOrder: 10, displayOrder: 20 }),
+      item({ code: 'FX_RATE', name: 'FX Rate', groupName: 'Market data', groupOrder: 15, displayOrder: 10 }),
+      item({ code: 'FORWARD_CURVE', name: 'Forward Curve', groupName: 'Market data', groupOrder: 15, displayOrder: 20 }),
+      item({ code: 'FORWARD_RATE', name: 'Forward Rate', groupName: 'Market data', groupOrder: 15, displayOrder: 21, parentCode: 'FORWARD_CURVE' }),
+    ]);
+    assert.deepEqual(rows.map((row) => `${row.domain.groupName}:${row.depth}:${row.domain.code}`), [
+      'Securities & market data:0:SECURITY',
+      'Market data:0:FX_RATE',
+      'Market data:0:FORWARD_CURVE',
+      'Market data:1:FORWARD_RATE',
+    ]);
+    assert.equal(rows.filter((row) => row.showGroup && row.domain.groupName === 'Market data').length, 1);
+  });
+
   it('still lists a cycle, once each', () => {
     const rows = nestDomainLinks([
       item({ code: 'A', name: 'A', displayOrder: 2, parentCode: 'B' }),
