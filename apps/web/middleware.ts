@@ -2,8 +2,9 @@ import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import { CLIENT_ADMIN_PERMISSIONS, isPlatformAdminPath } from '@/lib/admin-access';
 import { loginPath, NEXT_PATH_COOKIE, safeNextPath } from '@/lib/safe-next-path';
+import { isPublicPath } from '@/lib/public-paths';
 
-const PUBLIC_PATHS = ['/welcome', '/login', '/auth/callback', '/no-access', '/portal'];
+// Which pages a signed-out visitor may open is in lib/public-paths.ts, shared with the signed-out gate.
 
 async function adminAccess(supabase: { schema: (name: string) => any }, userId: string) {
   const { data: profile, error: profileError } = await supabase
@@ -78,7 +79,7 @@ export async function middleware(request: NextRequest) {
     }
     return NextResponse.redirect(callback);
   }
-  const isPublicPath = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  const isPublic = isPublicPath(pathname);
   const isApiOrAsset =
     pathname.startsWith('/api/') ||
     pathname.startsWith('/_next/') ||
@@ -92,7 +93,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // A signed-out visitor never sees the application shell, including the home page.
-  if (!user && !isPublicPath && !isApiOrAsset) {
+  if (!user && !isPublic && !isApiOrAsset) {
     return redirectTo(loginPath(pathname));
   }
 

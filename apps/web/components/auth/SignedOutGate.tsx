@@ -3,11 +3,9 @@
 import { useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import { browserSessionIsActive } from '@/lib/auth-token';
+import { isPublicPath } from '@/lib/public-paths';
 import { loginPath } from '@/lib/safe-next-path';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
-
-// Keep in step with PUBLIC_PATHS in middleware.ts. /portal is a form opened by its private link, with no sign-in.
-const PUBLIC_PATHS = ['/welcome', '/login', '/no-access', '/auth/callback', '/portal'];
 
 /**
  * Middleware sends a full request with no session to the login page.
@@ -18,8 +16,7 @@ export function SignedOutGate({ onLeave }: { onLeave?: () => void }) {
   const pathname = usePathname() || '/';
 
   useEffect(() => {
-    const isPublic = PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
-    if (isPublic) return;
+    if (isPublicPath(pathname)) return;
 
     const leave = () => {
       onLeave?.();
