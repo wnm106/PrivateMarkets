@@ -3,13 +3,14 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { StartRunDialog } from '@/components/workflows/StartRunDialog';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { usePublishViewContext } from '@/lib/view-context';
 import {
   SAVE_WORKFLOW,
-  START_RUN,
   WORKFLOW_HUB_QUERY,
-  parseObject,
+  assigneeText,
+  dueText,
   statusOf,
   when,
   type MutationErrors,
@@ -36,8 +37,7 @@ export default function WorkflowsPage() {
   const [hub, setHub] = useState<Hub | null>(null);
   const [message, setMessage] = useState('');
   const [picking, setPicking] = useState(false);
-  const [starting, setStarting] = useState<{ workflow: WorkflowSummary; inputText: string } | null>(null);
-  const [startError, setStartError] = useState('');
+  const [starting, setStarting] = useState<WorkflowSummary | null>(null);
   const [busy, setBusy] = useState(false);
 
   usePublishViewContext({ activity: 'viewing', kind: 'workflows', label: 'Workflows', summary: 'Automations with fixed, agent, and human review steps' });
@@ -82,29 +82,11 @@ export default function WorkflowsPage() {
     router.push(`/workflows/${data.saveWorkflow.workflow.id}`);
   };
 
-  const start = async () => {
-    if (!starting) return;
-    const input = parseObject(starting.inputText, 'The input');
-    if (!input.ok) {
-      setStartError(input.message);
-      return;
-    }
-    setBusy(true);
-    const { data, error } = await graphqlMutation<{ startWorkflowRun: { run: { id: string } | null; errors: MutationErrors } }>(START_RUN, {
-      workflowId: starting.workflow.id,
-      input: input.value,
-    });
-    setBusy(false);
-    const problem = error?.message || data?.startWorkflowRun.errors[0]?.message;
-    if (problem || !data?.startWorkflowRun.run) {
-      setStartError(problem || 'The run could not be started.');
-      return;
-    }
-    router.push(`/workflows/runs/${data.startWorkflowRun.run.id}`);
-  };
-
-  const inputFor = (workflow: WorkflowSummary) => hub?.workflowTemplates.find((template) => workflow.code.startsWith(template.code))?.inputExample || {};
   const reviews = hub?.workflowReviews || [];
+  // Yours to decide come first; the server already orders by due date within each group.
+  const yours = reviews.filter((review) => review.canReview);
+  const others = reviews.filter((review) => !review.canReview);
+  const [showOthers, setShowOthers] = useState(false);
 
   return (
     <div className="view-fade">
@@ -151,26 +133,28 @@ export default function WorkflowsPage() {
 
       {hub && (
         <>
-          <div style={sectionTitle}>Waiting for a person{reviews.length > 0 ? ` (${reviews.length})` : ''}</div>
-          {reviews.length === 0 ? (
-            <div style={empty}>Nothing is waiting for review.</div>
+          <div style={sectionTitle}>Waiting for you{yours.length > 0 ? ` (${yours.length})` : ''}</div>
+          {yours.length === 0 ? (
+            <div style={empty}>Nothing is waiting for you to review.</div>
           ) : (
             <div style={{ display: 'grid', gap: 8 }}>
-              {reviews.map((review) => (
-                <Link
-                  key={review.id}
-                  href={`/workflows/runs/${review.runId}`}
-                  style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '12px 14px', border: '1px solid #fde8c0', borderLeft: '5px solid #b45309', borderRadius: 8, background: '#fffbeb', textDecoration: 'none', color: 'inherit' }}
-                >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600 }}>{review.title}</div>
-                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>
-                      {review.workflowName} · {review.itemCount} proposed {review.itemCount === 1 ? 'change' : 'changes'} · asked {when(review.createdAt)}
-                    </div>
-                  </div>
-                  <span className="btn btn-sm btn-primary">{review.canReview ? 'Review' : 'View'}</span>
-                </Link>
+              {yours.map((review) => (
+                <ReviewRow key={review.id} review={review} />
               ))}
+            </div>
+          )}
+          {others.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <button type="button" onClick={() => setShowOthers(!showOthers)} style={{ border: 'none', background: 'none', padding: 0, fontSize: 12, fontWeight: 600, color: 'var(--entity-link)', cursor: 'pointer' }}>
+                {showOthers ? 'Hide' : 'Show'} {others.length} waiting for someone else
+              </button>
+              {showOthers && (
+                <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+                  {others.map((review) => (
+                    <ReviewRow key={review.id} review={review} />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -209,10 +193,7 @@ export default function WorkflowsPage() {
                         className="btn btn-sm btn-primary"
                         disabled={!workflow.publishedVersion}
                         title={workflow.publishedVersion ? undefined : 'Publish a version first'}
-                        onClick={() => {
-                          setStartError('');
-                          setStarting({ workflow, inputText: JSON.stringify(inputFor(workflow), null, 2) });
-                        }}
+                        onClick={() => setStarting(workflow)}
                       >
                         Start run
                       </button>
@@ -224,32 +205,7 @@ export default function WorkflowsPage() {
           )}
 
           {starting && (
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                start();
-              }}
-              style={{ margin: '12px 0', padding: 16, border: '1px solid var(--line-strong)', borderRadius: 8, display: 'grid', gap: 10, maxWidth: 620 }}
-            >
-              <div style={{ fontWeight: 600 }}>Start “{starting.workflow.name}”</div>
-              <label style={{ display: 'grid', gap: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-3)' }}>Input</span>
-                <textarea
-                  className="text-input"
-                  rows={5}
-                  spellCheck={false}
-                  style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}
-                  value={starting.inputText}
-                  onChange={(event) => setStarting({ ...starting, inputText: event.target.value })}
-                />
-                <span style={{ fontSize: 11, color: 'var(--ink-4)' }}>What the run starts with. Steps read it as {'{{input.name}}'}. Leave a value empty to not filter by it.</span>
-              </label>
-              {startError && <div role="alert" style={{ color: 'var(--red)', fontSize: 13 }}>{startError}</div>}
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? 'Starting…' : 'Start run'}</button>
-                <button type="button" className="btn" onClick={() => setStarting(null)}>Cancel</button>
-              </div>
-            </form>
+            <StartRunDialog workflow={starting} onClose={() => setStarting(null)} onStarted={(runId) => router.push(`/workflows/runs/${runId}`)} />
           )}
 
           <div style={sectionTitle}>Recent runs</div>
@@ -293,5 +249,37 @@ export default function WorkflowsPage() {
         </>
       )}
     </div>
+  );
+}
+
+function ReviewRow({ review }: { review: ReviewView }) {
+  const due = dueText(review.dueAt);
+  const mine = review.canReview;
+  return (
+    <Link
+      href={`/workflows/runs/${review.runId}`}
+      style={{
+        display: 'flex',
+        gap: 12,
+        alignItems: 'center',
+        padding: '12px 14px',
+        border: `1px solid ${mine ? '#fde8c0' : 'var(--line)'}`,
+        borderLeft: `5px solid ${review.overdue ? '#b91c1c' : mine ? '#b45309' : 'var(--line-strong)'}`,
+        borderRadius: 8,
+        background: mine ? '#fffbeb' : 'var(--surface)',
+        textDecoration: 'none',
+        color: 'inherit',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600 }}>{review.title}</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+          {review.workflowName} · {review.itemCount} proposed {review.itemCount === 1 ? 'change' : 'changes'} · asked {when(review.createdAt)} · for {review.assignedToMe ? 'you' : assigneeText(review.assignees)}
+          {due && <span style={{ fontWeight: 600, color: review.overdue ? '#b91c1c' : 'inherit' }}> · {due}</span>}
+        </div>
+        {!mine && review.blocker && <div style={{ fontSize: 12, color: 'var(--ink-4)', marginTop: 2 }}>{review.blocker}</div>}
+      </div>
+      <span className={`btn btn-sm${mine ? ' btn-primary' : ''}`}>{mine ? 'Review' : 'View'}</span>
+    </Link>
   );
 }

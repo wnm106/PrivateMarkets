@@ -2824,6 +2824,8 @@ type Query {
   workflow(id: ID!, version: Int): Workflow
   """Starting points for a new workflow."""
   workflowTemplates: [WorkflowTemplate!]!
+  """Records to choose from when starting a run: the first few of a type, or those matching the search."""
+  workflowRecordChoices(domainCode: String, search: String, first: Int): [WorkflowRecordChoice!]!
   """The kinds of step a workflow can have."""
   workflowNodeTypes: JSON!
   """Recent workflow runs, newest first."""
@@ -2831,7 +2833,10 @@ type Query {
   """One run with the graph it ran, each step, its audit log, and its reviews."""
   workflowRun(id: ID!): WorkflowRun
   """Reviews waiting for a person. status defaults to OPEN."""
-  workflowReviews(status: String): [WorkflowReview!]!
+  """Reviews, the ones due soonest first. mine keeps those the caller can decide now."""
+  workflowReviews(status: String, mine: Boolean): [WorkflowReview!]!
+  """Who a review step can be assigned to: people holding workflow.review in the client, and the roles that grant it. Leave out clientId for a shared workflow."""
+  workflowReviewerChoices(clientId: ID): WorkflowReviewerChoices!
   """Places files arrive from, for the caller's clients. Stored credentials are never returned."""
   feedConnections: [FeedConnection!]!
   feeds: [Feed!]!
@@ -3148,6 +3153,8 @@ type Mutation {
   retryWorkflowRun(id: ID!): WorkflowRunResult!
   """Approves or rejects the changes a run proposed, and lets the run continue."""
   decideWorkflowReview(input: DecideWorkflowReviewInput!): WorkflowReviewResult!
+  """Hands an open review to other people or roles. Empty lists open it to anyone who can review."""
+  reassignWorkflowReview(input: ReassignWorkflowReviewInput!): WorkflowReviewResult!
 
   # Feeds: files that arrive on their own
   saveFeedConnection(input: SaveFeedConnectionInput!): FeedConnectionResult!
@@ -4855,6 +4862,8 @@ type Workflow {
   version: Int
   """{ nodes, edges }. Null in a list."""
   graph: JSON
+  """What a run is asked for when it starts: { appliesTo, requiresRecords, inputs }. For a list, that of the published version."""
+  runSetup: JSON
   """What stops this graph being published."""
   problems: [WorkflowProblem!]!
   versions: [WorkflowVersion!]!
@@ -4863,6 +4872,13 @@ type Workflow {
   lastRunAt: DateTime
   createdAt: DateTime!
   updatedAt: DateTime!
+}
+
+type WorkflowRecordChoice {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
 }
 
 type WorkflowTemplate {
@@ -4891,9 +4907,38 @@ type WorkflowReview {
   status: String!
   decision: JSON
   decidedBy: ID
+  decidedByName: String
   decidedAt: DateTime
   createdAt: DateTime!
+  """Whether the caller can decide it now."""
   canReview: Boolean!
+  """Why the caller cannot decide it: no permission, they started the run, or it is assigned to someone else."""
+  blocker: String
+  """Who it is for: [{ kind: person | role, id, name }]. Empty means anyone who holds workflow.review."""
+  assignees: JSON!
+  assignedToMe: Boolean!
+  """True when the person who started the run may not decide it."""
+  separateReviewer: Boolean!
+  startedBy: ID
+  startedByName: String
+  dueAt: DateTime
+  overdue: Boolean!
+}
+
+type WorkflowReviewerChoices {
+  """[{ id, name }]"""
+  people: JSON!
+  """[{ code, name }]"""
+  roles: JSON!
+}
+
+input ReassignWorkflowReviewInput {
+  reviewId: ID!
+  """User ids."""
+  people: [ID!]
+  """Role codes."""
+  roles: [String!]
+  note: String
 }
 
 type WorkflowRun {
@@ -4913,6 +4958,8 @@ type WorkflowRun {
   openReviews: Int!
   canRun: Boolean!
   canReview: Boolean!
+  """Whether the caller manages this client's workflows, and so can reassign any of its reviews."""
+  canManage: Boolean!
   createdAt: DateTime!
   startedAt: DateTime
   finishedAt: DateTime

@@ -115,7 +115,7 @@ export default function WorkflowRunPage() {
 
           {openReview && (
             <div style={{ marginBottom: 16 }}>
-              <ReviewPanel key={openReview.id} review={openReview} onDecided={load} />
+              <ReviewPanel key={openReview.id} review={openReview} canManage={run.canManage === true} onDecided={load} />
             </div>
           )}
 
@@ -158,7 +158,7 @@ export default function WorkflowRunPage() {
 
               {pastReviews.map((review) => (
                 <div key={review.id} style={{ marginTop: 12 }}>
-                  <ReviewPanel review={review} onDecided={load} />
+                  <ReviewPanel review={review} canManage={run.canManage === true} onDecided={load} />
                 </div>
               ))}
 

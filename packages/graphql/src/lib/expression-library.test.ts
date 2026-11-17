@@ -48,7 +48,9 @@ describe('expression function library', () => {
       'ROW:CURRENT_DATE', 'ROW:PREVIOUS_DAY', 'ROW:START_OF_MONTH', 'ROW:END_OF_MONTH',
       'ROW:START_OF_QUARTER', 'ROW:END_OF_QUARTER', 'ROW:START_OF_YEAR', 'ROW:END_OF_YEAR',
       'GROUP:SUM', 'GROUP:WAVG', 'GROUP:MIN', 'GROUP:MAX',
-      'DOMAIN:XIRR', 'DOMAIN:CURRENT_YIELD', 'DOMAIN:UNREALIZED_PNL', 'DOMAIN:NET_MULTIPLE',
+      'DOMAIN:XIRR', 'ROW:OPEN', 'ROW:FLOWS', 'ROW:CLOSE', 'DOMAIN:MOIC',
+      'DOMAIN:CURRENT_YIELD', 'DOMAIN:UNREALIZED_PNL', 'DOMAIN:NET_MULTIPLE',
+      'ROW:ITD', 'ROW:YTD', 'ROW:QTD', 'ROW:MTD', 'ROW:LTM',
       'DISPLAY:FORMAT',
     ]);
     expect(listExpressionFunctions('row').every((row) => row.category === 'ROW')).toBe(true);
@@ -56,6 +58,6 @@ describe('expression function library', () => {
     expect(format?.callable).toBe(false);
     expect(format?.description).toMatch(/displayFormat/);
     expect(rows.find((row) => row.id === 'GROUP:MIN')?.description).toMatch(/row function/);
-    expect(rows.filter((row) => row.callable).every((row) => row.category === 'ROW')).toBe(true);
+    expect(rows.filter((row) => row.callable && row.category !== 'ROW').map((row) => row.code).sort()).toEqual(['MOIC', 'XIRR']);
   });
 });

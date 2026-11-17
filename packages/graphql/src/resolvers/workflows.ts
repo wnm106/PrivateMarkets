@@ -1,4 +1,5 @@
 import type { Context } from '../context';
+import { parseFilters, prepareRunInput, runSetupOf, type RunSetup } from '../lib/workflow-filters';
 import { NODE_TYPES, asGraph, validateGraph } from '../lib/workflow-graph';
 import { LIST_VALUE_TOOL, asDecision, asProposal, checkDecision, proposalCounts } from '../lib/workflow-proposal';
 import { WORKFLOW_TEMPLATES } from '../lib/workflow-templates';
@@ -47,6 +48,8 @@ export function mapWorkflow(row: Row) {
     latestVersion: row.latest_version ?? 0,
     version: row.version ?? null,
     graph,
+    // Known when the graph was read. In a list it is read on request: see Workflow.runSetup.
+    runSetup: graph ? runSetupOf(graph) : null,
     problems: graph ? validateGraph(graph) : [],
     versions: ((row.versions as Row[] | undefined) || []).map((version) => ({
       version: version.version,
@@ -79,9 +82,18 @@ export function mapReview(row: Row) {
     status: row.status,
     decision: row.decision ?? null,
     decidedBy: row.decided_by || null,
+    decidedByName: row.decided_by_name || null,
     decidedAt: row.decided_at || null,
     createdAt: row.created_at,
     canReview: row.can_review === true,
+    blocker: typeof row.blocker === 'string' ? row.blocker : null,
+    assignees: Array.isArray(row.assignees) ? row.assignees : [],
+    assignedToMe: row.assigned_to_me === true,
+    separateReviewer: row.separate_reviewer === true,
+    startedBy: row.started_by || null,
+    startedByName: row.started_by_name || null,
+    dueAt: row.due_at || null,
+    overdue: row.status === 'OPEN' && typeof row.due_at === 'string' && Date.parse(row.due_at) < Date.now(),
   };
 }
 
@@ -102,6 +114,7 @@ export function mapRun(row: Row) {
     openReviews: Number(row.open_reviews) || ((row.reviews as Row[] | undefined) || []).filter((review) => review.status === 'OPEN').length,
     canRun: row.can_run === true,
     canReview,
+    canManage: row.can_manage === true,
     createdAt: row.created_at,
     startedAt: row.started_at || null,
     finishedAt: row.finished_at || null,
@@ -130,7 +143,8 @@ export function mapRun(row: Row) {
       detail: event.detail ?? null,
       createdAt: event.created_at,
     })),
-    reviews: ((row.reviews as Row[] | undefined) || []).map((review) => mapReview({ ...review, workflow_name: row.workflow_name, can_review: canReview })),
+    // Each review carries its own can_review: who it is for and who started the run decide it, not only the permission.
+    reviews: ((row.reviews as Row[] | undefined) || []).map((review) => mapReview({ ...review, workflow_name: row.workflow_name, can_review: 'can_review' in review ? review.can_review : canReview })),
   };
 }
 
@@ -140,7 +154,21 @@ async function readRun(context: Context, id: string) {
   return data ? mapRun(data as Row) : null;
 }
 
+/** What a version of a workflow asks for when a run starts. Null when the version cannot be read. */
+async function readRunSetup(context: Context, workflowId: string, version: number | null): Promise<RunSetup | null> {
+  if (!version) return null;
+  const { data, error } = await context.supabase.rpc('workflow_get', { p_id: workflowId, p_version: version });
+  if (error) throw error;
+  const graph = (data as Row | null)?.graph;
+  return graph ? runSetupOf(asGraph(graph)) : null;
+}
+
 export const workflowResolvers = {
+  Workflow: {
+    // A list carries no graphs. For a list this reads the published version, which is the one a new run uses.
+    runSetup: async (parent: { id: string; runSetup: RunSetup | null; publishedVersion: number | null }, _: unknown, context: Context) =>
+      parent.runSetup ?? readRunSetup(context, parent.id, parent.publishedVersion),
+  },
   Query: {
     workflows: async (_: unknown, __: unknown, context: Context) => {
       const { data, error } = await context.supabase.rpc('workflow_list', {});
@@ -155,6 +183,18 @@ export const workflowResolvers = {
     },
 
     workflowTemplates: () => WORKFLOW_TEMPLATES,
+
+    // Records to choose from when starting a run: the first few of a type, or those matching what was typed.
+    workflowRecordChoices: async (_: unknown, args: { domainCode?: string | null; search?: string | null; first?: number | null }, context: Context) => {
+      const filters = parseFilters({ domainCode: args.domainCode, limit: args.first ?? 25 });
+      const search = (args.search || '').trim().replace(/[%_\\,()]/g, ' ').trim();
+      let query = context.supabase.from('master_entities').select('id, entity_code, entity_name, domain_code').eq('is_active', true);
+      if (filters.domainCode) query = query.eq('domain_code', filters.domainCode);
+      if (search) query = query.or(`entity_name.ilike.%${search}%,entity_code.ilike.%${search}%`);
+      const { data, error } = await query.order('entity_name').limit(Math.min(filters.limit, 50));
+      if (error) throw error;
+      return ((data as Row[] | null) || []).map((row) => ({ id: row.id, entityCode: row.entity_code, entityName: row.entity_name, domainCode: row.domain_code }));
+    },
     workflowNodeTypes: () => NODE_TYPES,
 
     workflowRuns: async (_: unknown, args: { workflowId?: string | null; status?: string | null; first?: number | null }, context: Context) => {
@@ -169,10 +209,21 @@ export const workflowResolvers = {
 
     workflowRun: (_: unknown, args: { id: string }, context: Context) => readRun(context, args.id),
 
-    workflowReviews: async (_: unknown, args: { status?: string | null }, context: Context) => {
-      const { data, error } = await context.supabase.rpc('workflow_reviews_list', { p_status: args.status === undefined ? 'OPEN' : args.status, p_limit: 100 });
+    workflowReviews: async (_: unknown, args: { status?: string | null; mine?: boolean | null }, context: Context) => {
+      const { data, error } = await context.supabase.rpc('workflow_reviews_list', {
+        p_status: args.status === undefined ? 'OPEN' : args.status,
+        p_limit: 100,
+        p_mine: args.mine === true,
+      });
       if (error) throw error;
       return ((data as Row[] | null) || []).map(mapReview);
+    },
+
+    workflowReviewerChoices: async (_: unknown, args: { clientId?: string | null }, context: Context) => {
+      const { data, error } = await context.supabase.rpc('workflow_reviewer_choices', { p_client_id: args.clientId || null });
+      if (error) throw error;
+      const row = (data as Row | null) || {};
+      return { people: Array.isArray(row.people) ? row.people : [], roles: Array.isArray(row.roles) ? row.roles : [] };
     },
   },
 
@@ -240,10 +291,20 @@ export const workflowResolvers = {
         }
         const clientId = await callerClientId(context);
         if (!clientId) return { run: null, errors: [{ field: null, message: 'Choose a client before starting a run.', code: 'NO_CLIENT' }] };
+        // The records are checked against what the workflow is about before the run exists.
+        let version = args.version ?? null;
+        if (!version) {
+          const { data: current, error: currentError } = await context.supabase.rpc('workflow_get', { p_id: args.workflowId, p_version: null });
+          if (currentError) throw currentError;
+          version = (current as Row | null)?.published_version ?? null;
+        }
+        const setup = await readRunSetup(context, args.workflowId, version);
+        const prepared = prepareRunInput(setup ?? { appliesTo: null, requiresRecords: false, inputs: [] }, args.input || {});
+        if ('problem' in prepared) return { run: null, errors: [{ field: 'input', message: prepared.problem, code: 'VALIDATION' }] };
         const { data, error } = await context.supabase.rpc('workflow_run_start', {
           p_workflow_id: args.workflowId,
           p_client_id: clientId,
-          p_input: args.input || {},
+          p_input: prepared.input,
           p_version: args.version ?? null,
         });
         if (error) throw error;
@@ -290,6 +351,11 @@ export const workflowResolvers = {
         const current = await context.supabase.rpc('workflow_review_get', { p_review_id: input.reviewId });
         if (current.error) throw current.error;
         if (!current.data) return { review: null, errors: [{ field: 'reviewId', message: 'Review was not found.', code: 'NOT_FOUND' }] };
+        // The database refuses too. Saying so first keeps the message the same whatever was decided.
+        const blocker = (current.data as Row).blocker;
+        if (typeof blocker === 'string' && blocker) {
+          return { review: mapReview(current.data as Row), errors: [{ field: null, message: blocker, code: 'FORBIDDEN' }] };
+        }
 
         const decision = asDecision(input.decision);
         let recorded = outcome;
@@ -315,9 +381,26 @@ export const workflowResolvers = {
         }
         const { data, error } = await context.supabase.rpc('workflow_review_decide', { p_review_id: input.reviewId, p_outcome: recorded, p_decision: decision });
         if (error) throw error;
-        return { review: mapReview({ ...(data as Row), can_review: true }), errors: [] };
+        return { review: mapReview(data as Row), errors: [] };
       } catch (error) {
         return { review: null, errors: [failure(error, 'DECIDE_FAILED')] };
+      }
+    },
+
+    reassignWorkflowReview: async (_: unknown, args: { input: Row }, context: Context) => {
+      const input = args.input;
+      const list = (value: unknown) => (Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : []);
+      try {
+        const { data, error } = await context.supabase.rpc('workflow_review_reassign', {
+          p_review_id: input.reviewId,
+          p_users: list(input.people),
+          p_roles: list(input.roles),
+          p_note: typeof input.note === 'string' ? input.note : null,
+        });
+        if (error) throw error;
+        return { review: mapReview(data as Row), errors: [] };
+      } catch (error) {
+        return { review: null, errors: [failure(error, 'REASSIGN_FAILED')] };
       }
     },
   },

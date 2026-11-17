@@ -20,6 +20,16 @@ export interface WorkflowSummary {
   canManage: boolean;
   runCount: number;
   lastRunAt: string | null;
+  /** What a run is asked for when it starts: { appliesTo, requiresRecords, inputs }. */
+  runSetup?: unknown;
+}
+
+/** A record a run can be started on. */
+export interface RecordChoice {
+  id: string;
+  entityCode: string;
+  entityName: string;
+  domainCode: string;
 }
 
 export interface WorkflowDetail extends WorkflowSummary {
@@ -40,6 +50,7 @@ export interface WorkflowTemplateOption {
 export interface ReviewView {
   id: string;
   runId: string;
+  clientId?: string;
   nodeId: string;
   workflowName: string | null;
   title: string;
@@ -51,8 +62,44 @@ export interface ReviewView {
   status: string;
   decision: { items?: Record<string, { decision: string; answers?: Record<string, unknown>; note?: string }>; note?: string } | null;
   decidedAt: string | null;
+  decidedByName?: string | null;
   createdAt: string;
+  /** Whether you can decide it now. */
   canReview: boolean;
+  /** Why you cannot: no permission, you started the run, or it is assigned to someone else. */
+  blocker?: string | null;
+  assignees?: Assignee[];
+  assignedToMe?: boolean;
+  separateReviewer?: boolean;
+  startedByName?: string | null;
+  dueAt?: string | null;
+  overdue?: boolean;
+}
+
+export interface Assignee {
+  kind: 'person' | 'role';
+  id: string;
+  name: string;
+}
+
+export interface ReviewerChoices {
+  people: Array<{ id: string; name: string }>;
+  roles: Array<{ code: string; name: string }>;
+}
+
+/** "Ada Reviewer, Operations lead", or "anyone who can review". */
+export function assigneeText(assignees: Assignee[] | undefined): string {
+  return assignees && assignees.length > 0 ? assignees.map((entry) => entry.name).join(', ') : 'anyone who can review';
+}
+
+/** "due in 5 hours", "due tomorrow", "2 days overdue". */
+export function dueText(dueAt: string | null | undefined, now = Date.now()): string | null {
+  if (!dueAt) return null;
+  const ms = Date.parse(dueAt) - now;
+  if (Number.isNaN(ms)) return null;
+  const hours = Math.abs(ms) / 3_600_000;
+  const span = hours < 1 ? `${Math.max(1, Math.round(hours * 60))} min` : hours < 48 ? `${Math.round(hours)} hour${Math.round(hours) === 1 ? '' : 's'}` : `${Math.round(hours / 24)} days`;
+  return ms >= 0 ? `due in ${span}` : `${span} overdue`;
 }
 
 export interface StepView {
@@ -97,6 +144,7 @@ export interface RunDetail extends RunSummary {
   input: Record<string, unknown>;
   canRun: boolean;
   canReview: boolean;
+  canManage?: boolean;
   graph: WorkflowGraph | null;
   steps: StepView[];
   events: EventView[];
@@ -110,15 +158,15 @@ export interface ToolOption {
   args: Array<{ name: string; type: string; description: string; required: boolean }>;
 }
 
-const WORKFLOW_FIELDS = `id clientId code name description publishedVersion latestVersion canManage runCount lastRunAt`;
+const WORKFLOW_FIELDS = `id clientId code name description publishedVersion latestVersion canManage runCount lastRunAt runSetup`;
 const RUN_FIELDS = `id workflowId workflowName version status currentNode errorMessage openReviews createdAt startedAt finishedAt`;
-const REVIEW_FIELDS = `id runId nodeId workflowName title instructions summary proposal counts itemCount status decision decidedAt createdAt canReview`;
+const REVIEW_FIELDS = `id runId clientId nodeId workflowName title instructions summary proposal counts itemCount status decision decidedAt decidedByName createdAt canReview blocker assignees assignedToMe separateReviewer startedByName dueAt overdue`;
 
 export const WORKFLOW_HUB_QUERY = `
   query WorkflowHub {
     workflows { ${WORKFLOW_FIELDS} }
     workflowRuns(first: 50) { ${RUN_FIELDS} }
-    workflowReviews(status: "OPEN") { id runId nodeId workflowName title summary itemCount status createdAt canReview }
+    workflowReviews(status: "OPEN") { id runId nodeId workflowName title summary itemCount status createdAt canReview blocker assignees assignedToMe startedByName dueAt overdue }
     workflowTemplates { code name description inputExample graph }
   }
 `;
@@ -132,7 +180,18 @@ export const WORKFLOW_QUERY = `
 `;
 export const WORKFLOW_RUN_QUERY = `
   query WorkflowRun($id: ID!) {
-    workflowRun(id: $id) { ${RUN_FIELDS} input canRun canReview graph steps events reviews { ${REVIEW_FIELDS} } }
+    workflowRun(id: $id) { ${RUN_FIELDS} input canRun canReview canManage graph steps events reviews { ${REVIEW_FIELDS} } }
+  }
+`;
+/** Published workflows with what each runs on, for offering them on a record. */
+export const RUNNABLE_WORKFLOWS_QUERY = `
+  query RunnableWorkflows {
+    workflows { ${WORKFLOW_FIELDS} }
+  }
+`;
+export const RECORD_CHOICES_QUERY = `
+  query WorkflowRecordChoices($domainCode: String, $search: String, $first: Int) {
+    workflowRecordChoices(domainCode: $domainCode, search: $search, first: $first) { id entityCode entityName domainCode }
   }
 `;
 export const SAVE_WORKFLOW = `
@@ -153,6 +212,14 @@ export const START_RUN = `
 `;
 export const CANCEL_RUN = `mutation CancelWorkflowRun($id: ID!) { cancelWorkflowRun(id: $id) { run { id } errors { message } } }`;
 export const RETRY_RUN = `mutation RetryWorkflowRun($id: ID!) { retryWorkflowRun(id: $id) { run { id } errors { message } } }`;
+export const REASSIGN_REVIEW = `
+  mutation ReassignWorkflowReview($input: ReassignWorkflowReviewInput!) {
+    reassignWorkflowReview(input: $input) { review { id } errors { message } }
+  }
+`;
+export const REVIEWER_CHOICES_QUERY = `
+  query WorkflowReviewerChoices($clientId: ID) { workflowReviewerChoices(clientId: $clientId) { people roles } }
+`;
 export const DECIDE_REVIEW = `
   mutation DecideWorkflowReview($input: DecideWorkflowReviewInput!) {
     decideWorkflowReview(input: $input) { review { id status } errors { message } }
@@ -160,6 +227,15 @@ export const DECIDE_REVIEW = `
 `;
 
 export type MutationErrors = Array<{ field?: string | null; message: string }>;
+
+/** A record type in words: "fund" and "funds". Falls back to the code when the type is not in the list. */
+export function recordTypeName(domainCode: string | null | undefined, types: Array<{ domainCode: string; domainName: string }>): { singular: string; plural: string } {
+  if (!domainCode) return { singular: 'record', plural: 'records' };
+  const name = (types.find((type) => type.domainCode === domainCode)?.domainName || domainCode.replace(/_/g, ' ')).toLowerCase();
+  const singular = name.endsWith('ies') ? `${name.slice(0, -3)}y` : name.endsWith('s') && !name.endsWith('ss') ? name.slice(0, -1) : name;
+  const plural = singular.endsWith('y') && !/[aeiou]y$/.test(singular) ? `${singular.slice(0, -1)}ies` : /(s|x|ch|sh)$/.test(singular) ? `${singular}es` : `${singular}s`;
+  return { singular, plural };
+}
 
 /** How each kind of step is drawn, so fixed, agent, and human steps read apart at a glance. */
 export const KIND_STYLE: Record<NodeKind, { label: string; color: string; tint: string; hint: string }> = {

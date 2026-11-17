@@ -35,40 +35,58 @@ export function domainLabel(code: string | null | undefined, names: Record<strin
   return names[code] || code.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-/** Places a calculation can read, staying on one direction so the calc engine can follow the path. */
-export function reachablePlaces(rootDomain: string, relationships: CalcRelationship[], depth = 2): CalcPlace[] {
+function hopTarget(domain: string, relationship: CalcRelationship, down: boolean): string | null {
+  if (down && relationship.parentDomainCode === domain && relationship.childDomainCode) return relationship.childDomainCode;
+  if (!down && relationship.childDomainCode === domain && relationship.parentDomainCode) return relationship.parentDomainCode;
+  return null;
+}
+
+/**
+ * Places a calculation can read.
+ * A path may reverse once. The reversed hop is stored with a ~ prefix, which is how the calc engine walks it.
+ * Deal cash flows are up to the tranche and the position, then down to the cash flow.
+ */
+export function reachablePlaces(rootDomain: string, relationships: CalcRelationship[], depth = 4): CalcPlace[] {
   const places: CalcPlace[] = [{
     domainCode: rootDomain,
     traversal: 'SELF',
     relationshipCodes: [],
     relationshipNames: [],
   }];
-  const seen = new Set<string>([rootDomain]);
+  const seen = new Set<string>([`SELF::${rootDomain}`]);
   let frontier = places.slice();
 
   for (let step = 0; step < depth; step += 1) {
     const next: CalcPlace[] = [];
     for (const place of frontier) {
+      const reversedAlready = place.relationshipCodes.some((code) => code.startsWith('~'));
+      const directions: Array<{ down: boolean; reversed: boolean }> = place.traversal === 'SELF'
+        ? [{ down: true, reversed: false }, { down: false, reversed: false }]
+        : [
+            { down: place.traversal === 'DOWN', reversed: false },
+            ...(reversedAlready ? [] : [{ down: place.traversal !== 'DOWN', reversed: true }]),
+          ];
       for (const relationship of relationships) {
-        const down = relationship.parentDomainCode === place.domainCode;
-        const up = relationship.childDomainCode === place.domainCode;
-        if (!down && !up) continue;
-        const traversal: 'UP' | 'DOWN' = down ? 'DOWN' : 'UP';
-        if (place.traversal !== 'SELF' && place.traversal !== traversal) continue;
-        const target = down ? relationship.childDomainCode : relationship.parentDomainCode;
-        if (!target || target === place.domainCode) continue;
-        const relationshipCodes = [...place.relationshipCodes, relationship.relationshipCode];
-        const key = `${traversal}:${relationshipCodes.join('>')}:${target}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const hop: CalcPlace = {
-          domainCode: target,
-          traversal,
-          relationshipCodes,
-          relationshipNames: [...place.relationshipNames, relationship.relationshipName || relationship.relationshipCode],
-        };
-        places.push(hop);
-        next.push(hop);
+        for (const direction of directions) {
+          const target = hopTarget(place.domainCode, relationship, direction.down);
+          if (!target || target === place.domainCode) continue;
+          const traversal: 'UP' | 'DOWN' = place.traversal === 'SELF'
+            ? (direction.down ? 'DOWN' : 'UP')
+            : place.traversal;
+          const code = direction.reversed ? `~${relationship.relationshipCode}` : relationship.relationshipCode;
+          const relationshipCodes = [...place.relationshipCodes, code];
+          const key = `${traversal}:${relationshipCodes.join('>')}:${target}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const hop: CalcPlace = {
+            domainCode: target,
+            traversal,
+            relationshipCodes,
+            relationshipNames: [...place.relationshipNames, relationship.relationshipName || relationship.relationshipCode],
+          };
+          places.push(hop);
+          next.push(hop);
+        }
       }
     }
     frontier = next;
@@ -140,13 +158,16 @@ export function bindingLabel(
   }
   let domain = rootDomain;
   const via: string[] = [];
-  for (const code of binding.relationshipCodes) {
+  for (const raw of binding.relationshipCodes) {
+    const reversed = raw.startsWith('~');
+    const code = reversed ? raw.slice(1) : raw;
     const relationship = relationships.find((item) => item.relationshipCode === code);
     via.push(relationship?.relationshipName || code);
     if (!relationship) continue;
-    if (binding.traversal === 'DOWN' && relationship.parentDomainCode === domain && relationship.childDomainCode) {
+    const down = (binding.traversal === 'DOWN') !== reversed;
+    if (down && relationship.parentDomainCode === domain && relationship.childDomainCode) {
       domain = relationship.childDomainCode;
-    } else if (binding.traversal === 'UP' && relationship.childDomainCode === domain && relationship.parentDomainCode) {
+    } else if (!down && relationship.childDomainCode === domain && relationship.parentDomainCode) {
       domain = relationship.parentDomainCode;
     }
   }

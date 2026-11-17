@@ -18,6 +18,7 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 |---|---|---|
 | List values | `supabase/migrations/20261116140000_workflow_list_values.sql`, `packages/worker/src/workflow/list-check.ts`, `packages/mcp-server/src/tools/list-tools.ts` | Reading an attribute's list, holding proposed values to it, and adding a value |
 | Service accounts | `supabase/migrations/20261116130000_workflow_service_accounts.sql` | Which user each client's steps run as, the Workflow Service role, and the checks on people |
+| Who reviews | `supabase/migrations/20261117010000_workflow_review_routing.sql`, `apps/web/components/workflows/ReviewerPicker.tsx` | Who a review is for, keeping the starter apart, due dates, and reassigning |
 | Tables and functions | `supabase/migrations/20261116120000_workflows.sql` | `ops.workflows`, `workflow_versions`, `workflow_runs`, `workflow_steps`, `workflow_events`, `workflow_reviews`, reached only through the `workflow_*` functions |
 | Record filters | `packages/graphql/src/lib/workflow-filters.ts`, `packages/mcp-server/src/tools/selection-tools.ts` | The filters a run is started with, and the step that turns them into the records it works on |
 | Graph rules | `packages/graphql/src/lib/workflow-graph.ts` | Step types, what makes a graph sound, which step follows which, `{{placeholders}}` |
@@ -49,6 +50,35 @@ A worker with no model key still runs workflows that have no agent step.
 ## Which records a run works on
 
 **A workflow says what is done. A run says to which records.** No workflow names a fund, a type of record, or a filter of its own. The same Fund reconciliation runs for one fund, for three, or for all of them; the same Data cleanup runs for one record or for every record.
+
+### Starting a run
+
+Start run asks which records. It never assumes.
+
+| From | What happens |
+|---|---|
+| **Workflows**, Start run | A picker opens. Find records by name or code and tick them, or choose all of them |
+| **A record's page**, Run workflow | Lists the published workflows that run on that type of record. The one you pick opens with the record already chosen. You can add more |
+| **The editor**, Try it | The same picker, for the version on screen |
+| **A schedule** | The filters are in the schedule's `input`, as below |
+
+Choosing all of them takes a second press: the button changes to "Yes, run on every fund" before anything starts. A workflow that needs records chosen does not offer it. The line above the buttons always says what the run will cover. Edit as JSON shows the input the choices produce, to change by hand.
+
+### What a workflow says about itself
+
+A workflow names no record, but its **Start step** says what it is about. Select the Start step in the editor to set:
+
+| Setting | Effect |
+|---|---|
+| Type of record it runs on | Only records of that type are offered, the workflow appears under Run workflow on their pages, and a run given another type is refused. Blank means any type |
+| A run must have records chosen | The workflow cannot be started on everything, from the picker, the API, or JSON |
+| Also ask for | Other values a run needs, such as a period end. Each becomes a field in the picker, and steps read it as `{{input.key}}` |
+
+This is not a filter. "Runs on funds" does not choose a fund.
+
+A run started from a schedule is not checked against these settings yet. A schedule that names records of the wrong type selects nothing, and the run ends.
+
+### The filters
 
 A run is started with `filters` in its input, in the same shape for every workflow:
 
@@ -251,7 +281,27 @@ To run it on a schedule, queue `workflow.start` after the feed's poll:
 
 ## Reviewing
 
-A run that reaches a Human review step waits, for as long as it takes. It shows under "Waiting for a person" on `/workflows`.
+A run that reaches a Human review step waits, for as long as it takes. On `/workflows`, a review you can decide shows under "Waiting for you", soonest due first. The ones waiting for someone else are one click below it, each saying why it is not yours.
+
+### Who reviews
+
+A Human review step says who may decide it:
+
+| Setting | Effect |
+|---|---|
+| Who reviews | People, roles, or both. Only someone named, or holding a role named, in the run's client can decide it. Tick nobody for anyone who holds `workflow.review`. A shared workflow can name roles only. A setting can be a placeholder, such as `{{input.reviewer}}`, for a person chosen when the run starts |
+| The person who started the run cannot review it | On by default. For a scheduled run, the starter is whoever created the schedule. Turn it off only for a client with one reviewer |
+| Hours to review | Gives the review a due date. It shows as due, then overdue. Nothing is decided or escalated when it passes |
+
+The database holds every decision to these rules, in `ops.workflow_review_blocker`. The page and the API only show what it says, so the same reason appears on the review, in the list, and when a decision is refused: "You started this run, so someone else has to review it", or "This review is assigned to Operations lead". A tenant admin is held to them too.
+
+When the review opens, each person it names is checked. Someone who does not hold `workflow.review` in the client, or who started the run when the step keeps them apart, is left off, and the run's history says who and why. If nobody named is left, the review is open to anyone who can review.
+
+**Reassign** on an open review hands it to other people or roles, with a reason kept in the run's history. Anyone who manages the client's workflows can reassign, and so can anyone who could decide the review now, so a reviewer can pass it on. The same checks apply: a person must hold `workflow.review`, a role must grant it, and the starter cannot be given a review that keeps them apart.
+
+A review opened before this was added keeps the rules it was opened under: open to anyone, and the starter may decide it.
+
+### Deciding
 
 The review shows the agent's own summary, then a table of every proposed change with the agent's confidence beside it.
 
@@ -275,6 +325,8 @@ People are checked by lookup before each call:
 | Run a tool (reading), Agent | Who started the run. For a scheduled run, who created the schedule | `workflow.run` |
 | Run a tool (changing data) | The same | `workflow.run` and `entity.write` |
 | Apply approved changes | Who approved them | `workflow.review` and `entity.write` |
+
+Who may approve in the first place is set on the review step. See [Who reviews](#who-reviews).
 
 If the person does not hold these, the step fails and says why. So nobody approves a change they could not make themselves.
 
@@ -330,6 +382,8 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 - A deal setup template. The engine supports it.
 - Splitting a large selection into several runs, or one run per record. A run works through its whole selection in one pass.
 - Filtering by an attribute's value (every fund of one strategy). Filters are by type, code, id, and name.
+- Run workflow on rows selected in a list. Lists have no row selection; it is on each record's page.
 - Checking the notes against the reconciliation after a reviewer rejects a change. The stored outcome line is the check.
-- Assigning a review to a named person, and telling them it is waiting.
-- A time limit on a review.
+- Telling a reviewer a review is waiting, by email or message. It shows in their list on `/workflows`.
+- Escalating an overdue review. Overdue is shown, not acted on.
+- More than one approval on a review (two people, or one after another).

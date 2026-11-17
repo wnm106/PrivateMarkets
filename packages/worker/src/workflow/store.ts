@@ -3,7 +3,8 @@ import type { LoadedRun, ReviewRow, StepRow, WorkflowStore } from './engine';
 
 /**
  * The workflow store on Supabase. Every call is one of the workflow_worker_*
- * functions in supabase/migrations/20261116120000_workflows.sql, which only the
+ * functions in supabase/migrations/20261116120000_workflows.sql (and
+ * 20261117010000_workflow_review_routing.sql for opening a review), which only the
  * service role may execute.
  */
 
@@ -25,6 +26,11 @@ export function toReview(row: Row): ReviewRow {
     proposal: row.proposal ?? null,
     decision: row.decision ?? null,
     decidedBy: text(row.decided_by),
+    assignees: Array.isArray(row.assignees) ? (row.assignees as Row[]).map((entry) => String(entry.name ?? '')).filter(Boolean) : undefined,
+    unassignable: Array.isArray(row.unassignable)
+      ? (row.unassignable as Row[]).map((entry) => ({ person: String(entry.person ?? ''), reason: String(entry.reason ?? '') }))
+      : undefined,
+    dueAt: text(row.due_at),
   };
 }
 
@@ -79,7 +85,7 @@ export function supabaseWorkflowStore(supabase: SupabaseClient, leaseSeconds = 9
         p_detail: detail ?? null,
       });
     },
-    async openReview(runId, nodeId, title, instructions, summary, proposal) {
+    async openReview(runId, nodeId, title, instructions, summary, proposal, routing) {
       const row = await call<Row | null>('workflow_worker_review', {
         p_run_id: runId,
         p_node_id: nodeId,
@@ -87,6 +93,7 @@ export function supabaseWorkflowStore(supabase: SupabaseClient, leaseSeconds = 9
         p_instructions: instructions,
         p_summary: summary,
         p_proposal: proposal,
+        p_routing: routing,
       });
       if (!row) throw new Error('The review could not be opened.');
       return toReview(row);

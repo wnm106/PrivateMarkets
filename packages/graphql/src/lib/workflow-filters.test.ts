@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeFilters, hasFilters, parseFilters, selectedIds } from './workflow-filters';
+import { buildRunInput, describeFilters, hasFilters, parseFilters, parseRunSetup, prepareRunInput, runSetupOf, selectedIds } from './workflow-filters';
 import { nextNode, resolveTemplates } from './workflow-graph';
 import { FILTERS_EXAMPLE, WORKFLOW_TEMPLATES } from './workflow-templates';
 
@@ -61,5 +61,55 @@ describe('templates and the records they run on', () => {
     expect(resolveTemplates(args, { input: { limit: 20 }, steps: { select: { filtered: false } } })).toEqual({ status: 'OPEN', first: 20 });
     expect(resolveTemplates(args, { input: {}, steps: { select: { filtered: true, entityIds: [] } } })).toEqual({ status: 'OPEN', entityIds: [] });
     expect(resolveTemplates(args, { input: {}, steps: { select: { filtered: true, entityIds: ['a'] } } })).toEqual({ status: 'OPEN', entityIds: ['a'] });
+  });
+});
+
+describe('what a workflow asks for when a run starts', () => {
+  const fund = parseRunSetup({ appliesTo: 'fund', inputs: [{ key: 'periodEnd', label: 'Period end', type: 'date' }, { key: 'filters' }, { key: 'periodEnd' }, { key: 'limit', type: 'number' }] });
+  const any = parseRunSetup(undefined);
+
+  it('reads the Start step, dropping an input that would shadow the filters or repeat a key', () => {
+    expect(fund).toEqual({ appliesTo: 'FUND', requiresRecords: false, inputs: [{ key: 'periodEnd', label: 'Period end', type: 'date' }, { key: 'limit', label: 'limit', type: 'number' }] });
+    expect(any).toEqual({ appliesTo: null, requiresRecords: false, inputs: [] });
+  });
+
+  it('is declared by every template, and never as a filter', () => {
+    const by = (code: string) => runSetupOf(WORKFLOW_TEMPLATES.find((template) => template.code === code)!.graph);
+    expect(by('FUND_RECONCILIATION')).toMatchObject({ appliesTo: 'FUND', requiresRecords: false, inputs: [{ key: 'periodEnd' }] });
+    expect(by('CLOSING_READINESS').appliesTo).toBe('DEAL');
+    expect(by('DATA_CLEANUP').appliesTo).toBeNull();
+    expect(by('REQUIRED_VALUES_CHECK').requiresRecords).toBe(true);
+    for (const template of WORKFLOW_TEMPLATES) {
+      const start = template.graph.nodes.find((node) => node.type === 'start')!;
+      expect(Object.keys(start.config).sort()).toEqual(['appliesTo', 'inputs', 'requiresRecords']);
+    }
+  });
+
+  it('builds the input from what a person chose', () => {
+    expect(buildRunInput(fund, { entityIds: ['a', 'b', 'a'], all: false }, { periodEnd: '2026-09-30', limit: '5', other: 'x' })).toEqual({
+      filters: { domainCode: 'FUND', entityIds: ['a', 'b'] },
+      periodEnd: '2026-09-30',
+      limit: 5,
+    });
+    // All funds needs no filter: the workflow is already about funds.
+    expect(buildRunInput(fund, { entityIds: ['a'], all: true })).toEqual({});
+    // A workflow for any type, run on every record of a type the person picked.
+    expect(buildRunInput(any, { entityIds: [], domainCode: 'issuer', all: true })).toEqual({ filters: { domainCode: 'ISSUER' } });
+    expect(buildRunInput(any, { entityIds: [], all: true })).toEqual({});
+  });
+
+  it('holds chosen records to the type the workflow is about', () => {
+    expect(prepareRunInput(fund, { filters: { entityCodes: ['HSCF2'] }, periodEnd: '' })).toEqual({ input: { filters: { entityCodes: ['HSCF2'], domainCode: 'FUND' }, periodEnd: '' } });
+    expect(prepareRunInput(fund, { filters: { domainCode: 'DEAL', entityCodes: ['X'] } })).toEqual({ problem: 'This workflow runs on FUND records, not DEAL.' });
+    // No filters is still no restriction.
+    expect(prepareRunInput(fund, { periodEnd: '2026-09-30' })).toEqual({ input: { periodEnd: '2026-09-30' } });
+    expect(prepareRunInput(any, { filters: { domainCode: 'DEAL' } })).toEqual({ input: { filters: { domainCode: 'DEAL' } } });
+  });
+
+  it('refuses to start on everything when the workflow needs records chosen', () => {
+    const needs = parseRunSetup({ requiresRecords: true });
+    expect(prepareRunInput(needs, {})).toEqual({ problem: 'Choose the records to run this workflow on. It does not run on everything.' });
+    expect(prepareRunInput(needs, { filters: { entityIds: [] } })).toHaveProperty('problem');
+    expect(prepareRunInput(needs, { filters: { entityIds: ['a'] } })).toEqual({ input: { filters: { entityIds: ['a'] } } });
   });
 });

@@ -8,6 +8,7 @@ import {
   decompileCalcExpression,
   deleteCalcDraft,
   enclosingCall,
+  enclosingPerformanceCall,
   exprPullsLatest,
   insertCalcDraft,
   relatedFieldText,
@@ -662,7 +663,9 @@ function ExpressionDesigner({
         relationshipCodes: choice.place.relationshipCodes,
       },
     }));
-    const text = choice.place.traversal !== 'SELF' && !enclosingCall(tokens, safeGap, 'LATEST')
+    const text = choice.place.traversal !== 'SELF'
+      && !enclosingCall(tokens, safeGap, 'LATEST')
+      && !enclosingPerformanceCall(tokens, safeGap)
       ? relatedFieldText(choice.attributeCode)
       : choice.attributeCode;
     writeInsertion(text);

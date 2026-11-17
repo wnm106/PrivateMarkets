@@ -71,3 +71,89 @@ export function selectedIds(value: unknown): string[] | null {
   if (value === undefined || value === null) return null;
   return list(value);
 }
+
+// ---------------------------------------------------------------------------
+// What a workflow asks for when a run starts
+// ---------------------------------------------------------------------------
+
+/** Something a run is asked for besides its records: a period end, a limit. */
+export interface RunInputField {
+  key: string;
+  label: string;
+  type: 'text' | 'date' | 'number';
+  help?: string;
+}
+
+/**
+ * What a workflow needs to start, kept on its Start step. This is not a filter:
+ * it names no record. It says what kind of record the workflow is about, so a
+ * run can be offered the right records and refused the wrong ones.
+ */
+export interface RunSetup {
+  /** The type of record the workflow works on. Null when it works on any. */
+  appliesTo: string | null;
+  /** True when a run with no records chosen makes no sense. */
+  requiresRecords: boolean;
+  inputs: RunInputField[];
+}
+
+const INPUT_TYPES = ['text', 'date', 'number'];
+const RESERVED_INPUT = new Set(['filters', '__proto__', 'prototype', 'constructor']);
+
+export function parseRunSetup(config: unknown): RunSetup {
+  const row = config && typeof config === 'object' && !Array.isArray(config) ? (config as Record<string, unknown>) : {};
+  const seen = new Set<string>();
+  const inputs: RunInputField[] = [];
+  for (const entry of Array.isArray(row.inputs) ? row.inputs : []) {
+    const field = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : {};
+    const key = word(field.key);
+    if (!key || !/^[A-Za-z][\w]*$/.test(key) || RESERVED_INPUT.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    const type = INPUT_TYPES.includes(String(field.type)) ? (field.type as RunInputField['type']) : 'text';
+    inputs.push({ key, label: word(field.label) || key, type, ...(word(field.help) ? { help: word(field.help) as string } : {}) });
+  }
+  return { appliesTo: word(row.appliesTo)?.toUpperCase() ?? null, requiresRecords: row.requiresRecords === true, inputs };
+}
+
+/** The setup of a graph: the settings of its Start step. */
+export function runSetupOf(graph: { nodes: Array<{ type: string; config: Record<string, unknown> }> } | null | undefined): RunSetup {
+  return parseRunSetup(graph?.nodes.find((node) => node.type === 'start')?.config);
+}
+
+/**
+ * Checks what a run is started with against what the workflow is about, and
+ * returns the input the run gets. Records of the wrong type are refused here,
+ * before the run exists, instead of matching nothing halfway through.
+ */
+export function prepareRunInput(setup: RunSetup, input: unknown): { input: Record<string, unknown> } | { problem: string } {
+  const given = input && typeof input === 'object' && !Array.isArray(input) ? { ...(input as Record<string, unknown>) } : {};
+  const filters = parseFilters(given.filters);
+  const filtered = hasFilters(filters);
+  if (setup.requiresRecords && !filtered) return { problem: 'Choose the records to run this workflow on. It does not run on everything.' };
+  if (setup.appliesTo && filters.domainCode && filters.domainCode !== setup.appliesTo) {
+    return { problem: `This workflow runs on ${setup.appliesTo} records, not ${filters.domainCode}.` };
+  }
+  if (!filtered) return { input: given };
+  const raw = given.filters && typeof given.filters === 'object' && !Array.isArray(given.filters) ? (given.filters as Record<string, unknown>) : {};
+  // Chosen records are held to the workflow's type, so a record of another type is reported as not found.
+  return { input: { ...given, filters: { ...raw, ...(setup.appliesTo ? { domainCode: setup.appliesTo } : {}) } } };
+}
+
+/** The input a run starts with, from what a person chose: records, or all of them, and the other values asked for. */
+export function buildRunInput(
+  setup: RunSetup,
+  choice: { entityIds: string[]; domainCode?: string | null; all: boolean },
+  values: Record<string, string> = {},
+): Record<string, unknown> {
+  const input: Record<string, unknown> = {};
+  const domainCode = setup.appliesTo || word(choice.domainCode)?.toUpperCase() || null;
+  if (!choice.all && choice.entityIds.length > 0) input.filters = { ...(domainCode ? { domainCode } : {}), entityIds: [...new Set(choice.entityIds)] };
+  // Every record of a type the person picked. A workflow with a type of its own needs no filter for that.
+  else if (choice.all && domainCode && !setup.appliesTo) input.filters = { domainCode };
+  for (const field of setup.inputs) {
+    const value = (values[field.key] ?? '').trim();
+    if (!value) continue;
+    input[field.key] = field.type === 'number' && Number.isFinite(Number(value)) ? Number(value) : value;
+  }
+  return input;
+}

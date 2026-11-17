@@ -4,7 +4,9 @@ import {
   isReadTool,
   nextNode,
   resolveTemplates,
+  reviewRouting,
   validateGraph,
+  type ReviewRouting,
   type RunScope,
   type WorkflowGraph,
   type WorkflowNode,
@@ -49,6 +51,11 @@ export interface ReviewRow {
   proposal: unknown;
   decision: unknown;
   decidedBy: string | null;
+  /** Who the review was given to, by name. Only set when it is opened. */
+  assignees?: string[];
+  /** People the step named who could not be given it, and why. Only set when it is opened. */
+  unassignable?: Array<{ person: string; reason: string }>;
+  dueAt?: string | null;
 }
 
 export interface LoadedRun {
@@ -93,7 +100,7 @@ export interface WorkflowStore {
   /** The run's status afterwards, or null when `owner` no longer holds it. */
   saveRun(runId: string, owner: string, patch: RunPatch, release?: boolean): Promise<string | null>;
   event(runId: string, nodeId: string | null, type: string, actor: ActorType, actorId: string | null, summary: string, detail?: unknown): Promise<void>;
-  openReview(runId: string, nodeId: string, title: string, instructions: string, summary: string, proposal: unknown): Promise<ReviewRow>;
+  openReview(runId: string, nodeId: string, title: string, instructions: string, summary: string, proposal: unknown, routing: ReviewRouting): Promise<ReviewRow>;
 }
 
 /**
@@ -270,13 +277,29 @@ async function runReview(node: WorkflowNode, ctx: StepContext): Promise<StepOutc
       String(node.config.instructions || ''),
       typeof source.summary === 'string' ? source.summary : '',
       proposal,
+      reviewRouting(node.config, ctx.scope),
     );
     if (review.status === 'OPEN') {
       const counts = proposalCounts(proposal);
-      await store.event(ctx.run.id, node.id, 'review.requested', 'SYSTEM', null, `Waiting for a person to review ${counts.total} proposed change${counts.total === 1 ? '' : 's'}`, {
+      const names = review.assignees || [];
+      const who = names.length > 0 ? names.join(', ') : 'a person';
+      await store.event(ctx.run.id, node.id, 'review.requested', 'SYSTEM', null, `Waiting for ${who} to review ${counts.total} proposed change${counts.total === 1 ? '' : 's'}`, {
         reviewId: review.id,
         counts,
+        assignees: names,
+        dueAt: review.dueAt ?? null,
       });
+      if (review.unassignable && review.unassignable.length > 0) {
+        await store.event(
+          ctx.run.id,
+          node.id,
+          'review.unassignable',
+          'SYSTEM',
+          null,
+          `${review.unassignable.length} of the people this review names could not be given it`,
+          { unassignable: review.unassignable },
+        );
+      }
     }
   }
 

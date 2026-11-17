@@ -3,6 +3,7 @@
 import { Fragment, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { LIST_VALUE_TOOL, setPath, unanswered, unmetListValues, type Confidence, type ItemDecision, type ProposalAction, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { ChangeSettings, readArg } from '@/components/workflows/ChangeSettings';
+import { ReviewAssignment } from '@/components/workflows/ReviewerPicker';
 import { graphqlMutation } from '@/lib/graphql';
 import { markdownToHtml } from '@/lib/markdown';
 import { DECIDE_REVIEW, showValue, when, type MutationErrors, type ReviewView } from '@/lib/workflows';
@@ -74,10 +75,12 @@ function coerce(original: unknown, text: string): unknown {
 
 interface Props {
   review: ReviewView;
+  /** The caller manages this client's workflows, so may reassign the review. */
+  canManage?: boolean;
   onDecided(): void;
 }
 
-export function ReviewPanel({ review, onDecided }: Props) {
+export function ReviewPanel({ review, canManage = false, onDecided }: Props) {
   const items = useMemo<ProposalItem[]>(() => review.proposal?.items || [], [review.proposal]);
   const open = review.status === 'OPEN';
   const canDecide = open && review.canReview;
@@ -209,7 +212,12 @@ export function ReviewPanel({ review, onDecided }: Props) {
           {!open && <span style={chip(review.status === 'APPROVED' ? '#166534' : '#475569', review.status === 'APPROVED' ? '#dcfce7' : '#f1f5f9')}>{review.status === 'APPROVED' ? 'Approved' : review.status === 'REJECTED' ? 'Rejected' : 'Cancelled'} {when(review.decidedAt)}</span>}
         </div>
         {review.instructions && <div style={{ marginTop: 6, fontSize: 13, color: 'var(--ink-2)' }}>{review.instructions}</div>}
-        {open && !review.canReview && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--red)' }}>You can see this review but cannot decide it. Someone with the review permission needs to.</div>}
+        <ReviewAssignment review={review} canManage={canManage} onChanged={onDecided} />
+        {open && !review.canReview && (
+          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--red)' }}>
+            You can see this review but cannot decide it. {review.blocker || 'Someone with the review permission needs to.'}
+          </div>
+        )}
       </header>
 
       {review.summary && <AgentSummary text={review.summary} />}

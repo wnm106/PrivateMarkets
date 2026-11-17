@@ -68,7 +68,7 @@ export const NODE_TYPES: readonly NodeTypeDef[] = [
     kind: 'human',
     description: 'Pauses the run until a person approves or rejects the changes an agent step proposed.',
     outcomes: ['approved', 'rejected'],
-    defaultConfig: { source: '', title: 'Review proposed changes', instructions: '', skipWhenEmpty: true },
+    defaultConfig: { source: '', title: 'Review proposed changes', instructions: '', skipWhenEmpty: true, people: [], roles: [], separateReviewer: true },
   },
   {
     type: 'apply',
@@ -268,6 +268,11 @@ export function validateGraph(graph: WorkflowGraph, toolNames?: ReadonlySet<stri
       else if (byId.get(source)?.type !== 'agent' || !upstream.has(source)) {
         problems.push({ nodeId: node.id, message: 'The step being reviewed must be an agent step that runs before this one.' });
       }
+      const due = node.config.dueInHours;
+      const placeholder = typeof due === 'string' && WHOLE.test(due.trim());
+      if (due !== undefined && due !== null && due !== '' && !placeholder && !(Number(due) > 0)) {
+        problems.push({ nodeId: node.id, message: 'The time to review must be a number of hours above zero, or left blank.' });
+      }
     }
     if (node.type === 'apply') {
       const review = String(node.config.review || '');
@@ -378,4 +383,45 @@ export function evaluateCondition(config: Record<string, unknown>, scope: RunSco
     default:
       return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Who a review is for
+// ---------------------------------------------------------------------------
+
+/** What a review step says about who decides it. The database holds the reviewer to it. */
+export interface ReviewRouting {
+  /** User ids. A setting may be a placeholder, such as {{input.reviewer}}. */
+  people: string[];
+  /** Role codes, held in the run's client. */
+  roles: string[];
+  /** The person who started the run may not decide it. On unless the step turns it off. */
+  separateReviewer: boolean;
+  /** Hours the reviewer has. Null for no due date. */
+  dueInHours: number | null;
+}
+
+function textList(value: unknown): string[] {
+  const flat = (Array.isArray(value) ? value : [value]).flat(2);
+  const out: string[] = [];
+  for (const item of flat) {
+    if (typeof item !== 'string' && typeof item !== 'number') continue;
+    for (const part of String(item).split(',')) {
+      const trimmed = part.trim();
+      if (trimmed && !out.includes(trimmed)) out.push(trimmed);
+    }
+  }
+  return out;
+}
+
+/** Reads a review step's routing, filling placeholders from the run when a scope is given. */
+export function reviewRouting(config: Record<string, unknown>, scope?: RunScope): ReviewRouting {
+  const fill = (value: unknown) => (scope ? resolveTemplates(value, scope) : value);
+  const hours = Number(fill(config.dueInHours));
+  return {
+    people: textList(fill(config.people)),
+    roles: textList(fill(config.roles)).map((code) => code.toUpperCase()),
+    separateReviewer: config.separateReviewer !== false,
+    dueInHours: Number.isFinite(hours) && hours > 0 ? hours : null,
+  };
 }

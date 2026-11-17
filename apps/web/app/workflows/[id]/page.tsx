@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NODE_TYPES, validateGraph, type NodeType, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { EdgeInspector, NodeInspector } from '@/components/workflows/NodeInspector';
+import { StartRunDialog } from '@/components/workflows/StartRunDialog';
 import { WorkflowCanvas, type CanvasSelection } from '@/components/workflows/WorkflowCanvas';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { authHeaders } from '@/lib/reporting';
@@ -14,7 +15,6 @@ import {
   KIND_STYLE,
   PUBLISH_WORKFLOW,
   SAVE_WORKFLOW,
-  START_RUN,
   WORKFLOW_QUERY,
   nodeIdFor,
   statusOf,
@@ -44,6 +44,8 @@ export default function WorkflowEditorPage() {
   const [message, setMessage] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  /** The saved version a trial run is about to start on, while its records are being chosen. */
+  const [trying, setTrying] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
   usePublishViewContext({ activity: 'editing', kind: 'workflow', label: workflow?.name || 'Workflow', id, summary: 'Workflow editor' });
@@ -165,15 +167,8 @@ export default function WorkflowEditorPage() {
       if (saved === null) return;
       version = saved;
     }
-    setBusy(true);
-    const { data, error } = await graphqlMutation<{ startWorkflowRun: { run: { id: string } | null; errors: MutationErrors } }>(START_RUN, { workflowId: id, input: {}, version });
-    setBusy(false);
-    const failed = error?.message || data?.startWorkflowRun.errors[0]?.message;
-    if (failed || !data?.startWorkflowRun.run) {
-      setMessage(failed || 'The run could not be started.');
-      return;
-    }
-    router.push(`/workflows/runs/${data.startWorkflowRun.run.id}`);
+    // A trial run asks for its records like any other. It never starts on everything by default.
+    setTrying(version);
   };
 
   const archive = async () => {
@@ -252,7 +247,7 @@ export default function WorkflowEditorPage() {
                 {canManage && !viewingOld && (
                   <>
                     <button type="button" className="btn" disabled={busy || !dirty} onClick={() => save()}>{dirty ? 'Save draft' : 'Saved'}</button>
-                    <button type="button" className="btn" disabled={busy || problems.length > 0} onClick={tryRun} title="Runs this version without publishing it, with an empty input">Try it</button>
+                    <button type="button" className="btn" disabled={busy || problems.length > 0} onClick={tryRun} title="Runs this version without publishing it. You choose the records first.">Try it</button>
                     <button
                       type="button"
                       className="btn btn-primary"
@@ -338,6 +333,7 @@ export default function WorkflowEditorPage() {
                   tools={tools}
                   problems={problems.filter((problem) => problem.nodeId === selectedNode.id)}
                   readOnly={readOnly}
+                  clientId={workflow?.clientId ?? null}
                   onChange={(next) => change({ ...graph, nodes: graph.nodes.map((node) => (node.id === next.id ? next : node)) })}
                   onDelete={() => {
                     change({ nodes: graph.nodes.filter((node) => node.id !== selectedNode.id), edges: graph.edges.filter((edge) => edge.from !== selectedNode.id && edge.to !== selectedNode.id) });
@@ -408,6 +404,14 @@ export default function WorkflowEditorPage() {
             </div>
           )}
         </>
+      )}
+    {trying !== null && (
+        <StartRunDialog
+          workflow={{ id, name, runSetup: graph.nodes.find((node) => node.type === 'start')?.config }}
+          version={trying}
+          onClose={() => setTrying(null)}
+          onStarted={(runId) => router.push(`/workflows/runs/${runId}`)}
+        />
       )}
     </div>
   );

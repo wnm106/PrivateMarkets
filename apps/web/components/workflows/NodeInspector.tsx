@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { CONDITION_OPS, nodeTypeDef, upstreamOf, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
+import { ReviewerPicker } from '@/components/workflows/ReviewerPicker';
 import { kindOf, parseObject, type ToolOption, type WorkflowProblem } from '@/lib/workflows';
 
 /** The settings for the step or connection selected on the canvas. */
@@ -93,11 +94,13 @@ interface NodeProps {
   tools: ToolOption[];
   problems: WorkflowProblem[];
   readOnly: boolean;
+  /** The workflow's client, for who a review can be assigned to. Null for a shared workflow. */
+  clientId?: string | null;
   onChange(node: WorkflowNode): void;
   onDelete(): void;
 }
 
-export function NodeInspector({ graph, node, tools, problems, readOnly, onChange, onDelete }: NodeProps) {
+export function NodeInspector({ graph, node, tools, problems, readOnly, clientId = null, onChange, onDelete }: NodeProps) {
   const def = nodeTypeDef(node.type);
   const kind = kindOf(node);
   const config = node.config;
@@ -134,7 +137,23 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, onChange
         </div>
       )}
 
-      {node.type === 'start' && <div style={hint}>The run&apos;s input is available to every step as <code>{'{{input.…}}'}</code>.</div>}
+      {node.type === 'start' && (
+        <>
+          <div style={hint}>
+            What a run is asked for when it starts. A workflow never names its records: the person starting a run chooses them, and the Select records step reads the choice.
+          </div>
+          <Field name="Type of record it runs on" help="A record type code, such as FUND or DEAL. Only records of this type are offered, and this workflow is offered on their pages. Leave blank for any type.">
+            <input className="text-input" style={full} disabled={readOnly} value={String(config.appliesTo || '')} onChange={(event) => set({ appliesTo: event.target.value.trim().toUpperCase() })} />
+          </Field>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+            <input type="checkbox" disabled={readOnly} checked={config.requiresRecords === true} onChange={(event) => set({ requiresRecords: event.target.checked })} />
+            A run must have records chosen. It cannot run on everything.
+          </label>
+          <Field name="Also ask for" help='Other values a run is asked for, as { "inputs": [{ "key": "periodEnd", "label": "Period end", "type": "date" }] }. type is text, date, or number. Steps read each as {{input.key}}.'>
+            <JsonField value={{ inputs: Array.isArray(config.inputs) ? config.inputs : [] }} onChange={(value) => set({ inputs: Array.isArray(value.inputs) ? value.inputs : [] })} rows={4} />
+          </Field>
+        </>
+      )}
 
       {node.type === 'tool' && (
         <>
@@ -210,6 +229,36 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, onChange
             <input type="checkbox" checked={config.skipWhenEmpty !== false} onChange={(event) => set({ skipWhenEmpty: event.target.checked })} />
             Skip the review when nothing was proposed
           </label>
+          <div style={{ display: 'grid', gap: 4 }}>
+            <span style={label}>Who reviews</span>
+            <ReviewerPicker
+              clientId={clientId}
+              people={list(config.people)}
+              roles={list(config.roles)}
+              onChange={(next) => set({ people: next.people, roles: next.roles })}
+            />
+            <span style={hint}>
+              {clientId
+                ? 'Only these people, and people holding these roles, can decide it. Tick nobody for anyone who holds the review permission.'
+                : 'A shared workflow can be assigned to roles only. Tick none for anyone who holds the review permission.'}
+            </span>
+          </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
+            <input type="checkbox" style={{ marginTop: 2 }} checked={config.separateReviewer !== false} onChange={(event) => set({ separateReviewer: event.target.checked })} />
+            <span>The person who started the run cannot review it. For a scheduled run, that is whoever created the schedule.</span>
+          </label>
+          <Field name="Hours to review" help="Shown as due, then overdue. Nothing is decided when it passes. Leave blank for no due date.">
+            <input
+              className="text-input"
+              style={full}
+              inputMode="decimal"
+              value={config.dueInHours === undefined || config.dueInHours === null ? '' : String(config.dueInHours)}
+              onChange={(event) => {
+                const text = event.target.value.trim();
+                set({ dueInHours: text === '' ? null : Number.isFinite(Number(text)) ? Number(text) : text });
+              }}
+            />
+          </Field>
         </>
       )}
 

@@ -1,3 +1,4 @@
+import type { RunInputField } from './workflow-filters';
 import type { WorkflowGraph, WorkflowNode } from './workflow-graph';
 
 /**
@@ -21,6 +22,25 @@ export interface WorkflowTemplate {
 
 /** The filters a run can be started with. The same for every workflow. Blank means no restriction. */
 export const FILTERS_EXAMPLE = { domainCode: '', entityCodes: [] as string[], nameContains: '' };
+
+const PERIOD_END: RunInputField = { key: 'periodEnd', label: 'Period end', type: 'date', help: 'Leave blank for the period each fund is now closing.' };
+const AS_OF: RunInputField = { key: 'asOfDate', label: 'As of', type: 'date', help: 'Leave blank for today.' };
+const LIMIT: RunInputField = { key: 'limit', label: 'Most exceptions to read', type: 'number', help: 'Leave blank for 20.' };
+
+/**
+ * Where a run begins. Its settings say what the workflow is about, never which
+ * records: the type of record it works on, whether it needs records chosen,
+ * and what else a run is asked for.
+ */
+function startStep(setup: { appliesTo?: string; requiresRecords?: boolean; inputs?: RunInputField[] } = {}): WorkflowNode {
+  return {
+    id: 'start',
+    type: 'start',
+    label: 'Start',
+    position: { x: 0, y: 160 },
+    config: { appliesTo: setup.appliesTo || '', requiresRecords: setup.requiresRecords === true, inputs: setup.inputs || [] },
+  };
+}
 
 /** The step every template starts with: the run's filters, turned into the records it works on. */
 function selectRecords(x: number, y: number): WorkflowNode {
@@ -271,9 +291,9 @@ Use validFrom of today and an overrideReason that says what was missing.
 Finish with a short summary: which records you looked at, what you found, and what you propose.`;
 
 /** Start, Select records, the steps between, End: one path, with the positions filled in. */
-function line(steps: Array<Omit<WorkflowNode, 'position'>>): WorkflowGraph {
+function line(setup: Parameters<typeof startStep>[0], steps: Array<Omit<WorkflowNode, 'position'>>): WorkflowGraph {
   const nodes: WorkflowNode[] = [
-    { id: 'start', type: 'start', label: 'Start', position: { x: 0, y: 160 }, config: {} },
+    startStep(setup),
     selectRecords(220, 160),
     ...steps.map((step, index) => ({ ...step, position: { x: 460 + index * 240, y: 160 } })),
     { id: 'end', type: 'end', label: 'End', position: { x: 460 + steps.length * 240, y: 160 }, config: {} },
@@ -314,13 +334,13 @@ const anyFund: Omit<WorkflowNode, 'position'> = {
   config: { path: 'steps.closes.funds', op: 'truthy', value: null },
 };
 
-function complianceCheck(code: string, name: string, ruleCode: string, rule: string, description: string): WorkflowTemplate {
+function complianceCheck(code: string, name: string, ruleCode: string, rule: string, appliesTo: string, description: string): WorkflowTemplate {
   return {
     code,
     name,
     description,
     inputExample: { filters: FILTERS_EXAMPLE, asOfDate: '' },
-    graph: line([
+    graph: line({ appliesTo, inputs: [AS_OF] }, [
       { id: 'score', type: 'tool', label: 'Score the rule', config: { tool: 'evaluate_compliance_rule', args: { ruleCode, asOfDate: '{{input.asOfDate}}' }, allowWrite: true } },
       brief('Explain the result', complianceInstructions(rule), COMPLIANCE_TOOLS),
     ]),
@@ -336,7 +356,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
     inputExample: { filters: FILTERS_EXAMPLE, limit: 20 },
     graph: {
       nodes: [
-        { id: 'start', type: 'start', label: 'Start', position: { x: 0, y: 160 }, config: {} },
+        startStep({ inputs: [LIMIT] }),
         selectRecords(220, 160),
         {
           id: 'scan',
@@ -401,7 +421,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
     inputExample: { filters: FILTERS_EXAMPLE, periodEnd: '' },
     graph: {
       nodes: [
-        { id: 'start', type: 'start', label: 'Start', position: { x: 0, y: 160 }, config: {} },
+        startStep({ appliesTo: 'FUND', inputs: [PERIOD_END] }),
         selectRecords(220, 160),
         {
           id: 'closes',
@@ -506,7 +526,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
     description:
       'For the records a run is started with, or for all of them: lists open data quality exceptions and writes a short brief of what is wrong, on which records, and what to open first. It does not change a record.',
     inputExample: { filters: FILTERS_EXAMPLE, limit: 20 },
-    graph: line([
+    graph: line({ inputs: [LIMIT] }, [
       { id: 'scan', type: 'tool', label: 'Open exceptions', config: { tool: 'list_dq_exceptions', args: { status: 'OPEN', entityIds: '{{steps.select.entityIds}}', first: '{{input.limit}}' }, allowWrite: false } },
       brief('Write the brief', QUALITY_BRIEF_INSTRUCTIONS, BRIEF_TOOLS),
     ]),
@@ -517,7 +537,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
     description:
       'For the funds a run is started with, or for all of them: reads each NAV reconciliation and names the checks and lines to look at before anyone signs it. It does not change a record.',
     inputExample: { filters: FILTERS_EXAMPLE, periodEnd: '' },
-    graph: line([
+    graph: line({ appliesTo: 'FUND', inputs: [PERIOD_END] }, [
       fundsInRun,
       anyFund,
       brief('Review the NAV', NAV_REVIEW_INSTRUCTIONS, ['get_nav_reconciliation', 'get_position_reconciliation', 'get_entity', 'get_field_lineage', 'get_temporal_history', 'query_data', 'get_model_map']),
@@ -529,7 +549,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
     description:
       'For the funds a run is started with, or for all of them: reads each cash reconciliation and says what ties to the bank and what still does not. It does not match or change anything.',
     inputExample: { filters: FILTERS_EXAMPLE, periodEnd: '' },
-    graph: line([
+    graph: line({ appliesTo: 'FUND', inputs: [PERIOD_END] }, [
       fundsInRun,
       anyFund,
       brief('Write the tie-out', CASH_TIE_OUT_INSTRUCTIONS, ['get_cash_reconciliation', 'get_entity', 'get_field_lineage', 'get_temporal_history', 'query_data', 'get_model_map']),
@@ -541,13 +561,14 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
     description:
       'For the deals a run is started with: says whether each can close, which checklist items are still open, who owns them, and what is already done. It does not change a record.',
     inputExample: { filters: FILTERS_EXAMPLE },
-    graph: line([brief('Write the close brief', CLOSING_READINESS_INSTRUCTIONS, BRIEF_TOOLS)]),
+    graph: line({ appliesTo: 'DEAL' }, [brief('Write the close brief', CLOSING_READINESS_INSTRUCTIONS, BRIEF_TOOLS)]),
   },
   complianceCheck(
     'OVERCOLLATERALIZATION_TEST',
     'Overcollateralization test',
     'CLO_OC_AB',
     'Class A/B overcollateralization',
+    'FUND',
     'Scores the Class A/B overcollateralization test and explains the result for the records a run is started with, or for every record the test applies to. It does not change a holding.',
   ),
   complianceCheck(
@@ -555,6 +576,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
     'Single-name check',
     'FUND_ISSUER_NAV_PCT',
     'single-issuer share of NAV',
+    'FUND',
     'Scores the single-issuer share of NAV and explains the result for the funds a run is started with, or for every fund the rule applies to. It does not change a record.',
   ),
   {
@@ -563,7 +585,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
     description:
       'For the records a run is started with: has an agent find missing required values and failing checks on each, propose the values, and wait for a person to review them. It reads records one at a time, so it needs filters: a run with none ends without doing anything.',
     inputExample: { filters: FILTERS_EXAMPLE },
-    graph: line([
+    graph: line({ requiresRecords: true }, [
       { id: 'any', type: 'branch', label: 'Any records selected?', config: { path: 'steps.select.entityIds', op: 'truthy', value: null } },
       {
         id: 'check',
@@ -588,7 +610,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
     inputExample: {},
     graph: {
       nodes: [
-        { id: 'start', type: 'start', label: 'Start', position: { x: 0, y: 120 }, config: {} },
+        { ...startStep(), position: { x: 0, y: 120 } },
         { id: 'end', type: 'end', label: 'End', position: { x: 320, y: 120 }, config: {} },
       ],
       edges: [{ id: 'e1', from: 'start', to: 'end' }],

@@ -5,6 +5,7 @@ import {
   compileCalcExpression,
   decompileCalcExpression,
   enclosingCall,
+  enclosingPerformanceCall,
   exprPullsLatest,
   relatedFieldText,
   tokenizeCalcDraft,
@@ -72,6 +73,25 @@ describe('latest pull-through', () => {
     const capexText = '-((STATEMENT_PPE - PRIOR(STATEMENT_PPE)) + STATEMENT_DA)';
     assert.equal(decompileCalcExpression(capex), capexText);
     assert.equal(decompileCalcExpression(compileCalcExpression(capexText)), capexText);
+  });
+
+  it('shows an inception return as the fields it reads', () => {
+    const source = 'XIRR(FLOWS(CASHFLOW_INVESTOR_AMOUNT, CASHFLOW_DATE), CLOSE(MARKET_VALUE))';
+    assert.equal(decompileCalcExpression(compileCalcExpression(source)), source);
+    assert.equal(
+      decompileCalcExpression(compileCalcExpression(source.replace('XIRR', 'MOIC'))),
+      source.replace('XIRR', 'MOIC'),
+    );
+  });
+
+  it('compiles a performance formula that names each field and the quarter offset', () => {
+    const source = 'XIRR(OPEN(MARKET_VALUE, QTD), FLOWS(CASHFLOW_INVESTOR_AMOUNT, CASHFLOW_DATE), FLOWS(FEE_AMOUNT, FEE_DATE), CLOSE(FUND_NAV))';
+    const expr = compileCalcExpression(source);
+    assert.equal(decompileCalcExpression(expr), source);
+    assert.deepEqual(collectCalcRefs(expr), ['MARKET_VALUE', 'CASHFLOW_INVESTOR_AMOUNT', 'CASHFLOW_DATE', 'FEE_AMOUNT', 'FEE_DATE', 'FUND_NAV']);
+    const tokens = tokenizeCalcDraft('XIRR(OPEN(');
+    assert.equal(enclosingPerformanceCall(tokens, tokens.length), true);
+    assert.equal(enclosingPerformanceCall(tokenizeCalcDraft('MARKET_VALUE'), 1), false);
   });
 
   it('keeps a quoted match as its own chip', () => {

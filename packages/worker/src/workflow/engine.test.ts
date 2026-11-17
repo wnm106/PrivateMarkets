@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WORKFLOW_TEMPLATES } from '@tapestrai/graphql/src/lib/workflow-templates';
+import type { ReviewRouting } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { normalizeItems } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { runAgentStep, type AgentModel, type ModelTurn } from './agent';
 import { RunBusyError, advanceRun, message, type Actor, type AgentRequest, type EngineDeps, type LoadedRun, type ReviewRow, type StepRow, type WorkflowStore } from './engine';
@@ -13,6 +14,7 @@ function memoryStore(graph: unknown, input: Record<string, unknown> = {}) {
   const run = { id: 'run-1', clientId: 'client-a', status: 'QUEUED', input, context: {} as Record<string, unknown>, currentNode: null as string | null, startedBy: 'owner', lockedBy: null as string | null };
   const steps = new Map<string, StepRow>();
   const reviews: ReviewRow[] = [];
+  const routings: ReviewRouting[] = [];
   const events: Array<{ nodeId: string | null; type: string; actor: string; actorId: string | null; summary: string }> = [];
   const store: WorkflowStore = {
     async load(_runId, owner): Promise<LoadedRun | 'busy' | 'done' | null> {
@@ -44,13 +46,14 @@ function memoryStore(graph: unknown, input: Record<string, unknown> = {}) {
     async event(_runId, nodeId, type, actor, actorId, summary) {
       events.push({ nodeId, type, actor, actorId, summary });
     },
-    async openReview(_runId, nodeId, _title, _instructions, _summary, proposal) {
+    async openReview(_runId, nodeId, _title, _instructions, _summary, proposal, routing) {
+      routings.push(routing);
       const review: ReviewRow = { id: `review-${nodeId}`, nodeId, status: 'OPEN', proposal, decision: null, decidedBy: null };
       reviews.push(review);
-      return { ...review };
+      return { ...review, assignees: routing.people.map((id) => `Person ${id}`), unassignable: [] };
     },
   };
-  return { store, run, steps, reviews, events };
+  return { store, run, steps, reviews, events, routings };
 }
 
 const EXCEPTION = { id: 'ex-1', entityCode: 'LOAN-7', ruleCode: 'MATURITY_REQUIRED', exceptionMessage: 'Maturity date is missing' };
@@ -138,6 +141,18 @@ describe('advanceRun', () => {
     // Across all three passes the records were selected once, and exceptions read twice: the scan, and what is left at the end.
     expect(calls.filter((call) => call.name === 'find_records')).toHaveLength(1);
     expect(calls.filter((call) => call.name === 'list_dq_exceptions')).toHaveLength(2);
+  });
+
+  it('opens the review for the people and roles the step names, keeping the starter apart', async () => {
+    const graph = JSON.parse(JSON.stringify(CLEANUP)) as { nodes: Array<{ type: string; config: Record<string, unknown> }> };
+    const step = graph.nodes.find((node) => node.type === 'review')!;
+    Object.assign(step.config, { people: ['{{input.reviewer}}'], roles: ['ops_lead'], dueInHours: '{{input.hours}}' });
+    const memory = memoryStore(graph, { reviewer: 'user-9', hours: 24 });
+    const { deps: engine } = deps(memory.store);
+
+    expect(await advanceRun('run-1', 'job-1', engine)).toMatchObject({ status: 'WAITING' });
+    expect(memory.routings).toEqual([{ people: ['user-9'], roles: ['OPS_LEAD'], separateReviewer: true, dueInHours: 24 }]);
+    expect(memory.events.find((event) => event.type === 'review.requested')?.summary).toBe('Waiting for Person user-9 to review 2 proposed changes');
   });
 
   it('takes the rejected path and changes nothing', async () => {

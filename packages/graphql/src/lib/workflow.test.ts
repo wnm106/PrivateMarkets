@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { asGraph, evaluateCondition, isReadTool, nextNode, resolveTemplates, validateGraph, type WorkflowGraph } from './workflow-graph';
+import { asGraph, evaluateCondition, isReadTool, nextNode, resolveTemplates, reviewRouting, validateGraph, type WorkflowGraph } from './workflow-graph';
 import { asDecision, checkDecision, finalArgs, inDependencyOrder, matchListValue, normalizeItems, proposalCounts, setPath, withFoundationGaps } from './workflow-proposal';
 import { WORKFLOW_TEMPLATES } from './workflow-templates';
 
@@ -171,5 +171,32 @@ describe('values that come from a list', () => {
     expect(swapped).toMatchObject({ ok: true, approved: ['set'] });
 
     expect(inDependencyOrder([items[1], items[0]]).map((item) => item.id)).toEqual(['add', 'set']);
+  });
+});
+
+describe('reviewRouting', () => {
+  it('fills placeholders, splits lists, and keeps the starter apart unless the step says otherwise', () => {
+    const scope = { input: { reviewer: 'u-2, u-3', hours: '48' }, steps: {} };
+    expect(reviewRouting({ people: ['u-1', '{{input.reviewer}}', 'u-1'], roles: ['ops_lead', ''], dueInHours: '{{input.hours}}' }, scope)).toEqual({
+      people: ['u-1', 'u-2', 'u-3'],
+      roles: ['OPS_LEAD'],
+      separateReviewer: true,
+      dueInHours: 48,
+    });
+    expect(reviewRouting({ separateReviewer: false, dueInHours: 0 })).toEqual({ people: [], roles: [], separateReviewer: false, dueInHours: null });
+  });
+
+  it('refuses a time to review that is not a positive number of hours', () => {
+    const graph = cleanup();
+    const review = graph.nodes.find((node) => node.type === 'review')!;
+    const problemsWith = (dueInHours: unknown) => {
+      review.config = { ...review.config, dueInHours };
+      return validateGraph(graph).filter((problem) => problem.nodeId === review.id).map((problem) => problem.message);
+    };
+    expect(problemsWith(-2)).toEqual(['The time to review must be a number of hours above zero, or left blank.']);
+    expect(problemsWith('soon')).toHaveLength(1);
+    expect(problemsWith(24)).toEqual([]);
+    expect(problemsWith('{{input.hours}}')).toEqual([]);
+    expect(problemsWith(null)).toEqual([]);
   });
 });

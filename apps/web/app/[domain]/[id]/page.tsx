@@ -15,6 +15,7 @@ import { getDomainConfig, type DomainKey } from '@/lib/mock-data';
 import { useTemporalStore } from '@/lib/store';
 import { entityViewFocus, usePublishViewContext } from '@/lib/view-context';
 import { RECORD_EXPERIENCES_QUERY, type RecordExperience } from '@/lib/experience';
+import { RunWorkflowButton } from '@/components/workflows/RunWorkflowButton';
 import type { EntityData, ConflictData, SourceContributionData, ActivityData } from '@/components/detail/types';
 
 export default function DynamicEntityDetailPage() {
@@ -452,8 +453,9 @@ export default function DynamicEntityDetailPage() {
         mergeHref={`/merge?entity=${entity.id}`}
       />
 
-      {(domain === 'funds' || workingView) && (
+      {(
         <div className="xp-jump">
+          <RunWorkflowButton record={{ id: entity.id, entityCode: entity.entityCode, entityName: entity.entityName, domainCode: entity.domainCode }} />
           {domain === 'funds' && (
             <Link href={`/funds/${id}/overview`} className="btn btn-primary">Fund surface</Link>
           )}

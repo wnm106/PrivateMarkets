@@ -1,5 +1,10 @@
 import { AS_OF_PERIOD_CODES } from './expression-library';
 
+/** Date offsets a performance formula can name without parentheses. QTD is the last day of the prior quarter. */
+export const PERFORMANCE_WINDOWS = new Set(['ITD', 'YTD', 'QTD', 'MTD', 'LTM']);
+
+const PERFORMANCE_CALLS = new Set(['XIRR', 'MOIC', 'OPEN', 'FLOWS', 'CLOSE']);
+
 /** Turns a calculation expression into the text shown in the editor. */
 export function decompileCalcExpression(expr: unknown): string {
   if (expr == null) return '';
@@ -183,6 +188,11 @@ class InfixParser {
     if (!name) throw new Error('Expected an attribute, number, or (');
     this.index += name[0].length;
     this.skip();
+    const upper = name[0].toUpperCase();
+    if (PERFORMANCE_WINDOWS.has(upper)) {
+      if (this.source[this.index] === '(') throw new Error(`${upper} is a date offset and takes no arguments`);
+      return { fn: upper, args: [] };
+    }
     if (this.source[this.index] === '(') {
       this.index += 1;
       const args: unknown[] = [];
@@ -339,6 +349,11 @@ export function caretToGap(tokens: CalcDraftToken[], caret: number): number {
 /** Text inserted for a field that lives on a related record. */
 export function relatedFieldText(attributeCode: string): string {
   return `LATEST(${attributeCode})`;
+}
+
+/** True when the caret is inside XIRR, MOIC, or one of their arguments. A related field there is aggregated, not wrapped in LATEST. */
+export function enclosingPerformanceCall(tokens: CalcDraftToken[], gap: number): boolean {
+  return [...PERFORMANCE_CALLS].some((name) => enclosingCall(tokens, gap, name));
 }
 
 /** True when the caret sits inside a call to name, such as LATEST(. */

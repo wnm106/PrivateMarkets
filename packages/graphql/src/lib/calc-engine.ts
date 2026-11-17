@@ -42,6 +42,70 @@ function npv(dates: string[], amounts: number[], rate: number): number | null {
   return total;
 }
 
+export interface PerformancePoint {
+  date: string;
+  amount: number;
+}
+
+/**
+ * The cash flows an XIRR or MOIC formula solves.
+ * The database function golden_master.performance_formula applies the same rules.
+ * The opening value is money put in on the offset date. Cash flows on that date stay out.
+ * Cash flows after it, through the end date, are kept. The ending value is money back on the end date.
+ */
+export function performanceSeries(input: {
+  start: string | null;
+  end: string;
+  opening: number | null;
+  closing: number | null;
+  flows: PerformancePoint[];
+}): { dates: string[]; amounts: number[]; invested: number; returned: number } | null {
+  if (input.start && input.start >= input.end) return null;
+  const dates: string[] = [];
+  const amounts: number[] = [];
+  let invested = 0;
+  let returned = 0;
+  if (input.start && input.opening != null && input.opening !== 0) {
+    dates.push(input.start);
+    amounts.push(-input.opening);
+    invested += input.opening;
+  }
+  const flows = input.flows
+    .filter((flow) => flow.amount !== 0 && flow.date <= input.end && (!input.start || flow.date > input.start))
+    .slice()
+    .sort((left, right) => (left.date < right.date ? -1 : left.date > right.date ? 1 : 0));
+  for (const flow of flows) {
+    dates.push(flow.date);
+    amounts.push(flow.amount);
+    if (flow.amount < 0) invested -= flow.amount;
+    else returned += flow.amount;
+  }
+  if (input.closing != null && input.closing !== 0) {
+    dates.push(input.end);
+    amounts.push(input.closing);
+    returned += input.closing;
+  }
+  if (!dates.length) return null;
+  return { dates, amounts, invested, returned };
+}
+
+/** Opening date for a performance offset. Null is inception to date. QTD is the last day of the prior quarter. */
+export function performanceWindowStart(window: string, asOf: string): string | null {
+  const token = window.toUpperCase();
+  if (token === 'ITD') return null;
+  const year = Number(asOf.slice(0, 4));
+  const month = Number(asOf.slice(5, 7));
+  const day = Number(asOf.slice(8, 10));
+  if (token === 'YTD') return iso(year - 1, 12, 31);
+  if (token === 'QTD') {
+    const quarterStartMonth = Math.floor((month - 1) / 3) * 3 + 1;
+    return new Date(Date.UTC(year, quarterStartMonth - 1, 0)).toISOString().slice(0, 10);
+  }
+  if (token === 'MTD') return new Date(Date.UTC(year, month - 1, 0)).toISOString().slice(0, 10);
+  if (token === 'LTM') return new Date(Date.UTC(year - 1, month - 1, day)).toISOString().slice(0, 10);
+  return null;
+}
+
 /** Actual/365 XIRR. Returns null when the solver cannot separate positive and negative flows. */
 export function xirr(dates: string[], amounts: number[]): number | null {
   if (dates.length < 2 || dates.length !== amounts.length) return null;

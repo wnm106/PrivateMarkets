@@ -8,9 +8,8 @@ import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 /**
  * Actual IRR and MOIC from position cash flows and market values.
  *
- * Inception to date is the default and is the stored calculation, so its figures open their sources.
- * Any other period opens with the market value on the start date, takes the cash flows after it,
- * and closes with the market value on the end date. Those are solved when asked, by the same function.
+ * The figures are the attribute formulas, solved when read. Inception to date is the formula as written.
+ * Any other period uses that same formula and opens with the market value on the start date.
  */
 
 type Preset = 'ITD' | 'YTD' | 'QTD' | 'LTM' | 'CUSTOM';
@@ -100,7 +99,7 @@ export function DealActualReturns({
   }, [dealId, trancheKey, start, end, invalid]);
 
   const value = (entityId: string, code: string) => values.get(`${entityId}|${code}`) ?? null;
-  // Only inception to date is a stored attribute. Other periods are solved on request and have no record to open.
+  // Inception to date is the formula on the attribute. Other periods reuse it with a start date.
   const stored = preset === 'ITD';
   const dealBind = (code: string, name: string) => (stored ? attrBind(dealId, 'DEAL', code, name, dealName) : null);
   const trancheBind = (tranche: { id: string; name: string }, code: string, name: string) =>

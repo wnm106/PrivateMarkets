@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calcOrder, evalNumericExpr, mergeWindow, periodEnds, xirr, type Expr } from './calc-engine';
+import { calcOrder, evalNumericExpr, mergeWindow, performanceSeries, performanceWindowStart, periodEnds, xirr, type Expr } from './calc-engine';
 
 describe('calculated attributes', () => {
   it('multiplies quantity by price and drops a missing input', () => {
@@ -25,6 +25,30 @@ describe('calculated attributes', () => {
     );
     expect(rate).not.toBeNull();
     expect(Math.abs(rate!)).toBeLessThan(1);
+  });
+
+  it('opens quarter to date on the prior quarter end and drops cash flows on that day', () => {
+    expect(performanceWindowStart('QTD', '2026-11-16')).toBe('2026-09-30');
+    expect(performanceWindowStart('YTD', '2026-11-16')).toBe('2025-12-31');
+    expect(performanceWindowStart('ITD', '2026-11-16')).toBeNull();
+    const series = performanceSeries({
+      start: '2026-09-30',
+      end: '2026-11-16',
+      opening: 100,
+      closing: 110,
+      flows: [
+        { date: '2026-09-30', amount: 4 },
+        { date: '2026-10-15', amount: 5 },
+        { date: '2026-08-01', amount: 9 },
+      ],
+    });
+    expect(series).toEqual({
+      dates: ['2026-09-30', '2026-10-15', '2026-11-16'],
+      amounts: [-100, 5, 110],
+      invested: 100,
+      returned: 115,
+    });
+    expect(series!.returned / series!.invested).toBeCloseTo(1.15, 6);
   });
 
   it('lists quarter ends from a change date through today', () => {
