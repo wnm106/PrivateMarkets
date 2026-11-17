@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { EntityMatchIndex, identifierCatalog, type IdentifierCatalog, type MatchEntity } from './entity-match';
+import { EntityMatchIndex, identifierCatalog, type IdentifierCatalog, type IdentifierTerm, type MatchEntity } from './entity-match';
 import { chooseRelationship, dependencyLoadOrder, dependencyLoadWaves, relationshipEndpoints, type RelationshipTypeRow } from './load-order';
 import { readImportFile } from './intake';
 import { parseTabularFile } from './parse-table';
@@ -9,6 +9,7 @@ import type { DomainLoadStats, FeedLoadResult, FeedMap, FeedPreview, Normalizati
 import { applyTransform, coerceAttributeValue, dayBefore, indexReferenceLists, normalizeToList, parseUsDate, type ListValueRow } from './values';
 
 const OPEN_TO = '9999-12-31';
+const OPEN_SYSTEM_TO = '9999-12-31 23:59:59';
 const CLIENT_CODE = 'MERIDIAN_INTERNAL';
 
 interface AttributeMeta {
@@ -383,7 +384,7 @@ async function loadEntityMatchIndex(
 
   const byId = new Map<string, any>();
   for (const row of [...domainRows, ...codeRows]) byId.set(row.id, row);
-  const identifiers = new Map<string, Map<string, string[]>>();
+  const terms = new Map<string, Map<string, IdentifierTerm[]>>();
   const codeByAttributeId = new Map<string, string>();
   for (const [code, id] of attributeIds) codeByAttributeId.set(id, code);
   const attributeIdList = [...attributeIds.values()];
@@ -392,19 +393,23 @@ async function loadEntityMatchIndex(
     for (let offset = 0; offset < entityIds.length; offset += 150) {
       const chunk = entityIds.slice(offset, offset + 150);
       const values = await pageRows((from, to) => db.schema('golden_master').from('entity_attribute_values')
-        .select('entity_id, attribute_id, golden_value')
+        .select('entity_id, attribute_id, golden_value, valid_from, valid_to')
         .in('entity_id', chunk)
         .in('attribute_id', attributeIdList)
-        .eq('valid_to', OPEN_TO)
+        .eq('system_to', OPEN_SYSTEM_TO)
         .range(from, to));
       for (const value of values) {
         const attributeCode = codeByAttributeId.get(value.attribute_id);
         if (!attributeCode || value.golden_value == null || String(value.golden_value).trim() === '') continue;
-        const perEntity = identifiers.get(value.entity_id) || new Map<string, string[]>();
+        const perEntity = terms.get(value.entity_id) || new Map<string, IdentifierTerm[]>();
         const list = perEntity.get(attributeCode) || [];
-        list.push(String(value.golden_value));
+        list.push({
+          value: String(value.golden_value),
+          validFrom: String(value.valid_from).slice(0, 10),
+          validTo: String(value.valid_to).slice(0, 10),
+        });
         perEntity.set(attributeCode, list);
-        identifiers.set(value.entity_id, perEntity);
+        terms.set(value.entity_id, perEntity);
       }
     }
   }
@@ -418,7 +423,8 @@ async function loadEntityMatchIndex(
       clientId: row.client_id,
       active: row.is_active !== false && !row.merged_into_id,
       provisional: false,
-      identifiers: identifiers.get(row.id) || new Map(),
+      identifiers: new Map(),
+      identifierTerms: terms.get(row.id) || new Map(),
     };
     index.add(matchEntity);
   }
@@ -549,7 +555,7 @@ export async function executeParsedFeed(
 
     for (const entity of entities) {
       const incoming = { code: entity.code, name: entity.name, attributes: entity.attributes };
-      const hit = index.resolve(incoming);
+      const hit = index.resolve(incoming, entity.asOf || asOfDate);
       if (hit.kind === 'rejected') {
         stats.failed += 1;
         stats.errors.push(hit.message);
@@ -655,12 +661,44 @@ export async function executeParsedFeed(
       }
       return rows;
     };
-    const [openAttributeRows, datedAttributeRows] = entityIds.length
+    const asOfList = [...asOfDates].sort();
+    const pageCoveringRows = async () => {
+      const rows: any[] = [];
+      const earliest = asOfList[0];
+      const latest = asOfList[asOfList.length - 1];
+      if (!earliest || !latest || entityIds.length === 0) return rows;
+      const pageSize = 1000;
+      const select = 'id, entity_id, attribute_id, source_id, valid_from, valid_to, system_to, golden_value, golden_value_numeric, golden_value_date';
+      for (let idFrom = 0; idFrom < entityIds.length; idFrom += 150) {
+        const idChunk = entityIds.slice(idFrom, idFrom + 150);
+        for (let from = 0; ; from += pageSize) {
+          const query = db.schema('golden_master').from('entity_attribute_values').select(select)
+            .in('entity_id', idChunk)
+            .lte('valid_from', latest)
+            .gte('valid_to', earliest)
+            .eq('system_to', OPEN_SYSTEM_TO);
+          const page = await query.range(from, from + pageSize - 1);
+          if (page.error) throw new Error(page.error.message);
+          rows.push(...(page.data || []));
+          if ((page.data || []).length < pageSize) break;
+        }
+      }
+      return rows;
+    };
+    const [coveringAttributeRows, openAttributeRows, datedAttributeRows] = entityIds.length
       ? await Promise.all([
+          pageCoveringRows(),
           pageAttributeRows('valid_to', OPEN_TO),
           pageAttributeRows('valid_from', varying ? [...asOfDates] : asOfDate),
         ])
-      : [[], []];
+      : [[], [], []];
+    const coveringByKey = new Map<string, any[]>();
+    for (const row of coveringAttributeRows) {
+      const key = `${row.entity_id}|${row.attribute_id}`;
+      const list = coveringByKey.get(key) || [];
+      list.push(row);
+      coveringByKey.set(key, list);
+    }
     const slicesByKey = new Map<string, any[]>();
     const seenIds = new Set<string>();
     for (const row of [...openAttributeRows, ...datedAttributeRows]) {
@@ -748,6 +786,24 @@ export async function executeParsedFeed(
           }
           if (changed) attributeStats.updated += 1;
           else attributeStats.unchanged += 1;
+          queuedAttributes.add(sliceKey);
+          continue;
+        }
+
+        const alreadyTrue = (coveringByKey.get(`${entityId}|${meta.id}`) || []).filter((row) => {
+          const from = String(row.valid_from).slice(0, 10);
+          const to = String(row.valid_to).slice(0, 10);
+          return from <= validFrom && to >= validFrom && sameValue(row, value);
+        });
+        if (alreadyTrue.length > 0) {
+          for (const slice of alreadyTrue) {
+            if (slice.source_id !== valueSource.id) continue;
+            const touch = await db.schema('golden_master').from('entity_attribute_values').update({
+              last_received_at: receivedAt,
+            }).eq('id', slice.id);
+            if (touch.error) errors.push(touch.error.message);
+          }
+          attributeStats.unchanged += 1;
           queuedAttributes.add(sliceKey);
           continue;
         }

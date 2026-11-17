@@ -6,11 +6,22 @@ import { compactIdentifier, normalizeName } from '../../../graphql/src/lib/entit
  * the entity code, the entity name, a single-attribute identifier, or a
  * full composite identifier. Codes and identifier values ignore punctuation.
  * Names ignore case, punctuation, and legal suffixes.
+ *
+ * Pass the file's as-of date and identifier values are taken from the slice
+ * that was current on that date. A dated identifier wins over the entity code,
+ * so a historical file whose only key was later reused lands on the entity
+ * that held the key on the file date.
  */
 
 export interface IdentifierCatalog {
   singles: string[];
   composites: string[][];
+}
+
+export interface IdentifierTerm {
+  value: string;
+  validFrom: string;
+  validTo: string;
 }
 
 export interface MatchEntity {
@@ -22,6 +33,7 @@ export interface MatchEntity {
   active: boolean;
   provisional: boolean;
   identifiers: Map<string, string[]>;
+  identifierTerms?: Map<string, IdentifierTerm[]>;
 }
 
 export interface IncomingEntity {
@@ -122,6 +134,7 @@ export class EntityMatchIndex {
     this.indexCode(entity, entity.code);
     this.indexName(entity, entity.name);
     this.indexIdentifiers(entity, entity.identifiers);
+    this.indexIdentifiers(entity, this.termValues(entity));
   }
 
   absorb(id: string, incoming: IncomingEntity): void {
@@ -139,12 +152,20 @@ export class EntityMatchIndex {
     this.indexIdentifiers(entity, incomingValues);
   }
 
-  resolve(incoming: IncomingEntity): ResolveHit {
+  resolve(incoming: IncomingEntity, asOf?: string): ResolveHit {
+    const values = attributeValues(incoming.attributes);
+    if (asOf) {
+      const dated = this.collectIdentifiers(incoming.code, values, asOf, true);
+      if (dated.length) {
+        const chosen = this.choose(dated, 'identifier', incoming.code);
+        if (chosen) return chosen;
+      }
+    }
+
     const codeHit = this.resolveCode(incoming.code);
     if (codeHit) return codeHit;
 
-    const values = attributeValues(incoming.attributes);
-    const identified = this.collectIdentifiers(incoming.code, values);
+    const identified = this.collectIdentifiers(incoming.code, values, asOf, false);
     if (identified.length) {
       const chosen = this.choose(identified, 'identifier', incoming.code);
       if (chosen) return chosen;
@@ -180,6 +201,33 @@ export class EntityMatchIndex {
 
   private indexName(entity: MatchEntity, name: string): void {
     this.push(this.byName, nameKey(name), entity);
+  }
+
+  private termValues(entity: MatchEntity): Map<string, string[]> {
+    const values = new Map<string, string[]>();
+    for (const [code, terms] of entity.identifierTerms || []) {
+      values.set(code, terms.map((term) => term.value));
+    }
+    return values;
+  }
+
+  /** True when a dated slice covers the value. Null when this entity has no slices for the attribute. */
+  private termCovers(entity: MatchEntity, code: string, compactValue: string, asOf?: string): boolean | null {
+    const terms = entity.identifierTerms?.get(code);
+    if (!terms?.length) return null;
+    if (!asOf) return true;
+    return terms.some((term) => compactIdentifier(term.value) === compactValue && term.validFrom <= asOf && term.validTo >= asOf);
+  }
+
+  private hasTerm(code: string, compactValue: string): boolean {
+    const entities = this.byIdentifier.get(`${code}|${compactValue}`) || [];
+    return entities.some((entity) => (entity.identifierTerms?.get(code) || []).some((term) => compactIdentifier(term.value) === compactValue));
+  }
+
+  private identifierActive(entity: MatchEntity, code: string, compactValue: string, asOf: string | undefined, datedOnly: boolean): boolean {
+    const covered = this.termCovers(entity, code, compactValue, asOf);
+    if (datedOnly) return covered === true;
+    return covered !== false;
   }
 
   private indexIdentifiers(entity: MatchEntity, values: Map<string, string[]>): void {
@@ -225,23 +273,34 @@ export class EntityMatchIndex {
     return { kind: 'match', entity, via: 'code' };
   }
 
-  private collectIdentifiers(code: string, values: Map<string, string[]>): MatchEntity[] {
+  private collectIdentifiers(code: string, values: Map<string, string[]>, asOf?: string, datedOnly = false): MatchEntity[] {
     const found: MatchEntity[] = [];
     const add = (entities: readonly MatchEntity[] | undefined) => {
       for (const entity of entities || []) {
         if (this.matchable(entity) && !found.some((item) => item.id === entity.id)) found.push(entity);
       }
     };
+    const holdersFor = (attributeCode: string, value: string) => (this.byIdentifier.get(`${attributeCode}|${value}`) || [])
+      .filter((entity) => this.matchable(entity) && this.identifierActive(entity, attributeCode, value, asOf, datedOnly));
     const codeKey = compactIdentifier(code);
     for (const attributeCode of this.catalog.singles) {
       for (const value of compactValues(values.get(attributeCode) || [])) {
-        add(this.byIdentifier.get(`${attributeCode}|${value}`));
-        add((this.byCode.get(value) || []).filter((entity) => this.matchable(entity)));
+        const holders = holdersFor(attributeCode, value);
+        if (holders.length) add(holders);
+        if (!datedOnly && holders.length === 0 && (!asOf || !this.hasTerm(attributeCode, value))) {
+          add((this.byCode.get(value) || []).filter((entity) => this.matchable(entity)));
+        }
       }
-      if (codeKey.length >= 2) add(this.byIdentifier.get(`${attributeCode}|${codeKey}`));
+      if (codeKey.length >= 2) add(holdersFor(attributeCode, codeKey));
     }
     this.catalog.composites.forEach((composite, index) => {
-      for (const key of compositeKeys(values, composite)) add(this.byComposite.get(`${index}|${key}`));
+      for (const key of compositeKeys(values, composite)) {
+        const parts = key.split('|');
+        add((this.byComposite.get(`${index}|${key}`) || []).filter((entity) => (
+          this.matchable(entity)
+          && composite.every((attributeCode, partIndex) => this.identifierActive(entity, attributeCode, parts[partIndex], asOf, datedOnly))
+        )));
+      }
     });
     return found;
   }
