@@ -96,6 +96,21 @@ describe('needs you', () => {
     assert.equal(items[0].aggregate, true);
   });
 
+  it('puts an overdue review first, with when it was due', () => {
+    const items = needsYouItems({
+      now,
+      userId: 'me',
+      reviews: [
+        { id: 'r1', runId: 'run1', title: 'On time', itemCount: 1, canReview: true, createdAt: '2026-11-16T11:00:00Z', dueAt: '2026-11-17T09:00:00Z', overdue: false },
+        { id: 'r2', runId: 'run2', title: 'Late', itemCount: 2, canReview: true, createdAt: '2026-11-15T09:00:00Z', dueAt: '2026-11-16T09:00:00Z', overdue: true },
+      ],
+    });
+    assert.deepEqual(items.map((item) => item.id), ['review-r2', 'review-r1']);
+    assert.equal(items[0].urgency, 'critical');
+    assert.equal(items[0].detail, '2 proposed changes · was due 2026-11-16 09:00 UTC');
+    assert.equal(items[1].detail, '1 proposed change · due 2026-11-17 09:00 UTC');
+  });
+
   it('shows only failed workflow runs the person started', () => {
     const items = needsYouItems({
       now,

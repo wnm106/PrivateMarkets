@@ -2834,8 +2834,7 @@ type Query {
   workflowRuns(workflowId: ID, status: String, first: Int): [WorkflowRun!]!
   """One run with the graph it ran, each step, its audit log, and its reviews."""
   workflowRun(id: ID!): WorkflowRun
-  """Reviews waiting for a person. status defaults to OPEN."""
-  """Reviews, the ones due soonest first. mine keeps those the caller can decide now."""
+  """Reviews waiting for a person, the ones due soonest first. status defaults to OPEN. mine keeps those the caller can decide now."""
   workflowReviews(status: String, mine: Boolean): [WorkflowReview!]!
   """Who a review step can be assigned to: people holding workflow.review in the client, and the roles that grant it. Leave out clientId for a shared workflow."""
   workflowReviewerChoices(clientId: ID): WorkflowReviewerChoices!

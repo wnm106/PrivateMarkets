@@ -47,6 +47,7 @@ Optional settings: `WORKER_CONCURRENCY` (runs side by side, default 5), `WORKER_
 | `assistant.watch` | One client | none | The same, for a change they asked to hear about right away. Not put on a schedule. |
 | `workflow.start` | One client | `workflowCode`, `input` (optional) | The run it started. See [WORKFLOWS.md](WORKFLOWS.md) |
 | `workflow.advance` | One client | none | Where the run got to: finished, failed, or waiting for a person. Not put on a schedule. Queued when a run starts and when a review is decided. |
+| `workflow.reviews_due` | Platform | none | How many reviews became overdue, how many people were told, and how many undelivered notes were queued again. Runs every 15 minutes from the `WORKFLOW_REVIEWS_DUE` schedule, which the migration creates. |
 
 `assistant.brief` and `assistant.watch` run as the person the note is for. See [who a job runs as](#who-a-job-runs-as). What they follow, and when the summary is sent, is set at Assistant, not on this page. A summary is not sent when nothing they follow has changed.
 

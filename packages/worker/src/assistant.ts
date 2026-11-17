@@ -19,7 +19,13 @@ export interface BriefEvent {
   id: string;
   summary: string;
   occurredAt: string;
+  kind?: string;
+  /** A page in the app the note links to. */
+  href?: string;
 }
+
+/** Notes addressed to a person about a workflow review, rather than something they follow. */
+const REVIEW_KINDS = new Set(['REVIEW_ASSIGNED', 'REVIEW_OVERDUE']);
 
 interface Collected {
   events?: unknown;
@@ -35,8 +41,12 @@ interface Committed {
 /** The note placed in the person's briefing chat. Empty when there is nothing to say. */
 export function briefText(events: BriefEvent[], mode: BriefMode, truncated = false): string {
   if (events.length === 0) return '';
-  const lead =
-    mode === 'IMMEDIATE'
+  const reviews = events.every((event) => REVIEW_KINDS.has(event.kind || ''));
+  const lead = reviews
+    ? events.length === 1
+      ? 'A workflow review needs you.'
+      : `${events.length} workflow review notes for you.`
+    : mode === 'IMMEDIATE'
       ? events.length === 1
         ? 'Something you asked to hear about right away.'
         : `${events.length} things you asked to hear about right away.`
@@ -45,7 +55,9 @@ export function briefText(events: BriefEvent[], mode: BriefMode, truncated = fal
         : `${events.length} things you follow changed.`;
   const lines = events.map((event) => {
     const when = event.occurredAt.slice(0, 16).replace('T', ' ');
-    return `- ${event.summary} (${when} UTC)`;
+    // Only a path inside the app is linked.
+    const link = event.href && event.href.startsWith('/') && !event.href.startsWith('//') ? ` [Open](${event.href})` : '';
+    return `- ${event.summary} (${when} UTC)${link}`;
   });
   const more = truncated ? '\n\nMore changes are waiting for the next summary.' : '';
   return `${lead}\n\n${lines.join('\n')}${more}`;
@@ -59,7 +71,13 @@ function asEvents(data: Collected | null): BriefEvent[] {
     const row = item as Record<string, unknown>;
     if (typeof row.id !== 'string' || typeof row.summary !== 'string') continue;
     const occurredAt = typeof row.occurredAt === 'string' ? row.occurredAt : '';
-    events.push({ id: row.id, summary: row.summary, occurredAt });
+    events.push({
+      id: row.id,
+      summary: row.summary,
+      occurredAt,
+      ...(typeof row.kind === 'string' ? { kind: row.kind } : {}),
+      ...(typeof row.href === 'string' && row.href ? { href: row.href } : {}),
+    });
   }
   return events;
 }
@@ -132,4 +150,13 @@ export function assistantBriefHandler(supabase: SupabaseClient): JobHandler {
 
 export function assistantWatchHandler(supabase: SupabaseClient): JobHandler {
   return (run) => deliver(supabase, run, 'IMMEDIATE');
+}
+
+/** Platform job: overdue review notices, and addressed notes that were not delivered. */
+export function workflowReviewsDueHandler(supabase: SupabaseClient, now: () => Date = () => new Date()): JobHandler {
+  return async () => {
+    const { data, error } = await supabase.rpc('job_run_workflow_reviews_due', { p_now: now().toISOString() });
+    if (error) throw new Error(error.message);
+    return (data || {}) as Record<string, unknown>;
+  };
 }

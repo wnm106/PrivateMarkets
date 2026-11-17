@@ -247,7 +247,7 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, clientId
             <input type="checkbox" style={{ marginTop: 2 }} checked={config.separateReviewer !== false} onChange={(event) => set({ separateReviewer: event.target.checked })} />
             <span>The person who started the run cannot review it. For a scheduled run, that is whoever created the schedule.</span>
           </label>
-          <Field name="Hours to review" help="Shown as due, then overdue. Nothing is decided when it passes. Leave blank for no due date.">
+          <Field name="Hours to review" help="Shown as due, then overdue. When it passes, the reviewers are told once. Nothing is decided. Leave blank for no due date.">
             <input
               className="text-input"
               style={full}
@@ -259,6 +259,11 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, clientId
               }}
             />
           </Field>
+          <div style={{ display: 'grid', gap: 4 }}>
+            <span style={label}>Also tell when overdue</span>
+            <ReviewerPicker rolesOnly clientId={clientId} people={[]} roles={list(config.escalateRoles)} onChange={(next) => set({ escalateRoles: next.roles })} />
+            <span style={hint}>People holding these roles are told once the review passes its due date, so they can chase it or reassign it.</span>
+          </div>
         </>
       )}
 

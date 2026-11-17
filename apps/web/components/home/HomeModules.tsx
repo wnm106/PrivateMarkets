@@ -52,7 +52,7 @@ async function loadSources(follows: HomeFollow[], includeClientWide: boolean) {
 
   const [reviews, files, jobs, runs, followed, urgent] = await Promise.all([
     graphqlQuery<{ workflowReviews: ReviewSource[] }>(
-      `query { workflowReviews(status: "OPEN") { id runId title workflowName itemCount canReview createdAt } }`,
+      `query { workflowReviews(status: "OPEN") { id runId title workflowName itemCount canReview createdAt dueAt overdue } }`,
       {},
       'network-only',
     ),

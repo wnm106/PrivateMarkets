@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { mapFileLoader } from './feed-loader';
-import { assistantBriefHandler, assistantSweepHandler, assistantWatchHandler } from './assistant';
+import { assistantBriefHandler, assistantSweepHandler, assistantWatchHandler, workflowReviewsDueHandler } from './assistant';
 import { connectionCheckHandler, feedCheckHandler, feedPollHandler } from './feeds';
 import { JobError, type JobHandler, type JobRun } from './worker';
 import { engineDeps, workflowAdvanceHandler, workflowStartHandler } from './workflow/handlers';
@@ -208,6 +208,7 @@ export function buildHandlers(supabase: SupabaseClient): Record<string, JobHandl
     'assistant.sweep': assistantSweepHandler(supabase),
     'assistant.brief': assistantBriefHandler(supabase),
     'assistant.watch': assistantWatchHandler(supabase),
+    'workflow.reviews_due': workflowReviewsDueHandler(supabase),
     'workflow.advance': workflowAdvanceHandler(engineDeps(supabase)),
     'workflow.start': workflowStartHandler(supabase),
   };

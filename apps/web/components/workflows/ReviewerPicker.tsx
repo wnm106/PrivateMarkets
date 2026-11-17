@@ -42,9 +42,11 @@ interface PickerProps {
   people: string[];
   roles: string[];
   onChange(next: { people: string[]; roles: string[] }): void;
+  /** Offer roles only, under no heading. */
+  rolesOnly?: boolean;
 }
 
-export function ReviewerPicker({ clientId, people, roles, onChange }: PickerProps) {
+export function ReviewerPicker({ clientId, people, roles, onChange, rolesOnly = false }: PickerProps) {
   const { choices, error } = useReviewerChoices(clientId);
   if (error) return <span style={{ ...hint, color: 'var(--red)' }}>{error}</span>;
   if (!choices) return <span style={hint}>Reading who can review…</span>;
@@ -55,7 +57,7 @@ export function ReviewerPicker({ clientId, people, roles, onChange }: PickerProp
 
   return (
     <div style={{ display: 'grid', gap: 8 }}>
-      {(choices.people.length > 0 || extraPeople.length > 0) && (
+      {!rolesOnly && (choices.people.length > 0 || extraPeople.length > 0) && (
         <div style={{ display: 'grid', gap: 4 }}>
           <span style={head}>People</span>
           <div style={box}>
@@ -75,7 +77,7 @@ export function ReviewerPicker({ clientId, people, roles, onChange }: PickerProp
         </div>
       )}
       <div style={{ display: 'grid', gap: 4 }}>
-        <span style={head}>Roles</span>
+        {!rolesOnly && <span style={head}>Roles</span>}
         <div style={box}>
           {choices.roles.length === 0 && extraRoles.length === 0 && <span style={hint}>No role grants the review permission.</span>}
           {choices.roles.map((role) => (

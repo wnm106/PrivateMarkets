@@ -135,6 +135,8 @@ export interface ReviewSource {
   itemCount: number;
   canReview: boolean;
   createdAt: string;
+  dueAt?: string | null;
+  overdue?: boolean;
 }
 
 export interface FileSource {
@@ -216,9 +218,11 @@ export function needsYouItems(sources: NeedsYouSources): NeedsYouItem[] {
       group: `review:${review.workflowName || review.title}`,
       groupTitle: review.workflowName || review.title,
       changes: review.itemCount,
-      urgency: 'high',
+      urgency: review.overdue ? 'critical' : 'high',
       title: review.title,
-      detail: [review.workflowName, plural(review.itemCount, 'proposed change')].filter(Boolean).join(' · '),
+      detail: [review.workflowName, plural(review.itemCount, 'proposed change'), review.dueAt ? `${review.overdue ? 'was due' : 'due'} ${review.dueAt.slice(0, 16).replace('T', ' ')} UTC` : null]
+        .filter(Boolean)
+        .join(' · '),
       href: `/workflows/runs/${review.runId}`,
       action: 'Review',
       at: review.createdAt,

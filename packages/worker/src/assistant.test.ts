@@ -42,6 +42,23 @@ describe('briefText', () => {
   });
 });
 
+describe('review notes', () => {
+  const review = { id: 'e9', kind: 'REVIEW_ASSIGNED', summary: 'Review waiting for you: "Fixes" in Data cleanup, 2 proposed changes', occurredAt: '2026-11-16T14:05:00Z', href: '/workflows/runs/run-1' };
+
+  it('says a review needs you, and links to it', () => {
+    expect(briefText([review], 'IMMEDIATE')).toBe(
+      'A workflow review needs you.\n\n- Review waiting for you: "Fixes" in Data cleanup, 2 proposed changes (2026-11-16 14:05 UTC) [Open](/workflows/runs/run-1)',
+    );
+    expect(briefText([review, { ...review, id: 'e10', kind: 'REVIEW_OVERDUE' }], 'IMMEDIATE')).toMatch(/^2 workflow review notes for you\./);
+  });
+
+  it('keeps the usual wording when a note mixes reviews and followed changes, and links only inside the app', () => {
+    expect(briefText([review, { ...review, id: 'e11', kind: 'FEED_LOADED', href: 'https://elsewhere.example' }], 'IMMEDIATE')).toMatch(
+      /^2 things you asked to hear about right away\.[\s\S]*\(2026-11-16 14:05 UTC\)$/,
+    );
+  });
+});
+
 describe('assistant handlers', () => {
   it('writes a digest and moves the clock', async () => {
     const { supabase, calls } = fake({

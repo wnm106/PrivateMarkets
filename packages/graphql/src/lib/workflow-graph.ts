@@ -399,6 +399,8 @@ export interface ReviewRouting {
   separateReviewer: boolean;
   /** Hours the reviewer has. Null for no due date. */
   dueInHours: number | null;
+  /** Role codes also told when the review is overdue. */
+  escalateRoles: string[];
 }
 
 function textList(value: unknown): string[] {
@@ -423,5 +425,6 @@ export function reviewRouting(config: Record<string, unknown>, scope?: RunScope)
     roles: textList(fill(config.roles)).map((code) => code.toUpperCase()),
     separateReviewer: config.separateReviewer !== false,
     dueInHours: Number.isFinite(hours) && hours > 0 ? hours : null,
+    escalateRoles: textList(fill(config.escalateRoles)).map((code) => code.toUpperCase()),
   };
 }

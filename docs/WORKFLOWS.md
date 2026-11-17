@@ -19,6 +19,7 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 | List values | `supabase/migrations/20261116140000_workflow_list_values.sql`, `packages/worker/src/workflow/list-check.ts`, `packages/mcp-server/src/tools/list-tools.ts` | Reading an attribute's list, holding proposed values to it, and adding a value |
 | Service accounts | `supabase/migrations/20261116130000_workflow_service_accounts.sql` | Which user each client's steps run as, the Workflow Service role, and the checks on people |
 | Who reviews | `supabase/migrations/20261117010000_workflow_review_routing.sql`, `apps/web/components/workflows/ReviewerPicker.tsx` | Who a review is for, keeping the starter apart, due dates, and reassigning |
+| Review notices | `supabase/migrations/20261117020000_workflow_review_notices.sql`, `packages/worker/src/assistant.ts` | Telling people a review is waiting or overdue |
 | Tables and functions | `supabase/migrations/20261116120000_workflows.sql` | `ops.workflows`, `workflow_versions`, `workflow_runs`, `workflow_steps`, `workflow_events`, `workflow_reviews`, reached only through the `workflow_*` functions |
 | Record filters | `packages/graphql/src/lib/workflow-filters.ts`, `packages/mcp-server/src/tools/selection-tools.ts` | The filters a run is started with, and the step that turns them into the records it works on |
 | Graph rules | `packages/graphql/src/lib/workflow-graph.ts` | Step types, what makes a graph sound, which step follows which, `{{placeholders}}` |
@@ -291,7 +292,8 @@ A Human review step says who may decide it:
 |---|---|
 | Who reviews | People, roles, or both. Only someone named, or holding a role named, in the run's client can decide it. Tick nobody for anyone who holds `workflow.review`. A shared workflow can name roles only. A setting can be a placeholder, such as `{{input.reviewer}}`, for a person chosen when the run starts |
 | The person who started the run cannot review it | On by default. For a scheduled run, the starter is whoever created the schedule. Turn it off only for a client with one reviewer |
-| Hours to review | Gives the review a due date. It shows as due, then overdue. Nothing is decided or escalated when it passes |
+| Hours to review | Gives the review a due date. It shows as due, then overdue. When it passes, the reviewers are told once. Nothing is decided |
+| Also tell when overdue | Roles whose holders are told too when the review passes its due date, so they can chase or reassign it |
 
 The database holds every decision to these rules, in `ops.workflow_review_blocker`. The page and the API only show what it says, so the same reason appears on the review, in the list, and when a decision is refused: "You started this run, so someone else has to review it", or "This review is assigned to Operations lead". A tenant admin is held to them too.
 
@@ -300,6 +302,22 @@ When the review opens, each person it names is checked. Someone who does not hol
 **Reassign** on an open review hands it to other people or roles, with a reason kept in the run's history. Anyone who manages the client's workflows can reassign, and so can anyone who could decide the review now, so a reviewer can pass it on. The same checks apply: a person must hold `workflow.review`, a role must grant it, and the starter cannot be given a review that keeps them apart.
 
 A review opened before this was added keeps the rules it was opened under: open to anyone, and the starter may decide it.
+
+### Telling people
+
+Nobody has to watch the list. A review is announced as a note in each person's assistant briefing (the Briefing chat), with a link to the run. It goes to whoever can decide the review, whether or not they follow anything or have turned the assistant on.
+
+| When | Who is told |
+|---|---|
+| The review opens | Everyone who can decide it: the people and roles it is for, or everyone holding `workflow.review` when it is for anyone. Not the person who started the run when the step keeps them apart |
+| It is reassigned | Everyone who can decide it now, except whoever reassigned it |
+| It passes its due date | The same people, and everyone holding a role under "Also tell when overdue". Once per review |
+
+On the home page, a review you can decide is under Needs you. An overdue one goes to the top, marked as when it was due.
+
+The overdue notices come from the platform job `workflow.reviews_due`, on a schedule the migration creates (`WORKFLOW_REVIEWS_DUE`, every 15 minutes). The same job sends again any note that was not delivered in the last two weeks, to anyone still in that client and in no other. A note about a review that has been decided since is not sent. Each notice is also kept in the run's history.
+
+Underneath, a notice is an `ops.activity_events` row with `recipients` set, in `supabase/migrations/20261117020000_workflow_review_notices.sql`. Any other part of the platform can address a note to people the same way.
 
 ### Deciding
 
@@ -384,6 +402,7 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 - Filtering by an attribute's value (every fund of one strategy). Filters are by type, code, id, and name.
 - Run workflow on rows selected in a list. Lists have no row selection; it is on each record's page.
 - Checking the notes against the reconciliation after a reviewer rejects a change. The stored outcome line is the check.
-- Telling a reviewer a review is waiting, by email or message. It shows in their list on `/workflows`.
-- Escalating an overdue review. Overdue is shown, not acted on.
+- Telling a reviewer by email or another messaging service. Notes go to the assistant briefing in the app.
+- Acting on an overdue review. People are told; nothing is reassigned or decided by itself.
+- Choosing an escalation role that does not grant `workflow.review`. The editor offers only roles that do, though the database accepts any.
 - More than one approval on a review (two people, or one after another).

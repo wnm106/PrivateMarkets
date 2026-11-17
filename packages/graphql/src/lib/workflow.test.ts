@@ -177,13 +177,16 @@ describe('values that come from a list', () => {
 describe('reviewRouting', () => {
   it('fills placeholders, splits lists, and keeps the starter apart unless the step says otherwise', () => {
     const scope = { input: { reviewer: 'u-2, u-3', hours: '48' }, steps: {} };
-    expect(reviewRouting({ people: ['u-1', '{{input.reviewer}}', 'u-1'], roles: ['ops_lead', ''], dueInHours: '{{input.hours}}' }, scope)).toEqual({
+    expect(
+      reviewRouting({ people: ['u-1', '{{input.reviewer}}', 'u-1'], roles: ['ops_lead', ''], dueInHours: '{{input.hours}}', escalateRoles: ['head_of_ops'] }, scope),
+    ).toEqual({
       people: ['u-1', 'u-2', 'u-3'],
       roles: ['OPS_LEAD'],
       separateReviewer: true,
       dueInHours: 48,
+      escalateRoles: ['HEAD_OF_OPS'],
     });
-    expect(reviewRouting({ separateReviewer: false, dueInHours: 0 })).toEqual({ people: [], roles: [], separateReviewer: false, dueInHours: null });
+    expect(reviewRouting({ separateReviewer: false, dueInHours: 0 })).toEqual({ people: [], roles: [], separateReviewer: false, dueInHours: null, escalateRoles: [] });
   });
 
   it('refuses a time to review that is not a positive number of hours', () => {
