@@ -308,7 +308,10 @@ function ReviewRow({ review }: { review: ReviewView }) {
         gap: 12,
         alignItems: 'center',
         padding: '12px 14px',
-        border: `1px solid ${mine ? '#fde8c0' : 'var(--line)'}`,
+        // Each side set on its own: mixing border and borderLeft makes React warn when they change.
+        borderTop: `1px solid ${mine ? '#fde8c0' : 'var(--line)'}`,
+        borderRight: `1px solid ${mine ? '#fde8c0' : 'var(--line)'}`,
+        borderBottom: `1px solid ${mine ? '#fde8c0' : 'var(--line)'}`,
         borderLeft: `5px solid ${review.overdue ? '#b91c1c' : mine ? '#b45309' : 'var(--line-strong)'}`,
         borderRadius: 8,
         background: mine ? '#fffbeb' : 'var(--surface)',
