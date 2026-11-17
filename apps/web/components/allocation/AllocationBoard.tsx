@@ -58,6 +58,7 @@ interface Cell {
   amount: number;
   systemAmount: number;
   capReason?: string | null;
+  imbalance?: boolean;
   exclusionKind?: string | null;
   exclusionText?: string | null;
   overridden: boolean;
@@ -109,6 +110,8 @@ interface Adjustment {
   amount?: number | null;
   reason?: string | null;
   note?: string | null;
+  /** Set by a parent or sibling edit. The user did not type this cell. */
+  derived?: boolean;
 }
 
 interface Preview {
@@ -143,7 +146,7 @@ const PREVIEW = `
       tranches { id name label size holdPct targetAmount allocated unfunded instrumentType rank pricing callProtection equityLinked coverage tickingFee status securityId }
       rows {
         fundId fundName parentFundId level availableCapital nav total cash undrawn line reserve issuerLimit sponsorLimit unfundedLimit
-        cells { trancheId eligible amount systemAmount capReason exclusionKind exclusionText overridden reasonCode }
+        cells { trancheId eligible amount systemAmount capReason imbalance exclusionKind exclusionText overridden reasonCode }
       }
       adjustments { fundId trancheId type amount reason note }
       errors { message }
@@ -337,6 +340,13 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
     }
     setBaselineHolds({ ...holds });
     setNotice('Allocation saved.');
+  };
+
+  const applyGridAmount = (row: Row, trancheId: string, amount: number) => {
+    if (!preview) return;
+    setAdjustments((current) => adjustmentsForAmount(current, preview.rows, row, trancheId, amount));
+    setError(null);
+    setSelected(row.fundId);
   };
 
   const resetAllocation = () => {
@@ -670,22 +680,15 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
                           </td>
                           <td className="num"><b>{plain(row.availableCapital)}</b><small>{row.availableCapital ? `${Math.round(row.total / row.availableCapital * 100)}% used` : ''}</small></td>
                           {row.cells.map((cell) => (
-                            <td key={cell.trancheId} className={`num ${cell.eligible ? 'act' : 'na'} ${cell.overridden ? 'ovr' : ''}`} onClick={(event) => {
-                              event.stopPropagation();
-                              setSelected(row.fundId);
-                              setEdit({
-                                fundId: row.fundId,
-                                trancheId: cell.trancheId,
-                                amount: ((cell.amount || 0) / 1_000_000).toFixed(2),
-                                reason: cell.reasonCode || '',
-                                note: '',
-                                type: cell.exclusionText?.toLowerCase().includes('exclud') ? 'exclude' : 'override',
-                              });
-                            }}>
+                            <td key={cell.trancheId} className={`num ${cell.eligible ? 'act' : 'na'} ${cell.overridden ? 'ovr' : ''} ${cell.imbalance ? 'mismatch' : ''}`} onClick={() => setSelected(row.fundId)}>
                               {cell.eligible ? (
                                 <>
-                                  <b>{cell.capReason ? <em>capped</em> : ''}{plain(cell.amount)}</b>
-                                  <small>{cell.overridden ? `Override ${cell.reasonCode || ''}` : `${preview.targetHold ? (cell.amount / (tranches.find((tranche) => tranche.id === cell.trancheId)?.targetAmount || 1) * 100).toFixed(1) : 0}% of hold`}</small>
+                                  <AmountEdit
+                                    amount={cell.amount}
+                                    label={`${row.fundName} ${tranches.find((tranche) => tranche.id === cell.trancheId)?.name || 'tranche'} allocation`}
+                                    onCommit={(next) => applyGridAmount(row, cell.trancheId, next)}
+                                  />
+                                  <small>{cell.imbalance ? 'Children do not sum to this amount' : cell.overridden ? `Override ${cell.reasonCode || ''}` : `${preview.targetHold ? (cell.amount / (tranches.find((tranche) => tranche.id === cell.trancheId)?.targetAmount || 1) * 100).toFixed(1) : 0}% of hold`}</small>
                                 </>
                               ) : (
                                 <span className="da-natag" title={cell.exclusionText || undefined}>{ineligibleLabel(cell.exclusionKind)}</span>
@@ -762,6 +765,105 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       )}
     </div>
   );
+}
+
+function AmountEdit({ amount, label, onCommit }: { amount: number; label: string; onCommit: (next: number) => void }) {
+  const shown = (amount / 1_000_000).toFixed(2);
+  const [draft, setDraft] = useState(shown);
+  useEffect(() => setDraft(shown), [shown]);
+  return (
+    <input
+      type="number"
+      min={0}
+      step={0.01}
+      aria-label={label}
+      value={draft}
+      onClick={(event) => event.stopPropagation()}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => {
+        const next = Number(draft);
+        if (!Number.isFinite(next) || next < 0) {
+          setDraft(shown);
+          return;
+        }
+        const dollars = Math.round(next * 1_000_000 * 100) / 100;
+        if (Math.abs(dollars - amount) > 0.5) onCommit(dollars);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') event.currentTarget.blur();
+        if (event.key === 'Escape') {
+          setDraft(shown);
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
+function userOverride(adjustments: Adjustment[], fundId: string, trancheId: string): Adjustment | undefined {
+  return adjustments.find((item) => !item.derived && item.type === 'override' && item.fundId === fundId && item.trancheId === trancheId);
+}
+
+function shareAmounts(total: number, weights: number[]): number[] {
+  if (!weights.length) return [];
+  const safe = weights.map((weight) => Math.max(0, weight));
+  const weight = safe.reduce((sum, value) => sum + value, 0);
+  const raw = weight > 0
+    ? safe.map((value) => total * value / weight)
+    : safe.map(() => total / safe.length);
+  const cents = Math.round(total * 100);
+  const floors = raw.map((value) => Math.floor(value * 100 + 1e-9));
+  let remainder = cents - floors.reduce((sum, value) => sum + value, 0);
+  const order = raw.map((value, index) => [index, value * 100 - floors[index]] as [number, number])
+    .sort((left, right) => right[1] - left[1]);
+  for (let index = 0; index < order.length && remainder > 0; index += 1) {
+    floors[order[index][0]] += 1;
+    remainder -= 1;
+  }
+  return floors.map((value) => value / 100);
+}
+
+function adjustmentsForAmount(
+  current: Adjustment[],
+  rows: Row[],
+  row: Row,
+  trancheId: string,
+  amount: number,
+): Adjustment[] {
+  const cellAmount = (fund: Row) => fund.cells.find((cell) => cell.trancheId === trancheId)?.amount || 0;
+  const drop = (fundIds: string[]) => current.filter((item) => !(item.trancheId === trancheId && fundIds.includes(item.fundId)));
+
+  if (row.level === 'PORTFOLIO') {
+    const children = rows.filter((item) => item.parentFundId === row.fundId && item.cells.some((cell) => cell.trancheId === trancheId && cell.eligible));
+    const shares = shareAmounts(amount, children.map(cellAmount));
+    const next = drop([row.fundId, ...children.map((child) => child.fundId)]);
+    next.push({ fundId: row.fundId, trancheId, type: 'override', amount, reason: null, note: null });
+    children.forEach((child, index) => {
+      next.push({ fundId: child.fundId, trancheId, type: 'override', amount: shares[index], reason: null, note: null, derived: true });
+    });
+    return next;
+  }
+
+  const siblings = rows.filter((item) => item.parentFundId === row.parentFundId);
+  const parent = rows.find((item) => item.fundId === row.parentFundId);
+  const parentAmount = parent ? cellAmount(parent) : 0;
+  const eligible = siblings.filter((item) => item.cells.some((cell) => cell.trancheId === trancheId && cell.eligible));
+  const locked = eligible.filter((item) => item.fundId === row.fundId || userOverride(current, item.fundId, trancheId));
+  const unlocked = eligible.filter((item) => !locked.includes(item));
+  const lockedSum = locked.reduce((sum, item) => sum + (item.fundId === row.fundId ? amount : (userOverride(current, item.fundId, trancheId)?.amount || 0)), 0);
+  const shares = shareAmounts(Math.max(0, parentAmount - lockedSum), unlocked.map(cellAmount));
+  const next = drop(eligible.map((item) => item.fundId));
+  locked.forEach((item) => {
+    if (item.fundId === row.fundId) next.push({ fundId: row.fundId, trancheId, type: 'override', amount, reason: null, note: null });
+    else {
+      const existing = userOverride(current, item.fundId, trancheId);
+      if (existing) next.push(existing);
+    }
+  });
+  unlocked.forEach((item, index) => {
+    next.push({ fundId: item.fundId, trancheId, type: 'override', amount: shares[index], reason: null, note: null, derived: true });
+  });
+  return next;
 }
 
 function ineligibleLabel(kind?: string | null): string {

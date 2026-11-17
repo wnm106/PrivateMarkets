@@ -9050,6 +9050,8 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .da-grid td.na { background-color: #e8edf2; background-image: repeating-linear-gradient(135deg, transparent 0 7px, #d5dbe3 7px 8px); color: #475368; font-size: 12px; text-align: center; }
 .da-natag { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid #9aa6b8; background: transparent; font-weight: 600; font-size: 11px; }
 .da-grid td.ovr { background: #ffe7c4; }
+.da-grid td.mismatch { background: #f8d0d0; box-shadow: inset 0 0 0 2px #b3261e; }
+.da-grid td.act input { font: inherit; width: 88px; padding: 2px 6px; border: 1px solid var(--da-line); border-radius: 6px; background: var(--surface); color: inherit; text-align: right; }
 .da-grid td b { font-weight: 600; }
 .da-grid td em { font-style: normal; font-size: 10px; font-weight: 700; background: #faefdb; color: #8f5400; border-radius: 999px; padding: 0 5px; margin-right: 4px; }
 .da-caret { border: 1px solid var(--da-line); background: var(--surface); border-radius: 4px; width: 22px; height: 22px; margin-right: 6px; cursor: pointer; }

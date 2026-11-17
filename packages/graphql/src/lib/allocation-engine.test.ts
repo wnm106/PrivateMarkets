@@ -335,6 +335,53 @@ describe('allocation engine', () => {
     expect(result.allocated).toBeCloseTo(80, 2);
   });
 
+  it('splits a child override across the children that were not overridden', () => {
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [{
+        id: 'p', name: 'Parent', nav: 1000,
+        issuerLimit: 1, sponsorLimit: 1, unfundedLimit: 1, sponsorExposure: 0, unfundedExposure: 0,
+        allowed: ['LOAN'], denyNote: '',
+        sleeves: [
+          { id: 'a', name: 'A', nav: 500, cash: 200, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '' },
+          { id: 'b', name: 'B', nav: 500, cash: 200, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '' },
+        ],
+      }],
+      adjustments: [
+        { fundId: 'p', trancheId: 'tl', type: 'override', amount: 100 },
+        { fundId: 'a', trancheId: 'tl', type: 'override', amount: 40 },
+      ],
+    });
+    expect(cell(result, 'p', 'tl').amount).toBeCloseTo(100, 2);
+    expect(cell(result, 'p', 'tl').imbalance).toBe(false);
+    expect(cell(result, 'a', 'tl').amount).toBeCloseTo(40, 2);
+    expect(cell(result, 'b', 'tl').amount).toBeCloseTo(60, 2);
+  });
+
+  it('highlights the parent when every child override misses the parent amount', () => {
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [{
+        id: 'p', name: 'Parent', nav: 1000,
+        issuerLimit: 1, sponsorLimit: 1, unfundedLimit: 1, sponsorExposure: 0, unfundedExposure: 0,
+        allowed: ['LOAN'], denyNote: '',
+        sleeves: [
+          { id: 'a', name: 'A', nav: 500, cash: 200, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '' },
+          { id: 'b', name: 'B', nav: 500, cash: 200, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '' },
+        ],
+      }],
+      adjustments: [
+        { fundId: 'p', trancheId: 'tl', type: 'override', amount: 100 },
+        { fundId: 'a', trancheId: 'tl', type: 'override', amount: 80 },
+        { fundId: 'b', trancheId: 'tl', type: 'override', amount: 80 },
+      ],
+    });
+    expect(cell(result, 'p', 'tl').amount).toBeCloseTo(100, 2);
+    expect(cell(result, 'p', 'tl').imbalance).toBe(true);
+    expect(cell(result, 'a', 'tl').amount).toBeCloseTo(80, 2);
+    expect(cell(result, 'b', 'tl').amount).toBeCloseTo(80, 2);
+  });
+
   it('removes an excluded portfolio and leaves the warrant off a fund that cannot hold it', () => {
     const result = allocate(halyard([
       { fundId: 'poc', trancheId: '*', type: 'exclude', reason: 'MAND' },

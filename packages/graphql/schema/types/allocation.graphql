@@ -25,6 +25,7 @@ type AllocationCell {
   exclusionText: String
   overridden: Boolean!
   reasonCode: String
+  imbalance: Boolean!
 }
 
 type AllocationRow {

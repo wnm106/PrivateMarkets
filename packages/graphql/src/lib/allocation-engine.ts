@@ -94,6 +94,8 @@ export interface AllocationCellResult {
   amount: number;
   systemAmount: number;
   capReason: string | null;
+  /** Every child fund in this tranche is overridden and the children do not sum to this amount. */
+  imbalance: boolean;
   exclusionKind: string | null;
   exclusionCode: string | null;
   exclusionText: string | null;
@@ -279,6 +281,7 @@ interface RawRow {
   override: Array<AllocationAdjustment | null>;
   why: Array<{ kind: string; code?: string; text: string } | null>;
   cap: Array<string | null>;
+  imbalance: boolean[];
 }
 
 interface RawResult {
@@ -457,8 +460,15 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
         return cell && sleeveEligible(portfolio, sleeve, trancheIndex) && cell.amount != null ? cell.amount : null;
       }));
       tranches.forEach((_, trancheIndex) => {
+        const eligibleIndexes = portfolio.sleeves
+          .map((sleeve, sleeveIndex) => sleeveIndex)
+          .filter((sleeveIndex) => sleeveEligible(portfolio, portfolio.sleeves[sleeveIndex], trancheIndex));
+        const allLocked = eligibleIndexes.length > 0
+          && eligibleIndexes.every((sleeveIndex) => sleeveLocks[sleeveIndex][trancheIndex] !== null);
         const locked = sum(sleeveLocks.map((row) => row[trancheIndex] || 0));
-        if (locked > portfolioAmounts[portfolioIndex][trancheIndex] + 1e-9 && locked > 0) {
+        // Overridden children keep the amount that was typed. When every child is
+        // overridden, a gap against the parent is reported instead of being scaled away.
+        if (!allLocked && locked > portfolioAmounts[portfolioIndex][trancheIndex] + 1e-9 && locked > 0) {
           const scale = portfolioAmounts[portfolioIndex][trancheIndex] / locked;
           sleeveLocks.forEach((row) => {
             if (row[trancheIndex] !== null) row[trancheIndex] = (row[trancheIndex] as number) * scale;
@@ -591,7 +601,24 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
         row[trancheIndex] = row[trancheIndex] / 100;
       });
     });
-    const amounts = tranches.map((_, trancheIndex) => sum(sleeveAmounts.map((row) => row[trancheIndex])));
+    const amounts = tranches.map((_, trancheIndex) => {
+      const sleeveSum = sum(sleeveAmounts.map((row) => row[trancheIndex]));
+      const eligibleIndexes = portfolio.sleeves
+        .map((sleeve, sleeveIndex) => sleeveIndex)
+        .filter((sleeveIndex) => sleeveEligible(portfolio, portfolio.sleeves[sleeveIndex], trancheIndex));
+      const allLocked = eligibleIndexes.length > 0
+        && eligibleIndexes.every((sleeveIndex) => sleeveFills[portfolioIndex].locks[sleeveIndex][trancheIndex] !== null);
+      return allLocked ? portfolioAmounts[portfolioIndex][trancheIndex] : sleeveSum;
+    });
+    const imbalance = tranches.map((_, trancheIndex) => {
+      const sleeveSum = sum(sleeveAmounts.map((row) => row[trancheIndex]));
+      const eligibleIndexes = portfolio.sleeves
+        .map((sleeve, sleeveIndex) => sleeveIndex)
+        .filter((sleeveIndex) => sleeveEligible(portfolio, portfolio.sleeves[sleeveIndex], trancheIndex));
+      const allLocked = eligibleIndexes.length > 0
+        && eligibleIndexes.every((sleeveIndex) => sleeveFills[portfolioIndex].locks[sleeveIndex][trancheIndex] !== null);
+      return allLocked && Math.abs(sleeveSum - portfolioAmounts[portfolioIndex][trancheIndex]) > 0.01;
+    });
     const eligible = tranches.map((_, trancheIndex) => portfolioEligible(portfolio, trancheIndex));
     const cap = portfolioCap(portfolio);
     rows.set(portfolio.id, {
@@ -602,6 +629,7 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
       excludedEntirely: exclusion(portfolio.id, '*'),
       override: tranches.map((tranche, trancheIndex) => (eligible[trancheIndex] ? override(portfolio.id, tranche.id) : null)),
       why: tranches.map((_, trancheIndex) => (eligible[trancheIndex] ? null : parentReason(portfolio, trancheIndex))),
+      imbalance,
       cap: tranches.map((_, trancheIndex) => {
         if (!eligible[trancheIndex] || locks[portfolioIndex][trancheIndex] !== null) return null;
         if (portfolioFill!.flagPerTranche[portfolioIndex][trancheIndex]) return capWhy[portfolioIndex][trancheIndex] || null;
@@ -623,6 +651,7 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
         excludedEntirely: exclusion(sleeve.id, '*'),
         override: tranches.map((tranche, trancheIndex) => (sleeveEligibleFlags[trancheIndex] ? override(sleeve.id, tranche.id) : null)),
         why: tranches.map((_, trancheIndex) => (sleeveEligibleFlags[trancheIndex] ? null : sleeveReason(portfolio, sleeve, trancheIndex))),
+        imbalance: tranches.map(() => false),
         cap: tranches.map((_, trancheIndex) => {
           const fillResult = sleeveFills[portfolioIndex];
           if (!sleeveEligibleFlags[trancheIndex] || fillResult.locks[sleeveIndex][trancheIndex] !== null) return null;
@@ -659,6 +688,7 @@ function cellFrom(
     amount: raw.amounts[trancheIndex],
     systemAmount,
     capReason: raw.cap[trancheIndex],
+    imbalance: Boolean(raw.imbalance[trancheIndex]),
     exclusionKind: why ? why.kind : null,
     exclusionCode: why?.code || null,
     exclusionText: why ? why.text : null,
