@@ -20,6 +20,7 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 | Service accounts | `supabase/migrations/20261116130000_workflow_service_accounts.sql` | Which user each client's steps run as, the Workflow Service role, and the checks on people |
 | Who reviews | `supabase/migrations/20261117010000_workflow_review_routing.sql`, `apps/web/components/workflows/ReviewerPicker.tsx` | Who a review is for, keeping the starter apart, due dates, and reassigning |
 | Review notices | `supabase/migrations/20261117020000_workflow_review_notices.sql`, `packages/worker/src/assistant.ts` | Telling people a review is waiting or overdue |
+| Triggers | `supabase/migrations/20261117030000_workflow_triggers.sql`, `apps/web/components/workflows/WorkflowTriggers.tsx` | Starting a workflow when a feed event arrives or a data quality scan finds new failures |
 | Tables and functions | `supabase/migrations/20261116120000_workflows.sql` | `ops.workflows`, `workflow_versions`, `workflow_runs`, `workflow_steps`, `workflow_events`, `workflow_reviews`, reached only through the `workflow_*` functions |
 | Record filters | `packages/graphql/src/lib/workflow-filters.ts`, `packages/mcp-server/src/tools/selection-tools.ts` | The filters a run is started with, and the step that turns them into the records it works on |
 | Graph rules | `packages/graphql/src/lib/workflow-graph.ts` | Step types, what makes a graph sound, which step follows which, `{{placeholders}}` |
@@ -380,6 +381,28 @@ Put a `workflow.start` job on a schedule at `/admin/jobs`:
 
 It starts a run of the published version for the schedule's creator, who must hold `workflow.run`. If the run reaches a review, it waits there for a person like any other.
 
+## Starting when something happens
+
+A trigger starts a workflow when a feed event arrives, or when a data quality scan finds new failures. Set one up under **Start automatically** on the workflow's page. It needs `workflow.manage` and `workflow.run`.
+
+| Source | Starts when | Narrowed by |
+|---|---|---|
+| A data quality scan finds new failures | A `dq.scan` finds records that began failing a rule, or lost a required value, since the day before | Severity, rule codes, types of record |
+| A feed does something | A feed loads a file, has one waiting for review, fails, or is late | Which of those, feed codes |
+
+Data quality is checked live, and the exceptions table holds only failures a person accepted. So "new" comes from the scan, which compares each record with the day before. Each `dq.scan` that finds something new records one `DQ_NEW_FAILURES` event listing those records (up to 500), with the rules they fail. Schedule the scan once a day: a second scan the same day reports the same new failures again.
+
+Events are not acted on one at a time. Everything new since the trigger last fired goes into **one run**, up to 500 events or records. A scan that finds 300 records failing starts one run, not 300.
+
+- **What the run covers.** A run started by data quality failures is given those records as `filters.entityIds`, added to any filters in the trigger's input, so Select records picks them and nothing else. A record fits when one of its failing rules matches the trigger's severities and rule codes. A record that only lost a required value has no rule, so it fits only a trigger that names no severity or rule. A run started by a feed gets the trigger's input as it is, like a schedule's.
+- **What started it.** Steps can read `{{input.trigger}}`: the trigger's name, its source, how many events or records there were, and up to 50 of them (the record, its rules and severities, and how many required values it lost; or the feed, file, and what happened).
+- **One run at a time.** While a run a trigger started is queued, running, or waiting for a review, the trigger starts nothing. New events wait, and the next run takes all of them. The trigger's line on the page says so.
+- **Who it runs as.** Runs start as whoever last saved the trigger, through the same `workflow.start` job a schedule uses, with the same checks. If that person can no longer run workflows, the start fails and the trigger shows why.
+- **Only the published version runs.** A trigger on an unpublished workflow starts nothing.
+- **Nothing earlier.** A new trigger acts only on what arrives after it is saved. Turning one back on does not act on what arrived while it was off.
+
+Underneath, the platform job `workflow.triggers` does the matching. It is queued the moment a feed or scan event is written, and also runs every 5 minutes from the `WORKFLOW_TRIGGERS` schedule. Each trigger keeps a cursor of what it has acted on. The tables and functions are in `supabase/migrations/20261117030000_workflow_triggers.sql`, which also changes `job_run_dq_scan` to record the event.
+
 ## Permissions
 
 | Permission | Lets a person |
@@ -400,6 +423,7 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 - A deal setup template. The engine supports it.
 - Splitting a large selection into several runs, or one run per record. A run works through its whole selection in one pass.
 - Filtering by an attribute's value (every fund of one strategy). Filters are by type, code, id, and name.
+- Starting a workflow when a record's value changes, or when a compliance breach opens. Triggers watch feeds and data quality scans.
 - Run workflow on rows selected in a list. Lists have no row selection; it is on each record's page.
 - Checking the notes against the reconciliation after a reviewer rejects a change. The stored outcome line is the check.
 - Telling a reviewer by email or another messaging service. Notes go to the assistant briefing in the app.

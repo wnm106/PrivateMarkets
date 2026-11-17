@@ -36,7 +36,7 @@ Optional settings: `WORKER_CONCURRENCY` (runs side by side, default 5), `WORKER_
 |---|---|---|---|
 | `calc.process` | Platform | `limit` (batch size, default 500), `maxRounds` (default 20) | Processed, failed, still pending |
 | `compliance.evaluate` | Platform | `ruleCodes` (leave out for every active rule), `asOfDate` (default today) | Results and breaches per rule |
-| `dq.scan` | One client | `domainCode` (optional) | The data quality dashboard's headline figures |
+| `dq.scan` | One client | `domainCode` (optional) | The data quality dashboard's headline figures, and how many records began failing since the day before. Those are also recorded as a `DQ_NEW_FAILURES` event, which workflow triggers can start from |
 | `stale.scan` | One client | `olderThanDays` (default 30), `domainCode` (optional) | Count of stale values and the 25 oldest |
 | `feed.poll` | One client | `feedId` | Files seen, loaded, duplicates, needing review, failed. See [FEEDS.md](FEEDS.md) |
 | `feed.check` | One client | none | Fails and names the feeds whose file is late |
@@ -48,6 +48,7 @@ Optional settings: `WORKER_CONCURRENCY` (runs side by side, default 5), `WORKER_
 | `workflow.start` | One client | `workflowCode`, `input` (optional) | The run it started. See [WORKFLOWS.md](WORKFLOWS.md) |
 | `workflow.advance` | One client | none | Where the run got to: finished, failed, or waiting for a person. Not put on a schedule. Queued when a run starts and when a review is decided. |
 | `workflow.reviews_due` | Platform | none | How many reviews became overdue, how many people were told, and how many undelivered notes were queued again. Runs every 15 minutes from the `WORKFLOW_REVIEWS_DUE` schedule, which the migration creates. |
+| `workflow.triggers` | Platform | none | How many triggers were checked, how many started a run, and how many were waiting on a run already going. Queued when a feed or data quality scan event is written, and every 5 minutes from the `WORKFLOW_TRIGGERS` schedule, which the migration creates. See [WORKFLOWS.md](WORKFLOWS.md). |
 
 `assistant.brief` and `assistant.watch` run as the person the note is for. See [who a job runs as](#who-a-job-runs-as). What they follow, and when the summary is sent, is set at Assistant, not on this page. A summary is not sent when nothing they follow has changed.
 

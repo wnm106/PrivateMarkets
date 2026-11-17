@@ -3,7 +3,7 @@ import { mapFileLoader } from './feed-loader';
 import { assistantBriefHandler, assistantSweepHandler, assistantWatchHandler, workflowReviewsDueHandler } from './assistant';
 import { connectionCheckHandler, feedCheckHandler, feedPollHandler } from './feeds';
 import { JobError, type JobHandler, type JobRun } from './worker';
-import { engineDeps, workflowAdvanceHandler, workflowStartHandler } from './workflow/handlers';
+import { engineDeps, workflowAdvanceHandler, workflowStartHandler, workflowTriggersHandler } from './workflow/handlers';
 
 /**
  * One handler per job type in packages/graphql/src/lib/job-types.ts.
@@ -211,5 +211,6 @@ export function buildHandlers(supabase: SupabaseClient): Record<string, JobHandl
     'workflow.reviews_due': workflowReviewsDueHandler(supabase),
     'workflow.advance': workflowAdvanceHandler(engineDeps(supabase)),
     'workflow.start': workflowStartHandler(supabase),
+    'workflow.triggers': workflowTriggersHandler(supabase),
   };
 }

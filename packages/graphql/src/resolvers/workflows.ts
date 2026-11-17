@@ -97,6 +97,27 @@ export function mapReview(row: Row) {
   };
 }
 
+export function mapTrigger(row: Row) {
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    workflowId: row.workflow_id,
+    name: row.trigger_name,
+    source: row.source,
+    match: row.match && typeof row.match === 'object' ? row.match : {},
+    input: row.input && typeof row.input === 'object' ? row.input : {},
+    isActive: row.is_active === true,
+    createdBy: row.created_by,
+    createdByName: row.created_by_name || null,
+    busy: row.busy === true,
+    lastFiredAt: row.last_fired_at || null,
+    lastCount: typeof row.last_count === 'number' ? row.last_count : null,
+    lastJob: row.last_job ?? null,
+    canManage: row.can_manage === true,
+    createdAt: row.created_at,
+  };
+}
+
 export function mapRun(row: Row) {
   const canReview = row.can_review === true;
   return {
@@ -217,6 +238,12 @@ export const workflowResolvers = {
       });
       if (error) throw error;
       return ((data as Row[] | null) || []).map(mapReview);
+    },
+
+    workflowTriggers: async (_: unknown, args: { workflowId: string }, context: Context) => {
+      const { data, error } = await context.supabase.rpc('workflow_triggers_list', { p_workflow_id: args.workflowId });
+      if (error) throw error;
+      return ((data as Row[] | null) || []).map(mapTrigger);
     },
 
     workflowReviewerChoices: async (_: unknown, args: { clientId?: string | null }, context: Context) => {
@@ -385,6 +412,32 @@ export const workflowResolvers = {
       } catch (error) {
         return { review: null, errors: [failure(error, 'DECIDE_FAILED')] };
       }
+    },
+
+    saveWorkflowTrigger: async (_: unknown, args: { input: Row }, context: Context) => {
+      const input = args.input;
+      const object = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
+      try {
+        const { data, error } = await context.supabase.rpc('workflow_trigger_save', {
+          p_id: input.id || null,
+          p_workflow_id: input.workflowId,
+          p_name: String(input.name || ''),
+          p_source: String(input.source || ''),
+          p_match: object(input.match),
+          p_input: object(input.input),
+          p_is_active: input.isActive !== false,
+        });
+        if (error) throw error;
+        return { trigger: mapTrigger(data as Row), errors: [] };
+      } catch (error) {
+        return { trigger: null, errors: [failure(error, 'TRIGGER_SAVE_FAILED')] };
+      }
+    },
+
+    deleteWorkflowTrigger: async (_: unknown, args: { id: string }, context: Context) => {
+      const { error } = await context.supabase.rpc('workflow_trigger_delete', { p_id: args.id });
+      if (error) return { success: false, errors: [failure(error, 'TRIGGER_DELETE_FAILED')] };
+      return { success: true, errors: [] };
     },
 
     reassignWorkflowReview: async (_: unknown, args: { input: Row }, context: Context) => {

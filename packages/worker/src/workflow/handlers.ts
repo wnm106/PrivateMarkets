@@ -14,6 +14,8 @@ import { workflowTools, type ToolEnv, type WorkflowTools } from './tools';
  *                     Queued when a run starts, when a review is decided, and on retry.
  *   workflow.start    starts a run of a workflow by code. This is the one a person puts on a
  *                     schedule; the run belongs to whoever created the schedule.
+ *   workflow.triggers platform job: queues a workflow.start for each trigger with something new
+ *                     to act on, as the person who made the trigger.
  */
 
 function toolEnv(): ToolEnv {
@@ -91,5 +93,13 @@ export function workflowStartHandler(supabase: SupabaseClient): JobHandler {
       throw new Error(started.error.message);
     }
     return { workflowRunId: String(started.data), workflowCode: code };
+  };
+}
+
+export function workflowTriggersHandler(supabase: SupabaseClient, now: () => Date = () => new Date()): JobHandler {
+  return async () => {
+    const { data, error } = await supabase.rpc('job_run_workflow_triggers', { p_now: now().toISOString() });
+    if (error) throw new Error(error.message);
+    return (data || {}) as Record<string, unknown>;
   };
 }

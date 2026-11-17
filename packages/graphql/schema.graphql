@@ -2836,6 +2836,8 @@ type Query {
   workflowReviews(status: String, mine: Boolean): [WorkflowReview!]!
   """Who a review step can be assigned to: people holding workflow.review in the client, and the roles that grant it. Leave out clientId for a shared workflow."""
   workflowReviewerChoices(clientId: ID): WorkflowReviewerChoices!
+  """What starts this workflow when something happens: feed events or new data quality failures."""
+  workflowTriggers(workflowId: ID!): [WorkflowTrigger!]!
   """Places files arrive from, for the caller's clients. Stored credentials are never returned."""
   feedConnections: [FeedConnection!]!
   feeds: [Feed!]!
@@ -3154,6 +3156,9 @@ type Mutation {
   decideWorkflowReview(input: DecideWorkflowReviewInput!): WorkflowReviewResult!
   """Hands an open review to other people or roles. Empty lists open it to anyone who can review."""
   reassignWorkflowReview(input: ReassignWorkflowReviewInput!): WorkflowReviewResult!
+  """Creates (no id) or changes a trigger. It starts runs as the caller."""
+  saveWorkflowTrigger(input: SaveWorkflowTriggerInput!): WorkflowTriggerResult!
+  deleteWorkflowTrigger(id: ID!): MutationResult!
 
   # Feeds: files that arrive on their own
   saveFeedConnection(input: SaveFeedConnectionInput!): FeedConnectionResult!
@@ -4922,6 +4927,47 @@ type WorkflowReview {
   startedByName: String
   dueAt: DateTime
   overdue: Boolean!
+}
+
+type WorkflowTrigger {
+  id: ID!
+  clientId: ID!
+  workflowId: ID!
+  name: String!
+  """FEED or DQ_FAILURES."""
+  source: String!
+  """FEED: { kinds, feedCodes }. DQ_FAILURES: { severities, ruleCodes, domainCodes }. An empty list matches everything."""
+  match: JSON!
+  """What each run starts with, as for a schedule. For DQ_FAILURES the records are added to filters.entityIds."""
+  input: JSON!
+  isActive: Boolean!
+  """The person runs are started as."""
+  createdBy: ID!
+  createdByName: String
+  """A run it started is still going, so new events wait for the next one."""
+  busy: Boolean!
+  lastFiredAt: DateTime
+  """How many events or exceptions the last run was started with."""
+  lastCount: Int
+  """{ status, error, workflowRunId, finishedAt } of the job that started the last run."""
+  lastJob: JSON
+  canManage: Boolean!
+  createdAt: DateTime!
+}
+
+input SaveWorkflowTriggerInput {
+  id: ID
+  workflowId: ID!
+  name: String!
+  source: String!
+  match: JSON
+  input: JSON
+  isActive: Boolean
+}
+
+type WorkflowTriggerResult {
+  trigger: WorkflowTrigger
+  errors: [MutationError!]!
 }
 
 type WorkflowReviewerChoices {

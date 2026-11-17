@@ -125,6 +125,14 @@ export const JOB_TYPES: readonly JobTypeDef[] = [
     payloadExample: {},
   },
   {
+    code: 'workflow.triggers',
+    label: 'Workflow triggers',
+    description:
+      'Starts a workflow run for each trigger whose feed events or new data quality failures have arrived, one run for everything new since it last fired. Queued when a feed or scan event is written, and every 5 minutes from a platform schedule the migration creates.',
+    scope: 'PLATFORM',
+    payloadExample: {},
+  },
+  {
     code: 'workflow.advance',
     label: 'Advance a workflow run',
     description: 'Moves one workflow run forward until it finishes, fails, or waits for a person. Queued when a run starts and when a review is decided.',
