@@ -44,6 +44,7 @@ export interface IncomingEntity {
 
 export type ResolveHit =
   | { kind: 'match'; entity: MatchEntity; via: 'code' | 'identifier' | 'name' }
+  | { kind: 'ambiguous'; via: 'code' | 'identifier' | 'name'; entities: MatchEntity[]; message: string }
   | { kind: 'rejected'; message: string }
   | { kind: 'none' };
 
@@ -252,8 +253,10 @@ export class EntityMatchIndex {
     const pool = exact.length ? exact : hits;
     if (pool.length > 1) {
       return {
-        kind: 'rejected',
-        message: `${code} matches more than one entity code. Merge those records before loading.`,
+        kind: 'ambiguous',
+        via: 'code',
+        entities: pool,
+        message: `${code} matches ${pool.length} entity codes.`,
       };
     }
     const entity = pool[0];
@@ -328,8 +331,10 @@ export class EntityMatchIndex {
     if (preferred) return { kind: 'match', entity: preferred, via };
     const labels = entities.slice(0, 5).map((entity) => entity.code).join(', ');
     return {
-      kind: 'rejected',
-      message: `${code} matches ${entities.length} ${this.domainCode} records (${labels}). Merge them before loading this file.`,
+      kind: 'ambiguous',
+      via,
+      entities,
+      message: `${code} matches ${entities.length} ${this.domainCode} records (${labels}).`,
     };
   }
 }

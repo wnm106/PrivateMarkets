@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { dependencyLoadWaves } from '@/lib/feeds/load-order';
+import { EntityResolutionStep } from '@/components/feeds/EntityResolutionStep';
 import {
   TRANSFORM_OPTIONS,
   applyTarget,
@@ -14,6 +15,7 @@ import {
   type ColumnAssignment,
   type MappingTarget,
 } from '@/lib/feeds/suggest';
+import type { EntityResolution, EntityResolutionDecision } from '@tapestrai/mcp-server/src/feeds/types';
 
 interface ReferenceListCatalog {
   listCode: string;
@@ -143,6 +145,8 @@ export function LoadReview({
   onLoad,
   onReload,
   onClose,
+  resolutions = [],
+  onResolve,
 }: {
   fileId: string;
   fileName: string;
@@ -165,6 +169,8 @@ export function LoadReview({
   onLoad: () => void;
   onReload: () => void;
   onClose: () => void;
+  resolutions?: EntityResolution[];
+  onResolve?: (decisions: EntityResolutionDecision[]) => void;
 }) {
   const columnsRef = useRef<HTMLElement>(null);
   const baselineFile = useRef(fileId);
@@ -358,6 +364,10 @@ export function LoadReview({
             </p>
           )}
 
+          {resolutions.length > 0 && onResolve && (
+            <EntityResolutionStep resolutions={resolutions} applying={loading} onApply={onResolve} />
+          )}
+
           <section className="load-section">
             <div className="load-sh">
               <span className="load-step-n">1</span>
@@ -539,7 +549,7 @@ export function LoadReview({
               {reloading ? 'Reading file…' : 'Reload file'}
             </button>
             <button type="button" className="load-btn sec" disabled={loading || reloading} onClick={onClose}>Cancel</button>
-            <button type="button" className="load-btn" disabled={!ready || loading || reloading} onClick={onLoad}>
+            <button type="button" className={resolutions.length > 0 ? 'load-btn sec' : 'load-btn'} disabled={!ready || loading || reloading} onClick={onLoad}>
               {loading ? 'Loading…' : `Load ${loadCount.toLocaleString()} records`}
             </button>
           </span>

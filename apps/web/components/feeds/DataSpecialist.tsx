@@ -2,6 +2,8 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { EntityResolutionStep } from '@/components/feeds/EntityResolutionStep';
+import type { EntityResolution, EntityResolutionDecision } from '@tapestrai/mcp-server/src/feeds/types';
 
 interface Option {
   id: string;
@@ -121,6 +123,7 @@ interface SessionDetail extends SessionSummary {
     attributes: { created: number; updated: number; unchanged: number };
     warnings: string[];
     errors: string[];
+    resolutions?: EntityResolution[];
   } | null;
 }
 
@@ -165,6 +168,27 @@ export function DataSpecialist() {
   useEffect(() => {
     refreshLibrary().catch((err) => setError(err.message));
   }, []);
+
+  async function loadFile(decisions?: EntityResolutionDecision[]) {
+    if (!detail) return;
+    setBusy('load');
+    setError(null);
+    try {
+      const response = await fetch(`/api/feeds/specialist/${detail.id}/load`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolutions: decisions }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'The file could not be loaded');
+      show(body);
+      await refreshLibrary();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   function show(session: SessionDetail) {
     setDetail(session);
@@ -513,25 +537,18 @@ export function DataSpecialist() {
             {reading.blockedReasons.length > 0 && (
               <div className="filter-bar" style={{ marginBottom: 12 }}>{reading.blockedReasons[0]}</div>
             )}
+            {(detail.result?.resolutions || []).length > 0 && (
+              <EntityResolutionStep
+                resolutions={detail.result?.resolutions || []}
+                applying={busy === 'load'}
+                onApply={(decisions) => loadFile(decisions)}
+              />
+            )}
             <div className="filter-bar" style={{ flexWrap: 'wrap', gap: 8 }}>
               <button
                 className="btn btn-primary"
                 disabled={!ready || busy !== null}
-                onClick={async () => {
-                  setBusy('load');
-                  setError(null);
-                  try {
-                    const response = await fetch(`/api/feeds/specialist/${detail.id}/load`, { method: 'POST' });
-                    const body = await response.json();
-                    if (!response.ok) throw new Error(body.error || 'The file could not be loaded');
-                    show(body);
-                    await refreshLibrary();
-                  } catch (err: any) {
-                    setError(err.message);
-                  } finally {
-                    setBusy(null);
-                  }
-                }}
+                onClick={() => loadFile()}
               >
                 {busy === 'load' ? 'Loading…' : ready ? `Load as of ${reading.asOfDate}` : 'Load'}
               </button>

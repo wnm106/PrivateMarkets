@@ -18,6 +18,7 @@ interface InstanceSummary {
   errorMessage: string | null;
   mapName: string | null;
   mapSaved: boolean;
+  resolutions?: { domainCode: string; fileCode: string; fileName: string; asOf: string; via: 'code' | 'identifier' | 'name'; message: string; candidates: { id: string; code: string; name: string }[]; identifiers: { attributeCode: string; value: string }[] }[];
   runs: { startedAt: string; completedAt: string; asOfDate: string; status: string; created: number; matched: number; failed: number }[];
   resultSummary: {
     created: number;
@@ -61,6 +62,10 @@ function formatWhen(value: string | null) {
 }
 
 function resultText(instance: InstanceSummary) {
+  if (instance.status === 'NEEDS_RESOLUTION') {
+    const count = instance.resolutions?.length || 0;
+    return count ? `${count} ${count === 1 ? 'row matches' : 'rows match'} more than one record` : 'Needs a decision';
+  }
   if (!instance.resultSummary) return instance.status === 'READY' ? 'Stored, not processed' : instance.status;
   const summary = instance.resultSummary;
   const entities = summary.created === 0 && summary.failed === 0
@@ -216,7 +221,7 @@ export default function PositionFilePage() {
     }
   }
 
-  async function processInstance(instanceId: string, mappings?: ColumnAssignment[]) {
+  async function processInstance(instanceId: string, mappings?: ColumnAssignment[], resolutions?: { domainCode: string; fileCode: string; action: 'map' | 'create' | 'ignore'; entityId?: string }[]) {
     setBusy(instanceId);
     setError(null);
     try {
@@ -226,6 +231,7 @@ export default function PositionFilePage() {
         body: JSON.stringify({
           columnMappings: mappings,
           asOfDate: mappings ? chosenDate() : undefined,
+          resolutions,
         }),
       });
       const body = await response.json();
@@ -262,6 +268,8 @@ export default function PositionFilePage() {
           onAsOfDate={setAsOfDate}
           onChange={updateAssignment}
           onLoad={() => processInstance(detail.id, detail.columnMappings)}
+          resolutions={detail.resolutions}
+          onResolve={(decisions) => processInstance(detail.id, detail.columnMappings, decisions)}
           onReload={() => reloadFile(detail.id)}
           mapNote={detail.mapSaved
             ? `This file matches the saved map${detail.mapName ? ` ${detail.mapName}` : ''}. Columns already on that map are confirmed. Anything new still needs a decision, and loading updates the map.`

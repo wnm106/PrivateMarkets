@@ -102,6 +102,32 @@ export interface DomainLoadStats {
   errors: string[];
 }
 
+export interface ResolutionCandidate {
+  id: string;
+  code: string;
+  name: string;
+}
+
+/** A file row that matches more than one stored entity. The load waits for a decision. */
+export interface EntityResolution {
+  domainCode: string;
+  fileCode: string;
+  fileName: string;
+  asOf: string;
+  via: 'code' | 'identifier' | 'name';
+  message: string;
+  candidates: ResolutionCandidate[];
+  identifiers: { attributeCode: string; value: string }[];
+}
+
+export interface EntityResolutionDecision {
+  domainCode: string;
+  fileCode: string;
+  action: 'map' | 'create' | 'ignore';
+  /** Required when action is map. One of the candidate ids. */
+  entityId?: string;
+}
+
 export interface FeedLoadResult {
   mapCode: string;
   sourceCode: string;
@@ -115,4 +141,5 @@ export interface FeedLoadResult {
   normalizations: NormalizationHit[];
   warnings: string[];
   errors: string[];
+  resolutions: EntityResolution[];
 }
