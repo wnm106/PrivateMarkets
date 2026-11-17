@@ -611,7 +611,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
             <div className="da-sechead">
               <div>
                 <h2>Allocation grid</h2>
-                <p>The allocation engine caps each fund at its pro forma limit and spreads the rest of that tranche across the other eligible portfolios.</p>
+                <p>The allocation engine caps each fund at the lowest capacity of the compliance rules this security would worsen, and spreads the rest of that tranche across the other eligible portfolios.</p>
               </div>
               <div className="page-actions">
                 <button type="button" className="btn" onClick={() => setExpanded(new Set(preview.rows.filter((row) => row.level === 'PORTFOLIO').map((row) => row.fundId)))}>Expand all</button>

@@ -11,6 +11,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   allocate,
   type AllocationAdjustment,
+  type AllocationCapacityPool,
   type AllocationPortfolio,
   type AllocationRequest,
   type AllocationResult,
@@ -378,6 +379,7 @@ export async function loadAllocationDraft(
     });
   }
   portfolios.sort((left, right) => right.nav - left.nav || left.name.localeCompare(right.name));
+  await attachComplianceCapacity(supabase, portfolios, loadedTranches, deal.entity_code, asOf);
 
   const positions: LoadedPosition[] = [];
   const storedAdjustments: AllocationAdjustment[] = [];
@@ -431,6 +433,88 @@ export async function loadAllocationDraft(
     },
     faces,
   };
+}
+
+interface CapacityRow {
+  fund_id: string;
+  security_id: string;
+  rule_code: string;
+  rule_name: string;
+  capacity: number | string | null;
+  group_value: string | null;
+}
+
+/**
+ * Caps are the compliance rule capacities for each fund and security.
+ * The engine must not rebuild those limits from fund attributes.
+ */
+async function attachComplianceCapacity(
+  supabase: SupabaseClient,
+  portfolios: AllocationPortfolio[],
+  tranches: LoadedTranche[],
+  dealCode: string,
+  asOf: string,
+) {
+  const fundIds = [
+    ...portfolios.map((portfolio) => portfolio.id),
+    ...portfolios.flatMap((portfolio) => portfolio.sleeves.map((sleeve) => sleeve.id)),
+  ];
+  const securityIds = [...new Set(tranches.map((tranche) => tranche.securityId).filter((id): id is string => Boolean(id)))];
+  const tranchesForSecurity = new Map<string, string[]>();
+  for (const tranche of tranches) {
+    if (!tranche.securityId) continue;
+    const list = tranchesForSecurity.get(tranche.securityId) || [];
+    list.push(tranche.id);
+    tranchesForSecurity.set(tranche.securityId, list);
+  }
+  const empty = () => {
+    for (const portfolio of portfolios) {
+      portfolio.capacityPools = [];
+      for (const sleeve of portfolio.sleeves) sleeve.capacityPools = [];
+    }
+  };
+  if (!fundIds.length || !securityIds.length) {
+    empty();
+    return;
+  }
+  const { data, error } = await supabase.schema('compliance').rpc('fund_security_capacities', {
+    p_fund_ids: fundIds,
+    p_security_ids: securityIds,
+    p_as_of_date: asOf,
+    p_knowledge_date: new Date().toISOString(),
+    p_exclude_scenario: dealCode,
+  });
+  if (error) throw new Error(error.message);
+  const rows = (data || []) as CapacityRow[];
+  const poolsFor = (fundId: string): AllocationCapacityPool[] => {
+    const grouped = new Map<string, AllocationCapacityPool>();
+    for (const row of rows) {
+      if (row.fund_id !== fundId) continue;
+      const trancheIds = tranchesForSecurity.get(row.security_id) || [];
+      if (!trancheIds.length) continue;
+      const capacity = Number(row.capacity);
+      if (!Number.isFinite(capacity)) continue;
+      const key = `${row.rule_code}|${row.group_value ?? ''}`;
+      const existing = grouped.get(key);
+      if (!existing) {
+        grouped.set(key, {
+          trancheIds: [...trancheIds],
+          capacity,
+          ruleName: row.rule_name || row.rule_code,
+        });
+      } else {
+        existing.capacity = Math.min(existing.capacity, capacity);
+        for (const trancheId of trancheIds) {
+          if (!existing.trancheIds.includes(trancheId)) existing.trancheIds.push(trancheId);
+        }
+      }
+    }
+    return [...grouped.values()];
+  };
+  for (const portfolio of portfolios) {
+    portfolio.capacityPools = poolsFor(portfolio.id);
+    for (const sleeve of portfolio.sleeves) sleeve.capacityPools = poolsFor(sleeve.id);
+  }
 }
 
 export function previewFromDraft(draft: AllocationDraft): AllocationPreview {

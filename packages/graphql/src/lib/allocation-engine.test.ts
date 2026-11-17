@@ -229,6 +229,87 @@ describe('allocation engine', () => {
     expect(result.allocated).toBeGreaterThan(result.targetHold * 0.9);
   });
 
+  it('caps a fund at the lowest compliance-rule capacity and does not apply the fund limit on its own', () => {
+    const sleeveFor = (id: string) => ({
+      id, name: id, nav: 1000, cash: 400, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '',
+    });
+    const fund = (
+      id: string,
+      pools: AllocationPortfolio['capacityPools'],
+    ): AllocationPortfolio => ({
+      id,
+      name: id,
+      nav: 1000,
+      issuerLimit: 0.01,
+      sponsorLimit: 0.01,
+      unfundedLimit: 0.01,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['LOAN'],
+      denyNote: '',
+      sleeves: [sleeveFor(`${id}-main`)],
+      capacityPools: pools,
+    });
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [
+        fund('tight', [
+          { trancheIds: ['tl'], capacity: 30, ruleName: 'Single-issuer share of NAV' },
+          { trancheIds: ['tl'], capacity: 12, ruleName: 'Sector share of invested book' },
+        ]),
+        fund('roomy', [
+          { trancheIds: ['tl'], capacity: 500, ruleName: 'Single-issuer share of NAV' },
+        ]),
+      ],
+    });
+    expect(cell(result, 'tight', 'tl').amount).toBeCloseTo(12, 2);
+    expect(cell(result, 'tight', 'tl').capReason).toBe('Sector share of invested book');
+    expect(cell(result, 'roomy', 'tl').amount).toBeCloseTo(88, 2);
+    expect(result.allocated).toBeCloseTo(100, 2);
+  });
+
+  it('shares one compliance capacity across the securities in that rule and redistributes the residual', () => {
+    const sleeveFor = (id: string) => ({
+      id, name: id, nav: 1000, cash: 500, undrawn: 0, line: 0, reserve: 0,
+      allowed: ['LOAN', 'DELAYED_DRAW_TERM_LOAN'], denyNote: '',
+    });
+    const fund = (id: string, pools: AllocationPortfolio['capacityPools']): AllocationPortfolio => ({
+      id,
+      name: id,
+      nav: 1000,
+      issuerLimit: 1,
+      sponsorLimit: 1,
+      unfundedLimit: 1,
+      sponsorExposure: 0,
+      unfundedExposure: 0,
+      allowed: ['LOAN', 'DELAYED_DRAW_TERM_LOAN'],
+      denyNote: '',
+      sleeves: [sleeveFor(`${id}-main`)],
+      capacityPools: pools,
+    });
+    const shared = { trancheIds: ['tl', 'ddtl'], capacity: 20, ruleName: 'Single-issuer share of NAV' };
+    const unfunded = { trancheIds: ['ddtl'], capacity: 8, ruleName: 'Pro Forma Unfunded Commitments' };
+    const result = allocate({
+      tranches: [
+        { id: 'tl', name: 'Term Loan', size: 40, holdPct: 100, unfunded: false, instrumentType: 'LOAN' },
+        { id: 'ddtl', name: 'Delayed Draw', size: 40, holdPct: 100, unfunded: true, instrumentType: 'DELAYED_DRAW_TERM_LOAN' },
+      ],
+      portfolios: [
+        fund('tight', [shared, unfunded]),
+        fund('roomy', [
+          { trancheIds: ['tl', 'ddtl'], capacity: 500, ruleName: 'Single-issuer share of NAV' },
+          { trancheIds: ['ddtl'], capacity: 500, ruleName: 'Pro Forma Unfunded Commitments' },
+        ]),
+      ],
+    });
+    const tightLoan = cell(result, 'tight', 'tl').amount;
+    const tightDraw = cell(result, 'tight', 'ddtl').amount;
+    expect(tightDraw).toBeLessThanOrEqual(8.02);
+    expect(tightLoan + tightDraw).toBeCloseTo(20, 1);
+    expect(cell(result, 'roomy', 'tl').amount + cell(result, 'roomy', 'ddtl').amount).toBeCloseTo(60, 1);
+    expect(result.allocated).toBeCloseTo(80, 2);
+  });
+
   it('removes an excluded portfolio and leaves the warrant off a fund that cannot hold it', () => {
     const result = allocate(halyard([
       { fundId: 'poc', trancheId: '*', type: 'exclude', reason: 'MAND' },
