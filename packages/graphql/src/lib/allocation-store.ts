@@ -26,7 +26,7 @@ const VALUE_CODES = [
   'TRANCHE_PRICING', 'TRANCHE_CALL_PROTECTION', 'TRANCHE_TICKING_FEE_PCT', 'TRANCHE_WARRANT_COVERAGE_PCT',
   'INSTRUMENT_TYPE',
   'NAV', 'FUND_CASH_BALANCE', 'FUND_UNDRAWN_COMMITMENTS', 'FUND_CREDIT_LINE_HEADROOM', 'FUND_PIPELINE_RESERVE',
-  'FUND_ALLOWED_INSTRUMENT_TYPES', 'FUND_MANDATE_NOTE',
+  'FUND_ALLOWED_INSTRUMENT_TYPES', 'FUND_MANDATE_NOTE', 'FUND_IS_ALLOCATION_ELIGIBLE',
   'FUND_SINGLE_ISSUER_LIMIT_PCT', 'FUND_SPONSOR_LIMIT_PCT', 'FUND_UNFUNDED_LIMIT_PCT',
   'POSITION_IS_HYPOTHETICAL', 'POSITION_ALLOCATION_ADJUSTMENT', 'POSITION_ALLOCATION_REASON',
   'POSITION_ALLOCATION_NOTE', 'POSITION_ALLOCATION_ROLE', 'POSITION_ALLOCATION_CAP', 'MARKET_VALUE',
@@ -352,23 +352,28 @@ export async function loadAllocationDraft(
     };
   };
 
+  const allocationEligible = (id: string) => flag(read(values, id, def('FUND_IS_ALLOCATION_ELIGIBLE')));
   const portfolios: AllocationPortfolio[] = [];
   const portfolioIds = new Set<string>();
   for (const fund of funds) {
-    if (parentOf.has(fund.id)) continue;
-    const issuerLimit = numeric(read(values, fund.id, def('FUND_SINGLE_ISSUER_LIMIT_PCT')));
-    if (issuerLimit == null) continue;
+    if (!allocationEligible(fund.id)) continue;
+    const parentId = parentOf.get(fund.id);
+    if (parentId && allocationEligible(parentId)) continue;
     const allowed = list(read(values, fund.id, def('FUND_ALLOWED_INSTRUMENT_TYPES')));
-    const childIds = childrenOf.get(fund.id) || [];
-    if (!allowed.length && !childIds.length) continue;
+    const issuerLimit = numeric(read(values, fund.id, def('FUND_SINGLE_ISSUER_LIMIT_PCT')));
+    const childIds = (childrenOf.get(fund.id) || []).filter((id) => allocationEligible(id));
     const sleeves = childIds.map((id) => sleeve(id, allowed)).filter((item): item is AllocationSleeve => Boolean(item));
+    if (!sleeves.length) {
+      const self = sleeve(fund.id, allowed);
+      if (self) sleeves.push(self);
+    }
     if (!sleeves.length) continue;
     portfolioIds.add(fund.id);
     portfolios.push({
       id: fund.id,
       name: fund.entity_name,
       nav: numeric(read(values, fund.id, def('NAV'))) || sleeves.reduce((total, item) => total + item.nav, 0),
-      issuerLimit: issuerLimit / 100,
+      issuerLimit: issuerLimit == null ? Number.POSITIVE_INFINITY : issuerLimit / 100,
       sponsorLimit: limitFraction(read(values, fund.id, def('FUND_SPONSOR_LIMIT_PCT'))),
       unfundedLimit: limitFraction(read(values, fund.id, def('FUND_UNFUNDED_LIMIT_PCT'))),
       sponsorExposure: 0,

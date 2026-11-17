@@ -77,6 +77,31 @@ function cell(result: ReturnType<typeof allocate>, fundId: string, trancheId: st
 }
 
 describe('allocation engine', () => {
+  it('lists a fund with no child funds as one row', () => {
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 10, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [{
+        id: 'solo',
+        name: 'Solo',
+        nav: 100,
+        issuerLimit: 1,
+        sponsorLimit: 1,
+        unfundedLimit: 1,
+        sponsorExposure: 0,
+        unfundedExposure: 0,
+        allowed: ['LOAN'],
+        denyNote: '',
+        sleeves: [{
+          id: 'solo', name: 'Solo', nav: 100, cash: 50, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '',
+        }],
+      }],
+    });
+    const rows = result.rows.filter((row) => row.fundId === 'solo');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].level).toBe('PORTFOLIO');
+    expect(rows[0].total).toBeCloseTo(10, 2);
+  });
+
   it('places the Halyard hold inside each fund mandate and keeps sleeve amounts inside the portfolio', () => {
     const result = allocate(halyard());
     expect(result.facilitySize).toBe(210);

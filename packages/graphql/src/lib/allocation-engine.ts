@@ -612,6 +612,7 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
       }),
     });
     portfolio.sleeves.forEach((sleeve, sleeveIndex) => {
+      if (sleeve.id === portfolio.id) return;
       const sleeveEligibleFlags = tranches.map((_, trancheIndex) => sleeveEligible(portfolio, sleeve, trancheIndex));
       const sleeveCapResult = sleeveCap(portfolio, sleeve);
       rows.set(sleeve.id, {
@@ -687,6 +688,7 @@ export function allocate(request: AllocationRequest): AllocationResult {
       cells: request.tranches.map((tranche, index) => cellFrom(tranche.id, portfolioRow, systemRow, index)),
     });
     for (const sleeve of portfolio.sleeves) {
+      if (sleeve.id === portfolio.id) continue;
       const sleeveRow = final.rows.get(sleeve.id);
       if (!sleeveRow) continue;
       rows.push({
