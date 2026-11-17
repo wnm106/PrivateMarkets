@@ -6,7 +6,8 @@ import { browserSessionIsActive } from '@/lib/auth-token';
 import { loginPath } from '@/lib/safe-next-path';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
 
-const PUBLIC_PATHS = ['/welcome', '/login', '/no-access', '/auth/callback'];
+// Keep in step with PUBLIC_PATHS in middleware.ts. /portal is a form opened by its private link, with no sign-in.
+const PUBLIC_PATHS = ['/welcome', '/login', '/no-access', '/auth/callback', '/portal'];
 
 /**
  * Middleware sends a full request with no session to the login page.
