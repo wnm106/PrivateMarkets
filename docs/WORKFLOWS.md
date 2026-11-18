@@ -467,3 +467,4 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 - Approvals in a set order (first a preparer, then a checker). Approvals are counted, in any order.
 - A form field that is a file upload.
 - Promoting a workflow between environments in one step. Export and Import move it as a file.
+- The demo briefs (morning quality, Halyard single-name, Brightwater close, Harbor NAV, CLO coverage, Halyard cash) only report. They are published for one client by `scripts/publish-bill-demo-workflows.mts`.
