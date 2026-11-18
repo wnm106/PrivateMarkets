@@ -9,15 +9,6 @@ scalar JSON
 scalar UUID
 
 # Enums
-enum DomainType {
-  FUND
-  ISSUER
-  DEAL
-  SECURITY
-  PRICE
-  POSITION
-}
-
 enum SourceType {
   VENDOR
   INTERNAL
@@ -302,7 +293,7 @@ type DQRule {
   id: ID!
   ruleCode: String!
   ruleName: String!
-  domainCode: DomainType
+  domainCode: String
   attributeCode: String
   ruleType: DQRuleType!
   severity: DQSeverity!
@@ -324,7 +315,7 @@ type DQException {
   entityId: ID!
   entityCode: String!
   entityName: String!
-  domainCode: DomainType!
+  domainCode: String!
   attributeId: ID
   attributeCode: String
   attributeName: String
@@ -369,7 +360,7 @@ type DQExceptionEdge {
 input DQRuleFilter {
   ruleCode: StringFilter
   ruleName: StringFilter
-  domainCode: DomainType
+  domainCode: String
   ruleType: DQRuleType
   severity: DQSeverity
   isActive: Boolean
@@ -379,7 +370,7 @@ input DQExceptionFilter {
   ruleId: IDFilter
   entityId: IDFilter
   entityCode: StringFilter
-  domainCode: DomainType
+  domainCode: String
   attributeCode: StringFilter
   exceptionType: StringFilter
   severity: DQSeverity
@@ -391,7 +382,7 @@ input DQExceptionFilter {
 input CreateDQRuleInput {
   ruleCode: String!
   ruleName: String!
-  domainCode: DomainType
+  domainCode: String
   attributeCode: String
   ruleType: DQRuleType!
   severity: DQSeverity!
@@ -405,7 +396,7 @@ input CreateDQRuleInput {
 input UpdateDQRuleInput {
   id: ID!
   ruleName: String
-  domainCode: DomainType
+  domainCode: String
   attributeCode: String
   ruleType: DQRuleType
   severity: DQSeverity
@@ -1664,7 +1655,7 @@ type ReorderTemplateAttributesResult {
 # Scalar for JSON objects
 scalar JSONObject
 
-# Domain Type Record (distinct from DomainType enum, used for managing domain types)
+# Domain Type Record (used for managing domain types)
 type DomainGroup {
   id: ID!
   groupCode: String!

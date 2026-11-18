@@ -261,7 +261,7 @@ type UpdateTemplateSourcePreferenceResult {
 # Scalar for JSON objects
 scalar JSONObject
 
-# Domain Type Record (distinct from DomainType enum, used for managing domain types)
+# Domain Type Record (used for managing domain types)
 type DomainGroup {
   id: ID!
   groupCode: String!

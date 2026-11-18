@@ -5,15 +5,6 @@ scalar JSON
 scalar UUID
 
 # Enums
-enum DomainType {
-  FUND
-  ISSUER
-  DEAL
-  SECURITY
-  PRICE
-  POSITION
-}
-
 enum SourceType {
   VENDOR
   INTERNAL
