@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter, IBM_Plex_Mono } from 'next/font/google';
 import { AppChrome } from '@/components/layout/AppChrome';
 import { AuthSync } from '@/components/auth/AuthSync';
+import { loadSurfaceNavLinks } from '@/lib/surface-access-server';
 import '../styles/globals.css';
 
 // Single UI face: Inter has tabular numerals and stays legible at 11-13px in dense grids.
@@ -24,16 +25,17 @@ export const metadata: Metadata = {
   description: 'Bi-temporal financial Master Data Management platform for private markets investments',
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const surfaceLinks = await loadSurfaceNavLinks();
   return (
     <html lang="en" className={`${inter.variable} ${ibmPlexMono.variable}`}>
       <body>
         <AuthSync />
-        <AppChrome>{children}</AppChrome>
+        <AppChrome surfaceLinks={surfaceLinks}>{children}</AppChrome>
       </body>
     </html>
   );

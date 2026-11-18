@@ -207,8 +207,10 @@ describe('reviewRouting', () => {
       escalateRoles: ['HEAD_OF_OPS'],
       approvals: 1,
       reassignWhenOverdue: false,
+      routeToOwners: true,
+      activity: null,
     });
-    expect(reviewRouting({ separateReviewer: false, dueInHours: 0, approvals: '2', reassignWhenOverdue: true })).toEqual({
+    expect(reviewRouting({ separateReviewer: false, dueInHours: 0, approvals: '2', reassignWhenOverdue: true, routeToOwners: false, activity: 'reconciliation' })).toEqual({
       people: [],
       roles: [],
       separateReviewer: false,
@@ -216,6 +218,8 @@ describe('reviewRouting', () => {
       escalateRoles: [],
       approvals: 2,
       reassignWhenOverdue: true,
+      routeToOwners: false,
+      activity: 'RECONCILIATION',
     });
     expect(reviewRouting({ approvals: 9 }).approvals).toBe(5);
   });

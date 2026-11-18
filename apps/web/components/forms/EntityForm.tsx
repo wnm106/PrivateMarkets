@@ -323,13 +323,13 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel, form
           <>
             <div className="field-section">
               <div className="field-section-head">
-                <div className="field-section-name">{parentSlots.length > 0 ? 'Other parent relationships' : 'Parent relationships'}</div>
+                <div className="field-section-name">{parentSlots.length > 0 ? 'Other records that link to this one' : 'Records that link to this one'}</div>
               </div>
               <div className="builder-body">
                 <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginBottom: '10px' }}>
                   {parentSlots.length > 0
-                    ? 'Additional records this one belongs to.'
-                    : 'The issuer a security belongs to, or the fund a position is held in.'}
+                    ? 'Additional records that carry a link to this one.'
+                    : 'Records that carry a link to this one, such as the statement periods of an issuer.'}
                 </div>
                 <RelationshipEditor
                   entries={formData.parentRelationships.filter((entry: RelationshipEntry) => !slottedCodes.has(entry.relationshipCode.toUpperCase()))}
@@ -349,11 +349,11 @@ export function EntityForm({ domain, mode, initialData, onSubmit, onCancel, form
 
             <div className="field-section">
               <div className="field-section-head">
-                <div className="field-section-name">Child relationships</div>
+                <div className="field-section-name">Records this one links to</div>
               </div>
               <div className="builder-body">
                 <div style={{ fontSize: '12px', color: 'var(--ink-3)', marginBottom: '10px' }}>
-                  Deals or positions that belong to this record.
+                  Records this one points to, such as the issuer of a security.
                 </div>
                 <RelationshipEditor
                   entries={formData.childRelationships.filter((entry: RelationshipEntry) => !slottedCodes.has(entry.relationshipCode.toUpperCase()))}

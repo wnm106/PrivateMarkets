@@ -58,6 +58,8 @@ export interface ReviewRow {
   /** People the step named who could not be given it, and why. Only set when it is opened. */
   unassignable?: Array<{ person: string; reason: string }>;
   dueAt?: string | null;
+  /** STEP when the step named who reviews, RESPONSIBILITY when it went to the people responsible for the records. */
+  assignmentSource?: string | null;
 }
 
 export interface LoadedRun {
@@ -323,11 +325,14 @@ async function runReview(node: WorkflowNode, ctx: StepContext): Promise<StepOutc
       const counts = proposalCounts(proposal);
       const names = review.assignees || [];
       const who = names.length > 0 ? names.join(', ') : 'a person';
-      await store.event(ctx.run.id, node.id, 'review.requested', 'SYSTEM', null, `Waiting for ${who} to review ${counts.total} proposed change${counts.total === 1 ? '' : 's'}`, {
+      const owners = review.assignmentSource === 'RESPONSIBILITY' && names.length > 0;
+      const why = owners ? `, who ${names.length === 1 ? 'is' : 'are'} responsible for these records,` : '';
+      await store.event(ctx.run.id, node.id, 'review.requested', 'SYSTEM', null, `Waiting for ${who}${why} to review ${counts.total} proposed change${counts.total === 1 ? '' : 's'}`, {
         reviewId: review.id,
         counts,
         assignees: names,
         dueAt: review.dueAt ?? null,
+        ...(owners ? { assignmentSource: 'RESPONSIBILITY' } : {}),
       });
       if (review.unassignable && review.unassignable.length > 0) {
         await store.event(

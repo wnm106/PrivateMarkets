@@ -41,6 +41,19 @@ export interface ComponentOverlay {
   experienceCode: string | null;
 }
 
+/**
+ * What the surface held before the save, for the fields the editor does not
+ * carry. Without it every save would reset them.
+ */
+export interface PriorCatalog {
+  /** Tab description by slot code. */
+  slotDescriptions: ReadonlyMap<string, string | null>;
+  /** Layout by `${slotCode}/${variantCode}`. */
+  variants: ReadonlyMap<string, { name: string; description: string | null }>;
+  /** The surface owner's components by component code. */
+  components: ReadonlyMap<string, { name: string; description: string | null; displayOrder: number }>;
+}
+
 interface RuleCondition {
   attributeCode: string;
   operator: 'equals' | 'not_equals';
@@ -87,6 +100,17 @@ export interface CatalogPayload {
 }
 
 const BASELINE = 'BASELINE';
+const SLOT_ALWAYS = 'On every record.';
+const SLOT_WHEN = 'Only when the rule qualifies.';
+
+/** A description someone wrote is kept. One this module generated follows the tab's new state. */
+function keptSlotDescription(prior: string | null | undefined): string | null {
+  return prior && prior !== SLOT_ALWAYS && prior !== SLOT_WHEN ? prior : null;
+}
+
+function keptDescription(prior: { name: string; description: string | null } | undefined): string | null {
+  return prior?.description && prior.description !== prior.name ? prior.description : null;
+}
 
 export function asTabs(raw: unknown): TabInput[] {
   if (!Array.isArray(raw) || raw.length === 0) {
@@ -131,6 +155,7 @@ export function buildCatalogPayload(
     /** Host panel each component or slot code mounted before the save. */
     panelByCode: ReadonlyMap<string, string | null>;
     overlays: readonly ComponentOverlay[];
+    prior?: PriorCatalog;
   },
 ): CatalogPayload {
   const payload: CatalogPayload = {
@@ -176,7 +201,8 @@ export function buildCatalogPayload(
     payload.slots.push({
       code: slotCode,
       name,
-      description: optionality === 'when_qualified' ? 'Only when the rule qualifies.' : 'On every record.',
+      description: keptSlotDescription(options.prior?.slotDescriptions.get(slotCode))
+        ?? (optionality === 'when_qualified' ? SLOT_WHEN : SLOT_ALWAYS),
       display_order: index + 1,
       optionality,
     });
@@ -204,11 +230,12 @@ export function buildCatalogPayload(
       }
 
       const code = layouts.length === 1 ? slotCode : `${slotCode}_${layoutIndex + 1}`;
+      const priorComponent = options.prior?.components.get(code);
       payload.variants.push({
         slot_code: slotCode,
         code,
         name: layoutName,
-        description: layoutName,
+        description: keptDescription(options.prior?.variants.get(`${slotCode}/${code}`)) ?? layoutName,
         priority: mode === 'everyone' ? 100 : 10 + layoutIndex,
         required: [gateCode, layoutCode].filter((entry): entry is string => Boolean(entry)),
       });
@@ -218,8 +245,8 @@ export function buildCatalogPayload(
         experience_code: layoutCode ?? gateCode ?? BASELINE,
         code,
         name: layoutName,
-        description: layoutName,
-        display_order: layoutIndex + 1,
+        description: keptDescription(priorComponent) ?? layoutName,
+        display_order: priorComponent?.displayOrder ?? layoutIndex + 1,
         client_id: options.surfaceClientId,
         panel_key: options.panelByCode.get(code) ?? options.panelByCode.get(slotCode) ?? null,
         is_active: true,

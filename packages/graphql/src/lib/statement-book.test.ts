@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyStatementLayout,
   gridSections,
   headlineAttributes,
   linesForSection,
+  mergeStatementLayouts,
   projectStatementBook,
   statementAttributesFromRegister,
   type RegisterAttribute,
@@ -201,6 +203,45 @@ describe('statement attributes', () => {
     expect(book.columns[4].values.RETAINED).toBe(150);
   });
 
+
+  it('shows only the lines a template assigns and still calculates from the rest', () => {
+    const laid = applyStatementLayout(catalog, {
+      name: 'Services borrower',
+      lines: [
+        { code: 'REV', label: 'Net sales', order: 1 },
+        { code: 'GP', order: 2 },
+        { code: 'EBITDA', order: 3 },
+      ],
+    });
+    expect(linesForSection(laid, 'Income statement', 'quarter').map((attr) => attr.name)).toEqual(['Net sales', 'Gross profit', 'EBITDA']);
+    expect(gridSections(laid, [])).toEqual(['Income statement']);
+    expect(headlineAttributes(laid)).toEqual([]);
+    const book = projectStatementBook(periods(), laid, '2025-03-31', 'quarter');
+    expect(book.columns[4].values.GP).toBe(160);
+    expect(book.columns[4].values.EBITDA).toBe(140);
+  });
+
+  it('keeps the catalog order when a template has none, and drops a heading left with no lines', () => {
+    const everything = catalog.map((attr) => ({ code: attr.code, order: 0 }));
+    expect(linesForSection(applyStatementLayout(catalog, { lines: everything }), 'Income statement', 'quarter').map((attr) => attr.code))
+      .toEqual(linesForSection(catalog, 'Income statement', 'quarter').map((attr) => attr.code));
+    const headingOnly = applyStatementLayout(catalog, {
+      lines: catalog.filter((attr) => attr.section === 'Income statement' || attr.role === 'section').map((attr) => ({ code: attr.code })),
+    });
+    expect(gridSections(headingOnly, [])).toEqual(['Income statement']);
+    expect(applyStatementLayout(catalog, null)).toBe(catalog);
+  });
+
+  it('merges the layouts of a borrower whose periods changed template', () => {
+    const merged = mergeStatementLayouts([
+      { name: 'Old', lines: [{ code: 'REV', label: 'Revenue' }, { code: 'COGS' }] },
+      { name: 'New', lines: [{ code: 'REV', label: 'Net sales' }, { code: 'GP' }] },
+    ]);
+    expect(merged?.name).toBe('New');
+    expect(merged?.lines.map((line) => line.code).sort()).toEqual(['COGS', 'GP', 'REV']);
+    expect(merged?.lines.find((line) => line.code === 'REV')?.label).toBe('Net sales');
+    expect(mergeStatementLayouts([{ lines: [] }])).toBeNull();
+  });
 
   it('keeps the statement period on each column so a cell can open that record', () => {
     const sourced = periods().map((period, index) => ({ ...period, entityId: `period-${index}`, entityName: period.end }));

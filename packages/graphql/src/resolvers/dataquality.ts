@@ -1,7 +1,34 @@
+import { GraphQLResolveInfo, Kind, SelectionSetNode } from 'graphql';
 import { Context } from '../context';
 
 function dq(context: Context) {
   return context.supabase.schema('data_quality');
+}
+
+const AVAILABILITY_LISTS = new Set(['missingEntities', 'resolvedEntities', 'introducedEntities']);
+
+/** Field names selected under a selection set, following fragments. */
+function selectedFields(set: SelectionSetNode | undefined, info: GraphQLResolveInfo, out = new Map<string, SelectionSetNode | undefined>()) {
+  for (const selection of set?.selections || []) {
+    if (selection.kind === Kind.FIELD) out.set(selection.name.value, selection.selectionSet);
+    else if (selection.kind === Kind.INLINE_FRAGMENT) selectedFields(selection.selectionSet, info, out);
+    else selectedFields(info.fragments[selection.name.value]?.selectionSet, info, out);
+  }
+  return out;
+}
+
+/** The record lists this query reads. The dashboard skips building the ones it does not. */
+function dashboardSections(info: GraphQLResolveInfo): string[] {
+  const sections: string[] = [];
+  for (const node of info.fieldNodes) {
+    const fields = selectedFields(node.selectionSet, info);
+    if (fields.has('entities') && !sections.includes('entities')) sections.push('entities');
+    const availability = selectedFields(fields.get('availability'), info);
+    if ([...availability.keys()].some((name) => AVAILABILITY_LISTS.has(name)) && !sections.includes('availabilityEntities')) {
+      sections.push('availabilityEntities');
+    }
+  }
+  return sections;
 }
 
 export const dataQualityResolvers = {
@@ -83,8 +110,26 @@ export const dataQualityResolvers = {
       };
     },
 
-    dataQualityDashboard: async (_: any, args: { domainCode?: string | null; fromDate?: string | null; toDate?: string | null; knowledgeDate?: string | null; entityId?: string | null }, context: Context) => {
+    dataQualityDashboard: async (_: any, args: { domainCode?: string | null; fromDate?: string | null; toDate?: string | null; knowledgeDate?: string | null; entityId?: string | null }, context: Context, info: GraphQLResolveInfo) => {
       const { data, error } = await context.supabase.rpc('data_quality_dashboard', {
+        p_domain_code: args.domainCode || null,
+        p_from_date: args.fromDate || null,
+        p_to_date: args.toDate || null,
+        p_knowledge_date: args.knowledgeDate || null,
+        p_entity_id: args.entityId || null,
+        p_sections: dashboardSections(info),
+      });
+      if (error) throw error;
+      return data;
+    },
+
+    dqAvailabilityDetail: async (
+      _: any,
+      args: { attributeCode: string; domainCode?: string | null; fromDate?: string | null; toDate?: string | null; knowledgeDate?: string | null; entityId?: string | null },
+      context: Context,
+    ) => {
+      const { data, error } = await context.supabase.rpc('dq_availability_detail', {
+        p_attribute_code: args.attributeCode,
         p_domain_code: args.domainCode || null,
         p_from_date: args.fromDate || null,
         p_to_date: args.toDate || null,
@@ -92,7 +137,12 @@ export const dataQualityResolvers = {
         p_entity_id: args.entityId || null,
       });
       if (error) throw error;
-      return data;
+      const detail = (data || {}) as { missingEntities?: unknown[]; resolvedEntities?: unknown[]; introducedEntities?: unknown[] };
+      return {
+        missingEntities: detail.missingEntities || [],
+        resolvedEntities: detail.resolvedEntities || [],
+        introducedEntities: detail.introducedEntities || [],
+      };
     },
 
     dqExceptions: async (_: any, args: any, context: Context) => {

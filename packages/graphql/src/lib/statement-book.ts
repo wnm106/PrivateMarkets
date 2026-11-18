@@ -236,6 +236,70 @@ export function statementAttributesFromRegister(rows: RegisterAttribute[]): Stat
   });
 }
 
+export interface StatementLayoutLine {
+  code: string;
+  label?: string | null;
+  order?: number | null;
+  section?: string | null;
+}
+
+/** The lines a template assigns, with the wording and order that template uses. */
+export interface StatementLayout {
+  name?: string | null;
+  lines: StatementLayoutLine[];
+}
+
+/**
+ * One layout from several, for a borrower whose periods changed template.
+ * Every line any of them lists is kept. The last layout sets wording and order.
+ */
+export function mergeStatementLayouts(layouts: StatementLayout[]): StatementLayout | null {
+  const usable = layouts.filter((layout) => layout.lines.length > 0);
+  if (usable.length === 0) return null;
+  const lines = new Map<string, StatementLayoutLine>();
+  for (const layout of usable) {
+    for (const line of layout.lines) lines.set(line.code, line);
+  }
+  return { name: usable[usable.length - 1].name ?? null, lines: [...lines.values()] };
+}
+
+/**
+ * Show only the lines a template assigns. A line the template leaves out stays
+ * in the list as a caption, so a subtotal that depends on it still calculates.
+ * A heading with no line left under it is dropped with its lines.
+ */
+export function applyStatementLayout(attributes: StatementAttribute[], layout: StatementLayout | null | undefined): StatementAttribute[] {
+  if (!layout || layout.lines.length === 0) return attributes;
+  const lines = new Map(layout.lines.map((line) => [line.code, line]));
+  const orders = layout.lines.map((line) => line.order).filter((order): order is number => typeof order === 'number' && Number.isFinite(order));
+  // A template that never set an order leaves every line at the same number.
+  const ordered = orders.length === layout.lines.length && new Set(orders).size > 1;
+
+  const laid = attributes.map((attr): StatementAttribute => {
+    const line = lines.get(attr.code);
+    if (!line) return attr.dataType === 'DATE' ? attr : { ...attr, placement: 'caption' };
+    return {
+      ...attr,
+      name: (line.label || '').trim() || attr.name,
+      order: ordered ? (line.order as number) : attr.order,
+      section: (line.section || '').trim() || attr.section,
+    };
+  });
+
+  const empty = new Set<string>();
+  for (const section of new Set(laid.map((attr) => attr.section))) {
+    const rows = laid
+      .filter((attr) => attr.section === section && isGridLine(attr))
+      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    rows.forEach((row, index) => {
+      if (row.role !== 'section') return;
+      const next = rows[index + 1];
+      if (!next || next.role === 'section') empty.add(row.code);
+    });
+  }
+  return empty.size === 0 ? laid : laid.map((attr) => (empty.has(attr.code) ? { ...attr, placement: 'caption' } : attr));
+}
+
 export function isGridLine(attr: StatementAttribute): boolean {
   if (attr.placement !== 'grid' && attr.placement !== 'both') return false;
   if (attr.role === 'section') return true;

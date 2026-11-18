@@ -563,6 +563,7 @@ export const RELATIONSHIP_TYPES_QUERY = `
       compositeKey
       description
       isActive
+      templateFromSide
       clientId
       clientName
     }
@@ -1699,7 +1700,9 @@ export const STALE_ATTRIBUTES_QUERY = `
   }
 `;
 
-export const DATA_QUALITY_DASHBOARD_QUERY = `
+// Counts and failing records load first. The per-record list is added only when the Entity view asks for it,
+// and the records behind a required attribute are fetched when its row is opened.
+const dataQualityDashboardQuery = (entityRows: string) => `
   query DataQualityDashboard($domainCode: String, $fromDate: Date, $toDate: Date, $knowledgeDate: DateTime, $entityId: ID) {
     dataQualityDashboard(domainCode: $domainCode, fromDate: $fromDate, toDate: $toDate, knowledgeDate: $knowledgeDate, entityId: $entityId) {
       fromDate
@@ -1736,10 +1739,6 @@ export const DATA_QUALITY_DASHBOARD_QUERY = `
         availabilityPercent
         resolvedCount
         introducedCount
-        missingEntities { id entityCode entityName domainCode }
-        resolvedEntities { id entityCode entityName domainCode previousValue currentValue }
-        introducedEntities { id entityCode entityName domainCode previousValue currentValue }
-        entities { id entityCode entityName domainCode value }
       }
       quality {
         ruleId
@@ -1786,7 +1785,11 @@ export const DATA_QUALITY_DASHBOARD_QUERY = `
         priorityValue
         ready
       }
-      entities {
+${entityRows}    }
+  }
+`;
+
+const DATA_QUALITY_ENTITY_ROWS = `      entities {
         id
         entityCode
         entityName
@@ -1809,6 +1812,17 @@ export const DATA_QUALITY_DASHBOARD_QUERY = `
         overrideMatchCount
         overrideCount
       }
+`;
+
+export const DATA_QUALITY_DASHBOARD_QUERY = dataQualityDashboardQuery('');
+export const DATA_QUALITY_DASHBOARD_WITH_ENTITIES_QUERY = dataQualityDashboardQuery(DATA_QUALITY_ENTITY_ROWS);
+
+export const DQ_AVAILABILITY_DETAIL_QUERY = `
+  query DQAvailabilityDetail($attributeCode: String!, $domainCode: String, $fromDate: Date, $toDate: Date, $knowledgeDate: DateTime, $entityId: ID) {
+    dqAvailabilityDetail(attributeCode: $attributeCode, domainCode: $domainCode, fromDate: $fromDate, toDate: $toDate, knowledgeDate: $knowledgeDate, entityId: $entityId) {
+      missingEntities { id entityCode entityName domainCode }
+      resolvedEntities { id entityCode entityName domainCode previousValue currentValue }
+      introducedEntities { id entityCode entityName domainCode previousValue currentValue }
     }
   }
 `;

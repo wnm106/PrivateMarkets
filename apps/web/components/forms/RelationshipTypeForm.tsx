@@ -21,6 +21,7 @@ interface FormData {
   compositeKey: string[];
   description: string;
   isRequired: boolean;
+  templateFromSide: '' | 'PARENT' | 'CHILD';
 }
 
 export function RelationshipTypeForm({ 
@@ -48,6 +49,7 @@ export function RelationshipTypeForm({
     compositeKey: initialData?.compositeKey || [],
     description: initialData?.description || '',
     isRequired: initialData?.isRequired || false,
+    templateFromSide: initialData?.templateFromSide || '',
   });
   
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -64,6 +66,7 @@ export function RelationshipTypeForm({
         compositeKey: initialData.compositeKey || [],
         description: initialData.description || '',
         isRequired: initialData.isRequired || false,
+        templateFromSide: initialData.templateFromSide || '',
       });
     }
   }, [initialData]);
@@ -89,10 +92,15 @@ export function RelationshipTypeForm({
   const handleSubmit = () => {
     if (validate()) {
       // Remove isRequired - not in GraphQL schema
-      const { isRequired, ...submitData } = formData;
+      const { isRequired, templateFromSide, ...rest } = formData;
+      const submitData = { ...rest, templateFromSide: templateFromSide || null };
       onSubmit(mode === 'create' ? { ...submitData, clientId } : submitData);
     }
   };
+
+  const nameOf = (code: string, fallback: string) => domains.find((d) => d.domainCode === code)?.domainName || fallback;
+  const fromName = nameOf(formData.parentDomainCode, 'From');
+  const toName = nameOf(formData.childDomainCode, 'To');
 
   return (
     <div className="builder-card">
@@ -125,7 +133,7 @@ export function RelationshipTypeForm({
           </div>
           
           <div className="field">
-            <label>Parent Domain *</label>
+            <label>From entity type *</label>
             <select
               className={`select ${errors.parentDomainCode ? 'error' : ''}`}
               value={formData.parentDomainCode}
@@ -137,10 +145,11 @@ export function RelationshipTypeForm({
               ))}
             </select>
             {errors.parentDomainCode && <span>{errors.parentDomainCode}</span>}
+            <small className="field-hint">The record that carries the link, such as a statement period.</small>
           </div>
           
           <div className="field">
-            <label>Child Domain *</label>
+            <label>To entity type *</label>
             <select
               className={`select ${errors.childDomainCode ? 'error' : ''}`}
               value={formData.childDomainCode}
@@ -152,6 +161,7 @@ export function RelationshipTypeForm({
               ))}
             </select>
             {errors.childDomainCode && <span>{errors.childDomainCode}</span>}
+            <small className="field-hint">The record it points to, such as the issuer.</small>
           </div>
           
           <div className="field">
@@ -167,10 +177,10 @@ export function RelationshipTypeForm({
               <option value="COMPOSITE">Composite</option>
             </select>
             <small className="field-hint">
-              {formData.cardinality === 'COMPOSITE' && 'Multiple child domains form a single relationship'}
-              {formData.cardinality === 'ONE_TO_MANY' && 'One parent can have multiple children'}
-              {formData.cardinality === 'MANY_TO_ONE' && 'Multiple parents can reference one child'}
-              {formData.cardinality === 'ONE_TO_ONE' && 'Single parent to single child'}
+              {formData.cardinality === 'COMPOSITE' && 'Several entity types together form a single relationship'}
+              {formData.cardinality === 'ONE_TO_MANY' && `One ${fromName} record can link to many ${toName} records`}
+              {formData.cardinality === 'MANY_TO_ONE' && `Many ${fromName} records can link to one ${toName} record`}
+              {formData.cardinality === 'ONE_TO_ONE' && `One ${fromName} record links to one ${toName} record`}
             </small>
           </div>
           
@@ -182,15 +192,31 @@ export function RelationshipTypeForm({
                 onChange={(e) => handleChange('isRequired', e.target.checked)}
                 style={{ width: '16px', height: '16px' }}
               />
-              <span>Required Parent</span>
+              <span>Required link</span>
             </label>
             <small className="field-hint">
               {formData.isRequired 
-                ? 'Entity cannot be saved without this parent relationship' 
-                : 'This parent relationship is optional'}
+                ? 'A record cannot be saved without this link'
+                : 'This link is optional'}
             </small>
           </div>
           
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
+            <label>Template inheritance</label>
+            <select
+              className="select"
+              value={formData.templateFromSide}
+              onChange={(e) => handleChange('templateFromSide', e.target.value)}
+            >
+              <option value="">None: each record keeps its own template</option>
+              <option value="CHILD">{`${fromName} records use the template chosen on their ${toName}`}</option>
+              <option value="PARENT">{`${toName} records use the template chosen on their ${fromName}`}</option>
+            </select>
+            <small className="field-hint">
+              The template is picked once on the record that supplies it, on that record&apos;s Relationships tab.
+            </small>
+          </div>
+
           {formData.cardinality === 'COMPOSITE' && (
             <div className="field" style={{ gridColumn: '1 / -1' }}>
               <label>Composite Key (comma-separated domain codes)</label>

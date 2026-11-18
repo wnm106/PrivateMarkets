@@ -12,6 +12,9 @@ type Entity {
   
   # Dynamic attributes from template
   attributes: JSONObject!
+
+  # The template in force for this record, after overrides and inheritance.
+  effectiveTemplate(asOfDate: Date): EffectiveTemplate
   
   # Relationships
   parentRelationships: [EntityRelationship!]!
@@ -156,8 +159,67 @@ type RelationshipType {
   isRequired: Boolean!
   cardinality: String!
   compositeKey: [String!]!
+  # Stored side (PARENT or CHILD) whose record chooses the template for the other side.
+  templateFromSide: String
   clientId: ID
   clientName: String
+}
+
+# Which template a record uses, and where it came from.
+# source: OVERRIDE (set on the record), INHERITED (chosen on a linked record),
+# OWN (the record's own template), NONE.
+type EffectiveTemplate {
+  entityId: ID!
+  templateId: ID
+  templateCode: String
+  templateName: String
+  source: String!
+  fromEntityId: ID
+  fromEntityName: String
+  relationshipCode: String
+  onDate: Date
+}
+
+type TemplateOption {
+  id: ID!
+  templateCode: String!
+  templateName: String!
+}
+
+type EntityTemplateChoice {
+  id: ID!
+  entityId: ID!
+  relationshipCode: String
+  templateId: ID!
+  templateCode: String!
+  templateName: String!
+  validFrom: Date
+  validTo: Date
+}
+
+# One thing a record can choose a template for: the records linked to it
+# through a relationship, or itself when relationshipCode is null.
+type TemplateChoiceSlot {
+  entityId: ID!
+  relationshipCode: String
+  relationshipName: String
+  domainCode: String!
+  domainName: String!
+  templates: [TemplateOption!]!
+  choices: [EntityTemplateChoice!]!
+}
+
+input SetEntityTemplateChoiceInput {
+  entityId: ID!
+  relationshipCode: String
+  templateId: ID
+  effectiveFrom: Date
+}
+
+type SetEntityTemplateChoiceResult {
+  success: Boolean!
+  choices: [EntityTemplateChoice!]!
+  errors: [MutationError!]!
 }
 
 type CreateRelationshipResult {

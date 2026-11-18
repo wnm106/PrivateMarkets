@@ -9,10 +9,11 @@ import { ATTRIBUTE_SECTIONS_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_
 import { EntityReports } from '@/components/reporting/EntityReports';
 import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard';
 import { RelationshipEntityGrids } from './RelationshipEntityGrids';
+import { RecordTemplateChoices } from './RecordTemplateChoices';
 import { classifyRecordRelationships, singularRelatedRefs } from '@/lib/relationship-grids';
 import { definingParentDomains, toParentLinkCounts, type ParentLinkCount, type ParentRelationshipType } from '@/lib/parent-entities';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
-import { attributeSectionLinks, groupForDisplay, type AttributeSectionOrder } from '@/lib/attribute-layout';
+import { attributeSectionLinks, fieldsForVisibility, groupForDisplay, type AttributeSectionOrder, type FieldVisibility } from '@/lib/attribute-layout';
 import { decompileCalcExpression } from '@/lib/calc-expression';
 
 export interface TemplateAttribute {
@@ -276,12 +277,15 @@ export function GoldenRecordSections({
             <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>Loading…</div>
           </div>
         ) : (
-          <RelationshipEntityGrids
-            entityId={entity.id}
-            asOfDate={asOfDate}
-            parents={shown.parents}
-            children={shown.children}
-          />
+          <>
+            <RecordTemplateChoices entityId={entity.id} asOfDate={asOfDate} />
+            <RelationshipEntityGrids
+              entityId={entity.id}
+              asOfDate={asOfDate}
+              parents={shown.parents}
+              children={shown.children}
+            />
+          </>
         )
       ) : !sections ? (
         <div className="field-section" aria-busy="true">
@@ -367,6 +371,7 @@ export function GoldenRecordSections({
             section: templateAttr.displaySection || 'General',
             sortOrder: templateAttr.sortOrder ?? 0,
             name: displayLabel,
+            populated: hasValue,
             node: (
               <SourceAttributedFieldRow
                 field={fieldData}
@@ -404,8 +409,15 @@ interface AttributeDisplayNode {
   section: string;
   sortOrder: number;
   name: string;
+  populated: boolean;
   node: ReactNode;
 }
+
+const FIELD_VISIBILITY: Array<{ value: FieldVisibility; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'populated', label: 'Populated' },
+  { value: 'missing', label: 'Missing' },
+];
 
 function AttributeSections({
   sections,
@@ -414,7 +426,9 @@ function AttributeSections({
   sections: AttributeSectionOrder[];
   items: AttributeDisplayNode[];
 }) {
-  const groups = groupForDisplay(items, sections);
+  const [visibility, setVisibility] = useState<FieldVisibility>('all');
+  const shown = fieldsForVisibility(items, visibility);
+  const groups = groupForDisplay(shown, sections);
   const links = attributeSectionLinks(groups.map((group) => group.section));
   const sectionNav = links;
   const sectionNavKey = sectionNav.map((item) => encodeURIComponent(item.id)).join('\n');
@@ -422,6 +436,12 @@ function AttributeSections({
   const jumpLock = useRef(0);
   const active = sectionNav.some((item) => item.id === activeSection) ? activeSection : (sectionNav[0]?.id || '');
   const showNav = sectionNav.length > 1;
+  const populatedCount = items.filter((item) => item.populated).length;
+  const visibilityCount: Record<FieldVisibility, number> = {
+    all: items.length,
+    populated: populatedCount,
+    missing: items.length - populatedCount,
+  };
 
   useEffect(() => {
     const ids = sectionNavKey ? sectionNavKey.split('\n').map((id) => decodeURIComponent(id)) : [];
@@ -455,12 +475,38 @@ function AttributeSections({
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  const emptyLabel = items.length === 0
+    ? 'No attribute values yet.'
+    : visibility === 'populated'
+      ? 'No populated fields.'
+      : 'No missing fields.';
+
+  const filter = (
+    <div className="attr-field-filter">
+      <div className="rb-seg small" role="radiogroup" aria-label="Which fields to show">
+        {FIELD_VISIBILITY.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={visibility === option.value}
+            className={visibility === option.value ? 'on' : ''}
+            onClick={() => setVisibility(option.value)}
+          >
+            {option.label}
+            <span className="attr-field-filter-count">{visibilityCount[option.value]}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   const body = (
     <>
-      {items.length === 0 && (
+      {shown.length === 0 && (
         <div className="field-section">
           <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>
-            No attribute values yet.
+            {emptyLabel}
           </div>
         </div>
       )}
@@ -478,9 +524,7 @@ function AttributeSections({
     </>
   );
 
-  if (!showNav) return body;
-
-  return (
+  const sectionsView = showNav ? (
     <div className="attr-sections">
       <nav className="attr-sections-nav" aria-label="Attribute sections">
         {sectionNav.map((item) => (
@@ -497,6 +541,13 @@ function AttributeSections({
       </nav>
       <div>{body}</div>
     </div>
+  ) : body;
+
+  return (
+    <>
+      {filter}
+      {sectionsView}
+    </>
   );
 }
 

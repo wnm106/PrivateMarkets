@@ -509,6 +509,13 @@ export interface ReviewRouting {
   approvals: number;
   /** Hand an overdue review to the escalation roles, as well as telling them. */
   reassignWhenOverdue: boolean;
+  /**
+   * When the step names no people and no roles, give the review to the people
+   * responsible for the records it changes. On unless the step turns it off.
+   */
+  routeToOwners: boolean;
+  /** The activity whose owners are asked, such as RECONCILIATION. Null asks whoever is responsible, whatever for. */
+  activity: string | null;
 }
 
 function textList(value: unknown): string[] {
@@ -536,5 +543,7 @@ export function reviewRouting(config: Record<string, unknown>, scope?: RunScope)
     escalateRoles: textList(fill(config.escalateRoles)).map((code) => code.toUpperCase()),
     approvals: Math.min(5, Math.max(1, Math.floor(Number(fill(config.approvals)) || 1))),
     reassignWhenOverdue: config.reassignWhenOverdue === true,
+    routeToOwners: config.routeToOwners !== false,
+    activity: textList(fill(config.activity))[0]?.toUpperCase() || null,
   };
 }

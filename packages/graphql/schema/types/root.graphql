@@ -36,6 +36,8 @@ type Query {
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
+  effectiveTemplates(entityIds: [ID!]!, asOfDate: Date): [EffectiveTemplate!]!
+  templateChoiceSlots(entityId: ID!): [TemplateChoiceSlot!]!
   
   # Lineage and temporal queries
   fieldLineage(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime): [FieldLineage!]!
@@ -47,6 +49,7 @@ type Query {
   dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
   dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
   dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date, knowledgeDate: DateTime, entityId: ID): DataQualityDashboard!
+  dqAvailabilityDetail(attributeCode: String!, domainCode: String, fromDate: Date, toDate: Date, knowledgeDate: DateTime, entityId: ID): AvailabilityDetail!
   staleAttributes(domainCode: String, olderThanDays: Int, asOfDate: Date, knowledgeDate: DateTime, entityId: ID): StaleAttributeReport!
   
   # Source queries
@@ -214,6 +217,7 @@ type Mutation {
   createRelationshipType(input: CreateRelationshipTypeInput!): CreateRelationshipTypeResult!
   updateRelationshipType(input: UpdateRelationshipTypeInput!): UpdateRelationshipTypeResult!
   deleteRelationshipType(id: ID!): DeleteRelationshipTypeResult!
+  setEntityTemplateChoice(input: SetEntityTemplateChoiceInput!): SetEntityTemplateChoiceResult!
 
   # Entity identifier (match key) mutations
   createEntityIdentifier(input: CreateEntityIdentifierInput!): CreateEntityIdentifierResult!
@@ -976,13 +980,19 @@ input CreateRelationshipTypeInput {
   isActive: Boolean
   cardinality: String
   compositeKey: [String!]
+  templateFromSide: String
   clientId: ID
 }
 
 input UpdateRelationshipTypeInput {
+  id: ID!
+  relationshipCode: String
   relationshipName: String
+  parentDomainCode: String
+  childDomainCode: String
   description: String
   isActive: Boolean
   cardinality: String
   compositeKey: [String!]
+  templateFromSide: String
 }

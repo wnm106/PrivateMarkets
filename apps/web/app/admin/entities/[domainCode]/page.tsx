@@ -156,6 +156,7 @@ interface RelationshipType {
   description?: string;
   isActive: boolean;
   isRequired?: boolean;
+  templateFromSide?: string | null;
   clientId?: string | null;
   clientName?: string | null;
 }
@@ -1056,6 +1057,11 @@ export default function EntityTypeDetailPage() {
                     )}
                     {!rel.isRequired && rel.parentDomainCode && (
                       <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none' }}>Optional</span>
+                    )}
+                    {rel.templateFromSide && (
+                      <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none' }}>
+                        Template from {rel.templateFromSide === 'CHILD' ? rel.childDomainCode : rel.parentDomainCode}
+                      </span>
                     )}
                     {!rel.isActive && (
                       <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'none' }}>Inactive</span>

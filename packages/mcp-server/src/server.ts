@@ -14,6 +14,7 @@ import {
 import { createClient } from '@supabase/supabase-js';
 import { registerDomainTools } from './tools/domain-tools';
 import { registerLineageTools } from './tools/lineage-tools';
+import { registerDocumentTools } from './tools/document-tools';
 import { registerOverrideTools } from './tools/override-tools';
 import { registerDQTools } from './tools/dq-tools';
 import { registerImportMapTools } from './tools/import-map-tools';
@@ -114,6 +115,7 @@ const toolRegistry = new ToolRegistry(supabase);
 // Register all tool categories
 registerDomainTools(toolRegistry);
 registerLineageTools(toolRegistry);
+registerDocumentTools(toolRegistry);
 registerOverrideTools(toolRegistry);
 registerDQTools(toolRegistry);
 registerImportMapTools(toolRegistry);

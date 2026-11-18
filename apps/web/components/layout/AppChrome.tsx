@@ -9,11 +9,18 @@ import { AppSidebar } from './AppSidebar';
 import { ChatPanel } from './ChatPanel';
 import { ImpersonationBanner } from './ImpersonationBanner';
 import { AttributeInspectProvider } from '@/components/detail/AttributeInspect';
+import type { SurfaceNavLink } from '@/lib/surface-links';
 
 /** Routes rendered without the authenticated application chrome. */
 const BARE_PATHS = ['/welcome', '/login', '/no-access', '/portal'];
 
-export function AppChrome({ children }: { children: React.ReactNode }) {
+export function AppChrome({
+  children,
+  surfaceLinks = [],
+}: {
+  children: React.ReactNode;
+  surfaceLinks?: SurfaceNavLink[];
+}) {
   const pathname = usePathname() || '/';
   const routeContext = useMemo(() => routeChatContext(pathname), [pathname]);
   const bare = BARE_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
@@ -26,7 +33,7 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
       {/* The assistant is a flex sibling of the page content, so opening it
           compresses the page rather than overlaying it. */}
       <div className="app-shell">
-        <AppSidebar />
+        <AppSidebar surfaceLinks={surfaceLinks} />
         <div className="app-shell-main">
           <TopBar />
           <main className="main">{children}</main>

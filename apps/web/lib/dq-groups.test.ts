@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { groupByEntityType, splitAvailabilityByEntityType, splitChangesByEntityType, splitRulesByEntityType } from './dq-groups';
+import { groupByEntityType, splitChangesByEntityType, splitRulesByEntityType } from './dq-groups';
 
 describe('groupByEntityType', () => {
   it('keeps row order inside a type and sorts types by label', () => {
@@ -19,65 +19,6 @@ describe('groupByEntityType', () => {
       ['ISSUER', ['Issuer A']],
       ['', ['Shared']],
     ]);
-  });
-});
-
-describe('splitAvailabilityByEntityType', () => {
-  it('keeps a single entity type and retargets the row to that type', () => {
-    const [row] = splitAvailabilityByEntityType([
-      {
-        attributeCode: 'LEI',
-        domainCode: null,
-        requiredCount: 2,
-        missingCount: 1,
-        availabilityPercent: 50,
-        resolvedCount: 0,
-        introducedCount: 0,
-        missingEntities: [{ domainCode: 'ISSUER' }],
-        resolvedEntities: [],
-        introducedEntities: [],
-        entities: [
-          { domainCode: 'ISSUER', value: '549300' },
-          { domainCode: 'ISSUER', value: null },
-        ],
-      },
-    ]);
-    assert.equal(row.domainCode, 'ISSUER');
-    assert.equal(row.requiredCount, 2);
-    assert.equal(row.missingCount, 1);
-  });
-
-  it('recomputes counts when one attribute is required on more than one entity type', () => {
-    const rows = splitAvailabilityByEntityType([
-      {
-        attributeCode: 'COUNTRY',
-        domainCode: 'ISSUER',
-        requiredCount: 3,
-        missingCount: 2,
-        availabilityPercent: 33.3,
-        resolvedCount: 1,
-        introducedCount: 1,
-        missingEntities: [{ id: 'i1', domainCode: 'ISSUER' }, { id: 'f1', domainCode: 'FUND' }],
-        resolvedEntities: [{ id: 'i2', domainCode: 'ISSUER' }],
-        introducedEntities: [{ id: 'f1', domainCode: 'FUND' }],
-        entities: [
-          { id: 'i1', domainCode: 'ISSUER', value: null },
-          { id: 'f1', domainCode: 'FUND', value: null },
-          { id: 'i2', domainCode: 'ISSUER', value: 'US' },
-        ],
-      },
-    ]);
-    const issuer = rows.find((row) => row.domainCode === 'ISSUER');
-    const fund = rows.find((row) => row.domainCode === 'FUND');
-    assert.equal(issuer?.requiredCount, 2);
-    assert.equal(issuer?.missingCount, 1);
-    assert.equal(issuer?.availabilityPercent, 50);
-    assert.equal(issuer?.resolvedCount, 1);
-    assert.equal(issuer?.introducedCount, 0);
-    assert.equal(fund?.requiredCount, 1);
-    assert.equal(fund?.missingCount, 1);
-    assert.equal(fund?.availabilityPercent, 0);
-    assert.equal(fund?.introducedCount, 1);
   });
 });
 

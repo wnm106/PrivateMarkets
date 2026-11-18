@@ -5,7 +5,7 @@ import {
   panelKeyForSlot,
   preferClientScope,
 } from '../lib/surface-composition/client-scope';
-import { asTabs, buildCatalogPayload, type ComponentOverlay } from '../lib/surface-composition/catalog-payload';
+import { asTabs, buildCatalogPayload, type ComponentOverlay, type PriorCatalog } from '../lib/surface-composition/catalog-payload';
 import {
   ApplicabilityRules,
   CatalogComponent,
@@ -449,15 +449,17 @@ async function readComponentMemory(context: Context, surfaceId: string, surfaceC
     .eq('surface_id', surfaceId);
   if (error) throw new Error(`Failed to read components: ${error.message}`);
   const rows = (components || []) as ComponentRow[];
-  const slotIds = [...new Set(rows.map((row) => row.slot_id))];
-  const variantIds = [...new Set(rows.map((row) => row.variant_id).filter((id): id is string => Boolean(id)))];
+  const { data: slotRows, error: slotError } = await context.supabase
+    .from('surface_page_slots')
+    .select('id, slot_code, description')
+    .eq('surface_id', surfaceId);
+  if (slotError) throw new Error(`Failed to read components: ${slotError.message}`);
+  const slotIds = ((slotRows || []) as Array<{ id: string }>).map((row) => row.id);
   const experienceIds = [...new Set(rows.map((row) => row.experience_id).filter((id): id is string => Boolean(id)))];
   const [slots, variants, experiences] = await Promise.all([
+    Promise.resolve({ data: slotRows || [], error: null }),
     slotIds.length
-      ? context.supabase.from('surface_page_slots').select('id, slot_code').in('id', slotIds)
-      : Promise.resolve({ data: [], error: null }),
-    variantIds.length
-      ? context.supabase.from('surface_page_variants').select('id, variant_code').in('id', variantIds)
+      ? context.supabase.from('surface_page_variants').select('id, slot_id, variant_code, variant_name, description').in('slot_id', slotIds)
       : Promise.resolve({ data: [], error: null }),
     experienceIds.length
       ? context.supabase.from('surface_experiences').select('id, experience_code').in('id', experienceIds)
@@ -469,6 +471,17 @@ async function readComponentMemory(context: Context, surfaceId: string, surfaceC
   const slotCode = new Map((slots.data || []).map((row: { id: string; slot_code: string }) => [row.id, row.slot_code]));
   const variantCode = new Map((variants.data || []).map((row: { id: string; variant_code: string }) => [row.id, row.variant_code]));
   const experienceCode = new Map((experiences.data || []).map((row: { id: string; experience_code: string }) => [row.id, row.experience_code]));
+  const prior = {
+    slotDescriptions: new Map<string, string | null>(
+      (slots.data || []).map((row: { slot_code: string; description: string | null }) => [row.slot_code, row.description]),
+    ),
+    variants: new Map<string, { name: string; description: string | null }>(),
+    components: new Map<string, { name: string; description: string | null; displayOrder: number }>(),
+  } satisfies PriorCatalog;
+  for (const row of (variants.data || []) as Array<{ slot_id: string; variant_code: string; variant_name: string; description: string | null }>) {
+    const code = slotCode.get(row.slot_id);
+    if (code) prior.variants.set(`${code}/${row.variant_code}`, { name: row.variant_name, description: row.description });
+  }
   const panelByCode = new Map<string, string | null>();
   const overlays: ComponentOverlay[] = [];
   for (const row of rows) {
@@ -478,6 +491,11 @@ async function readComponentMemory(context: Context, surfaceId: string, surfaceC
     if (ownsRow) {
       panelByCode.set(row.component_code, row.panel_key ?? null);
       if (!panelByCode.has(code)) panelByCode.set(code, row.panel_key ?? null);
+      prior.components.set(row.component_code, {
+        name: row.component_name,
+        description: row.description,
+        displayOrder: row.display_order,
+      });
       continue;
     }
     overlays.push({
@@ -493,7 +511,7 @@ async function readComponentMemory(context: Context, surfaceId: string, surfaceC
       experienceCode: row.experience_id ? experienceCode.get(row.experience_id) ?? null : null,
     });
   }
-  return { panelByCode, overlays };
+  return { panelByCode, overlays, prior };
 }
 
 /** Replaces the surface's tabs. The database writes the whole catalog in one transaction. */
@@ -514,6 +532,7 @@ async function saveSurfaceTabs(context: Context, surfaceCode: string, rawTabs: u
     surfaceClientId: surface.client_id ?? null,
     panelByCode: memory.panelByCode,
     overlays: memory.overlays,
+    prior: memory.prior,
   });
 
   const { error } = await context.supabase.rpc('save_surface_catalog', {

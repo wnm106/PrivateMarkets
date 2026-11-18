@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { attributeSectionLinks, planAttributeMove, sectionAnchor, sectionsForDisplay } from './attribute-layout';
+import { attributeSectionLinks, fieldsForVisibility, planAttributeMove, sectionAnchor, sectionsForDisplay } from './attribute-layout';
 
 describe('attribute section anchors', () => {
   it('slugs a section name into a stable id fragment', () => {
@@ -15,6 +15,26 @@ describe('attribute section anchors', () => {
       'attr-a-b',
       'attr-a-b-2',
     ]);
+  });
+});
+
+describe('field visibility', () => {
+  const items = [
+    { name: 'Country', populated: false },
+    { name: 'Sector', populated: true },
+    { name: 'Industry', populated: false },
+  ];
+
+  it('keeps every field', () => {
+    assert.deepEqual(fieldsForVisibility(items, 'all').map((item) => item.name), ['Country', 'Sector', 'Industry']);
+  });
+
+  it('keeps fields that have a stored value', () => {
+    assert.deepEqual(fieldsForVisibility(items, 'populated').map((item) => item.name), ['Sector']);
+  });
+
+  it('keeps fields that are blank', () => {
+    assert.deepEqual(fieldsForVisibility(items, 'missing').map((item) => item.name), ['Country', 'Industry']);
   });
 });
 

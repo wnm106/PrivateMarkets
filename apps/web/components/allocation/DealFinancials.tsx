@@ -6,9 +6,11 @@ import { attributeText } from '@/lib/experience';
 import { useTemporalStore } from '@/lib/store';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 import {
+  applyStatementLayout,
   gridSections,
   headlineAttributes,
   linesForSection,
+  mergeStatementLayouts,
   periodEndValue,
   projectStatementBook,
   readStatementAmounts,
@@ -17,6 +19,7 @@ import {
   type RegisterSection,
   type StatementAttribute,
   type StatementColumn,
+  type StatementLayout,
   type StatementPeriod,
 } from '@tapestrai/graphql/src/lib/statement-book';
 
@@ -53,8 +56,51 @@ const BOOK = `
       sectionName
       displayOrder
     }
+    domainTemplates(domainCode: "STATEMENT_PERIOD") {
+      id
+      templateName
+      attributes {
+        displayLabel
+        displayOrder
+        sectionName
+        attribute { attributeCode }
+      }
+    }
   }
 `;
+
+// Which template each statement period uses: its own, or the one its issuer chose.
+const TEMPLATES = `
+  query StatementTemplates($entityIds: [ID!]!, $asOfDate: Date) {
+    effectiveTemplates(entityIds: $entityIds, asOfDate: $asOfDate) {
+      entityId
+      templateId
+    }
+  }
+`;
+
+interface TemplateNode {
+  id: string;
+  templateName: string;
+  attributes: Array<{
+    displayLabel?: string | null;
+    displayOrder?: number | null;
+    sectionName?: string | null;
+    attribute: { attributeCode: string };
+  }>;
+}
+
+function layoutOf(template: TemplateNode): StatementLayout {
+  return {
+    name: template.templateName,
+    lines: template.attributes.map((row) => ({
+      code: row.attribute.attributeCode,
+      label: row.displayLabel,
+      order: row.displayOrder,
+      section: row.sectionName,
+    })),
+  };
+}
 
 function text(raw: unknown): string {
   return attributeText(raw).trim();
@@ -152,6 +198,7 @@ export function DealFinancials({
   const [periods, setPeriods] = useState<StatementPeriod[]>([]);
   const [attributes, setAttributes] = useState<StatementAttribute[]>([]);
   const [sections, setSections] = useState<RegisterSection[]>([]);
+  const [layoutName, setLayoutName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [grain, setGrain] = useState<'quarter' | 'month' | 'statement'>('quarter');
@@ -165,6 +212,7 @@ export function DealFinancials({
       periods: { edges: Array<{ node: Node }> };
       attributeRegister: RegisterAttribute[];
       attributeSections: RegisterSection[];
+      domainTemplates: TemplateNode[];
     }, {
       asOfDate?: string | null;
       knowledgeDate?: string | null;
@@ -189,9 +237,34 @@ export function DealFinancials({
         };
       })
       .filter((period): period is StatementPeriod => period != null);
-    setAttributes(catalog);
+    const shown = borrowerId ? next : [];
+
+    // The statement lists the lines its template assigns. Periods that changed
+    // template are merged, with the latest period setting wording and order.
+    // If the lookup fails, every line in the catalog is listed.
+    let layout: StatementLayout | null = null;
+    const periodIds = shown.map((period) => period.entityId).filter((id): id is string => !!id);
+    if (periodIds.length > 0) {
+      const chosen = await graphqlQuery<{
+        effectiveTemplates: Array<{ entityId: string; templateId: string | null }>;
+      }, { entityIds: string[]; asOfDate?: string | null }>(TEMPLATES, { entityIds: periodIds, asOfDate }, 'network-only');
+      const templateOf = new Map((chosen.data?.effectiveTemplates || []).map((row) => [row.entityId, row.templateId]));
+      const templates = new Map((result.data?.domainTemplates || []).map((template) => [template.id, template]));
+      const used: TemplateNode[] = [];
+      for (const period of [...shown].sort((a, b) => a.end.localeCompare(b.end))) {
+        const template = templates.get(templateOf.get(period.entityId || '') || '');
+        if (!template) continue;
+        const at = used.indexOf(template);
+        if (at >= 0) used.splice(at, 1);
+        used.push(template);
+      }
+      layout = mergeStatementLayouts(used.map(layoutOf));
+    }
+
+    setAttributes(applyStatementLayout(catalog, layout));
+    setLayoutName(layout?.name || null);
     setSections(result.data?.attributeSections || []);
-    setPeriods(borrowerId ? next : []);
+    setPeriods(shown);
     setLoading(false);
   }, [asOfDate, borrowerId, knowledgeDate]);
 
@@ -236,6 +309,7 @@ export function DealFinancials({
             {borrowerName || 'Borrower'}
             {book.firstEnd && book.lastEnd ? `: statements from ${shortDay(book.firstEnd)} to ${shortDay(book.lastEnd)}. ` : ': '}
             {pinned?.end ? `Actuals run through ${shortDay(pinned.end)}; later periods are forecast.` : 'No reported periods yet.'}
+            {layoutName ? ` Lines follow the ${layoutName} template.` : ''}
           </p>
         </div>
         {pinned && headlines.length > 0 && (

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { mapFileLoader } from './feed-loader';
 import { notifyDeliverHandler } from './notify';
 import { assistantBriefHandler, assistantSweepHandler, assistantWatchHandler, workflowReviewsDueHandler } from './assistant';
+import { documentProcessHandler } from './documents';
 import { connectionCheckHandler, feedCheckHandler, feedPollHandler } from './feeds';
 import { JobError, type JobHandler, type JobRun } from './worker';
 import { engineDeps, workflowAdvanceHandler, workflowStartHandler, workflowTriggersHandler } from './workflow/handlers';
@@ -211,6 +212,7 @@ export function buildHandlers(supabase: SupabaseClient): Record<string, JobHandl
     'assistant.watch': assistantWatchHandler(supabase),
     'workflow.reviews_due': workflowReviewsDueHandler(supabase),
     'notify.deliver': notifyDeliverHandler(supabase),
+    'document.process': documentProcessHandler(supabase),
     'workflow.advance': workflowAdvanceHandler(engineDeps(supabase)),
     'workflow.start': workflowStartHandler(supabase),
     'workflow.triggers': workflowTriggersHandler(supabase),

@@ -14,6 +14,7 @@ import { referenceListResolvers } from './referencelist';
 import { reportingResolvers } from './reporting';
 import { experienceResolvers } from './experience';
 import { statementTemplateResolvers } from './statement-template';
+import { templateInheritanceResolvers } from './template-inheritance';
 import { surfaceResolvers } from './surface';
 import { calculationResolvers } from './calculation';
 import { reconciliationResolvers } from './reconciliation';
@@ -25,9 +26,11 @@ import { icMemoResolvers } from './ic-memo';
 import { jobResolvers } from './jobs';
 import { workflowResolvers } from './workflows';
 import { feedResolvers } from './feeds';
+import { documentResolvers } from './documents';
 import { assistantResolvers } from './assistant';
 import { homeResolvers } from './home';
 import { agentUsageResolvers } from './agent-usage';
+import { responsibilityResolvers } from './responsibilities';
 
 export const resolvers = {
   Query: {
@@ -56,6 +59,7 @@ export const resolvers = {
     attributeSections: metadataResolvers.Query.attributeSections,
     domainTemplates: metadataResolvers.Query.domainTemplates,
     previewStatementTemplate: statementTemplateResolvers.Query.previewStatementTemplate,
+    ...templateInheritanceResolvers.Query,
     ...surfaceResolvers.Query,
     matchRules: entityResolutionResolvers.Query.matchRules,
     mergeCandidates: entityResolutionResolvers.Query.mergeCandidates,
@@ -69,8 +73,10 @@ export const resolvers = {
     ...jobResolvers.Query,
     ...workflowResolvers.Query,
     ...feedResolvers.Query,
+    ...documentResolvers.Query,
     ...assistantResolvers.Query,
     ...homeResolvers.Query,
+    ...responsibilityResolvers.Query,
     ...agentUsageResolvers.Query,
   },
   
@@ -99,6 +105,7 @@ export const resolvers = {
     reorderSectionAttributes: metadataResolvers.Mutation.reorderSectionAttributes,
     deleteAttribute: metadataResolvers.Mutation.deleteAttribute,
     applyStatementTemplate: statementTemplateResolvers.Mutation.applyStatementTemplate,
+    ...templateInheritanceResolvers.Mutation,
     mergeEntities: entityResolutionResolvers.Mutation.mergeEntities,
     updateMatchRule: entityResolutionResolvers.Mutation.updateMatchRule,
     createMatchRule: entityResolutionResolvers.Mutation.createMatchRule,
@@ -108,8 +115,10 @@ export const resolvers = {
     ...jobResolvers.Mutation,
     ...workflowResolvers.Mutation,
     ...feedResolvers.Mutation,
+    ...documentResolvers.Mutation,
     ...assistantResolvers.Mutation,
     ...homeResolvers.Mutation,
+    ...responsibilityResolvers.Mutation,
   },
   
   Subscription: {},
@@ -117,6 +126,7 @@ export const resolvers = {
   Entity: {
     ...entityResolvers.Entity,
     ...calculationResolvers.Entity,
+    ...templateInheritanceResolvers.Entity,
   },
   Template: statementTemplateResolvers.Template,
   DataConnection: dataConnectionResolvers.DataConnection,

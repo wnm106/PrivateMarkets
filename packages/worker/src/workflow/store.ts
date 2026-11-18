@@ -31,6 +31,7 @@ export function toReview(row: Row): ReviewRow {
       ? (row.unassignable as Row[]).map((entry) => ({ person: String(entry.person ?? ''), reason: String(entry.reason ?? '') }))
       : undefined,
     dueAt: text(row.due_at),
+    assignmentSource: text(row.assignment_source),
   };
 }
 

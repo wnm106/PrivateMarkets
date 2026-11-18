@@ -142,6 +142,15 @@ export const JOB_TYPES: readonly JobTypeDef[] = [
     schedulable: false,
   },
   {
+    code: 'document.process',
+    label: 'Read a document',
+    description:
+      'Reads one stored document into tagged sections and chunks, then embeds them for search. Queued when a document is added or read again. Search by meaning needs VOYAGE_API_KEY on the worker. See docs/DOCUMENTS.md.',
+    scope: 'CLIENT',
+    payloadExample: { documentId: '' },
+    schedulable: false,
+  },
+  {
     code: 'workflow.advance',
     label: 'Advance a workflow run',
     description: 'Moves one workflow run forward until it finishes, fails, or waits for a person. Queued when a run starts and when a review is decided.',

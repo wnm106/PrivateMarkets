@@ -77,7 +77,7 @@ export function RelationshipEntityGrids({
               <div className="field-section-name">
                 {name}
                 {repeated.has(grid.domainCode) && (
-                  <span className="relationship-grid-side">{grid.side === 'parent' ? 'Parent' : 'Child'}</span>
+                  <span className="relationship-grid-side">{grid.side === 'parent' ? 'From' : 'To'}</span>
                 )}
               </div>
               <div className="field-section-count">{grid.entityIds.length}</div>

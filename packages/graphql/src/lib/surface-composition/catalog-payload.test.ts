@@ -54,6 +54,38 @@ describe('buildCatalogPayload', () => {
     expect(payload.components.map((row) => row.experience_code)).toEqual(['GATE_ACCOUNTS', 'LAYOUT_ACCOUNTS_2']);
   });
 
+  it('keeps written descriptions and component order, and refreshes generated ones', () => {
+    const payload = buildCatalogPayload(
+      [
+        { slotCode: 'CLOSING', name: 'Closing' },
+        { slotCode: 'FUNDING', name: 'Funding test', appearance: 'when', conditions: [{ attribute: 'A', value: 'B' }] },
+      ],
+      {
+        ...none,
+        prior: {
+          slotDescriptions: new Map([['CLOSING', 'Closing checklist and funds flow.'], ['FUNDING', 'On every record.']]),
+          variants: new Map([
+            ['CLOSING/CLOSING', { name: 'Closing', description: 'Checklist.' }],
+            ['FUNDING/FUNDING', { name: 'Funding', description: 'Funding' }],
+          ]),
+          components: new Map([
+            ['CLOSING', { name: 'Closing', description: 'Checklist.', displayOrder: 8 }],
+            ['FUNDING', { name: 'Funding', description: 'Funding', displayOrder: 1 }],
+          ]),
+        },
+      },
+    );
+    expect(payload.slots.map((row) => row.description)).toEqual([
+      'Closing checklist and funds flow.',
+      'Only when the rule qualifies.',
+    ]);
+    expect(payload.variants.map((row) => row.description)).toEqual(['Checklist.', 'Funding test']);
+    expect(payload.components.map((row) => [row.description, row.display_order])).toEqual([
+      ['Checklist.', 8],
+      ['Funding test', 1],
+    ]);
+  });
+
   it('gives two tabs with the same name different codes', () => {
     const payload = buildCatalogPayload([{ name: 'Notes' }, { name: 'Notes' }], none);
     expect(payload.slots.map((row) => row.code)).toEqual(['NOTES', 'NOTES_2']);

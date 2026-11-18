@@ -170,7 +170,7 @@ export function EntityGraphPanel({ entityId }: { entityId: string }) {
               return (
                 <div key={edge.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--line)', fontSize: 13 }}>
                   <div>
-                    {parent?.entityName || 'Parent'} <span style={{ color: 'var(--ink-3)' }}>— {edge.relationshipType || edge.relationshipCode} →</span> {child?.entityName || 'Child'}
+                    {parent?.entityName || 'From'} <span style={{ color: 'var(--ink-3)' }}>— {edge.relationshipType || edge.relationshipCode} →</span> {child?.entityName || 'To'}
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>
                     {edge.relationshipCode}

@@ -3,6 +3,7 @@ import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePos
 import { fetchEntitySearchHits } from '../lib/entity-search';
 import { fillBlankOnReadAttributes, loadOnReadValues, mergeOnReadLineage } from '../lib/on-read-values';
 import { needsTemporalRead, overlayTemporalAttributes } from '../lib/temporal-attributes';
+import { templateSide } from '../lib/template-inheritance';
 import { dirtyAttributeCodes } from './calculation';
 import { ensureAttributeSection } from './metadata';
 import { resolveEntityClientId, resolveSchemaClientId, withClientNames } from './schema-scope';
@@ -444,6 +445,7 @@ export const entityResolvers = {
         description: row.description,
         isActive: row.is_active,
         isRequired: row.is_required || false,
+        templateFromSide: row.template_from_side ?? null,
         clientId: row.client_id ?? null,
       }));
       return withClientNames(context, rows);
@@ -1628,6 +1630,7 @@ export const entityResolvers = {
             cardinality: input.cardinality || 'ONE_TO_ONE',
             composite_key: input.compositeKey || [],
             description: input.description,
+            ...(templateSide(input.templateFromSide) ? { template_from_side: templateSide(input.templateFromSide) } : {}),
             client_id: await resolveSchemaClientId(context, input.clientId, { required: false }),
           })
           .select()
@@ -1646,6 +1649,8 @@ export const entityResolvers = {
             compositeKey: data.composite_key,
             description: data.description,
             isActive: data.is_active,
+            isRequired: data.is_required || false,
+            templateFromSide: data.template_from_side ?? null,
             clientId: data.client_id ?? null,
           },
           errors: [],
@@ -1670,6 +1675,7 @@ export const entityResolvers = {
         if (input.cardinality !== undefined) updateData.cardinality = input.cardinality;
         if (input.compositeKey !== undefined) updateData.composite_key = input.compositeKey;
         if (input.isActive !== undefined) updateData.is_active = input.isActive;
+        if (input.templateFromSide !== undefined) updateData.template_from_side = templateSide(input.templateFromSide);
 
         const { data, error } = await context.supabase
           .from('relationship_types')
@@ -1691,6 +1697,9 @@ export const entityResolvers = {
             compositeKey: data.composite_key,
             description: data.description,
             isActive: data.is_active,
+            isRequired: data.is_required || false,
+            templateFromSide: data.template_from_side ?? null,
+            clientId: data.client_id ?? null,
           },
           errors: [],
         };

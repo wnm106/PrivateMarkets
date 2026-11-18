@@ -85,14 +85,22 @@ export function DqRuleForm({ initial, lockIdentity, onSubmit, onCancel, submitti
   const [codeTouched, setCodeTouched] = useState(!!initial?.ruleCode);
   const [domains, setDomains] = useState<DomainOption[]>([]);
   const [attributes, setAttributes] = useState<AttributeOption[]>([]);
+  // Conditions are checked against the field list, so they wait for it.
+  const [catalogReady, setCatalogReady] = useState(false);
 
   useEffect(() => {
-    graphqlQuery<{ domainTypes: DomainOption[] }, {}>(DOMAIN_TYPES_QUERY, {}).then((r) => {
-      if (r.data?.domainTypes) setDomains(r.data.domainTypes);
+    let cancelled = false;
+    Promise.allSettled([
+      graphqlQuery<{ domainTypes: DomainOption[] }, {}>(DOMAIN_TYPES_QUERY, {}).then((r) => {
+        if (!cancelled && r.data?.domainTypes) setDomains(r.data.domainTypes);
+      }),
+      graphqlQuery<{ attributeRegister: AttributeOption[] }, {}>(ATTRIBUTE_REGISTER_QUERY, {}).then((r) => {
+        if (!cancelled && r.data?.attributeRegister) setAttributes(r.data.attributeRegister);
+      }),
+    ]).then(() => {
+      if (!cancelled) setCatalogReady(true);
     });
-    graphqlQuery<{ attributeRegister: AttributeOption[] }, {}>(ATTRIBUTE_REGISTER_QUERY, {}).then((r) => {
-      if (r.data?.attributeRegister) setAttributes(r.data.attributeRegister);
-    });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => { onChange?.(form); }, [form]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -304,6 +312,9 @@ export function DqRuleForm({ initial, lockIdentity, onSubmit, onCancel, submitti
       <section className="rb-step tone-num" id="rb-conditions" data-cond-error={errors.ruleExpression ? '' : undefined}>
         <StepHead n={2} title="Conditions" hint="When does a record pass?" tone="num" />
         <div className="rb-body2">
+          {!catalogReady ? (
+            <div aria-busy="true" style={{ padding: '16px 4px', color: 'var(--ink-3)', fontSize: '13px' }}>Loading…</div>
+          ) : (
           <DqConditionBuilder
             expression={form.ruleExpression}
             attributes={attributeChoices}
@@ -315,6 +326,7 @@ export function DqRuleForm({ initial, lockIdentity, onSubmit, onCancel, submitti
               if (ruleExpression.trim() && !issue) setErrors((prev) => ({ ...prev, ruleExpression: '' }));
             }}
           />
+          )}
           {errors.ruleExpression && <span className="field-error">{errors.ruleExpression}</span>}
         </div>
       </section>

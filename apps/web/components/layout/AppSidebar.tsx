@@ -7,6 +7,7 @@ import { graphqlQuery } from '@/lib/graphql';
 import { nestDomainLinks } from '@/lib/domain-nav';
 import { domainHref } from '@/lib/domain-routes';
 import { SKILL_NAV } from '@/lib/skill-catalog';
+import { omitSurfacesFromTools, surfaceLinkActive, type SurfaceNavLink } from '@/lib/surface-links';
 import { BrandLogo } from './BrandLogo';
 import { UserMenu } from './UserMenu';
 
@@ -31,6 +32,7 @@ const TOOLS = [
   { href: '/lists', label: 'Value Lists', icon: 'layers' },
   { href: '/intersections', label: 'Composite Entities', icon: 'nodes' },
   { href: '/imports', label: 'Load data', icon: 'download' },
+  { href: '/documents', label: 'Documents', icon: 'layers' },
   { href: '/assistant', label: 'Assistant', icon: 'list' },
   { href: '/workflows', label: 'Workflows', icon: 'nodes' },
 ] as const;
@@ -51,8 +53,10 @@ const ADMIN = [
   { href: '/admin/narratives', label: 'Narratives', icon: 'list' },
   { href: '/admin/skills', label: 'Skills', icon: 'list' },
   { href: '/admin/feeds', label: 'Feeds', icon: 'download' },
+  { href: '/admin/document-templates', label: 'Document templates', icon: 'layers' },
   { href: '/admin/jobs', label: 'Jobs', icon: 'list' },
   { href: '/admin/agent-usage', label: 'Agent usage', icon: 'chart' },
+  { href: '/admin/responsibilities', label: 'Responsibilities', icon: 'users' },
   { href: '/admin/tenancy', label: 'Clients, Users & Roles', icon: 'users' },
 ] as const;
 
@@ -209,8 +213,9 @@ function NavIcon({ name }: { name: string }) {
   }
 }
 
-export function AppSidebar() {
+export function AppSidebar({ surfaceLinks = [] }: { surfaceLinks?: SurfaceNavLink[] }) {
   const pathname = usePathname() || '/';
+  const tools = useMemo(() => omitSurfacesFromTools(TOOLS, surfaceLinks), [surfaceLinks]);
   const [collapsed, setCollapsed] = useState(false);
   const [openSection, setOpenSection] = useState<NavSection | null>('domains');
   const [domains, setDomains] = useState<DomainLink[]>([]);
@@ -336,21 +341,35 @@ export function AppSidebar() {
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`} aria-label="Main">
       <div className="sidebar-brand">
-        <Link href="/" className={collapsed ? 'sidebar-logo is-mark' : 'sidebar-logo'} title="Home">
-          <BrandLogo size={collapsed ? 28 : 30} />
-        </Link>
-        <button
-          type="button"
-          className="sidebar-toggle"
-          onClick={toggleCollapsed}
-          aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
-          title={collapsed ? 'Expand menu' : 'Collapse menu'}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
-            <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
-            <path d="M9 4.5v15" />
-          </svg>
-        </button>
+        {collapsed ? (
+          <button
+            type="button"
+            className="sidebar-logo is-mark"
+            onClick={toggleCollapsed}
+            aria-label="Expand menu"
+            title="Expand menu"
+          >
+            <BrandLogo size={28} />
+          </button>
+        ) : (
+          <Link href="/" className="sidebar-logo" title="Home">
+            <BrandLogo size={30} />
+          </Link>
+        )}
+        {!collapsed && (
+          <button
+            type="button"
+            className="sidebar-toggle"
+            onClick={toggleCollapsed}
+            aria-label="Collapse menu"
+            title="Collapse menu"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+              <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+              <path d="M9 4.5v15" />
+            </svg>
+          </button>
+        )}
       </div>
 
       <nav className="sidebar-nav">
@@ -363,6 +382,19 @@ export function AppSidebar() {
           <NavIcon name="home" />
           {!collapsed && <span className="sidebar-label">Home</span>}
         </Link>
+
+        {surfaceLinks.map((surface) => (
+          <Link
+            key={surface.code}
+            href={surface.href}
+            className={`sidebar-link ${surfaceLinkActive(pathname, surface) ? 'active' : ''}`}
+            title={surface.label}
+            aria-current={surfaceLinkActive(pathname, surface) ? 'page' : undefined}
+          >
+            <NavIcon name={surface.icon} />
+            {!collapsed && <span className="sidebar-label">{surface.label}</span>}
+          </Link>
+        ))}
 
         <button
           type="button"
@@ -417,7 +449,7 @@ export function AppSidebar() {
         <div className="sidebar-tools">
           <button
             type="button"
-            className={`sidebar-link sidebar-section ${openSection === 'tools' && !collapsed ? 'open' : ''} ${collapsed && TOOLS.some((tool) => toolActive(pathname, tool.href)) ? 'active' : ''}`}
+            className={`sidebar-link sidebar-section ${openSection === 'tools' && !collapsed ? 'open' : ''} ${collapsed && tools.some((tool) => toolActive(pathname, tool.href)) ? 'active' : ''}`}
             onClick={() => toggleSection('tools')}
             aria-expanded={!collapsed && openSection === 'tools'}
             title="Tools"
@@ -432,7 +464,7 @@ export function AppSidebar() {
           </button>
           {!collapsed && openSection === 'tools' && (
             <div className="sidebar-sub">
-              {TOOLS.map((tool) => (
+              {tools.map((tool) => (
                 <Link
                   key={tool.href}
                   href={tool.href}

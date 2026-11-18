@@ -1,4 +1,6 @@
 import { supabaseServerClient } from '@/lib/supabase-server';
+import { SURFACES } from '@/lib/surface-registry';
+import { surfaceNavLinks, type SurfaceNavLink } from '@/lib/surface-links';
 
 export interface SurfaceUser {
   clientCode: string | null;
@@ -35,4 +37,14 @@ export async function loadSurfaceUser(): Promise<SurfaceUser | null> {
       : [],
     isTenantAdmin: row.isTenantAdmin === true,
   };
+}
+
+/** Mounted surfaces this caller may open, for the sidebar. Empty when signed out. */
+export async function loadSurfaceNavLinks(): Promise<SurfaceNavLink[]> {
+  const user = await loadSurfaceUser();
+  if (!user) return [];
+  return surfaceNavLinks(
+    SURFACES.map((entry) => entry.manifest),
+    user,
+  );
 }

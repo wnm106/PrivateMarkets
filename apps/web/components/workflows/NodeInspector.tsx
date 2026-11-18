@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { CONDITION_OPS, nodeTypeDef, upstreamOf, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { ReviewerPicker } from '@/components/workflows/ReviewerPicker';
 import { kindOf, parseObject, type ToolOption, type WorkflowProblem } from '@/lib/workflows';
+import { graphqlQuery } from '@/lib/graphql';
+import { RESPONSIBILITY_CHOICES_QUERY, type ResponsibilityChoices } from '@/lib/responsibilities';
 
 /** The settings for the step or connection selected on the canvas. */
 
@@ -111,6 +113,20 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, clientId
   const readTools = tools.filter((candidate) => candidate.readOnly);
   const writeTools = tools.filter((candidate) => !candidate.readOnly);
   const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
+  const [activities, setActivities] = useState<ResponsibilityChoices['activities']>([]);
+  const isReview = node.type === 'review';
+
+  // The activities a review can be routed by. Only a review step asks.
+  useEffect(() => {
+    if (!isReview) return;
+    let cancelled = false;
+    void graphqlQuery<{ responsibilityChoices: ResponsibilityChoices }>(RESPONSIBILITY_CHOICES_QUERY, { clientId: clientId || null }).then((result) => {
+      if (!cancelled) setActivities(result.data?.responsibilityChoices.activities || []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isReview, clientId]);
 
   return (
     <fieldset disabled={readOnly} style={{ border: 'none', padding: 0, margin: 0, display: 'grid', gap: 12, minWidth: 0 }}>
@@ -356,6 +372,24 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, clientId
                 : 'A shared workflow can be assigned to roles only. Tick none for anyone who holds the review permission.'}
             </span>
           </div>
+          {list(config.people).length === 0 && list(config.roles).length === 0 && (
+            <>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
+                <input type="checkbox" style={{ marginTop: 2 }} checked={config.routeToOwners !== false} onChange={(event) => set({ routeToOwners: event.target.checked })} />
+                <span>With nobody ticked, give it to the people responsible for the records it changes. If nobody is responsible, anyone who holds the review permission can decide it.</span>
+              </label>
+              {config.routeToOwners !== false && (
+                <Field name="Responsible for" help="Ask only the people responsible for this activity. Set who is responsible under Admin, Responsibilities.">
+                  <select className="text-input" style={full} value={String(config.activity || '')} onChange={(event) => set({ activity: event.target.value || null })}>
+                    <option value="">Any activity</option>
+                    {activities.map((activity) => (
+                      <option key={activity.code} value={activity.code}>{activity.name}</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+            </>
+          )}
           <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
             <input type="checkbox" style={{ marginTop: 2 }} checked={config.separateReviewer !== false} onChange={(event) => set({ separateReviewer: event.target.checked })} />
             <span>The person who started the run cannot review it. For a scheduled run, that is whoever created the schedule.</span>

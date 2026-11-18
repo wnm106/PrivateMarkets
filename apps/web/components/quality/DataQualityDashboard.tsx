@@ -6,13 +6,12 @@ import type { ColDef } from 'ag-grid-community';
 import { AppGrid } from '@/components/grid/AppGrid';
 import { usePublishViewContext } from '@/lib/view-context';
 import { useTemporalStore } from '@/lib/store';
-import { CLEAR_MANUAL_OVERRIDE_MUTATION, DATA_QUALITY_DASHBOARD_QUERY, FIELD_LINEAGE_QUERY, STALE_ATTRIBUTES_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
+import { CLEAR_MANUAL_OVERRIDE_MUTATION, DATA_QUALITY_DASHBOARD_QUERY, DATA_QUALITY_DASHBOARD_WITH_ENTITIES_QUERY, DQ_AVAILABILITY_DETAIL_QUERY, FIELD_LINEAGE_QUERY, STALE_ATTRIBUTES_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { CommittedDateInput } from '@/components/forms/CommittedDateInput';
 import { STALE_AFTER_DAYS, formatReceipt } from '@/lib/receipt-freshness';
 import { domainHref } from '@/lib/domain-routes';
-import { AttributeValueInput, listDisplayLabel, useAttributeDisplay, useAttributeListOptions } from '@/components/forms/AttributeValueInput';
-import { attributeDisplayKind, formatAttributeDisplay } from '@/lib/attribute-display';
-import { groupByEntityType, splitAvailabilityByEntityType, splitChangesByEntityType, splitRulesByEntityType } from '@/lib/dq-groups';
+import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
+import { groupByEntityType, splitChangesByEntityType, splitRulesByEntityType } from '@/lib/dq-groups';
 
 type Section = 'availability' | 'quality' | 'trajectory' | 'handoff' | 'freshness';
 type Period = 'day' | 'week' | 'month' | 'quarter' | 'custom';
@@ -24,13 +23,15 @@ interface EntityRef {
   domainCode: string;
 }
 
-interface AvailabilityEntity extends EntityRef {
-  value: string | null;
-}
-
 interface MeasureShift extends EntityRef {
   previousValue: string | null;
   currentValue: string | null;
+}
+
+interface AvailabilityDetailData {
+  missingEntities: EntityRef[];
+  resolvedEntities: MeasureShift[];
+  introducedEntities: MeasureShift[];
 }
 
 interface StaleAttribute {
@@ -100,10 +101,6 @@ interface Dashboard {
     availabilityPercent: number | null;
     resolvedCount: number;
     introducedCount: number;
-    missingEntities: EntityRef[];
-    resolvedEntities: MeasureShift[];
-    introducedEntities: MeasureShift[];
-    entities?: AvailabilityEntity[] | null;
   }>;
   quality: Array<{
     ruleId: string;
@@ -137,7 +134,8 @@ interface Dashboard {
     changeCount: number;
     changes: Array<EntityRef & { previousValue: string | null; currentValue: string | null }>;
   }>;
-  entities: Array<{
+  /** Loaded only once the Entity view has been opened. */
+  entities?: Array<{
     id: string;
     entityCode: string;
     entityName: string;
@@ -361,8 +359,11 @@ export function DataQualityDashboard({
   const [entityPages, setEntityPages] = useState<Record<string, number>>({});
   const [refreshToken, setRefreshToken] = useState(0);
   const [handoffScope, setHandoffScope] = useState<'ready' | 'all'>('ready');
+  const [measureQuery, setMeasureQuery] = useState('');
+  const [rowScope, setRowScope] = useState<'exceptions' | 'all'>('exceptions');
   const [staleDays, setStaleDays] = useState(STALE_AFTER_DAYS);
   const [staleReport, setStaleReport] = useState<StaleReport | null>(null);
+  const [entitiesNeeded, setEntitiesNeeded] = useState(false);
   const openRule = openKey?.startsWith('rule-')
     ? dashboard?.quality.find((rule) => `rule-${rule.ruleId}` === openKey)
     : undefined;
@@ -393,8 +394,12 @@ export function DataQualityDashboard({
     },
   });
 
-  const refreshJob = useRef({ domainCode, entityId, fromDate, toDate, knownAt, staleDays, refreshToken });
-  refreshJob.current = { domainCode, entityId, fromDate, toDate, knownAt, staleDays, refreshToken };
+  useEffect(() => {
+    if (view === 'entities' && section !== 'freshness') setEntitiesNeeded(true);
+  }, [view, section]);
+
+  const refreshJob = useRef({ domainCode, entityId, fromDate, toDate, knownAt, staleDays, refreshToken, entitiesNeeded });
+  refreshJob.current = { domainCode, entityId, fromDate, toDate, knownAt, staleDays, refreshToken, entitiesNeeded };
   const refreshPump = useRef(false);
   const refreshApplied = useRef('');
   const refreshAlive = useRef(true);
@@ -418,11 +423,12 @@ export function DataQualityDashboard({
           while (refreshAlive.current) {
             const job = refreshJob.current;
             const key = JSON.stringify(job);
+            const dashboardQuery = job.entitiesNeeded ? DATA_QUALITY_DASHBOARD_WITH_ENTITIES_QUERY : DATA_QUALITY_DASHBOARD_QUERY;
             setLoading(true);
             setComparing(false);
             const [dashboardResult, staleResult] = await Promise.all([
               graphqlQuery<{ dataQualityDashboard: Dashboard }, { domainCode: string | null; fromDate: string; toDate: string; knowledgeDate: string | null; entityId: string | null }>(
-                DATA_QUALITY_DASHBOARD_QUERY,
+                dashboardQuery,
                 {
                   domainCode: job.domainCode || null,
                   fromDate: job.toDate,
@@ -471,7 +477,7 @@ export function DataQualityDashboard({
             }
             setComparing(true);
             const compared = await graphqlQuery<{ dataQualityDashboard: Dashboard }, { domainCode: string | null; fromDate: string; toDate: string; knowledgeDate: string | null; entityId: string | null }>(
-              DATA_QUALITY_DASHBOARD_QUERY,
+              dashboardQuery,
               {
                 domainCode: job.domainCode || null,
                 fromDate: job.fromDate,
@@ -504,7 +510,7 @@ export function DataQualityDashboard({
     };
 
     pump();
-  }, [domainCode, entityId, fromDate, toDate, knownAt, refreshToken, staleDays]);
+  }, [domainCode, entityId, fromDate, toDate, knownAt, refreshToken, staleDays, entitiesNeeded]);
 
   useEffect(() => {
     setOpenKey(null);
@@ -547,19 +553,23 @@ export function DataQualityDashboard({
   );
   const availabilityGroups = useMemo(
     () => groupByEntityType(
-      splitAvailabilityByEntityType(dashboard?.availability ?? []),
+      (dashboard?.availability ?? []).filter((row) =>
+        (rowScope === 'all' || row.missingCount > 0) && row.attributeName.toLowerCase().includes(measureQuery.trim().toLowerCase())),
       (row) => row.domainCode,
       domainLabel,
     ),
-    [dashboard],
+    [dashboard, rowScope, measureQuery],
   );
   const qualityGroups = useMemo(
     () => groupByEntityType(
-      splitRulesByEntityType(dashboard?.quality ?? []),
+      splitRulesByEntityType(dashboard?.quality ?? []).filter(
+        (rule) => (rowScope === 'all' || !rule.evaluated || rule.failingCount > 0) &&
+          rule.ruleName.toLowerCase().includes(measureQuery.trim().toLowerCase()),
+      ),
       (rule) => rule.domainCode,
       domainLabel,
     ),
-    [dashboard],
+    [dashboard, rowScope, measureQuery],
   );
   const trajectoryGroups = useMemo(
     () => groupByEntityType(
@@ -820,10 +830,18 @@ export function DataQualityDashboard({
               <div className="qm-title">Data availability by attribute</div>
               <p>Required attributes come from the entity template. Resolved means a gap on {formatDay(fromDate)} now has a value. Introduced means a value then is missing on {formatDay(toDate)}.</p>
             </div>
+            <div className="dq-head-tools">
+              <input className="text-input" placeholder="Search attributes" value={measureQuery} onChange={(event) => setMeasureQuery(event.target.value)} aria-label="Search attributes" />
+              <ExceptionScopeRadios name="dq-scope-availability" value={rowScope} onChange={setRowScope} />
+            </div>
           </div>
           {loading && !dashboard && <div className="dq-empty">Loading availability…</div>}
           {dashboard && availabilityGroups.length === 0 && (
-            <div className="dq-empty">No required attributes are defined for this selection. Mark attributes required on the template or the attribute register.</div>
+            <div className="dq-empty">
+              {rowScope === 'exceptions' && (dashboard.availability?.length ?? 0) > 0
+                ? 'Every required attribute is fully populated.'
+                : 'No required attributes are defined for this selection. Mark attributes required on the template or the attribute register.'}
+            </div>
           )}
           {availabilityGroups.map((group) => (
             <div className="dq-type" key={group.code || 'all'}>
@@ -856,40 +874,19 @@ export function DataQualityDashboard({
                   </span>
                 </button>
                 {open && (
-                  <div className="dq-detail">
-                    {row.entities && row.entities.length > 0 ? (
-                      <AvailabilityTable
-                        rows={row.entities.slice(0, detailLimit)}
-                        total={row.entities.length}
-                        missingCount={row.missingCount}
-                        attributeCode={row.attributeCode}
-                        attributeName={row.attributeName}
-                        asOf={toDate}
-                        onDone={() => setRefreshToken((token) => token + 1)}
-                        onMore={() => setDetailLimit((count) => count + DETAIL_PAGE)}
-                      />
-                    ) : row.missingEntities.length === 0 ? (
-                      <div className="dq-empty">Every entity that requires this attribute has a value.</div>
-                    ) : (
-                      <EntityTable
-                        rows={row.missingEntities.slice(0, detailLimit)}
-                        total={row.missingEntities.length}
-                        attributeCode={row.attributeCode}
-                        attributeName={row.attributeName}
-                        asOf={toDate}
-                        onDone={() => setRefreshToken((token) => token + 1)}
-                        onMore={() => setDetailLimit((count) => count + DETAIL_PAGE)}
-                      />
-                    )}
-                    <ShiftTables
-                      resolved={row.resolvedEntities}
-                      introduced={row.introducedEntities}
-                      fromDate={fromDate}
-                      toDate={toDate}
-                      limit={detailLimit}
-                      onMore={() => setDetailLimit((count) => count + DETAIL_PAGE)}
-                    />
-                  </div>
+                  <AvailabilityDetail
+                    attributeCode={row.attributeCode}
+                    attributeName={row.attributeName}
+                    domainCode={row.domainCode}
+                    entityId={entityId}
+                    fromDate={fromDate}
+                    toDate={toDate}
+                    knownAt={knownAt}
+                    refreshToken={refreshToken}
+                    limit={detailLimit}
+                    onMore={() => setDetailLimit((count) => count + DETAIL_PAGE)}
+                    onDone={() => setRefreshToken((token) => token + 1)}
+                  />
                 )}
               </div>
             );
@@ -906,9 +903,19 @@ export function DataQualityDashboard({
               <div className="qm-title">Data quality by rule</div>
               <p>Each active rule is checked as of {formatDay(toDate)}{knownAt ? `, using what was known at ${new Date(knownAt).toLocaleString()}` : ''}. Resolved means it failed on {formatDay(fromDate)} and passes on {formatDay(toDate)}. Introduced means it passed then and fails on {formatDay(toDate)}. Waived results stay off the failing list.</p>
             </div>
+            <div className="dq-head-tools">
+              <input className="text-input" placeholder="Search rules" value={measureQuery} onChange={(event) => setMeasureQuery(event.target.value)} aria-label="Search rules" />
+              <ExceptionScopeRadios name="dq-scope-quality" value={rowScope} onChange={setRowScope} />
+            </div>
           </div>
           {loading && !dashboard && <div className="dq-empty">Loading rules…</div>}
-          {dashboard && qualityGroups.length === 0 && <div className="dq-empty">No active data quality rules match this selection.</div>}
+          {dashboard && qualityGroups.length === 0 && (
+            <div className="dq-empty">
+              {rowScope === 'exceptions' && (dashboard.quality?.length ?? 0) > 0
+                ? 'Every active rule is passing.'
+                : 'No active data quality rules match this selection.'}
+            </div>
+          )}
           {qualityGroups.map((group) => (
             <div className="dq-type" key={group.code || 'all'}>
               <TypeHead code={group.code} count={group.items.length} singular="rule" />
@@ -1323,9 +1330,9 @@ export function DataQualityDashboard({
               />
             </div>
           </div>
-          {loading && !dashboard && <div className="dq-empty">Loading entities…</div>}
+          {!dashboard?.entities && !error && <div className="dq-empty">Loading entities…</div>}
           {comparing && entityGroups.length === 0 && section === 'trajectory' && <div className="dq-empty">Comparing {formatDay(fromDate)} to {formatDay(toDate)}…</div>}
-          {!comparing && dashboard && entityGroups.length === 0 && (
+          {!comparing && dashboard?.entities && entityGroups.length === 0 && (
             <div className="dq-empty">
               {section === 'availability' && 'No required-attribute gaps opened or closed in this period.'}
               {section === 'quality' && 'No rule results opened or closed in this period.'}
@@ -1743,6 +1750,23 @@ function handoffStatusClass(match: OverrideMatch) {
   return 'dq-status-differs';
 }
 
+function ExceptionScopeRadios({
+  name,
+  value,
+  onChange,
+}: {
+  name: string;
+  value: 'exceptions' | 'all';
+  onChange: (next: 'exceptions' | 'all') => void;
+}) {
+  return (
+    <div className="dq-seg" role="radiogroup" aria-label="Rows shown" data-name={name}>
+      <button type="button" role="radio" aria-checked={value === 'exceptions'} className={value === 'exceptions' ? 'active' : ''} onClick={() => onChange('exceptions')}>Exceptions</button>
+      <button type="button" role="radio" aria-checked={value === 'all'} className={value === 'all' ? 'active' : ''} onClick={() => onChange('all')}>All</button>
+    </div>
+  );
+}
+
 function HandoffScopeToggle({
   value,
   onChange,
@@ -1977,7 +2001,7 @@ function isCritical(severity: string) {
   return key === 'CRITICAL' || key === 'HIGH';
 }
 
-type QualityEntity = Dashboard['entities'][number];
+type QualityEntity = NonNullable<Dashboard['entities']>[number];
 
 function ExceptionBoard({ entity, asOf, onDone }: { entity: QualityEntity; asOf: string; onDone: () => void }) {
   const [tab, setTab] = useState<'open' | 'resolved' | 'all'>('open');
@@ -2170,92 +2194,189 @@ function ExceptionRow({ entityId, ruleId, ruleName, severity, attributeCode, act
   );
 }
 
-function AvailabilityTable({ rows, total, missingCount, attributeCode, attributeName, asOf, onDone, onMore }: {
-  rows: AvailabilityEntity[];
-  total: number;
-  missingCount: number;
+function AvailabilityDetail({ attributeCode, attributeName, domainCode, entityId, fromDate, toDate, knownAt, refreshToken, limit, onMore, onDone }: {
   attributeCode: string;
   attributeName: string;
-  asOf: string;
-  onDone: () => void;
+  domainCode: string | null;
+  entityId?: string;
+  fromDate: string;
+  toDate: string;
+  knownAt: string | null;
+  refreshToken: number;
+  limit: number;
   onMore: () => void;
+  onDone: () => void;
 }) {
-  const display = useAttributeDisplay(attributeCode);
-  const listOptions = useAttributeListOptions(attributeCode);
-  const numeric = ['number', 'integer', 'currency', 'percentage'].includes(attributeDisplayKind(display));
+  const [detail, setDetail] = useState<AvailabilityDetailData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setError(null);
+    graphqlQuery<{ dqAvailabilityDetail: AvailabilityDetailData }>(
+      DQ_AVAILABILITY_DETAIL_QUERY,
+      { attributeCode, domainCode: domainCode || null, fromDate, toDate, knowledgeDate: knownAt, entityId: entityId || null },
+      'network-only',
+      controller.signal,
+    ).then((result) => {
+      if (result.aborted || controller.signal.aborted) return;
+      if (result.error || !result.data?.dqAvailabilityDetail) {
+        setError(qualityError(result.error?.message, 'Could not load the entities for this attribute.'));
+        return;
+      }
+      setDetail(result.data.dqAvailabilityDetail);
+    });
+    return () => controller.abort();
+  }, [attributeCode, domainCode, entityId, fromDate, toDate, knownAt, refreshToken]);
+
+  if (error) return <div className="dq-detail"><div className="dq-error">{error}</div></div>;
+  if (!detail) return <div className="dq-detail"><div className="dq-empty">Loading entities…</div></div>;
   return (
-    <>
-      <div className="dq-sub">
-        {missingCount === 0
-          ? `${total.toLocaleString()} ${total === 1 ? 'entity requires' : 'entities require'} ${attributeName}, and each one has a value.`
-          : `${missingCount.toLocaleString()} of ${total.toLocaleString()} ${total === 1 ? 'entity is' : 'entities are'} missing ${attributeName}.`}
-      </div>
-      <AppGrid
-        rows={rows}
-        columns={[
-          {
-            colId: 'entity',
-            headerName: 'Entity',
-            flex: 1.4,
-            minWidth: 200,
-            valueGetter: (params) => params.data?.entityName || '',
-            cellRenderer: (params: any) => (
-              <div>
-                <Link href={entityHref(params.data.domainCode, params.data.id)}>{params.data.entityName}</Link>
-              </div>
-            ),
-          },
-          {
-            colId: 'value',
-            headerName: 'Value',
-            flex: 1,
-            minWidth: 180,
-            autoHeight: true,
-            sortable: false,
-            filter: false,
-            cellRenderer: (params: any) => params.data.value ? (
-              <span className={numeric ? 'dq-num' : undefined}>{listDisplayLabel(params.data.value, listOptions) || formatAttributeDisplay(params.data.value, display)}</span>
-            ) : (
-              <ResolveForm
-                entityId={params.data.id}
-                attributeCode={attributeCode}
-                attributeName={attributeName}
-                actualValue=""
-                asOf={asOf}
-                onDone={onDone}
-              />
-            ),
-          },
-        ]}
-        getRowId={(row) => row.id}
-        autoHeight
-        autoRowHeight
-        emptyMessage="No entities."
-      />
-      {total > rows.length && (
-        <button type="button" className="dq-more" onClick={onMore}>Show more ({total - rows.length} remaining)</button>
+    <div className="dq-detail">
+      {detail.missingEntities.length === 0 ? (
+        <div className="dq-empty">Every entity that requires this attribute has a value.</div>
+      ) : (
+        <EntityTable
+          rows={detail.missingEntities}
+          limit={limit}
+          attributeCode={attributeCode}
+          attributeName={attributeName}
+          asOf={toDate}
+          onDone={onDone}
+          onMore={onMore}
+        />
       )}
-    </>
+      <ShiftTables
+        resolved={detail.resolvedEntities}
+        introduced={detail.introducedEntities}
+        fromDate={fromDate}
+        toDate={toDate}
+        limit={limit}
+        onMore={onMore}
+      />
+    </div>
   );
 }
 
-function EntityTable({ rows, total, attributeCode, attributeName, asOf, onDone, onMore }: {
+function EntityTable({ rows, limit, attributeCode, attributeName, asOf, onDone, onMore }: {
   rows: EntityRef[];
-  total: number;
+  limit: number;
   attributeCode: string;
   attributeName: string;
   asOf: string;
   onDone: () => void;
   onMore: () => void;
 }) {
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkValue, setBulkValue] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+
+  const needle = query.trim().toLowerCase();
+  const matching = needle ? rows.filter((entity) => entity.entityName.toLowerCase().includes(needle)) : rows;
+  const shown = matching.slice(0, limit);
+  const selectedMatching = matching.filter((entity) => selected.has(entity.id));
+  const allSelected = matching.length > 0 && selectedMatching.length === matching.length;
+
+  const toggleOne = (id: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    setSelected((current) => {
+      const next = new Set(current);
+      for (const entity of matching) {
+        if (allSelected) next.delete(entity.id);
+        else next.add(entity.id);
+      }
+      return next;
+    });
+  };
+
+  const saveSelected = async () => {
+    const value = bulkValue.trim();
+    if (!value) {
+      setBulkMessage('Choose a value to apply.');
+      return;
+    }
+    const targets = selectedMatching;
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    setBulkMessage(null);
+    const outcomes = await Promise.all(targets.map(async (entity) => {
+      const result = await graphqlMutation<{ submitManualOverride: { success: boolean; errors: Array<{ message: string }> } }>(
+        `mutation CorrectQualityValue($input: ManualOverrideInput!) {
+          submitManualOverride(input: $input) { success errors { message } }
+        }`,
+        {
+          input: {
+            entityId: entity.id,
+            attributeCode,
+            value,
+            validFrom: asOf,
+            overrideReason: 'Corrected from the data quality review',
+          },
+        }
+      );
+      const error = result.error?.message || result.data?.submitManualOverride?.errors?.[0]?.message;
+      return { id: entity.id, ok: !error && Boolean(result.data?.submitManualOverride?.success), error };
+    }));
+    setBulkBusy(false);
+    const failed = outcomes.filter((outcome) => !outcome.ok);
+    setSelected(new Set(failed.map((outcome) => outcome.id)));
+    if (failed.length > 0) {
+      setBulkMessage(`${outcomes.length - failed.length} saved, ${failed.length} failed: ${failed[0].error || 'not saved'}`);
+    } else {
+      setBulkValue('');
+    }
+    onDone();
+  };
+
   return (
     <>
-      {rows.map((entity) => (
-        <div className="dq-case" key={entity.id}>
-          <div>
-            <Link href={entityHref(entity.domainCode, entity.id)}>{entity.entityName}</Link>
-            <div className="dq-sub">{attributeName} is required and blank</div>
+      <div className="dq-bulk">
+        <input
+          className="text-input"
+          placeholder={`Search ${rows.length.toLocaleString()} entities`}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          aria-label="Search entities"
+        />
+        <label className="dq-bulk-all">
+          <input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={matching.length === 0} />
+          Select all{needle ? ' matching' : ''} ({matching.length.toLocaleString()})
+        </label>
+        {selectedMatching.length > 0 && (
+          <div className="dq-bulk-apply">
+            <AttributeValueInput
+              attributeCode={attributeCode}
+              className="select"
+              value={bulkValue}
+              onChange={setBulkValue}
+              ariaLabel={`Set ${attributeName} for selected`}
+            />
+            <button type="button" className="btn btn-sm btn-primary" disabled={bulkBusy || !bulkValue.trim()} onClick={saveSelected}>
+              {bulkBusy ? 'Saving…' : `Save ${selectedMatching.length.toLocaleString()} correction${selectedMatching.length === 1 ? '' : 's'}`}
+            </button>
           </div>
+        )}
+        {bulkMessage && <span className="dq-sub">{bulkMessage}</span>}
+      </div>
+      {matching.length === 0 && <div className="dq-empty">No entities match that search.</div>}
+      {shown.map((entity) => (
+        <div className="dq-case dq-case-row dq-case-pick" key={entity.id}>
+          <label className="dq-pick">
+            <input type="checkbox" checked={selected.has(entity.id)} onChange={() => toggleOne(entity.id)} aria-label={`Select ${entity.entityName}`} />
+            <span>
+              <Link href={entityHref(entity.domainCode, entity.id)}>{entity.entityName}</Link>
+              <span className="dq-sub">{attributeName} is required and blank</span>
+            </span>
+          </label>
           <ResolveForm
             entityId={entity.id}
             attributeCode={attributeCode}
@@ -2266,8 +2387,8 @@ function EntityTable({ rows, total, attributeCode, attributeName, asOf, onDone, 
           />
         </div>
       ))}
-      {total > rows.length && (
-        <button type="button" className="dq-more" onClick={onMore}>Show more ({total - rows.length} remaining)</button>
+      {matching.length > shown.length && (
+        <button type="button" className="dq-more" onClick={onMore}>Show more ({matching.length - shown.length} remaining)</button>
       )}
     </>
   );

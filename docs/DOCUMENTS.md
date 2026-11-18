@@ -1,0 +1,137 @@
+# Documents
+
+Load data turns a file into values. Documents keeps the words: an agreement is read into its sections and clauses, each tied to the records it is about, tagged, and searchable by meaning. Documents are at `/documents`; types and templates are at `/admin/document-templates`.
+
+## Parts
+
+| Part | Where | What it does |
+|---|---|---|
+| Tables and functions | `supabase/migrations/20261118150000_document_content.sql` and the four that follow it | The `docs` schema, reached only through the `document_*` functions, and the private `documents` storage bucket |
+| Reader, chunker, templates, embedding | `packages/graphql/src/lib/document-content` | Pure code with tests: file to text, headings, chunks; template drawing and matching; the Voyage client; the pipeline |
+| Job | `packages/worker/src/documents.ts` | `document.process` |
+| Describer | `packages/worker/src/document-refiner.ts` | Claude, writing a description and topics for tables and lists |
+| Command line | `packages/worker/src/documents-cli.ts` | Add, process and search without a running worker |
+| API | `packages/graphql/src/resolvers/documents.ts` | What the screens call |
+| Upload | `apps/web/app/api/documents/route.ts` | Stores the file and queues it |
+| Agent tools | `packages/mcp-server/src/tools/document-tools.ts` | `search_documents`, `list_documents`, `get_document_section` |
+
+## What happens to a file
+
+1. **Stored.** The file goes to `documents/<client id>/<document id>/<file name>`. A document is identified by its content: the same file for the same client is held once.
+2. **Read.** HTML, text and PDFs with a text layer are read on the worker, with no outside service. Scans and Word files are refused with a reason. The reader produces the body (the whole text), the headings, and the chunks.
+3. **Tagged.** Each heading is placed on a section of the type's published template.
+4. **Refined.** A passage that is mostly names and numbers gets a one-sentence description and topics from a model. Only those passages are sent, and only when `ANTHROPIC_API_KEY` is set. See Refinement below.
+5. **Embedded.** Each chunk gets a vector. The whole text is sent to the embedding service here, and only when `VOYAGE_API_KEY` is set. Without it the document is still searchable by words.
+
+`document.process` runs these in order. Embedding saves as it goes, so a run the embedding service slows down carries on from where it stopped. Reading a file again keeps the vector, description and topics of every passage whose words, place and headings did not change, so only what changed is described and embedded again. Nothing runs until a worker is running (see [JOBS.md](JOBS.md)); to work on one document without it:
+
+```
+npm run documents --workspace @tapestrai/worker -- add <file> --type CREDIT_AGREEMENT --entity <entity code>:BORROWER
+npm run documents --workspace @tapestrai/worker -- process <document id>
+npm run documents --workspace @tapestrai/worker -- pending
+npm run documents --workspace @tapestrai/worker -- search "what are the financial covenants"
+```
+
+## Headings and chunks
+
+Headings come from how agreements number themselves (`SECTION 7`, `ARTICLE VI`, `7.1`, `EXHIBIT A`, `SCHEDULE 1.1A`), from bold run-in headings (`7.2 Indebtedness. Create, ...`), and from heading marks in HTML and markdown. A table of contents lists the same headings with nothing between them, which is how it is told apart from the body and left out. Two levels are kept.
+
+A chunk never crosses a heading. Within a section:
+
+- a new clause label, `(a)`, starts a new chunk once the current one is long enough;
+- each defined term is its own chunk, tagged with the term;
+- the rows of a table stay together, with a short caption line above them;
+- a paragraph longer than the limit is cut at a sentence end.
+
+Each chunk carries what a citation needs:
+
+| Field | What it is |
+|---|---|
+| `text` | The exact words. The database cuts them from the body by the chunk's offsets, so they cannot differ from the document. |
+| `char_start`, `char_end` | Where the words sit in the body |
+| `locator` | Page, clause label, the headings above, and for HTML the offsets in the original file |
+| `tags` | See below |
+| `embedding` | 1,024 numbers from the embedding model |
+
+Offsets count characters of the body. The reader replaces characters outside the basic plane (emoji and the like) with one placeholder character, so JavaScript and Postgres count the same.
+
+## Tags
+
+Tags are plain strings on chunks. Search can require any set of them.
+
+| Tag | Set by |
+|---|---|
+| `type:CREDIT_AGREEMENT` | The document's type |
+| `section:NEGATIVE_COVENANTS` | The template section of the chunk's heading, and of the heading above it |
+| `kind:clause`, `kind:definition`, `kind:table`, `kind:front` | The chunker |
+| `topic:lenders` | Refinement, or a person, from the template's topics |
+| `term:applicable margin` | The chunker, on a definition |
+| anything else | A person, on the document or on a template section. Every chunk under it carries the tag. |
+
+A chunk's tags are rebuilt whenever the document's tags, type, template or section choices change.
+
+## Templates
+
+A template lists the sections a kind of document is expected to have: a title, other wordings that mean the same section, tags, guidance, and whether every document should have it. It has two levels, like the headings.
+
+- **Draw.** Tick one or more read documents and draw a draft. Headings are grouped across the documents by their words, ignoring numbers, so `7.1 Financial Condition Covenants` and `6.12 Financial Covenants` become one section with the second as another wording. Each section records how many of the documents had it.
+- **Refine.** Rename, reorder, merge, remove and add sections; add other wordings and tags. Ticking more documents adds only what the draft lacks and changes nothing a person set.
+- **Publish.** Publishing retires the version it replaces and tags every document of the type against the new one. A published template is never changed; start a new draft from it.
+
+A heading is placed on a section by the same words, then a known other wording, then similar words, then (with an embedding key) similar meaning. A section a person chose on a document is kept when the document is tagged again. A client's own published template is used before the shared one.
+
+## Refinement
+
+A table of lenders and amounts has no sentence in it. Its vector means little and a question shares few words with it, so search passes it by. Refinement is what is done about that.
+
+- **Thin passages.** The chunker marks a passage thin when it is a table, when half its lines are a label and a value (`By:`, `Name:`, `Title:`), or when fewer than about two words in ten are ordinary function words. On a 137-page credit agreement that was 20 passages of 728: tables, schedules, signature blocks, the notice addresses and a few terse definitions.
+- **Description and topics.** For each thin passage the model is given the passage, the headings above it, the end of the passage before it, and the template's topics. It writes one sentence saying what the passage holds and picks the topics it is about. The topics become tags (`topic:lenders`). The description is word-indexed and embedded with the passage.
+- **Never the citation.** `chunks.text` stays the document's own words. The description is kept apart in `chunks.summary`, shown as "Described as", and the agent tools tell the model not to quote it.
+- **Corrections.** On the document's page a person can describe any passage and choose its topics. What a person wrote is marked `MANUAL` and is not overwritten when the document is refined or read again. The passage is embedded again by the worker.
+- **When the model cannot be reached.** The step never fails the document. The passages stay as they are, the document's message says so, and the next read tries again.
+
+### Topics
+
+A template lists the subjects its documents cover, each with a short description: lenders, pricing, fees, financial covenants. They cut across sections; lenders appear in the preamble, a schedule and the signature pages. A new draft starts with a list for its type (see `defaultTopics` in `refine.ts`), and a person changes it on the template page. The description matters: a search question is compared with it.
+
+## Search
+
+`document_search` ranks chunks by vector distance and by the words of the question, and joins the lists by reciprocal rank, so a chunk found both ways comes first. Filters are tags (all must be present), linked records, document types and documents.
+
+It does not pick a branch of the template and search only there. Instead it routes: each topic and top section of a published template has a vector, the question is compared with them, and the passages carrying the closest topic, and those under the closest top section, are added as further ranked lists at less than a full vote (0.75 for a topic, 0.2 for a section). So a table filed under Lenders is found by a question about lenders even when neither its words nor its own vector match. A wrong route only adds a few candidates; it never hides the rest. Each result says how it was found and which topic or section brought it forward. To search one branch only, pass its tag as a filter.
+
+Routes are built when a template is published, or by the worker the next time it reads a document of the type.
+
+### The second pass
+
+Joining lists by rank has a weakness: a passage that is a middling match two ways outranks one that is by far the closest in meaning but shares no words with the question. So the best 30 candidates are ranked again by a reranking model, which reads the question and each passage together and scores how well the passage answers it. The model is given each passage's headings, its description if it has one, and the first 1,600 characters of its words. Results come back in that order, each with a `relevance` from 0 to 1.
+
+The pass sends the question and those candidates to the same service that embeds them. If it is rate limited or fails, the search returns the joined order and says so.
+
+The agent tools return `quote` and `citation` for each passage and tell the model to quote the words rather than restate them.
+
+## Embedding
+
+Anthropic has no embedding model. The default is Voyage AI's `voyage-4` at 1,024 dimensions. The heading path is embedded along with the chunk's words, so a clause is embedded knowing where it sits.
+
+| Setting | Meaning |
+|---|---|
+| `VOYAGE_API_KEY` | Turns on embedding and search by meaning. Needed by the worker (to embed chunks) and by the web app and API (to embed a question). |
+| `DOCUMENT_EMBEDDING_MODEL` | Default `voyage-4`. A different model needs every chunk embedded again. |
+| `DOCUMENT_RERANK_MODEL` | Default `rerank-3`. `off` turns the second pass off. |
+| `VOYAGE_API_BASE` | Default tries `https://ai.mongodb.com/v1` (a key from MongoDB Atlas), then `https://api.voyageai.com/v1`. |
+| `ANTHROPIC_API_KEY` | Turns on refinement. Needed by the worker only. |
+| `DOCUMENT_REFINE_MODEL` | Default `claude-opus-5-5`, at low effort. Each call is recorded in agent usage as `document.refine`. |
+
+The model is recorded on each chunk. The column holds 1,024 dimensions; a model of another size needs a migration.
+
+## Permissions
+
+Any member of a client can read and search that client's documents. `document.manage` lets a person add and remove documents, link them to records, tag sections by hand and change templates. Client admins have it. A document type or template with no client is shared; only a tenant admin changes those.
+
+## Not built yet
+
+- Scans and Word files. They need LlamaParse or Azure, as Load data uses, and a decision on sending document text there.
+- Highlighting a passage on the page image of a PDF. The locator keeps the page; the screen shows the text.
+- Tying a value loaded from a document to the chunk it came from.
+- Feeds do not deliver documents; they are added by hand or from the command line.

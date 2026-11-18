@@ -1,8 +1,8 @@
 import { redirect } from 'next/navigation';
-import { checkSurfaceAccess } from '@tapestrai/surface-sdk';
 import { HomeView } from '@/components/home/HomeView';
 import type { HomePlace } from '@/lib/home';
 import { loadSurfaceUser } from '@/lib/surface-access-server';
+import { eligibleManifests } from '@/lib/surface-links';
 import { SURFACES } from '@/lib/surface-registry';
 
 /** Built-in pages a person can pin. The first group is pinned until they choose. */
@@ -22,11 +22,11 @@ export default async function HomePage() {
   if (!user) redirect('/login?redirectedFrom=%2F');
 
   // A surface the person may not open is never offered, the same as /s/<code>.
-  const surfaces: HomePlace[] = SURFACES.filter((entry) => checkSurfaceAccess(entry.manifest, user).allowed).map((entry) => ({
-    key: `s:${entry.manifest.code}`,
-    title: entry.manifest.title,
-    description: entry.manifest.description || '',
-    href: `/s/${entry.manifest.code}`,
+  const surfaces: HomePlace[] = eligibleManifests(SURFACES.map((entry) => entry.manifest), user).map((manifest) => ({
+    key: `s:${manifest.code}`,
+    title: manifest.title,
+    description: manifest.description || '',
+    href: `/s/${manifest.code}`,
     pinnedByDefault: true,
   }));
 

@@ -165,7 +165,7 @@ describe('advanceRun', () => {
     const { deps: engine } = deps(memory.store);
 
     expect(await advanceRun('run-1', 'job-1', engine)).toMatchObject({ status: 'WAITING' });
-    expect(memory.routings).toEqual([{ people: ['user-9'], roles: ['OPS_LEAD'], separateReviewer: true, dueInHours: 24, escalateRoles: [], approvals: 1, reassignWhenOverdue: false }]);
+    expect(memory.routings).toEqual([{ people: ['user-9'], roles: ['OPS_LEAD'], separateReviewer: true, dueInHours: 24, escalateRoles: [], approvals: 1, reassignWhenOverdue: false, routeToOwners: true, activity: null }]);
     expect(memory.events.find((event) => event.type === 'review.requested')?.summary).toBe('Waiting for Person user-9 to review 2 proposed changes');
   });
 

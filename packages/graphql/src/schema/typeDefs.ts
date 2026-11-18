@@ -522,14 +522,6 @@ type QualityEntityRef {
   domainCode: String!
 }
 
-type AvailabilityEntity {
-  id: ID!
-  entityCode: String!
-  entityName: String!
-  domainCode: String!
-  value: String
-}
-
 type AttributeAvailability {
   attributeCode: String!
   attributeName: String!
@@ -542,7 +534,13 @@ type AttributeAvailability {
   missingEntities: [QualityEntityRef!]!
   resolvedEntities: [MeasureShift!]!
   introducedEntities: [MeasureShift!]!
-  entities: [AvailabilityEntity!]
+}
+
+"Records behind one required-attribute row: missing a value now, or filled in or lost since the from date."
+type AvailabilityDetail {
+  missingEntities: [QualityEntityRef!]!
+  resolvedEntities: [MeasureShift!]!
+  introducedEntities: [MeasureShift!]!
 }
 
 type RuleFailure {
@@ -1370,6 +1368,9 @@ type Entity {
   
   # Dynamic attributes from template
   attributes: JSONObject!
+
+  # The template in force for this record, after overrides and inheritance.
+  effectiveTemplate(asOfDate: Date): EffectiveTemplate
   
   # Relationships
   parentRelationships: [EntityRelationship!]!
@@ -1514,8 +1515,67 @@ type RelationshipType {
   isRequired: Boolean!
   cardinality: String!
   compositeKey: [String!]!
+  # Stored side (PARENT or CHILD) whose record chooses the template for the other side.
+  templateFromSide: String
   clientId: ID
   clientName: String
+}
+
+# Which template a record uses, and where it came from.
+# source: OVERRIDE (set on the record), INHERITED (chosen on a linked record),
+# OWN (the record's own template), NONE.
+type EffectiveTemplate {
+  entityId: ID!
+  templateId: ID
+  templateCode: String
+  templateName: String
+  source: String!
+  fromEntityId: ID
+  fromEntityName: String
+  relationshipCode: String
+  onDate: Date
+}
+
+type TemplateOption {
+  id: ID!
+  templateCode: String!
+  templateName: String!
+}
+
+type EntityTemplateChoice {
+  id: ID!
+  entityId: ID!
+  relationshipCode: String
+  templateId: ID!
+  templateCode: String!
+  templateName: String!
+  validFrom: Date
+  validTo: Date
+}
+
+# One thing a record can choose a template for: the records linked to it
+# through a relationship, or itself when relationshipCode is null.
+type TemplateChoiceSlot {
+  entityId: ID!
+  relationshipCode: String
+  relationshipName: String
+  domainCode: String!
+  domainName: String!
+  templates: [TemplateOption!]!
+  choices: [EntityTemplateChoice!]!
+}
+
+input SetEntityTemplateChoiceInput {
+  entityId: ID!
+  relationshipCode: String
+  templateId: ID
+  effectiveFrom: Date
+}
+
+type SetEntityTemplateChoiceResult {
+  success: Boolean!
+  choices: [EntityTemplateChoice!]!
+  errors: [MutationError!]!
 }
 
 type CreateRelationshipResult {
@@ -2931,6 +2991,12 @@ type Query {
   workflowReviews(status: String, mine: Boolean): [WorkflowReview!]!
   """Who a review step can be assigned to: people holding workflow.review in the client, and the roles that grant it. Leave out clientId for a shared workflow."""
   workflowReviewerChoices(clientId: ID): WorkflowReviewerChoices!
+  """Who is responsible for a record or a domain. Filter by record, by domain, or to the caller's own."""
+  responsibilities(entityId: ID, domainCode: String, mine: Boolean): [Responsibility!]!
+  """Who is responsible for one record right now, after the nearest assignment wins."""
+  responsibleForEntity(entityId: ID!, activity: String): [ResponsiblePerson!]!
+  """The people, roles, and activities a responsibility can be set to."""
+  responsibilityChoices(clientId: ID): ResponsibilityChoices!
   """What starts this workflow when something happens: feed events or new data quality failures."""
   workflowTriggers(workflowId: ID!): [WorkflowTrigger!]!
   """Where this client's review notices are sent besides the assistant: email and Slack."""
@@ -2954,6 +3020,16 @@ type Query {
   receivedFiles(feedId: ID, first: Int): [ReceivedFile!]!
   """Saved maps a feed can load through."""
   feedMaps: [FeedMapOption!]!
+  # Document content: types, templates, documents and search (see docs/DOCUMENTS.md)
+  documentTypes: [DocumentType!]!
+  documentTemplates(typeId: ID): [DocumentTemplate!]!
+  documents(typeId: ID, entityId: ID, first: Int): [Document!]!
+  document(id: ID!): Document
+  documentChunks(documentId: ID!, sectionId: ID, first: Int, offset: Int): [DocumentChunk!]!
+  documentText(id: ID!, start: Int!, end: Int!): DocumentText
+  documentTags: [DocumentTag!]!
+  searchDocuments(query: String!, tags: [String!], entityIds: [ID!], typeCodes: [String!], documentIds: [ID!], first: Int): DocumentSearchResult!
+  documentFileUrl(id: ID!): String
   """When the caller wants a summary, and whether delivery is on."""
   assistantSettings: AssistantSettings!
   """What the caller has asked the assistant to follow."""
@@ -2969,6 +3045,8 @@ type Query {
   # Entity Management queries
   entityIdentifierDefinitions(domainCode: String): [EntityIdentifierDefinition!]!
   relationshipTypes: [RelationshipType!]!
+  effectiveTemplates(entityIds: [ID!]!, asOfDate: Date): [EffectiveTemplate!]!
+  templateChoiceSlots(entityId: ID!): [TemplateChoiceSlot!]!
   
   # Lineage and temporal queries
   fieldLineage(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime): [FieldLineage!]!
@@ -2982,6 +3060,7 @@ type Query {
   dqRules(filter: DQRuleFilter, pagination: PaginationInput): [DQRule!]!
   dqExceptions(filter: DQExceptionFilter, pagination: PaginationInput): DQExceptionConnection!
   dataQualityDashboard(domainCode: String, fromDate: Date, toDate: Date, knowledgeDate: DateTime, entityId: ID): DataQualityDashboard!
+  dqAvailabilityDetail(attributeCode: String!, domainCode: String, fromDate: Date, toDate: Date, knowledgeDate: DateTime, entityId: ID): AvailabilityDetail!
   staleAttributes(domainCode: String, olderThanDays: Int, asOfDate: Date, knowledgeDate: DateTime, entityId: ID): StaleAttributeReport!
   
   # Source queries
@@ -3189,6 +3268,7 @@ type Mutation {
   createRelationshipType(input: CreateRelationshipTypeInput!): CreateRelationshipTypeResult!
   updateRelationshipType(input: UpdateRelationshipTypeInput!): UpdateRelationshipTypeResult!
   deleteRelationshipType(id: ID!): DeleteRelationshipTypeResult!
+  setEntityTemplateChoice(input: SetEntityTemplateChoiceInput!): SetEntityTemplateChoiceResult!
 
   # Entity identifier (match key) mutations
   createEntityIdentifier(input: CreateEntityIdentifierInput!): CreateEntityIdentifierResult!
@@ -3306,10 +3386,25 @@ type Mutation {
   deleteFeed(id: ID!): MutationResult!
   """Queues a poll of the feed now."""
   pollFeedNow(id: ID!): JobRunResult!
+  # Document content
+  saveDocumentType(input: SaveDocumentTypeInput!): DocumentTypeResult!
+  saveDocumentTemplate(input: SaveDocumentTemplateInput!): DocumentTemplateResult!
+  generateDocumentTemplate(typeId: ID!, documentIds: [ID!]!, baseTemplateId: ID): DocumentTemplateResult!
+  publishDocumentTemplate(id: ID!): PublishDocumentTemplateResult!
+  deleteDocumentTemplate(id: ID!): MutationResult!
+  updateDocument(input: UpdateDocumentInput!): DocumentResult!
+  deleteDocument(id: ID!): MutationResult!
+  reprocessDocument(id: ID!): DocumentResult!
+  retagDocument(id: ID!): DocumentResult!
+  assignDocumentSection(sectionId: ID!, templateSectionCode: String): DocumentResult!
+  refineDocumentChunk(chunkId: ID!, summary: String, topics: [String!]): MutationResult!
 
   saveAssistantSettings(input: SaveAssistantSettingsInput!): SaveAssistantSettingsResult!
   saveAssistantFollow(input: SaveAssistantFollowInput!): SaveAssistantFollowResult!
   deleteAssistantFollow(id: ID!): MutationResult!
+  """Names a person or a role as responsible for a record or a domain. Needs responsibility.manage."""
+  saveResponsibility(input: SaveResponsibilityInput!): SaveResponsibilityResult!
+  deleteResponsibility(id: ID!): MutationResult!
   deliverAssistantBrief: MutationResult!
   """Saves the caller's home page choices. Null for a list returns it to the default."""
   saveHomeLayout(input: SaveHomeLayoutInput!): SaveHomeLayoutResult!
@@ -4229,15 +4324,21 @@ input CreateRelationshipTypeInput {
   isActive: Boolean
   cardinality: String
   compositeKey: [String!]
+  templateFromSide: String
   clientId: ID
 }
 
 input UpdateRelationshipTypeInput {
+  id: ID!
+  relationshipCode: String
   relationshipName: String
+  parentDomainCode: String
+  childDomainCode: String
   description: String
   isActive: Boolean
   cardinality: String
   compositeKey: [String!]
+  templateFromSide: String
 }
 
 
@@ -5023,6 +5124,71 @@ type WorkflowReviewerChoices {
   roles: JSON!
 }
 
+"""Who must act on a record or a domain. It grants no access."""
+type Responsibility {
+  id: ID!
+  clientId: ID!
+  """ENTITY or DOMAIN."""
+  subjectType: String!
+  entityId: ID
+  entityName: String
+  """The domain named, or the domain of the record."""
+  domainCode: String
+  """For a record: also covers the records under it."""
+  includeChildren: Boolean!
+  """Null covers every activity."""
+  activityCode: String
+  activityName: String
+  userId: ID
+  userName: String
+  roleCode: String
+  roleName: String
+  """Used only when nobody else named at the same level can act."""
+  isBackup: Boolean!
+  note: String
+  """The caller is the person named, or holds the role named."""
+  isMine: Boolean!
+  canManage: Boolean!
+  createdAt: DateTime
+}
+
+type ResponsiblePerson {
+  userId: ID!
+  name: String!
+  isBackup: Boolean!
+}
+
+type ResponsibilityChoices {
+  clientId: ID
+  canManage: Boolean!
+  """[{ id, name }]"""
+  people: JSON!
+  """[{ code, name }]"""
+  roles: JSON!
+  """[{ code, name, description }]"""
+  activities: JSON!
+}
+
+input SaveResponsibilityInput {
+  """ENTITY or DOMAIN."""
+  subjectType: String!
+  entityId: ID
+  domainCode: String
+  activityCode: String
+  userId: ID
+  roleCode: String
+  isBackup: Boolean
+  includeChildren: Boolean
+  note: String
+  """For a domain, when the session can see more than one client."""
+  clientId: ID
+}
+
+type SaveResponsibilityResult {
+  responsibility: Responsibility
+  errors: [MutationError!]!
+}
+
 input ReassignWorkflowReviewInput {
   reviewId: ID!
   """User ids."""
@@ -5316,5 +5482,283 @@ type HomeBrief {
   followCount: Int!
 }
 
+# Document content: the words of a document in tagged, searchable sections (see docs/DOCUMENTS.md)
+
+type DocumentType {
+  id: ID!
+  """Null for a type every client can use."""
+  clientId: ID
+  typeCode: String!
+  typeName: String!
+  description: String
+  isActive: Boolean!
+  documentCount: Int!
+  publishedTemplateId: ID
+  publishedTemplateVersion: Int
+}
+
+type DocumentTemplateSection {
+  code: String!
+  title: String!
+  """Null for a top section. A template has two levels."""
+  parentCode: String
+  """Other headings that mean this section."""
+  aliases: [String!]!
+  """Tags every chunk under this section carries."""
+  tags: [String!]!
+  guidance: String!
+  required: Boolean!
+  order: Int!
+  """How many of the source documents had this section."""
+  seenIn: Int!
+}
+
+type DocumentTemplateTopic {
+  code: String!
+  title: String!
+  """What belongs under the topic. A search question is compared with it."""
+  description: String!
+}
+
+type DocumentTemplate {
+  id: ID!
+  clientId: ID
+  typeId: ID!
+  typeCode: String
+  typeName: String
+  version: Int!
+  """DRAFT, PUBLISHED or RETIRED. Only a draft can be changed."""
+  status: String!
+  sections: [DocumentTemplateSection!]!
+  """The subjects documents of this type cover, such as lenders or pricing."""
+  topics: [DocumentTemplateTopic!]!
+  sourceDocumentIds: [ID!]!
+  notes: String
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  publishedAt: DateTime
+}
+
+type DocumentEntityLink {
+  entityId: ID!
+  entityName: String!
+  entityCode: String
+  domainCode: String
+  """What the record is to the document: BORROWER, LENDER, FUND, SUBJECT."""
+  role: String!
+}
+
+type DocumentSection {
+  id: ID!
+  seq: Int!
+  parentSeq: Int
+  level: Int!
+  number: String
+  heading: String!
+  charStart: Int!
+  charEnd: Int!
+  templateSectionCode: String
+  """EXACT, ALIAS, SIMILAR, EMBEDDING or MANUAL. MANUAL is a choice made by a person and survives tagging again."""
+  matchMethod: String
+  matchScore: Float
+  chunkCount: Int!
+}
+
+type Document {
+  id: ID!
+  clientId: ID!
+  typeId: ID!
+  typeCode: String!
+  typeName: String!
+  templateId: ID
+  templateVersion: Int
+  title: String!
+  fileName: String!
+  mediaType: String
+  sizeBytes: Float
+  """RECEIVED, PROCESSING, READY or FAILED."""
+  status: String!
+  """While processing: READING, TAGGING or EMBEDDING."""
+  stage: String
+  message: String
+  documentDate: Date
+  tags: [String!]!
+  format: String
+  pageCount: Int
+  charCount: Int!
+  chunkCount: Int!
+  embeddedCount: Int!
+  embeddingModel: String
+  createdAt: DateTime!
+  processedAt: DateTime
+  entities: [DocumentEntityLink!]!
+  """Only on a single document, not in a list."""
+  sections: [DocumentSection!]!
+}
+
+type DocumentChunk {
+  id: ID!
+  documentId: ID!
+  sectionId: ID
+  seq: Int!
+  """CLAUSE, DEFINITION, TABLE or FRONT."""
+  kind: String!
+  """The exact words of the document."""
+  text: String!
+  charStart: Int!
+  charEnd: Int!
+  page: Int
+  clause: String
+  locator: JSON!
+  tags: [String!]!
+  embedded: Boolean!
+  """Mostly names and numbers: a table, a signature block, a list."""
+  thin: Boolean!
+  """What the passage holds. Written by a model or a person, never the words of the document."""
+  summary: String
+  """Topic codes from the template."""
+  topics: [String!]!
+  """MODEL or MANUAL. Null when nobody has described the passage."""
+  refinedBy: String
+}
+
+type DocumentText {
+  start: Int!
+  """The length of the whole document."""
+  length: Int!
+  text: String!
+}
+
+type DocumentTag {
+  tag: String!
+  chunks: Int!
+}
+
+type DocumentSearchEntity {
+  entityId: ID!
+  entityName: String!
+  role: String!
+}
+
+type DocumentSearchHit {
+  chunkId: ID!
+  documentId: ID!
+  documentTitle: String!
+  documentDate: Date
+  typeCode: String!
+  typeName: String!
+  sectionId: ID
+  sectionNumber: String
+  sectionHeading: String
+  parentHeading: String
+  templateSectionCode: String
+  kind: String!
+  """The exact words of the document, to quote as the citation."""
+  text: String!
+  """What the passage holds, where its own words say little. Not the words of the document."""
+  summary: String
+  """The topic or section that brought the passage forward: topic:LENDERS, section:NEGATIVE_COVENANTS."""
+  routedBy: String
+  charStart: Int!
+  charEnd: Int!
+  page: Int
+  clause: String
+  locator: JSON!
+  tags: [String!]!
+  score: Float!
+  similarity: Float
+  """How well the passage answers the question, from 0 to 1, when the second ranking pass ran."""
+  relevance: Float
+  """MEANING, WORDS, BOTH, or TOPIC when only the routing found it."""
+  foundBy: String!
+  entities: [DocumentSearchEntity!]!
+}
+
+type DocumentSearchResult {
+  hits: [DocumentSearchHit!]!
+  """False when only the words were searched."""
+  byMeaning: Boolean!
+  """True when the candidates were ranked again by a model that reads each against the question."""
+  reranked: Boolean!
+  note: String
+}
+
+input SaveDocumentTypeInput {
+  id: ID
+  typeCode: String
+  typeName: String!
+  description: String
+  isActive: Boolean
+}
+
+input DocumentTemplateSectionInput {
+  code: String!
+  title: String!
+  parentCode: String
+  aliases: [String!]
+  tags: [String!]
+  guidance: String
+  required: Boolean
+  order: Int
+  seenIn: Int
+}
+
+input DocumentTemplateTopicInput {
+  code: String
+  title: String!
+  description: String
+}
+
+input SaveDocumentTemplateInput {
+  """Omit to start a new draft for typeId."""
+  id: ID
+  typeId: ID
+  sections: [DocumentTemplateSectionInput!]!
+  """Omit to leave the topics as they are."""
+  topics: [DocumentTemplateTopicInput!]
+  notes: String
+  sourceDocumentIds: [ID!]
+}
+
+input DocumentEntityLinkInput {
+  entityId: ID!
+  role: String
+}
+
+input UpdateDocumentInput {
+  id: ID!
+  title: String
+  typeId: ID
+  """An empty string clears the date."""
+  documentDate: String
+  tags: [String!]
+  """Replaces every link. Omit to leave them."""
+  entities: [DocumentEntityLinkInput!]
+}
+
+type DocumentTypeResult {
+  type: DocumentType
+  errors: [MutationError!]!
+}
+
+type DocumentTemplateResult {
+  template: DocumentTemplate
+  errors: [MutationError!]!
+}
+
+type PublishDocumentTemplateResult {
+  template: DocumentTemplate
+  """Documents of the type tagged against the new version."""
+  tagged: Int!
+  failed: Int!
+  """Topics and sections a search can now be routed by. Zero when no embedding key is set."""
+  routes: Int!
+  errors: [MutationError!]!
+}
+
+type DocumentResult {
+  document: Document
+  errors: [MutationError!]!
+}
 
 `;

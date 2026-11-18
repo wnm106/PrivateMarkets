@@ -227,14 +227,6 @@ type QualityEntityRef {
   domainCode: String!
 }
 
-type AvailabilityEntity {
-  id: ID!
-  entityCode: String!
-  entityName: String!
-  domainCode: String!
-  value: String
-}
-
 type AttributeAvailability {
   attributeCode: String!
   attributeName: String!
@@ -247,7 +239,13 @@ type AttributeAvailability {
   missingEntities: [QualityEntityRef!]!
   resolvedEntities: [MeasureShift!]!
   introducedEntities: [MeasureShift!]!
-  entities: [AvailabilityEntity!]
+}
+
+"Records behind one required-attribute row: missing a value now, or filled in or lost since the from date."
+type AvailabilityDetail {
+  missingEntities: [QualityEntityRef!]!
+  resolvedEntities: [MeasureShift!]!
+  introducedEntities: [MeasureShift!]!
 }
 
 type RuleFailure {

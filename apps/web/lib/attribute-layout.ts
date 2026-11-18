@@ -15,6 +15,18 @@ export interface AttributeDisplayItem {
   name: string;
 }
 
+export type FieldVisibility = 'all' | 'populated' | 'missing';
+
+/** Fields that match the attribute-page radio: every field, only stored values, or only blanks. */
+export function fieldsForVisibility<T extends { populated: boolean }>(
+  items: T[],
+  visibility: FieldVisibility,
+): T[] {
+  if (visibility === 'populated') return items.filter((item) => item.populated);
+  if (visibility === 'missing') return items.filter((item) => !item.populated);
+  return items;
+}
+
 export function clampAttributeSpan(columns?: number | null, rows?: number | null, maxColumns = ATTRIBUTE_GRID_COLUMNS) {
   return {
     columns: clamp(columns, 1, clamp(maxColumns, 1, ATTRIBUTE_GRID_COLUMNS)),
