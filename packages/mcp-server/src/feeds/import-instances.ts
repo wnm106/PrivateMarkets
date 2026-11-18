@@ -35,7 +35,7 @@ import {
   type ColumnHint,
   type ListChoice,
 } from './suggest';
-import type { CellLocation, FeedLoadResult, LoadReject, PageSize } from './types';
+import type { CellLocation, EntityResolution, EntityResolutionDecision, FeedLoadResult, LoadReject, PageSize } from './types';
 import { parseUsDate } from './values';
 import {
   findStoredMap,
@@ -76,6 +76,7 @@ export interface ImportInstanceSummary {
   mapCode: string;
   mapName: string | null;
   mapSaved: boolean;
+  resolutions: EntityResolution[];
 }
 
 export interface InstanceRun {
@@ -207,6 +208,7 @@ function toSummary(row: any, map?: { name: string | null; saved: boolean }): Imp
     mapCode: row.map_code || '',
     mapName: map?.name ?? (row.map_code === 'POSITION_FILE' ? 'Position file' : null),
     mapSaved: Boolean(map?.saved),
+    resolutions: Array.isArray(row.result?.resolutions) ? row.result.resolutions : [],
   };
 }
 
@@ -486,7 +488,7 @@ export async function trackImportAttribute(
 /** A load still marked PROCESSING after this long is treated as abandoned. */
 const PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
 
-export async function processImportInstance(id: string, clientId: string, columnMappings?: ColumnAssignment[], asOfDate?: string, client?: SupabaseClient): Promise<ImportInstanceDetail> {
+export async function processImportInstance(id: string, clientId: string, columnMappings?: ColumnAssignment[], asOfDate?: string, client?: SupabaseClient, decisions?: EntityResolutionDecision[]): Promise<ImportInstanceDetail> {
   const db = client || useClient();
   assertLocalSupabase(db);
   const existing = await db.schema('entity_instances').from('import_instances').select('*').eq('id', id).eq('client_id', clientId).single();
@@ -549,26 +551,29 @@ export async function processImportInstance(id: string, clientId: string, column
       rows: existing.data.parsed_rows || [],
       locations: located?.locations,
       pages: located?.pages,
-    }, asOf, db, clientId, cleanSource(existing.data.source_code) || undefined, { provenance: { instanceId: id, tableId: existing.data.table_id || null } });
+    }, asOf, db, clientId, cleanSource(existing.data.source_code) || undefined, { provenance: { instanceId: id, tableId: existing.data.table_id || null }, decisions });
     const summary = summarize(result);
-    const failed = (summary?.failed || 0) > 0 || result.errors.length > 0;
+    const needsResolution = result.resolutions.length > 0;
+    const failed = !needsResolution && ((summary?.failed || 0) > 0 || result.errors.length > 0);
     const completedAt = new Date().toISOString();
     const runs = Array.isArray(existing.data.runs) ? existing.data.runs : [];
     runs.push({
       startedAt,
       completedAt,
       asOfDate: asOf,
-      status: failed ? 'FAILED' : 'SUCCEEDED',
+      status: needsResolution ? 'NEEDS_RESOLUTION' : failed ? 'FAILED' : 'SUCCEEDED',
       created: summary?.created || 0,
       matched: summary?.matched || 0,
       failed: summary?.failed || 0,
     });
     const saved = await db.schema('entity_instances').from('import_instances').update({
-      status: failed ? 'FAILED' : 'SUCCEEDED',
+      status: needsResolution ? 'NEEDS_RESOLUTION' : failed ? 'FAILED' : 'SUCCEEDED',
       completed_at: completedAt,
       result,
       runs,
-      error_message: failed ? result.errors.slice(0, 3).join(' ') : null,
+      error_message: needsResolution
+        ? `${result.resolutions.length} ${result.resolutions.length === 1 ? 'record matches' : 'records match'} more than one entity.`
+        : failed ? result.errors.slice(0, 3).join(' ') : null,
     }).eq('id', id).eq('client_id', clientId);
     if (saved.error) throw new Error(saved.error.message);
     return getImportInstance(id, clientId, db);

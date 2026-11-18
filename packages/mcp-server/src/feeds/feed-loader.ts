@@ -1,14 +1,16 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { EntityMatchIndex, identifierCatalog, type IdentifierCatalog, type MatchEntity } from './entity-match';
+import { EntityMatchIndex, identifierCatalog, type IdentifierCatalog, type IdentifierTerm, type MatchEntity, type ResolveHit } from './entity-match';
 import { chooseRelationship, dependencyLoadOrder, dependencyLoadWaves, relationshipEndpoints, type RelationshipTypeRow } from './load-order';
 import { readImportFile } from './intake';
 import { parseTabularFile } from './parse-table';
 import { POSITION_FILE_MAP } from './position-file-map';
 import { normalizeSourceCode, resolveRowContext } from './row-context';
-import type { DomainLoadStats, FeedLoadResult, FeedMap, FeedPreview, LoadReject, NormalizationHit, ParsedTable } from './types';
+import { compactIdentifier } from '../../../graphql/src/lib/entity-resolution/similarity';
+import type { DomainLoadStats, EntityResolution, EntityResolutionDecision, FeedLoadResult, FeedMap, FeedPreview, LoadReject, NormalizationHit, ParsedTable } from './types';
 import { applyTransform, coerceAttributeValue, dayBefore, planPeriod, indexReferenceLists, normalizeToList, parseUsDate, type ListValueRow } from './values';
 
 const OPEN_TO = '9999-12-31';
+const OPEN_SYSTEM_TO = '9999-12-31 23:59:59';
 const MAX_REJECTS = 500;
 const DRY_PREFIX = 'dry:';
 /** Client that scripts and tests load into. The app always passes the signed-in user's client instead. */
@@ -435,7 +437,7 @@ async function loadEntityMatchIndex(
 
   const byId = new Map<string, any>();
   for (const row of [...domainRows, ...codeRows]) byId.set(row.id, row);
-  const identifiers = new Map<string, Map<string, string[]>>();
+  const terms = new Map<string, Map<string, IdentifierTerm[]>>();
   const codeByAttributeId = new Map<string, string>();
   for (const [code, id] of attributeIds) codeByAttributeId.set(id, code);
   const attributeIdList = [...attributeIds.values()];
@@ -444,19 +446,23 @@ async function loadEntityMatchIndex(
     for (let offset = 0; offset < entityIds.length; offset += 150) {
       const chunk = entityIds.slice(offset, offset + 150);
       const values = await pageRows((from, to) => db.schema('golden_master').from('entity_attribute_values')
-        .select('entity_id, attribute_id, golden_value')
+        .select('entity_id, attribute_id, golden_value, valid_from, valid_to')
         .in('entity_id', chunk)
         .in('attribute_id', attributeIdList)
-        .eq('valid_to', OPEN_TO)
+        .eq('system_to', OPEN_SYSTEM_TO)
         .range(from, to));
       for (const value of values) {
         const attributeCode = codeByAttributeId.get(value.attribute_id);
         if (!attributeCode || value.golden_value == null || String(value.golden_value).trim() === '') continue;
-        const perEntity = identifiers.get(value.entity_id) || new Map<string, string[]>();
+        const perEntity = terms.get(value.entity_id) || new Map<string, IdentifierTerm[]>();
         const list = perEntity.get(attributeCode) || [];
-        list.push(String(value.golden_value));
+        list.push({
+          value: String(value.golden_value),
+          validFrom: String(value.valid_from).slice(0, 10),
+          validTo: String(value.valid_to).slice(0, 10),
+        });
         perEntity.set(attributeCode, list);
-        identifiers.set(value.entity_id, perEntity);
+        terms.set(value.entity_id, perEntity);
       }
     }
   }
@@ -470,7 +476,8 @@ async function loadEntityMatchIndex(
       clientId: row.client_id,
       active: row.is_active !== false && !row.merged_into_id,
       provisional: false,
-      identifiers: identifiers.get(row.id) || new Map(),
+      identifiers: new Map(),
+      identifierTerms: terms.get(row.id) || new Map(),
     };
     index.add(matchEntity);
   }
@@ -504,6 +511,91 @@ async function loadValueSources(db: SupabaseClient, codes: string[], allowMissin
   return found;
 }
 
+function decisionFor(decisions: EntityResolutionDecision[] | undefined, domainCode: string, fileCode: string) {
+  return decisions?.find((item) => item.domainCode === domainCode && item.fileCode === fileCode);
+}
+
+function sharedIdentifiers(entity: EntityDraft, catalog: IdentifierCatalog): { attributeCode: string; value: string }[] {
+  const tracked = new Set([...catalog.singles, ...catalog.composites.flat()]);
+  const found: { attributeCode: string; value: string }[] = [];
+  for (const [code, value] of entity.attributes) {
+    const key = code.trim().toUpperCase();
+    if (!tracked.has(key) || !value.trim()) continue;
+    found.push({ attributeCode: key, value });
+  }
+  return found;
+}
+
+function resolutionFrom(domainCode: string, entity: EntityDraft, hit: Extract<ResolveHit, { kind: 'ambiguous' }>, asOf: string, catalog: IdentifierCatalog): EntityResolution {
+  return {
+    domainCode,
+    fileCode: entity.code,
+    fileName: entity.name,
+    asOf: entity.asOf || asOf,
+    via: hit.via,
+    message: hit.message,
+    candidates: hit.entities.filter((item) => !item.provisional).map((item) => ({ id: item.id, code: item.code, name: item.name })),
+    identifiers: sharedIdentifiers(entity, catalog),
+  };
+}
+
+async function availableEntityCode(db: SupabaseClient, code: string): Promise<string> {
+  const base = code.slice(0, 80);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const candidate = (attempt === 0 ? base : `${base}-${attempt + 1}`).slice(0, 100);
+    const existing = await db.schema('entity_instances').from('master_entities').select('id').eq('entity_code', candidate).maybeSingle();
+    if (existing.error) throw new Error(existing.error.message);
+    if (!existing.data) return candidate;
+  }
+  return `${base}-${Date.now()}`.slice(0, 100);
+}
+
+async function cleanseDuplicateIdentifiers(
+  db: SupabaseClient,
+  entityIds: string[],
+  entity: EntityDraft,
+  catalog: IdentifierCatalog,
+  attributeIds: Map<string, string>,
+  asOf: string,
+) {
+  const shared = sharedIdentifiers(entity, catalog);
+  if (!shared.length || !entityIds.length) return;
+  const now = new Date().toISOString();
+  for (const identifier of shared) {
+    const attributeId = attributeIds.get(identifier.attributeCode);
+    if (!attributeId) continue;
+    const wanted = compactIdentifier(identifier.value);
+    for (const entityId of entityIds) {
+      const rows = await db.schema('golden_master').from('entity_attribute_values')
+        .select('*')
+        .eq('entity_id', entityId)
+        .eq('attribute_id', attributeId)
+        .eq('system_to', OPEN_SYSTEM_TO);
+      if (rows.error) throw new Error(rows.error.message);
+      for (const row of rows.data || []) {
+        if (compactIdentifier(String(row.golden_value || '')) !== wanted) continue;
+        const started = String(row.valid_from).slice(0, 10);
+        const ended = String(row.valid_to).slice(0, 10);
+        if (ended < asOf || started > asOf) continue;
+        const close = await db.schema('golden_master').from('entity_attribute_values').update({ system_to: now }).eq('id', row.id);
+        if (close.error) throw new Error(close.error.message);
+        if (started >= asOf) continue;
+        const historyEnd = dayBefore(asOf);
+        if (historyEnd < started) continue;
+        const copy = { ...row };
+        delete copy.id;
+        delete copy.created_at;
+        copy.valid_from = started;
+        copy.valid_to = historyEnd;
+        copy.system_from = now;
+        copy.system_to = OPEN_SYSTEM_TO;
+        const insert = await db.schema('golden_master').from('entity_attribute_values').insert(copy);
+        if (insert.error) throw new Error(insert.error.message);
+      }
+    }
+  }
+}
+
 export async function executeFeed(map: FeedMap, fileName: string, bytes: Buffer, asOfDate: string, client?: SupabaseClient, clientId?: string): Promise<FeedLoadResult> {
   const db = client || localSupabase();
   return executeParsedFeed(map, fileName, await tableFromFile(fileName, bytes), asOfDate, db, clientId || await defaultClientId(db));
@@ -517,9 +609,10 @@ export async function executeParsedFeed(
   client: SupabaseClient | undefined,
   clientId: string,
   fallbackSource?: string,
-  options: { dryRun?: boolean; provenance?: { instanceId: string; tableId: string | null } } = {},
+  options: { dryRun?: boolean; provenance?: { instanceId: string; tableId: string | null }; decisions?: EntityResolutionDecision[] } = {},
 ): Promise<FeedLoadResult> {
   const dry = options.dryRun === true;
+  const decisions = options.decisions;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
     throw new Error('As-of date must be YYYY-MM-DD');
   }
@@ -585,6 +678,76 @@ export async function executeParsedFeed(
   const attributeStats = { created: 0, updated: 0, unchanged: 0 };
   const relationshipStats = { created: 0, matched: 0, failed: 0 };
   const receivedAt = new Date().toISOString();
+  const resolutions: EntityResolution[] = [];
+
+  for (const domainCode of order) {
+    const domain = domainByCode.get(domainCode);
+    if (!domain) continue;
+    const entities = drafts.get(domainCode) || [];
+    const { catalog: matchCatalog, attributeIds } = await loadIdentifierCatalog(db, domainCode);
+    const index = await loadEntityMatchIndex(db, domainCode, catalog.clientId, entities.map((entity) => entity.code), matchCatalog, attributeIds);
+    for (const entity of entities) {
+      const incoming = { code: entity.code, name: entity.name, attributes: entity.attributes };
+      const hit = index.resolve(incoming, entity.asOf || asOfDate);
+      const decision = decisionFor(decisions, domainCode, entity.code);
+      if (hit.kind === 'ambiguous' && !decision) {
+        resolutions.push(resolutionFrom(domainCode, entity, hit, asOfDate, matchCatalog));
+        continue;
+      }
+      if (hit.kind === 'ambiguous' && decision?.action === 'ignore') continue;
+      if (hit.kind === 'ambiguous' && decision?.action === 'map') {
+        const chosen = hit.entities.find((item) => item.id === decision.entityId);
+        if (chosen) index.absorb(chosen.id, incoming);
+        continue;
+      }
+      if (hit.kind === 'match') {
+        index.absorb(hit.entity.id, incoming);
+        continue;
+      }
+      if (hit.kind === 'rejected') continue;
+      const identifiers = new Map<string, string[]>();
+      for (const [attributeCode, value] of entity.attributes) {
+        if (!value.trim()) continue;
+        identifiers.set(attributeCode.toUpperCase(), [value]);
+      }
+      index.add({
+        id: `pending:${entity.code}`,
+        code: entity.code,
+        name: entity.name,
+        domainCode,
+        clientId: catalog.clientId,
+        active: true,
+        provisional: true,
+        identifiers,
+      });
+    }
+  }
+
+  if (resolutions.length > 0) {
+    const count = resolutions.length;
+    return {
+      mapCode: map.mapCode,
+      sourceCode: map.sourceCode,
+      asOfDate,
+      fileName,
+      rowCount: rows.length,
+      loadWaves: waves,
+      domains: order.filter((domainCode) => domainByCode.has(domainCode)).map((domainCode) => ({
+        domainCode,
+        distinctEntities: (drafts.get(domainCode) || []).length,
+        created: 0,
+        matched: 0,
+        failed: 0,
+        errors: [],
+      })),
+      relationships: { created: 0, matched: 0, failed: 0 },
+      attributes: { created: 0, updated: 0, unchanged: 0 },
+      normalizations: [],
+      warnings: [`${count} ${count === 1 ? 'record matches' : 'records match'} more than one entity. Nothing was written.`],
+      errors: [],
+      resolutions,
+    };
+  }
 
   for (const domainCode of order) {
     const domain = domainByCode.get(domainCode);
@@ -608,6 +771,7 @@ export async function executeParsedFeed(
     const idByCode = new Map<string, string>();
     const linkedTo = new Map<string, string>();
     const pending = new Map<string, EntityDraft>();
+    const cleanseIds = new Map<string, string[]>();
     let matchedByIdentity = 0;
 
     const rememberInserted = (fileCode: string, id: string) => {
@@ -619,7 +783,26 @@ export async function executeParsedFeed(
 
     for (const entity of entities) {
       const incoming = { code: entity.code, name: entity.name, attributes: entity.attributes };
-      const hit = index.resolve(incoming);
+      let hit = index.resolve(incoming, entity.asOf || asOfDate);
+      const decision = decisionFor(decisions, domainCode, entity.code);
+      if (hit.kind === 'ambiguous') {
+        if (decision?.action === 'ignore') continue;
+        if (decision?.action === 'map') {
+          const chosen = hit.entities.find((item) => item.id === decision.entityId);
+          hit = chosen
+            ? { kind: 'match', entity: chosen, via: hit.via }
+            : { kind: 'rejected', message: `${entity.code} was not mapped to one of the matching records.` };
+        } else if (decision?.action === 'create') {
+          cleanseIds.set(entity.code, hit.entities.filter((item) => !item.provisional).map((item) => item.id));
+          hit = { kind: 'none' };
+        }
+      }
+      if (hit.kind === 'ambiguous') {
+        stats.failed += 1;
+        stats.errors.push(hit.message);
+        errors.push(hit.message);
+        continue;
+      }
       if (hit.kind === 'rejected') {
         stats.failed += 1;
         stats.errors.push(hit.message);
@@ -683,6 +866,11 @@ export async function executeParsedFeed(
       }
       toCreate.length = 0;
     }
+    for (const entity of toCreate) {
+      const targets = cleanseIds.get(entity.code) || [];
+      if (!targets.length) continue;
+      await cleanseDuplicateIdentifiers(db, targets, entity, matchCatalog, attributeIds, entity.asOf || asOfDate);
+    }
     for (let offset = 0; offset < toCreate.length; offset += 200) {
       const chunk = toCreate.slice(offset, offset + 200);
       const payload = chunk.map((entity) => ({
@@ -698,15 +886,20 @@ export async function executeParsedFeed(
       if (insert.error || !insert.data) {
         for (const entity of chunk) {
           const single = await db.schema('entity_instances').from('master_entities').insert(payload.find((row) => row.entity_code === entity.code)!).select('id').single();
-          if (single.error || !single.data) {
+          let created = single;
+          if (created.error && /duplicate key|entity_code/i.test(created.error.message || '')) {
+            const storedCode = await availableEntityCode(db, entity.code);
+            created = await db.schema('entity_instances').from('master_entities').insert({ ...payload.find((row) => row.entity_code === entity.code)!, entity_code: storedCode }).select('id').single();
+          }
+          if (created.error || !created.data) {
             stats.failed += 1;
-            const message = single.error?.message || `Failed to create ${entity.code}`;
+            const message = created.error?.message || `Failed to create ${entity.code}`;
             stats.errors.push(message);
             errors.push(message);
             continue;
           }
           stats.created += 1;
-          rememberInserted(entity.code, single.data.id);
+          rememberInserted(entity.code, created.data.id);
         }
         continue;
       }
@@ -729,7 +922,7 @@ export async function executeParsedFeed(
         const idChunk = entityIds.slice(idFrom, idFrom + 150);
         for (let from = 0; ; from += pageSize) {
           const select = 'id, entity_id, attribute_id, source_id, valid_from, valid_to, golden_value, golden_value_numeric, golden_value_date';
-          let query = db.schema('golden_master').from('entity_attribute_values').select(select).in('entity_id', idChunk);
+          let query = db.schema('golden_master').from('entity_attribute_values').select(select).in('entity_id', idChunk).eq('system_to', OPEN_SYSTEM_TO);
           query = varying ? query.in('source_id', sourceIds) : query.eq('source_id', catalog.sourceId);
           const page = await query.order('valid_from', { ascending: true }).range(from, from + pageSize - 1);
           if (page.error) throw new Error(page.error.message);
@@ -842,6 +1035,18 @@ export async function executeParsedFeed(
           }
           if (changed) attributeStats.updated += 1;
           else attributeStats.unchanged += 1;
+          queuedAttributes.add(sliceKey);
+          continue;
+        }
+        // The same value already holds on this date inside a period that began earlier: nothing to write, only note it was received.
+        const alreadyTrue = slices.filter((row) => String(row.valid_from).slice(0, 10) <= validFrom && String(row.valid_to).slice(0, 10) >= validFrom && sameValue(row, value));
+        if (alreadyTrue.length > 0) {
+          for (const slice of alreadyTrue) {
+            if (dry || String(slice.id).startsWith('pending:') || slice.source_id !== valueSource.id) continue;
+            const touch = await db.schema('golden_master').from('entity_attribute_values').update({ last_received_at: receivedAt }).eq('id', slice.id);
+            if (touch.error) errors.push(touch.error.message);
+          }
+          attributeStats.unchanged += 1;
           queuedAttributes.add(sliceKey);
           continue;
         }
@@ -1029,6 +1234,7 @@ export async function executeParsedFeed(
     dryRun: dry,
     rejects,
     rejectCount,
+    resolutions,
   };
 }
 

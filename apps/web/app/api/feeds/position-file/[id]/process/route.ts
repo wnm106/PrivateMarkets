@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { processImportInstance } from '@/lib/feeds/import-instances';
 import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
 import type { ColumnAssignment } from '@/lib/feeds/suggest';
+import type { EntityResolutionDecision } from '@tapestrai/mcp-server/src/feeds/types';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -18,7 +19,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       id,
       clientId,
       Array.isArray(body.columnMappings) ? body.columnMappings as ColumnAssignment[] : undefined,
-      body.asOfDate ? String(body.asOfDate) : undefined
+      body.asOfDate ? String(body.asOfDate) : undefined,
+      undefined,
+      Array.isArray(body.resolutions) ? body.resolutions as EntityResolutionDecision[] : undefined,
     );
     return NextResponse.json(instance);
   } catch (error: any) {

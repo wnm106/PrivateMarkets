@@ -11,7 +11,7 @@ import {
   type SpecialistCatalog,
   type SpecialistReading,
 } from './specialist';
-import type { FeedLoadResult, FeedMap } from './types';
+import type { EntityResolutionDecision, FeedLoadResult, FeedMap } from './types';
 
 export interface LoadSessionSummary {
   id: string;
@@ -501,7 +501,7 @@ export async function saveSourceMap(id: string, name: string | undefined, client
   return getLoadSession(id, clientId, client);
 }
 
-export async function runLoadSession(id: string, clientId: string, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
+export async function runLoadSession(id: string, clientId: string, client: SupabaseClient = useClient(), decisions?: EntityResolutionDecision[]): Promise<LoadSessionDetail> {
   assertLocalSupabase(client);
   const row = await client.schema('entity_instances').from('load_sessions').select('*').eq('id', id).eq('client_id', clientId).single();
   if (row.error || !row.data) throw new Error(row.error?.message || 'Load session not found');
@@ -522,13 +522,16 @@ export async function runLoadSession(id: string, clientId: string, client: Supab
     const result = await executeParsedFeed(reading.map, row.data.file_name, {
       headers: table?.headers || [],
       rows: table?.rows || [],
-    }, reading.asOfDate, client, clientId);
-    const failed = result.errors.length > 0 || result.domains.some((domain) => domain.failed > 0);
+    }, reading.asOfDate, client, clientId, undefined, { decisions });
+    const needsResolution = result.resolutions.length > 0;
+    const failed = !needsResolution && (result.errors.length > 0 || result.domains.some((domain) => domain.failed > 0));
     const saved = await client.schema('entity_instances').from('load_sessions').update({
-      status: failed ? 'FAILED' : 'LOADED',
+      status: needsResolution ? 'NEEDS_RESOLUTION' : failed ? 'FAILED' : 'LOADED',
       result,
       saved_map_code: reading.map.mapCode,
-      error_message: failed ? result.errors.slice(0, 3).join(' ') : null,
+      error_message: needsResolution
+        ? `${result.resolutions.length} ${result.resolutions.length === 1 ? 'record matches' : 'records match'} more than one entity.`
+        : failed ? result.errors.slice(0, 3).join(' ') : null,
       updated_at: new Date().toISOString(),
     }).eq('id', id).eq('client_id', clientId);
     if (saved.error) throw new Error(saved.error.message);

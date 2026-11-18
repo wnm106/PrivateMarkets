@@ -7,6 +7,7 @@ import { describeOrphans, orphanColumns } from '@/lib/feeds/suggest';
 import { SourceViewer, type SourceTarget } from '@/components/feeds/SourceViewer';
 import { IntakePanel, SourcePicker, TrackAttribute, type IntakeInfo, type TableChoice } from '@/components/feeds/LoadIntake';
 import { IssueList, LoadPreview, LoadStepper, type LoadPreviewResult, type PreviewReject, type StepState } from '@/components/feeds/LoadPreview';
+import { EntityResolutionStep } from '@/components/feeds/EntityResolutionStep';
 import {
   TRANSFORM_OPTIONS,
   applyTarget,
@@ -18,6 +19,7 @@ import {
   type ColumnAssignment,
   type MappingTarget,
 } from '@/lib/feeds/suggest';
+import type { EntityResolution, EntityResolutionDecision } from '@tapestrai/mcp-server/src/feeds/types';
 
 interface ReferenceListCatalog {
   listCode: string;
@@ -157,6 +159,8 @@ export function LoadReview({
   onPreview,
   onReload,
   onClose,
+  resolutions = [],
+  onResolve,
 }: {
   fileId: string;
   fileName: string;
@@ -189,6 +193,8 @@ export function LoadReview({
   onPreview: () => Promise<LoadPreviewResult>;
   onReload: () => void;
   onClose: () => void;
+  resolutions?: EntityResolution[];
+  onResolve?: (decisions: EntityResolutionDecision[]) => void;
 }) {
   const columnsRef = useRef<HTMLElement>(null);
   const baselineFile = useRef(fileId);
@@ -444,6 +450,10 @@ export function LoadReview({
             </details>
           )}
 
+          {resolutions.length > 0 && onResolve && (
+            <EntityResolutionStep resolutions={resolutions} applying={loading} onApply={onResolve} />
+          )}
+
           <section className="load-section">
             <div className="load-sh">
               <span className="load-step-n">1</span>
@@ -645,7 +655,7 @@ export function LoadReview({
                 {previewing ? 'Reviewing…' : 'Review before loading'}
               </button>
             ) : (
-              <button type="button" className="load-btn" disabled={!ready || loading || reloading} onClick={onLoad}>
+              <button type="button" className={resolutions.length > 0 ? 'load-btn sec' : 'load-btn'} disabled={!ready || loading || reloading} onClick={onLoad}>
                 {loading ? 'Loading…' : `Load ${loadCount.toLocaleString()} records`}
               </button>
             )}

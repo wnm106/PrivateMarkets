@@ -147,7 +147,9 @@ describe('entity match for loads', () => {
       entity({ id: 'b', code: 'ISS-B', name: 'Northwind' }),
     ]);
     const hit = index.resolve({ code: 'FILE', name: 'Northwind', attributes: new Map() });
-    expect(hit.kind).toBe('rejected');
+    expect(hit.kind).toBe('ambiguous');
+    if (hit.kind !== 'ambiguous') return;
+    expect(hit.entities.map((item) => item.id).sort()).toEqual(['a', 'b']);
   });
 
   it('collapses a later file row onto an entity resolved earlier in the same load', () => {
@@ -174,6 +176,79 @@ describe('entity match for loads', () => {
     if (second.kind !== 'match') return;
     expect(second.entity.id).toBe('pending:FILE-1');
     expect(second.via).toBe('identifier');
+  });
+
+  it('matches a reused identifier to the entity that held it on the file as-of date', () => {
+    const loanCatalog = identifierCatalog([['LOAN_X_CODE']]);
+    const index = new EntityMatchIndex(loanCatalog, 'SECURITY', 'client-1');
+    index.add(entity({
+      id: 'prior',
+      code: 'LOAN-001',
+      name: 'Original term loan',
+      domainCode: 'SECURITY',
+      identifierTerms: new Map([['LOAN_X_CODE', [{ value: 'LX123456', validFrom: '2020-01-01', validTo: '2024-06-30' }]]]),
+    }));
+    index.add(entity({
+      id: 'successor',
+      code: 'LX123456',
+      name: 'Refinanced term loan',
+      domainCode: 'SECURITY',
+      identifierTerms: new Map([['LOAN_X_CODE', [{ value: 'LX-123456', validFrom: '2024-07-01', validTo: '9999-12-31' }]]]),
+    }));
+
+    const historical = index.resolve({
+      code: 'LX123456',
+      name: 'Refinanced term loan',
+      attributes: new Map([['Loan_X_Code', 'LX-123456']]),
+    }, '2024-03-31');
+    expect(historical.kind).toBe('match');
+    if (historical.kind !== 'match') return;
+    expect(historical.entity.id).toBe('prior');
+    expect(historical.via).toBe('identifier');
+
+    const current = index.resolve({
+      code: 'LX123456',
+      name: 'Original term loan',
+      attributes: new Map([['LOAN_X_CODE', 'LX123456']]),
+    }, '2024-09-30');
+    expect(current.kind).toBe('match');
+    if (current.kind !== 'match') return;
+    expect(current.entity.id).toBe('successor');
+
+    const gap = index.resolve({
+      code: 'FILE-ONLY',
+      name: 'Unrelated',
+      attributes: new Map([['LOAN_X_CODE', 'LX123456']]),
+    }, '2019-12-31');
+    expect(gap.kind).toBe('none');
+  });
+
+  it('asks for a decision when two entities hold the identifier on the as-of date', () => {
+    const loanCatalog = identifierCatalog([['LOAN_X_CODE']]);
+    const index = new EntityMatchIndex(loanCatalog, 'SECURITY', 'client-1');
+    index.add(entity({
+      id: 'a',
+      code: 'LOAN-001',
+      name: 'First loan',
+      domainCode: 'SECURITY',
+      identifierTerms: new Map([['LOAN_X_CODE', [{ value: 'LX1', validFrom: '2020-01-01', validTo: '9999-12-31' }]]]),
+    }));
+    index.add(entity({
+      id: 'b',
+      code: 'LOAN-002',
+      name: 'Second loan',
+      domainCode: 'SECURITY',
+      identifierTerms: new Map([['LOAN_X_CODE', [{ value: 'LX1', validFrom: '2020-01-01', validTo: '9999-12-31' }]]]),
+    }));
+    const hit = index.resolve({
+      code: 'FILE',
+      name: 'Incoming',
+      attributes: new Map([['LOAN_X_CODE', 'LX1']]),
+    }, '2024-03-31');
+    expect(hit.kind).toBe('ambiguous');
+    if (hit.kind !== 'ambiguous') return;
+    expect(hit.via).toBe('identifier');
+    expect(hit.entities.map((item) => item.id).sort()).toEqual(['a', 'b']);
   });
 
   it('strips a legal suffix when comparing names', () => {
