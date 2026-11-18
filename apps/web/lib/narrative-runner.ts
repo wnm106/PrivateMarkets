@@ -32,6 +32,8 @@ import {
   runSectionData,
   type SectionEvidence,
 } from '@tapestrai/graphql/src/lib/narrative-engine';
+import { invokeAgent } from '@tapestrai/mcp-server/src/agent/harness';
+import { geminiAnswerText } from '@tapestrai/mcp-server/src/agent/usage';
 import {
   narrativeSystemPrompt,
   collapseGapColumns,
@@ -95,17 +97,19 @@ function agentRegistry(): ToolRegistry {
   return r;
 }
 
-async function gemini(model: string, body: Record<string, unknown>): Promise<any> {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(MODEL_TIMEOUT_MS) },
-  );
-  if (!response.ok) throw new Error(`Model error: ${(await response.text()).slice(0, 400)}`);
-  return response.json();
+async function gemini(model: string, body: Record<string, unknown>, activity: string): Promise<any> {
+  const { response } = await invokeAgent({
+    provider: 'gemini',
+    model,
+    feature: 'narrative',
+    activity,
+    body,
+    signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
+  });
+  return response;
 }
 
-const textOf = (data: any): string =>
-  (data?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text || '').join('').trim();
+const textOf = (data: any): string => geminiAnswerText(data);
 
 function clampJson(value: unknown, max: number): unknown {
   const s = JSON.stringify(value);
@@ -135,7 +139,7 @@ async function researchWeb(model: string, queries: string[], maxSources: number)
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     tools: [{ google_search: {} }],
     generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
-  });
+  }, 'narrative.research');
   const chunks: any[] = data?.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
   const seen = new Set<string>();
   const sources = chunks.flatMap((c) => {
@@ -212,7 +216,7 @@ async function gatherWithTools(args: {
       tools: [{ functionDeclarations: tools }],
       toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
       generationConfig: { temperature: 0.2, maxOutputTokens: 4096, ...FAST_THINKING },
-    });
+    }, 'narrative.gather');
     const parts: any[] = data?.candidates?.[0]?.content?.parts ?? [];
     const calls = parts.filter((p) => p.functionCall);
     log(`gather ${section.key} round ${round + 1} model`, roundStart, calls.length ? `calls=${calls.map((c) => c.functionCall.name).join(',')}` : 'final');
@@ -297,7 +301,7 @@ async function compose(args: {
   };
   let lastError = 'The model returned no usable blocks.';
   for (let attempt = 0; attempt < 2; attempt++) {
-    const data = await gemini(args.model, body);
+    const data = await gemini(args.model, body, 'narrative.compose');
     try {
       const blocks = normalizeBlocks(JSON.parse(textOf(data)));
       if (blocks.length) return blocks;
@@ -329,7 +333,7 @@ export async function reviewRun(args: {
     contents: [{ role: 'user', parts: [{ text: reviewUserPrompt(args.sections) }] }],
     // Full reasoning: this is the step that has to notice what the writers did not.
     generationConfig: { temperature: 0.1, maxOutputTokens: 8000, responseMimeType: 'application/json' },
-  });
+  }, 'narrative.review');
   let parsed: unknown = null;
   try {
     parsed = JSON.parse(textOf(data));

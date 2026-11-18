@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as XLSX from 'xlsx';
 import { extractPdfText } from '@tapestrai/graphql/src/lib/import-intake';
 import { visionJsonToStatementText } from '@tapestrai/graphql/src/lib/statement-template/parse';
-import { requireFeedUser } from '@/lib/feeds/require-user';
+import { invokeAgent, runWithAgentContext } from '@tapestrai/mcp-server/src/agent/harness';
+import { geminiAnswerText } from '@tapestrai/mcp-server/src/agent/usage';
+import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,18 +36,24 @@ export async function POST(request: NextRequest) {
   if (files.length === 0) return NextResponse.json({ error: 'Choose a file or an image.' }, { status: 400 });
   if (files.length > MAX_FILES) return NextResponse.json({ error: `Upload at most ${MAX_FILES} files at a time.` }, { status: 400 });
 
+  const clientId = await feedClientId();
   try {
-    const sources = [];
-    for (const file of files) {
-      if (file.size > MAX_BYTES) {
-        return NextResponse.json({ error: `${file.name} is larger than 8 MB.` }, { status: 400 });
-      }
-      sources.push(await sourceFromFile(file));
-    }
+    const sources = await runWithAgentContext(
+      { userId: user.id, clientId, feature: 'statement-extract', activity: 'statement.vision' },
+      async () => {
+        const read = [];
+        for (const file of files) {
+          if (file.size > MAX_BYTES) throw Object.assign(new Error(`${file.name} is larger than 8 MB.`), { status: 400 });
+          read.push(await sourceFromFile(file));
+        }
+        return read;
+      },
+    );
     return NextResponse.json({ sources });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'The file could not be read.';
-    return NextResponse.json({ error: message }, { status: 400 });
+    const status = error && typeof error === 'object' && 'status' in error && typeof error.status === 'number' ? error.status : 400;
+    return NextResponse.json({ error: message }, { status });
   }
 }
 
@@ -121,12 +129,15 @@ async function textFromImage(bytes: Buffer, mime: string, fileName: string): Pro
   if (!geminiApiKey) {
     throw new Error(`${fileName} is an image. Add a Gemini API key, or paste the statement table instead.`);
   }
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+  let payload: unknown;
+  try {
+    const called = await invokeAgent({
+      provider: 'gemini',
+      model: geminiModel,
+      feature: 'statement-extract',
+      activity: 'statement.vision',
+      agent: fileName,
+      body: {
         contents: [{
           parts: [
             { text: VISION_PROMPT },
@@ -134,15 +145,14 @@ async function textFromImage(bytes: Buffer, mime: string, fileName: string): Pro
           ],
         }],
         generationConfig: { temperature: 0, responseMimeType: 'application/json' },
-      }),
-    },
-  );
-  if (!response.ok) {
-    const detail = (await response.text()).slice(0, 300);
+      },
+    });
+    payload = called.response;
+  } catch (error) {
+    const detail = (error instanceof Error ? error.message : 'The model could not read the image.').slice(0, 300);
     throw new Error(`Could not read ${fileName}. ${detail}`);
   }
-  const payload = await response.json();
-  const raw = payload?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || '').join('\n') || '';
+  const raw = geminiAnswerText(payload);
   const parsed = parseVisionJson(raw);
   const text = parsed ? visionJsonToStatementText(parsed) : raw;
   if (!text.trim()) throw new Error(`${fileName} did not contain a readable statement.`);

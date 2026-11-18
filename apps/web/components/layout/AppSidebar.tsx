@@ -53,6 +53,7 @@ const ADMIN = [
   { href: '/admin/skills', label: 'Skills', icon: 'list' },
   { href: '/admin/feeds', label: 'Feeds', icon: 'download' },
   { href: '/admin/jobs', label: 'Jobs', icon: 'list' },
+  { href: '/admin/agent-usage', label: 'Agent usage', icon: 'chart' },
   { href: '/admin/tenancy', label: 'Clients, Users & Roles', icon: 'users' },
 ] as const;
 

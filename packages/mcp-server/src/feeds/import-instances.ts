@@ -1,4 +1,5 @@
 import { type SupabaseClient } from '@supabase/supabase-js';
+import { runAsFeedClient } from '../agent/harness';
 import { assertLocalSupabase, executeParsedFeed, localSupabase } from './feed-loader';
 import { reviewColumns, type ReviewContext } from './semantic-review';
 import { intakeFile, type IntakeTable } from './intake-file';
@@ -263,9 +264,13 @@ export async function createImportInstance(
   options?: { forceMapCode?: string; sourceCode?: string },
 ): Promise<ImportInstanceDetail> {
   assertLocalSupabase(client);
-  const upload = await readUpload(fileName, mediaType, bytes, Boolean(options?.forceMapCode));
+  const upload = await runAsFeedClient({ clientId, activity: 'feed.import', metadata: { fileName } }, () =>
+    readUpload(fileName, mediaType, bytes, Boolean(options?.forceMapCode)),
+  );
   upload.context = { fileName, note: upload.intake?.note };
-  const planned = await planColumns(client, clientId, upload, options?.forceMapCode);
+  const planned = await runAsFeedClient({ clientId, activity: 'feed.import', metadata: { fileName } }, () =>
+    planColumns(client, clientId, upload, options?.forceMapCode),
+  );
   const identity = planned.identity;
   const columnMappings = planned.columnMappings;
   if (planned.artifact) await saveReusableMap(client, clientId, planned.artifact);
@@ -302,9 +307,13 @@ export async function refreshImportInstance(id: string, clientId: string, client
   if (!existing.data.source_base64) throw new Error('The original file is not stored, so it cannot be read again.');
   // A document that was read by an outside reader keeps its tables. Reading it again would cost another parse.
   const stored = storedUpload(existing.data);
-  const upload = stored || await readUpload(existing.data.file_name, existing.data.media_type || '', Buffer.from(existing.data.source_base64, 'base64'), false);
+  const upload = stored || await runAsFeedClient({ clientId, activity: 'feed.import', metadata: { fileName: existing.data.file_name } }, () =>
+    readUpload(existing.data.file_name, existing.data.media_type || '', Buffer.from(existing.data.source_base64, 'base64'), false),
+  );
   upload.context = { fileName: existing.data.file_name, note: upload.intake?.note };
-  const planned = await planColumns(client, clientId, upload);
+  const planned = await runAsFeedClient({ clientId, activity: 'feed.import', metadata: { fileName: existing.data.file_name } }, () =>
+    planColumns(client, clientId, upload),
+  );
   if (planned.artifact) await saveReusableMap(client, clientId, planned.artifact);
   const { columnMappings, identity } = planned;
   const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', identity.sourceCode).maybeSingle();
@@ -371,7 +380,9 @@ export async function selectImportTable(id: string, clientId: string, tableId: s
   const chosen = tables.find((table) => table.id === tableId);
   if (!chosen) throw new Error('That table is not in this file.');
   const upload: UploadTable = { headers: chosen.headers, rows: chosen.rows, hints: [], kind: null, context: { fileName: existing.data.file_name, note: existing.data.intake_note } };
-  const planned = await planColumns(client, clientId, upload);
+  const planned = await runAsFeedClient({ clientId, activity: 'feed.import', metadata: { fileName: existing.data.file_name } }, () =>
+    planColumns(client, clientId, upload),
+  );
   if (planned.artifact) await saveReusableMap(client, clientId, planned.artifact);
   const source = await client.schema('entity_instances').from('source_registry').select('id').eq('source_code', planned.identity.sourceCode).maybeSingle();
   if (source.error) throw new Error(source.error.message);

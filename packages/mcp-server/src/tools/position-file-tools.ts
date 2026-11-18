@@ -4,6 +4,7 @@
  */
 
 import type { JSONSchema7 } from 'json-schema';
+import { withSupabaseCaller } from '../agent/harness';
 import { sessionClientId } from '../feeds/session-client';
 import { ToolRegistry } from '../lib/tool-registry.js';
 import { ToolDefinition } from '../lib/types.js';
@@ -110,7 +111,10 @@ const createPositionFileImportTool: ToolDefinition = {
     const mediaType = fileName.toLowerCase().endsWith('.csv')
       ? 'text/csv'
       : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    return createImportInstance(fileName, mediaType, bytes, await sessionClientId(supabase));
+    const clientId = await sessionClientId(supabase);
+    return withSupabaseCaller(supabase, clientId, { feature: 'feed-intake', activity: 'feed.import', metadata: { fileName } }, () =>
+      createImportInstance(fileName, mediaType, bytes, clientId),
+    );
   },
 };
 

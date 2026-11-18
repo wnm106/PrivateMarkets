@@ -28,6 +28,7 @@ import { workflowResolvers } from './workflows';
 import { feedResolvers } from './feeds';
 import { assistantResolvers } from './assistant';
 import { homeResolvers } from './home';
+import { agentUsageResolvers } from './agent-usage';
 
 export const resolvers = {
   Query: {
@@ -72,6 +73,7 @@ export const resolvers = {
     ...feedResolvers.Query,
     ...assistantResolvers.Query,
     ...homeResolvers.Query,
+    ...agentUsageResolvers.Query,
   },
   
   Mutation: {

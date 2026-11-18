@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { runAsFeedClient } from '../agent/harness';
 import { assertLocalSupabase, executeParsedFeed, localSupabase } from './feed-loader';
 import { preferOwnMap, visibleToClient } from './load-maps';
 import type { IntakeTable } from './intake-file';
@@ -200,7 +201,9 @@ export async function getLoadSession(id: string, clientId: string, client: Supab
 
 export async function startLoadSession(fileName: string, mediaType: string, bytes: Buffer, clientId: string, client: SupabaseClient = useClient()): Promise<LoadSessionDetail> {
   assertLocalSupabase(client);
-  const intake = await intakeFile(fileName, mediaType, bytes);
+  const intake = await runAsFeedClient({ clientId, activity: 'feed.import', metadata: { fileName } }, () =>
+    intakeFile(fileName, mediaType, bytes),
+  );
   const tables: StoredTable[] = intake.tables.map((table: IntakeTable) => ({
     id: table.id,
     name: table.name,
@@ -261,7 +264,9 @@ export async function refreshLoadSession(id: string, clientId: string, client: S
   let note = current.extraction_note;
   if (current.source_base64) {
     try {
-      const intake = await intakeFile(current.file_name, current.media_type || 'application/octet-stream', Buffer.from(current.source_base64, 'base64'));
+      const intake = await runAsFeedClient({ clientId, activity: 'feed.import', metadata: { fileName: current.file_name } }, () =>
+        intakeFile(current.file_name, current.media_type || 'application/octet-stream', Buffer.from(current.source_base64, 'base64')),
+      );
       if (intake.tables.length > 0) {
         tables = intake.tables.map((table) => ({
           id: table.id,

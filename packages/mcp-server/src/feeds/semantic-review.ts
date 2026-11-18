@@ -1,4 +1,6 @@
-import { geminiKey, geminiUrl } from './model';
+import { invokeAgent } from '../agent/harness';
+import { geminiAnswerText } from '../agent/usage';
+import { GEMINI_MODEL, geminiKey } from './model';
 import {
   domainLabel,
   promoteNamesToIdentity,
@@ -253,19 +255,21 @@ export async function reviewColumns(
   const reviewable = assignments.filter(needsReview);
   if (reviewable.length === 0) return assignments;
   try {
-    const response = await fetchImpl(geminiUrl(key), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const { response } = await invokeAgent({
+      provider: 'gemini',
+      model: GEMINI_MODEL,
+      feature: 'feed-intake',
+      activity: 'feed.semantic-review',
+      apiKey: key,
+      fetchImpl,
+      signal: AbortSignal.timeout(40000),
+      body: {
         contents: [{ parts: [{ text: buildPrompt(reviewable, attributes, domains, context) }] }],
         // A little thinking helps with meaning. Unbounded thinking took 11 seconds on a 700-field catalog; 512 tokens keeps it to a few.
         generationConfig: { responseMimeType: 'application/json', temperature: 0, thinkingConfig: { thinkingBudget: 512 } },
-      }),
-      signal: AbortSignal.timeout(40000),
+      },
     });
-    if (!response.ok) return assignments;
-    const body = await response.json();
-    const text = (body?.candidates?.[0]?.content?.parts || []).map((part: { text?: string }) => part.text || '').join('');
+    const text = geminiAnswerText(response);
     return mergeSemanticAnswer(assignments, parseModelAnswer(text), attributes, domains);
   } catch {
     return assignments;
