@@ -1,4 +1,13 @@
 import { Context } from '../context';
+import {
+  assertIdentityProviderInput,
+  normalizeEmailDomains,
+  oidcIdentifier,
+  removeRegisteredProvider,
+  syncIdentityProvider,
+  toIdentityProviderRow,
+  type IdentityProviderKind,
+} from '../lib/enterprise-sso';
 
 // Always the caller's JWT. The service role bypasses row level security, so
 // tenancy reads and writes go through `supabase` and Postgres policies.
@@ -182,6 +191,26 @@ export const tenancyResolvers = {
       }
       return Array.from(codes);
     },
+
+    clientAuthRequirements: async (_: any, args: { clientId: string }, context: Context) => {
+      const { data, error } = await tn(context)
+        .from('client_auth_requirements')
+        .select('client_id, password_enabled, mfa_required, email_domains')
+        .eq('client_id', args.clientId)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapAuthRequirements(data) : null;
+    },
+
+    clientIdentityProviders: async (_: any, args: { clientId: string }, context: Context) => {
+      const { data, error } = await tn(context)
+        .from('client_identity_providers')
+        .select('id, client_id, provider, display_name, email_domain, azure_tenant_id, saml_metadata_url, oidc_issuer, oidc_client_id, oidc_identifier, sso_provider_id, registration_status, registration_error, is_enabled')
+        .eq('client_id', args.clientId)
+        .order('provider');
+      if (error) throw error;
+      return (data || []).map(mapIdentityProvider);
+    },
   },
 
   Mutation: {
@@ -240,6 +269,15 @@ export const tenancyResolvers = {
         }
         if (!context.supabaseAdmin) {
           throw new Error('User invitation requires SUPABASE_SERVICE_ROLE_KEY to be configured on the server');
+        }
+        const { data: authRules, error: authRulesError } = await tn(context)
+          .from('client_auth_requirements')
+          .select('password_enabled')
+          .eq('client_id', args.input.clientId)
+          .maybeSingle();
+        if (authRulesError && !/client_auth_requirements|schema cache/i.test(authRulesError.message)) throw authRulesError;
+        if (authRules && authRules.password_enabled === false) {
+          throw new Error('This client requires single sign-on. People join when they sign in with the organization identity provider.');
         }
 
         let userId: string | null = null;
@@ -430,8 +468,183 @@ export const tenancyResolvers = {
         return { success: false, errors: [{ field: 'general', message: error.message, code: 'UPDATE_FAILED' }] };
       }
     },
+
+    updateClientAuthRequirements: async (_: any, args: { input: { clientId: string; passwordEnabled: boolean; mfaRequired: boolean; emailDomains: string[] } }, context: Context) => {
+      try {
+        await assertTenantAdmin(context);
+        const unique = normalizeEmailDomains(args.input.emailDomains || []);
+        const { data: providers, error: providerError } = await tn(context)
+          .from('client_identity_providers')
+          .select('email_domain')
+          .eq('client_id', args.input.clientId);
+        if (providerError) throw providerError;
+        const stillUsed = (providers || [])
+          .map((row: { email_domain: string | null }) => row.email_domain)
+          .filter((domain): domain is string => typeof domain === 'string' && !unique.includes(domain));
+        if (stillUsed.length) {
+          throw new Error(`Remove the connection for ${stillUsed.join(', ')} before dropping that domain`);
+        }
+        const { error } = await tn(context).from('client_auth_requirements').upsert({
+          client_id: args.input.clientId,
+          password_enabled: args.input.passwordEnabled,
+          mfa_required: args.input.mfaRequired,
+          email_domains: unique,
+          updated_by: context.user?.id ?? null,
+        }, { onConflict: 'client_id' });
+        if (error) throw error;
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        return { success: false, errors: [{ field: 'general', message: error.message, code: 'AUTH_REQUIREMENTS_FAILED' }] };
+      }
+    },
+
+    upsertClientIdentityProvider: async (_: any, args: { input: any }, context: Context) => {
+      try {
+        await assertTenantAdmin(context);
+        const input = args.input;
+        let existing: any = null;
+        if (input.id) {
+          const { data, error } = await tn(context)
+            .from('client_identity_providers')
+            .select('id, provider, oidc_identifier, sso_provider_id, saml_metadata_url, saml_metadata_xml')
+            .eq('id', input.id)
+            .eq('client_id', input.clientId)
+            .maybeSingle();
+          if (error) throw error;
+          if (!data) throw new Error('Identity provider not found');
+          existing = data;
+        }
+        const samlMetadataUrl = input.provider === 'SAML'
+          ? (input.samlMetadataUrl || (!input.samlMetadataXml ? existing?.saml_metadata_url : null))
+          : null;
+        const samlMetadataXml = input.provider === 'SAML'
+          ? (input.samlMetadataXml || (!input.samlMetadataUrl ? existing?.saml_metadata_xml : null))
+          : null;
+        const write = assertIdentityProviderInput({
+          provider: input.provider as IdentityProviderKind,
+          displayName: input.displayName ?? null,
+          emailDomain: input.emailDomain ?? null,
+          azureTenantId: input.azureTenantId ?? null,
+          samlMetadataUrl,
+          samlMetadataXml,
+          oidcIssuer: input.oidcIssuer ?? null,
+          oidcClientId: input.oidcClientId ?? null,
+          oidcClientSecret: input.oidcClientSecret ?? null,
+          isEnabled: input.isEnabled !== false,
+        }, { secretRequired: input.provider === 'OIDC' && !existing?.oidc_identifier });
+        const identifier = write.provider === 'OIDC'
+          ? (existing?.oidc_identifier || (write.emailDomain ? oidcIdentifier(write.emailDomain) : null))
+          : null;
+        const registers = write.provider === 'SAML' || write.provider === 'OIDC';
+        const payload = {
+          ...toIdentityProviderRow(write, identifier),
+          client_id: input.clientId,
+          registration_status: registers ? 'pending' : 'active',
+          registration_error: null,
+        };
+        const saved = input.id
+          ? await tn(context).from('client_identity_providers').update(payload).eq('id', input.id).select('id').single()
+          : await tn(context).from('client_identity_providers').insert(payload).select('id').single();
+        if (saved.error) throw saved.error;
+        if (!registers) return { success: true, errors: [] };
+
+        const registration = await syncIdentityProvider({
+          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
+          serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+          row: {
+            provider: write.provider,
+            emailDomain: write.emailDomain,
+            samlMetadataUrl: write.samlMetadataUrl,
+            samlMetadataXml: write.samlMetadataXml,
+            oidcIssuer: write.oidcIssuer,
+            oidcClientId: write.oidcClientId,
+            oidcClientSecret: write.oidcClientSecret,
+            oidcIdentifier: identifier,
+            ssoProviderId: existing?.sso_provider_id ?? null,
+            displayName: write.displayName,
+            isEnabled: write.isEnabled,
+          },
+        });
+        const { error: statusError } = await tn(context)
+          .from('client_identity_providers')
+          .update({
+            registration_status: registration.registrationStatus,
+            registration_error: registration.registrationError,
+            sso_provider_id: registration.ssoProviderId,
+            oidc_identifier: registration.oidcIdentifier ?? identifier,
+          })
+          .eq('id', saved.data.id);
+        if (statusError) throw statusError;
+        if (registration.registrationStatus === 'error') {
+          return { success: false, errors: [{ field: 'provider', message: registration.registrationError || 'Could not register the identity provider', code: 'REGISTRATION_FAILED' }] };
+        }
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        return { success: false, errors: [{ field: 'general', message: error.message, code: 'IDENTITY_PROVIDER_FAILED' }] };
+      }
+    },
+
+    deleteClientIdentityProvider: async (_: any, args: { id: string }, context: Context) => {
+      try {
+        await assertTenantAdmin(context);
+        const { data: row, error } = await tn(context)
+          .from('client_identity_providers')
+          .select('id, provider, sso_provider_id, oidc_identifier')
+          .eq('id', args.id)
+          .maybeSingle();
+        if (error) throw error;
+        if (!row) return { success: true, errors: [] };
+        await removeRegisteredProvider({
+          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
+          serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+          provider: row.provider,
+          ssoProviderId: row.sso_provider_id,
+          oidcIdentifier: row.oidc_identifier,
+        });
+        const { error: deleteError } = await tn(context).from('client_identity_providers').delete().eq('id', args.id);
+        if (deleteError) throw deleteError;
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        return { success: false, errors: [{ field: 'general', message: error.message, code: 'DELETE_FAILED' }] };
+      }
+    },
   },
 };
+
+async function assertTenantAdmin(context: Context) {
+  if (!context.user) throw new Error('Not authenticated');
+  const { data, error } = await tn(context).rpc('is_tenant_admin');
+  if (error) throw error;
+  if (!data) throw new Error('Only a tenant admin can manage authentication');
+}
+
+function mapAuthRequirements(row: any) {
+  return {
+    clientId: row.client_id,
+    passwordEnabled: row.password_enabled,
+    mfaRequired: row.mfa_required,
+    emailDomains: row.email_domains || [],
+  };
+}
+
+function mapIdentityProvider(row: any) {
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    provider: row.provider,
+    displayName: row.display_name,
+    emailDomain: row.email_domain,
+    azureTenantId: row.azure_tenant_id,
+    samlMetadataUrl: row.saml_metadata_url,
+    oidcIssuer: row.oidc_issuer,
+    oidcClientId: row.oidc_client_id,
+    oidcIdentifier: row.oidc_identifier,
+    ssoProviderId: row.sso_provider_id,
+    registrationStatus: row.registration_status,
+    registrationError: row.registration_error,
+    isEnabled: row.is_enabled,
+  };
+}
 
 function mapClient(row: any) {
   if (!row) return null;
