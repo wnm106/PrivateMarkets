@@ -31,7 +31,6 @@ const CRUMB_LABELS: Record<string, string> = {
   attributes: 'Attributes',
   'expression-functions': 'Expression Functions',
   templates: 'Templates',
-  layouts: 'Display Layouts',
   'dq-rules': 'DQ Rules',
   compliance: 'Compliance',
   dashboards: 'Dashboards',

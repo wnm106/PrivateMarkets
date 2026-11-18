@@ -2983,8 +2983,6 @@ type Query {
   fieldLineage(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime): [FieldLineage!]!
   entityActivity(entityId: ID!, knowledgeDate: DateTime, attributeCode: String, limit: Int): [AttributeActivity!]!
   temporalHistory(entityId: ID!, attributeCode: String!, fromDate: Date!, toDate: Date!): [TemporalValue!]!
-  entityDisplay(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime, controls: JSON): EntityDisplay!
-  displayLayouts(domainCode: String): [DisplayLayout!]!
   
   # DQ queries
   dqRule(id: ID!): DQRule
@@ -3146,9 +3144,6 @@ type Mutation {
   reorderTemplateAttributes(input: ReorderTemplateAttributesInput!): ReorderTemplateAttributesResult!
   unassignAttributeFromTemplate(templateId: ID!, attributeId: ID!): MutationResult!
   applyStatementTemplate(input: ApplyStatementTemplateInput!): ApplyStatementTemplateResult!
-  upsertDisplayLayout(input: UpsertDisplayLayoutInput!): UpsertDisplayLayoutResult!
-  upsertEntityTemplateBinding(input: UpsertEntityTemplateBindingInput!): UpsertEntityTemplateBindingResult!
-  saveDisplayValue(input: SaveDisplayValueInput!): SaveDisplayValueResult!
   updateTemplateSourcePreference(input: UpdateTemplateSourcePreferenceInput!): UpdateTemplateSourcePreferenceResult!
   mergeEntities(survivorId: ID!, retiredId: ID!, fieldChoices: [MergeFieldChoiceInput!], matchScore: Int, matchReasons: JSON): MergeEntitiesResult!
   updateMatchRule(input: UpdateMatchRuleInput!): UpdateMatchRuleResult!
@@ -3604,146 +3599,6 @@ type ApplyStatementTemplateResult {
   sectionCount: Int!
   errors: [MutationError!]!
 }
-
-type DisplayParameterOption {
-  value: String!
-  label: String!
-  sets: JSON
-}
-
-type DisplayParameter {
-  name: String!
-  label: String
-  type: String
-  binds: String
-  multi: Boolean
-  defaultValue: String
-  options: [DisplayParameterOption!]!
-}
-
-type DisplayPeriod {
-  key: String!
-  grain: String!
-  label: String!
-  periodStart: String!
-  periodEnd: String!
-  entityId: ID
-}
-
-type DisplayCell {
-  periodKey: String!
-  basis: String!
-  value: String
-  readOnly: Boolean!
-  entityId: ID
-  periodStart: String!
-  periodEnd: String!
-  periodGrain: String!
-}
-
-type DisplaySeriesRow {
-  attributeCode: String!
-  attributeName: String!
-  reportingGrain: String
-  periodRollup: String!
-  cells: [DisplayCell!]!
-}
-
-type ResolvedDisplayLayout {
-  id: ID!
-  layoutCode: String!
-  layoutName: String!
-  htmlTemplate: String!
-  timeMode: String!
-  seriesAxis: String!
-  relationshipCode: String
-  parameters: [DisplayParameter!]!
-  effectiveControls: JSON!
-  periods: [DisplayPeriod!]!
-  rows: [DisplaySeriesRow!]!
-}
-
-type EntityDisplay {
-  fiscalYearEndMonth: Int!
-  layouts: [ResolvedDisplayLayout!]!
-}
-
-type DisplayLayout {
-  id: ID!
-  layoutCode: String!
-  layoutName: String!
-  description: String
-  domainCode: String!
-  ownerDomainCode: String
-  relationshipCode: String
-  scope: String!
-  ownerEntityId: ID
-  htmlTemplate: String!
-  timeMode: String!
-  seriesAxis: String!
-  defaultViewGrain: String
-  allowedViewGrains: [String!]!
-  seriesWindow: Int!
-  parameters: JSON!
-  isActive: Boolean!
-}
-
-input UpsertDisplayLayoutInput {
-  id: ID
-  layoutCode: String!
-  layoutName: String!
-  description: String
-  domainCode: String!
-  ownerDomainCode: String
-  relationshipCode: String
-  scope: String
-  ownerEntityId: ID
-  htmlTemplate: String!
-  timeMode: String
-  seriesAxis: String
-  defaultViewGrain: String
-  allowedViewGrains: [String!]
-  seriesWindow: Int
-  parameters: JSON
-  isActive: Boolean
-}
-
-type UpsertDisplayLayoutResult {
-  success: Boolean!
-  layout: DisplayLayout
-  errors: [MutationError!]!
-}
-
-input UpsertEntityTemplateBindingInput {
-  id: ID
-  ownerEntityId: ID!
-  relationshipCode: String
-  dataTemplateId: ID
-  layoutId: ID!
-  validFrom: Date
-  validTo: Date
-}
-
-type UpsertEntityTemplateBindingResult {
-  success: Boolean!
-  id: ID
-  errors: [MutationError!]!
-}
-
-input SaveDisplayValueInput {
-  entityId: ID!
-  attributeCode: String!
-  value: String!
-  periodStart: Date!
-  periodEnd: Date!
-  periodGrain: String
-  statementBasis: String
-}
-
-type SaveDisplayValueResult {
-  success: Boolean!
-  id: ID
-  errors: [MutationError!]!}
 
 # Entity Identifier Definition Type
 type EntityIdentifierDefinition {

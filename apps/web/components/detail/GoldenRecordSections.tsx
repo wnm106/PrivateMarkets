@@ -5,8 +5,7 @@ import type { EntityData } from './types';
 import { SourceAttributedFieldRow, type FieldData } from './SourceAttributedFieldRow';
 import { type SourceKey } from '@/lib/data';
 import { useTemporalStore } from '@/lib/store';
-import { ATTRIBUTE_SECTIONS_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
-import { DisplayLayoutView, type DisplayCellData, type ResolvedLayoutView } from './DisplayLayoutView';
+import { ATTRIBUTE_SECTIONS_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, graphqlQuery } from '@/lib/graphql';
 import { EntityReports } from '@/components/reporting/EntityReports';
 import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard';
 import { RelationshipEntityGrids } from './RelationshipEntityGrids';
@@ -67,41 +66,12 @@ function formulaLabel(formula: string | null | undefined): string {
   return shown || 'Calculated';
 }
 
-const ENTITY_DISPLAY_QUERY = `
-  query EntityDisplay($entityId: ID!, $asOfDate: Date, $knowledgeDate: DateTime, $controls: JSON) {
-    entityDisplay(entityId: $entityId, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate, controls: $controls) {
-      fiscalYearEndMonth
-      layouts {
-        id
-        layoutName
-        htmlTemplate
-        parameters { name label type binds multi defaultValue options { value label sets } }
-        effectiveControls
-        periods { key label periodStart periodEnd grain entityId }
-        rows {
-          attributeCode
-          cells { periodKey basis value readOnly entityId periodStart periodEnd periodGrain }
-        }
-      }
-    }
-  }
-`;
-
 const DERIVED_ATTRIBUTE_QUERY = `
   query DerivedAttributes($domainCode: String!) {
     attributeRegister(domainCode: $domainCode) {
       attributeCode
       isDerived
       derivationFormula
-    }
-  }
-`;
-
-const SAVE_DISPLAY_VALUE_MUTATION = `
-  mutation SaveDisplayValue($input: SaveDisplayValueInput!) {
-    saveDisplayValue(input: $input) {
-      success
-      errors { message }
     }
   }
 `;
@@ -127,8 +97,6 @@ export function GoldenRecordSections({
     linkCounts: ParentLinkCount[];
     parentDomains: string[];
   } | null>(null);
-  const [controls, setControls] = useState<Record<string, string> | null>(null);
-  const [displayVersion, setDisplayVersion] = useState(0);
   const [derivedFormulas, setDerivedFormulas] = useState<Record<string, string>>({});
   const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const domainCode = entity.domainCode || '';
@@ -140,15 +108,6 @@ export function GoldenRecordSections({
     setSectionState({ domainCode, sections: domainCode ? null : [] });
   }
   const sections = sectionState.domainCode === domainCode ? sectionState.sections : null;
-  const layoutKey = `${entity.id}\0${asOfDate ?? ''}\0${knowledgeDate ?? ''}`;
-  const [layoutState, setLayoutState] = useState<{ key: string; layouts: ResolvedLayoutView[] | null }>({
-    key: layoutKey,
-    layouts: null,
-  });
-  if (layoutState.key !== layoutKey) {
-    setLayoutState({ key: layoutKey, layouts: null });
-  }
-  const layouts = layoutState.key === layoutKey ? layoutState.layouts : null;
 
   useEffect(() => {
     const domainCode = entity.domainCode;
@@ -188,10 +147,6 @@ export function GoldenRecordSections({
   }, [domainCode]);
 
   useEffect(() => {
-    setControls(null);
-  }, [entity.id]);
-
-  useEffect(() => {
     let cancelled = false;
     setRelationshipCatalog(null);
     Promise.all([
@@ -218,36 +173,17 @@ export function GoldenRecordSections({
     return () => { cancelled = true; };
   }, [entity.domainCode]);
 
-  useEffect(() => {
-    let cancelled = false;
-    graphqlQuery<{ entityDisplay: { layouts: ResolvedLayoutView[] } }, { entityId: string; asOfDate?: string; knowledgeDate?: string; controls: Record<string, string> }>(
-      ENTITY_DISPLAY_QUERY,
-      { entityId: entity.id, asOfDate, knowledgeDate, controls: controls ?? {} },
-      'network-only',
-    ).then((result) => {
-      if (cancelled) return;
-      const next = result.error ? [] : (result.data?.entityDisplay?.layouts ?? []);
-      setLayoutState((current) => (current.key === layoutKey ? { key: layoutKey, layouts: next } : current));
-    }).catch(() => {
-      if (cancelled) return;
-      setLayoutState((current) => (current.key === layoutKey ? { key: layoutKey, layouts: [] } : current));
-    });
-    return () => { cancelled = true; };
-  }, [entity.id, asOfDate, knowledgeDate, controls, displayVersion, layoutKey]);
-
   const attributes = entity.attributes || {};
   const assignedCodes = new Set(templateAttributes.map((attribute) => attribute.attributeCode));
-  const layoutCodes = new Set((layouts ?? []).flatMap((layout) => layout.rows.map((row) => row.attributeCode)));
   // Stored values can exist for attributes owned by another entity type. Once the
   // assignment catalog is loaded, only show attributes assigned to this entity.
   const attributeEntries = Object.entries(attributes).filter(([key]) =>
-    (assignedCodes.size === 0 || assignedCodes.has(key)) && !layoutCodes.has(key)
+    assignedCodes.size === 0 || assignedCodes.has(key)
   );
   const populatedEntries = attributeEntries.filter(([, attr]) => hasStoredValue(attr));
   const temporalEntries = lineageData
     .filter((lineage) => hasStoredValue(lineage.currentValue))
     .filter((lineage) => assignedCodes.size === 0 || assignedCodes.has(lineage.attributeCode))
-    .filter((lineage) => !layoutCodes.has(lineage.attributeCode))
     .map((lineage) => [lineage.attributeCode, { value: lineage.currentValue }] as [string, { value: string }]);
   const displayEntries = lineageLoaded ? temporalEntries : populatedEntries;
   const lineageMap = new Map<string, LineageData>();
@@ -256,7 +192,6 @@ export function GoldenRecordSections({
   const listedAttributes: TemplateAttribute[] = [];
   const listedCodes = new Set<string>();
   for (const attribute of templateAttributes) {
-    if (layoutCodes.has(attribute.attributeCode)) continue;
     listedCodes.add(attribute.attributeCode);
     listedAttributes.push(attribute);
   }
@@ -348,7 +283,7 @@ export function GoldenRecordSections({
             children={shown.children}
           />
         )
-      ) : !sections || !layouts ? (
+      ) : !sections ? (
         <div className="field-section" aria-busy="true">
           <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>
             Loading…
@@ -356,29 +291,7 @@ export function GoldenRecordSections({
         </div>
       ) : (
         <AttributeSections
-          layouts={layouts}
           sections={sections}
-          controls={controls ?? {}}
-          onControlsChange={setControls}
-          onSaveCell={async (attributeCode, cell, value) => {
-            const result = await graphqlMutation<{ saveDisplayValue: { success: boolean; errors: Array<{ message: string }> } }, { input: Record<string, string | null> }>(
-              SAVE_DISPLAY_VALUE_MUTATION,
-              {
-                input: {
-                  entityId: cell.entityId || entity.id,
-                  attributeCode,
-                  value,
-                  periodStart: cell.periodStart,
-                  periodEnd: cell.periodEnd,
-                  periodGrain: cell.periodGrain || null,
-                  statementBasis: cell.basis || null,
-                },
-              },
-            );
-            const saveError = result.error?.message || result.data?.saveDisplayValue?.errors?.[0]?.message;
-            if (saveError || !result.data?.saveDisplayValue?.success) throw new Error(saveError || 'Save failed');
-            setDisplayVersion((version) => version + 1);
-          }}
           items={listedAttributes.map((templateAttr) => {
           const key = templateAttr.attributeCode;
           const lineage = lineageMap.get(key);
@@ -495,29 +408,15 @@ interface AttributeDisplayNode {
 }
 
 function AttributeSections({
-  layouts,
   sections,
-  controls,
-  onControlsChange,
-  onSaveCell,
   items,
 }: {
-  layouts: ResolvedLayoutView[];
   sections: AttributeSectionOrder[];
-  controls: Record<string, string>;
-  onControlsChange: (next: Record<string, string>) => void;
-  onSaveCell: (attributeCode: string, cell: DisplayCellData, value: string) => Promise<void>;
   items: AttributeDisplayNode[];
 }) {
   const groups = groupForDisplay(items, sections);
   const links = attributeSectionLinks(groups.map((group) => group.section));
-  const sectionNav = [
-    ...layouts.map((layout) => ({
-      id: `attr-layout-${layout.id}`,
-      label: layout.layoutName?.trim() || 'Statement',
-    })),
-    ...links,
-  ];
+  const sectionNav = links;
   const sectionNavKey = sectionNav.map((item) => encodeURIComponent(item.id)).join('\n');
   const [activeSection, setActiveSection] = useState('');
   const jumpLock = useRef(0);
@@ -558,16 +457,6 @@ function AttributeSections({
 
   const body = (
     <>
-      {layouts.map((layout) => (
-        <DisplayLayoutView
-          key={layout.id}
-          anchorId={`attr-layout-${layout.id}`}
-          layout={layout}
-          controls={controls}
-          onControlsChange={onControlsChange}
-          onSaveCell={onSaveCell}
-        />
-      ))}
       {items.length === 0 && (
         <div className="field-section">
           <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>

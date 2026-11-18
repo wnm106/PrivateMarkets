@@ -42,7 +42,6 @@ const ADMIN = [
   { href: '/admin/templates/studio', label: 'Statement Studio', icon: 'chart' },
   { href: '/admin/expression-functions', label: 'Expression Functions', icon: 'list' },
   { href: '/admin/templates', label: 'Templates', icon: 'layers' },
-  { href: '/admin/layouts', label: 'Display Layouts', icon: 'domains' },
   { href: '/admin/dq-rules', label: 'DQ Rules', icon: 'alert' },
   { href: '/admin/compliance', label: 'Compliance Rules', icon: 'list' },
   { href: '/admin/compliance/funds', label: 'Fund Thresholds', icon: 'chart' },

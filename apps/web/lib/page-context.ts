@@ -23,7 +23,6 @@ const PAGES: Record<string, string> = {
   '/admin/expression-functions': 'Expression functions',
   '/admin/templates': 'Templates',
   '/admin/templates/studio': 'Template studio',
-  '/admin/layouts': 'Display layouts',
   '/admin/dq-rules': 'Data quality rules',
   '/admin/compliance': 'Compliance rules',
   '/admin/compliance/funds': 'Fund thresholds',

@@ -15,7 +15,6 @@ import { reportingResolvers } from './reporting';
 import { experienceResolvers } from './experience';
 import { statementTemplateResolvers } from './statement-template';
 import { surfaceResolvers } from './surface';
-import { displayLayoutResolvers } from './display-layout';
 import { calculationResolvers } from './calculation';
 import { reconciliationResolvers } from './reconciliation';
 import { entityResolutionResolvers } from './entity-resolution';
@@ -46,7 +45,6 @@ export const resolvers = {
     ...referenceListResolvers.Query,
     ...reportingResolvers.Query,
     ...experienceResolvers.Query,
-    ...displayLayoutResolvers.Query,
     ...calculationResolvers.Query,
     ...reconciliationResolvers.Query,
     // Only attributeRegister/domainTemplates are declared in the schema today.
@@ -90,7 +88,6 @@ export const resolvers = {
     ...complianceResolvers.Mutation,
     ...referenceListResolvers.Mutation,
     ...reportingResolvers.Mutation,
-    ...displayLayoutResolvers.Mutation,
     ...calculationResolvers.Mutation,
     ...reconciliationResolvers.Mutation,
     updateAttributeDefinition: metadataResolvers.Mutation.updateAttributeDefinition,
