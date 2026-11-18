@@ -366,6 +366,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
           text: response.text,
           timestamp: Date.now(),
           proposals: extractProposals(response.text),
+          usage: response.usage,
         },
       ]);
 
@@ -757,6 +758,24 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
                       className="markdown-content"
                       dangerouslySetInnerHTML={{ __html: markdownToHtml(msg.text) }}
                     />
+                  )}
+                </div>
+              )}
+              {msg.role === 'model' && msg.usage && msg.usage.calls > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--ink-4)', marginTop: 4 }}>
+                  {msg.usage.totalTokens.toLocaleString('en-US')} tokens
+                  {msg.usage.thinkingTokens > 0 ? ` · ${msg.usage.thinkingTokens.toLocaleString('en-US')} thinking` : ''}
+                  {' · '}
+                  {msg.usage.costUsd > 0 && msg.usage.costUsd < 0.01
+                    ? `$${msg.usage.costUsd.toFixed(4)}`
+                    : msg.usage.costUsd.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}
+                  {msg.usage.audits.some((audit) => audit.thinking) && (
+                    <details style={{ marginTop: 4 }}>
+                      <summary style={{ cursor: 'pointer' }}>Thinking</summary>
+                      {msg.usage.audits.filter((audit) => audit.thinking).map((audit, auditIndex) => (
+                        <pre key={audit.id ?? auditIndex} style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0', fontSize: 11, color: 'var(--ink-3)' }}>{audit.thinking}</pre>
+                      ))}
+                    </details>
                   )}
                 </div>
               )}

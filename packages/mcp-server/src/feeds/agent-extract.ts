@@ -1,4 +1,6 @@
-import { geminiUrl } from './model';
+import { invokeAgent } from '../agent/harness';
+import { geminiAnswerText } from '../agent/usage';
+import { GEMINI_MODEL, geminiKey } from './model';
 import type { ParsedTable } from './types';
 
 /**
@@ -6,34 +8,33 @@ import type { ParsedTable } from './types';
  * This stays optional: with no model key the specialist says so and waits for a structured file.
  */
 export async function extractTableWithAgent(text: string, fileName: string): Promise<ParsedTable | null> {
-  const key = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
+  const key = geminiKey();
   if (!key || !text.trim()) return null;
   try {
-    const response = await fetch(
-      geminiUrl(key),
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: [
-                `Extract one table from "${fileName}".`,
-                'Reply with JSON only, no markdown: {"headers":["column"],"rows":[{"column":"value"}]}.',
-                'Keep the document\'s own column names. Leave dates as text.',
-                'If there is no table, reply {"headers":[],"rows":[]}.',
-                '',
-                text.slice(0, 15000),
-              ].join('\n'),
-            }],
+    const { response } = await invokeAgent({
+      provider: 'gemini',
+      model: GEMINI_MODEL,
+      feature: 'feed-intake',
+      activity: 'feed.extract-table',
+      agent: fileName,
+      apiKey: key,
+      signal: AbortSignal.timeout(12000),
+      body: {
+        contents: [{
+          parts: [{
+            text: [
+              `Extract one table from "${fileName}".`,
+              'Reply with JSON only, no markdown: {"headers":["column"],"rows":[{"column":"value"}]}.',
+              'Keep the document\'s own column names. Leave dates as text.',
+              'If there is no table, reply {"headers":[],"rows":[]}.',
+              '',
+              text.slice(0, 15000),
+            ].join('\n'),
           }],
-        }),
-        signal: AbortSignal.timeout(12000),
-      }
-    );
-    if (!response.ok) return null;
-    const body = await response.json();
-    const raw = body?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        }],
+      },
+    });
+    const raw = geminiAnswerText(response);
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) return null;
     const parsed = JSON.parse(match[0]);

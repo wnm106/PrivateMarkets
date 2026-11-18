@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { nextCronRun } from '@tapestrai/graphql/src/lib/cron';
+import { runWithAgentContext } from '@tapestrai/mcp-server/src/agent/harness';
 import { buildConnector, type ConnectionSpec, type Connector, type FeedSpec, type FileOutcome, type SftpOptions } from './connectors';
 import { JobError, type JobHandler } from './worker';
 
@@ -129,14 +130,24 @@ export function feedPollHandler(deps: FeedDeps): JobHandler {
           } else {
             let loaded: LoadOutcome;
             try {
-              loaded = await deps.loadFile({
-                clientId: feed.client_id,
-                mapCode: feed.map_code,
-                sourceCode: feed.source_code || null,
-                fileName: fetched.name,
-                mediaType: fetched.mediaType,
-                bytes: fetched.bytes,
-              });
+              loaded = await runWithAgentContext(
+                {
+                  userId: run.requestedBy,
+                  clientId: String(feed.client_id),
+                  feature: 'feed-intake',
+                  activity: 'feed.load',
+                  metadata: { feedId, fileName: fetched.name, jobRunId: run.id },
+                },
+                () =>
+                  deps.loadFile({
+                    clientId: feed.client_id,
+                    mapCode: feed.map_code,
+                    sourceCode: feed.source_code || null,
+                    fileName: fetched.name,
+                    mediaType: fetched.mediaType,
+                    bytes: fetched.bytes,
+                  }),
+              );
             } catch (error) {
               loaded = { status: 'FAILED', message: reason(error) };
             }

@@ -1,6 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
+import { callerClientId } from '@/lib/agent-audit';
 import { parseRecInsights, withoutRuleEchoes, type RecInsightPayload } from '@/lib/fund-rec-insights';
+import { invokeAgent, usageForClient } from '@tapestrai/mcp-server/src/agent/harness';
+import { geminiAnswerText } from '@tapestrai/mcp-server/src/agent/usage';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -47,12 +50,20 @@ export async function POST(request: NextRequest) {
   const packed = JSON.stringify(payload);
   if (packed.length > 350_000) return NextResponse.json({ error: 'This period is too large to review' }, { status: 413 });
 
-  const geminiResponse = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+  const clientId = await callerClientId(supabase);
+  let generated: any;
+  let usage;
+  try {
+    const called = await invokeAgent({
+      provider: 'gemini',
+      model: geminiModel,
+      feature: 'fund-rec',
+      activity: 'fund-rec.insights',
+      agent: 'insights',
+      userId: userData.user.id,
+      clientId,
+      metadata: { fundName: payload.fundName, periodEnd: payload.periodEnd },
+      body: {
         systemInstruction: { parts: [{ text: INSTRUCTION }] },
         contents: [{ role: 'user', parts: [{ text: packed }] }],
         generationConfig: {
@@ -61,18 +72,16 @@ export async function POST(request: NextRequest) {
           responseMimeType: 'application/json',
           thinkingConfig: { thinkingBudget: 0 },
         },
-      }),
-    },
-  );
-
-  if (!geminiResponse.ok) {
-    const detail = (await geminiResponse.text()).replace(/key=[^&\s"]+/gi, 'key').slice(0, 180);
+      },
+    });
+    generated = called.response;
+    usage = usageForClient([called.audit]);
+  } catch (error) {
+    const detail = (error instanceof Error ? error.message : 'The model could not read this period.').slice(0, 180);
     return NextResponse.json({ error: `The model could not read this period. ${detail}` }, { status: 502 });
   }
-
-  const generated = await geminiResponse.json();
   const candidate = generated.candidates?.[0];
-  const text = (candidate?.content?.parts || []).map((part: { text?: string }) => part.text || '').join('');
+  const text = geminiAnswerText(generated);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -86,5 +95,5 @@ export async function POST(request: NextRequest) {
   }
   const titles = Array.isArray(payload.rules) ? payload.rules.map((rule) => String(rule?.title ?? '')) : [];
   const points = withoutRuleEchoes(parseRecInsights(parsed), titles);
-  return NextResponse.json({ points });
+  return NextResponse.json({ points, usage });
 }

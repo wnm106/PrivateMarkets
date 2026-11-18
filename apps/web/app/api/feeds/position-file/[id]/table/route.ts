@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { selectImportTable } from '@/lib/feeds/import-instances';
+import { asFeedCaller } from '@/lib/agent-audit';
 import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
 
 export const dynamic = 'force-dynamic';
@@ -14,7 +15,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   const body = await request.json().catch(() => ({}));
   if (!body.tableId) return NextResponse.json({ error: 'Choose a table' }, { status: 400 });
   try {
-    return NextResponse.json(await selectImportTable(id, clientId, String(body.tableId)));
+    return NextResponse.json(await asFeedCaller(user.id, clientId, () => selectImportTable(id, clientId, String(body.tableId))));
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'The table could not be opened' }, { status: 400 });
   }

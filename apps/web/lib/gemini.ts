@@ -7,6 +7,7 @@ export interface ChatMessage {
   role: 'user' | 'model';
   text: string;
   timestamp: number;
+  usage?: ChatUsage | null;
 }
 
 export interface ChatContext {
@@ -56,6 +57,30 @@ export interface ChatResponse {
   /** Guided skill ledger after this turn, when a skill is active. */
   skill?: SkillView | null;
   skillState?: SkillState | null;
+  /** The model calls this turn made, for the person who asked. */
+  usage?: ChatUsage | null;
+}
+
+export interface ChatUsage {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  thinkingTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  audits: Array<{
+    id: string | null;
+    model: string;
+    activity: string;
+    agent: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    thinkingTokens: number;
+    totalTokens: number;
+    costUsd: number;
+    thinking: string;
+    status: 'ok' | 'error';
+  }>;
 }
 
 export async function sendGeminiMessage(
@@ -102,5 +127,6 @@ export async function sendGeminiMessage(
     conversation: data.conversation ?? null,
     skill: data.skill ?? null,
     skillState: data.skillState ?? null,
+    usage: data.usage ?? null,
   };
 }

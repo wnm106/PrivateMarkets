@@ -15,6 +15,7 @@ import {
   saveSourceMap,
   startLoadSession,
 } from '../feeds/load-sessions';
+import { withSupabaseCaller } from '../agent/harness';
 import { sessionClientId } from '../feeds/session-client';
 import { ToolRegistry } from '../lib/tool-registry.js';
 import { ToolDefinition } from '../lib/types.js';
@@ -55,7 +56,9 @@ const startLoadSessionTool: ToolDefinition = {
     const bytes = args.contentBase64
       ? Buffer.from(String(args.contentBase64), 'base64')
       : Buffer.from(String(args.csvText), 'utf8');
-    return startLoadSession(String(args.fileName), String(args.mediaType || 'text/csv'), bytes, clientId);
+    return withSupabaseCaller(supabase, clientId, { feature: 'feed-intake', activity: 'feed.import', metadata: { fileName: String(args.fileName) } }, () =>
+      startLoadSession(String(args.fileName), String(args.mediaType || 'text/csv'), bytes, clientId),
+    );
   },
 };
 
@@ -103,7 +106,12 @@ const refreshLoadSessionTool: ToolDefinition = {
     properties: { sessionId: { type: 'string' } },
     required: ['sessionId'],
   } as JSONSchema7,
-  execute: async (args, supabase) => refreshLoadSession(String(args.sessionId), await sessionClientId(supabase)),
+  execute: async (args, supabase) => {
+    const clientId = await sessionClientId(supabase);
+    return withSupabaseCaller(supabase, clientId, { feature: 'feed-intake', activity: 'feed.import' }, () =>
+      refreshLoadSession(String(args.sessionId), clientId),
+    );
+  },
 };
 
 const saveSourceMapTool: ToolDefinition = {

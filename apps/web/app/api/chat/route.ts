@@ -43,6 +43,9 @@ import {
   isImage,
 } from '@/lib/chat-attachments';
 import { chatVoiceInstruction } from '@/lib/chat-voice';
+import { callerClientId } from '@/lib/agent-audit';
+import { bindAgentContext, invokeAgent, usageForClient, type AgentAudit } from '@tapestrai/mcp-server/src/agent/harness';
+import { geminiAnswerText } from '@tapestrai/mcp-server/src/agent/usage';
 
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseAnonKey;
 const geminiApiKey =
@@ -74,16 +77,24 @@ registerReportingTools(toolRegistry);
 registerQueryTools(toolRegistry);
 registerNarrativeTools(toolRegistry);
 
-async function callGemini(body: Record<string, any>) {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-  );
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Gemini API error: ${error}`);
-  }
-  return response.json();
+async function callGemini(
+  body: Record<string, any>,
+  scope: { userId: string | null; clientId: string | null; agent: string | null; metadata?: Record<string, unknown> },
+  audits: AgentAudit[],
+) {
+  const { response, audit } = await invokeAgent({
+    provider: 'gemini',
+    model: geminiModel,
+    feature: 'chat',
+    activity: 'chat.turn',
+    agent: scope.agent,
+    userId: scope.userId,
+    clientId: scope.clientId,
+    metadata: scope.metadata,
+    body,
+  });
+  audits.push(audit);
+  return response as any;
 }
 
 // Gemini requires function responses to be JSON objects.
@@ -215,6 +226,11 @@ export async function POST(request: NextRequest) {
     // History is a signed-in feature; anonymous callers still get a reply but
     // nothing is persisted for them.
     const auth = await authenticate(request);
+    const clientId = auth ? await callerClientId(auth.supabase) : null;
+    bindAgentContext({ userId: auth?.userId ?? null, clientId, feature: 'chat', activity: 'chat.turn' });
+    const audits: AgentAudit[] = [];
+    const withUsage = (payload: Record<string, unknown>, status = 200) =>
+      NextResponse.json({ ...payload, usage: usageForClient(audits) }, { status });
 
     // Convert messages to Gemini format (accept both `content` and `text`)
     const incoming: Array<{ role: 'user' | 'model'; content?: string; text?: string }> = messages || [];
@@ -410,6 +426,13 @@ export async function POST(request: NextRequest) {
       return { text: done.text, skill: done.view };
     };
 
+    const scope = {
+      userId: auth?.userId ?? null,
+      clientId,
+      agent: skill?.id ?? 'assistant',
+      metadata: { conversationId: conversation?.id ?? conversationId ?? null, page: context?.page ?? null },
+    };
+
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       const data = await callGemini({
         contents,
@@ -419,22 +442,22 @@ export async function POST(request: NextRequest) {
           ? { tools: [{ functionDeclarations: tools }], toolConfig: { functionCallingConfig: { mode: 'AUTO' } } }
           : {}),
         generationConfig: { temperature: 0.4, topK: 40, topP: 0.95, maxOutputTokens: 8192 },
-      });
+      }, scope, audits);
 
       const candidate = data.candidates?.[0];
       if (!candidate) {
-        return NextResponse.json({ error: 'No response from Gemini' }, { status: 500 });
+        return withUsage({ error: 'No response from Gemini' }, 500);
       }
 
       const parts: any[] = candidate.content?.parts || [];
       const functionCalls = parts.filter((p) => p.functionCall);
 
       if (functionCalls.length === 0) {
-        const raw = parts.map((p) => p.text || '').join('').trim() || 'No response generated.';
+        const raw = geminiAnswerText(data) || 'No response generated.';
         const finished = finish(raw);
         const text = presentAnswer(finished.text);
         const turnConversationId = await persistAssistantTurn(text);
-        return NextResponse.json({
+        return withUsage({
           text,
           skill: finished.skill,
           skillState,
@@ -542,11 +565,8 @@ export async function POST(request: NextRequest) {
         ],
         systemInstruction: { parts: [{ text: systemInstruction }] },
         generationConfig: { temperature: 0.4, maxOutputTokens: 4096 },
-      });
-      finalText = (finalData.candidates?.[0]?.content?.parts || [])
-        .map((p: any) => p.text || '')
-        .join('')
-        .trim();
+      }, scope, audits);
+      finalText = geminiAnswerText(finalData);
     } catch (error) {
       console.error('[Chat API] Final summary call failed:', error);
     }
@@ -557,7 +577,7 @@ export async function POST(request: NextRequest) {
     const finished = finish(exhausted);
     const text = presentAnswer(finished.text);
     const exhaustedConversationId = await persistAssistantTurn(text);
-    return NextResponse.json({
+    return withUsage({
       text,
       skill: finished.skill,
       skillState,

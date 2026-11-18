@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createImportInstance, listImportInstances, listMappingCatalog, listReferenceLists, listSources } from '@/lib/feeds/import-instances';
+import { asFeedCaller } from '@/lib/agent-audit';
 import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
 import { mappingTargets } from '@/lib/feeds/suggest';
 
@@ -37,7 +38,9 @@ export async function POST(request: NextRequest) {
   if (file.size > 20 * 1024 * 1024) return NextResponse.json({ error: 'Files need to be 20 MB or smaller' }, { status: 400 });
   try {
     const bytes = Buffer.from(await file.arrayBuffer());
-    const instance = await createImportInstance(file.name, file.type || 'application/octet-stream', bytes, clientId);
+    const instance = await asFeedCaller(user.id, clientId, () =>
+      createImportInstance(file.name, file.type || 'application/octet-stream', bytes, clientId),
+    );
     return NextResponse.json(instance);
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'The file could not be stored' }, { status: 400 });

@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { invokeAgent } from '@tapestrai/mcp-server/src/agent/harness';
 import type { AgentModel, ModelToolCall, ModelTurn } from './agent';
 
 /**
@@ -49,26 +50,33 @@ export function claudeModel(client: Anthropic = new Anthropic()): AgentModel {
       ),
     }),
     async turn(system, tools, messages): Promise<ModelTurn> {
-      let response: Anthropic.Beta.BetaMessage;
-      try {
-        response = await client.beta.messages.create({
-          model,
-          max_tokens: 16000,
-          betas: ['server-side-fallback-2026-07-01'],
-          fallbacks: 'default',
-          thinking: { type: 'adaptive' },
-          output_config: { effort: effort() },
-          // Caches the prompt up to the newest message, so each round only pays for what is new.
-          cache_control: { type: 'ephemeral' },
-          system,
-          ...(tools.length > 0
-            ? { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema as Anthropic.Beta.BetaTool.InputSchema })) }
-            : {}),
-          messages: messages as Anthropic.Beta.BetaMessageParam[],
-        });
-      } catch (error) {
-        throw explain(error);
-      }
+      const { response } = await invokeAgent<Anthropic.Beta.BetaMessage>({
+        provider: 'claude',
+        model,
+        feature: 'workflow',
+        activity: 'workflow.agent',
+        execute: async () => {
+          try {
+            return await client.beta.messages.create({
+              model,
+              max_tokens: 16000,
+              betas: ['server-side-fallback-2026-07-01'],
+              fallbacks: 'default',
+              thinking: { type: 'adaptive' },
+              output_config: { effort: effort() },
+              // Caches the prompt up to the newest message, so each round only pays for what is new.
+              cache_control: { type: 'ephemeral' },
+              system,
+              ...(tools.length > 0
+                ? { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema as Anthropic.Beta.BetaTool.InputSchema })) }
+                : {}),
+              messages: messages as Anthropic.Beta.BetaMessageParam[],
+            });
+          } catch (error) {
+            throw explain(error);
+          }
+        },
+      });
 
       const text = response.content
         .filter((block): block is Anthropic.Beta.BetaTextBlock => block.type === 'text')

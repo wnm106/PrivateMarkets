@@ -1,5 +1,6 @@
 import { isReadTool, resolveTemplates } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { normalizeItems, type ListValue, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { runWithAgentContext, takeAgentAudits } from '@tapestrai/mcp-server/src/agent/harness';
 import { checkListValues } from './list-check';
 import { message, type AgentRequest, type AgentResult, type ToolRunner } from './engine';
 
@@ -177,6 +178,20 @@ export interface AgentDeps {
 }
 
 export async function runAgentStep(request: AgentRequest, deps: AgentDeps): Promise<AgentResult> {
+  return runWithAgentContext(
+    {
+      userId: request.actor.userId,
+      clientId: request.actor.clientId,
+      feature: 'workflow',
+      activity: 'workflow.agent',
+      agent: request.node.label || request.node.id,
+      metadata: { nodeId: request.node.id, nodeType: request.node.type },
+    },
+    () => executeAgentStep(request, deps),
+  );
+}
+
+async function executeAgentStep(request: AgentRequest, deps: AgentDeps): Promise<AgentResult> {
   const config = request.node.config;
   const model = deps.model(String(config.provider || 'claude'));
   const maxRounds = Math.min(MAX_ROUNDS, Math.max(1, Math.trunc(Number(config.maxRounds)) || DEFAULT_ROUNDS));
@@ -239,8 +254,32 @@ export async function runAgentStep(request: AgentRequest, deps: AgentDeps): Prom
     return { content: lines.join(' '), isError: kept.length === 0 && refused.length > 0 };
   };
 
+  const auditedTurn = async (systemPrompt: string, toolSpecs: ToolSpec[], messages: unknown[]): Promise<ModelTurn> => {
+    const before = takeAgentAudits().length;
+    const turn = await model.turn(systemPrompt, toolSpecs, messages);
+    const latest = takeAgentAudits().slice(before).at(-1);
+    if (latest) {
+      await request.event(
+        'agent.usage',
+        `${latest.model}: ${latest.inputTokens} in, ${latest.outputTokens} out${latest.thinking ? ', thinking recorded' : ''}`,
+        {
+          callId: latest.id,
+          provider: latest.provider,
+          model: latest.model,
+          inputTokens: latest.inputTokens,
+          outputTokens: latest.outputTokens,
+          thinkingTokens: latest.thinkingTokens,
+          totalTokens: latest.totalTokens,
+          costUsd: latest.costUsd,
+          thinking: latest.thinking.slice(0, 8000),
+        },
+      );
+    }
+    return turn;
+  };
+
   while (state.rounds < maxRounds) {
-    const turn = await model.turn(system, tools, state.messages);
+    const turn = await auditedTurn(system, tools, state.messages);
     if (turn.stop === 'refused') throw new Error(`The model declined this step${turn.refusal ? `: ${turn.refusal}` : '.'}`);
     state.messages.push(turn.message);
     if (turn.stop === 'pause') {
@@ -285,7 +324,7 @@ export async function runAgentStep(request: AgentRequest, deps: AgentDeps): Prom
 
   // Out of rounds: one last turn with no tools, so the reviewer still gets a summary.
   state.messages.push(model.userMessage('You have used every tool round this step allows. Do not call any more tools. Write your summary for the reviewer now, and say plainly what you did not get to.'));
-  const last = await model.turn(system, [], state.messages);
+  const last = await auditedTurn(system, [], state.messages);
   await request.event('agent.note', `Stopped at the limit of ${maxRounds} rounds`);
   return { summary: last.text || `The agent used all ${maxRounds} rounds without writing a summary.`, items: state.items };
 }

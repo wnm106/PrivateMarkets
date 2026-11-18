@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withAgentCaller } from '@/lib/agent-audit';
 import { authenticate } from '@/lib/chat-server';
+import type { ClientUsage } from '@tapestrai/mcp-server/src/agent/harness';
 import { DEFAULT_NARRATIVE_MODEL, executeSection, hasModelKey, reviewRun } from '@/lib/narrative-runner';
 import type { ReviewSectionInput } from '@tapestrai/graphql/src/lib/narrative-review';
 import { resolveEntityId } from '@tapestrai/graphql/src/lib/data-query-engine';
@@ -210,14 +212,22 @@ export async function POST(request: NextRequest) {
       }
 
       let outcome;
+      let usage: ClientUsage | undefined;
       try {
-        outcome = await executeSection({
+        const ran = await withAgentCaller(supabase, auth.userId, {
+          feature: 'narrative',
+          activity: 'narrative.section',
+          agent: sectionKey,
+          metadata: { runId, sectionKey },
+        }, () => executeSection({
           supabase, spec, section, entityId, asOfDate: useAsOf, params: useParams,
           prior: prior.map(({ key, title, markdown }) => ({ key, title, markdown })), batchIndex, reviewNotes,
           reuseFindings: batchIndex > 0
             ? (rows.find((r) => r.section_key === sectionKey)?.evidence?.batches?.['0']?.toolFindings as string | undefined)
             : undefined,
-        });
+        }));
+        outcome = ran.result;
+        usage = ran.usage;
       } catch (e: any) {
         const message = e?.message || String(e);
         if (runId) {
@@ -225,7 +235,7 @@ export async function POST(request: NextRequest) {
             .update({ status: 'FAILED', error_message: message.slice(0, 1000), updated_at: new Date().toISOString() })
             .eq('run_id', runId).eq('section_key', sectionKey);
         }
-        return NextResponse.json({ section: sectionRecord({ section_key: sectionKey, status: 'FAILED', error_message: message, title: section.title }), batch: null });
+        return NextResponse.json({ section: sectionRecord({ section_key: sectionKey, status: 'FAILED', error_message: message, title: section.title }), batch: null, usage: e?.usage });
       }
 
       // Stitch batches: keep each batch's blocks, merge in order, complete when all are in.
@@ -284,6 +294,7 @@ export async function POST(request: NextRequest) {
         batch: outcome.batch ? { ...outcome.batch, done: complete } : null,
         // For an unsaved draft the caller keeps the batch blocks and sends them back merged.
         batchBlocks: runId ? undefined : outcome.blocks,
+        usage,
       });
     }
 
@@ -312,7 +323,13 @@ export async function POST(request: NextRequest) {
           untraced: ((r.verification?.unmatched ?? []) as Array<{ figure: string }>).map((u) => u.figure),
         };
       });
-      const review = await reviewRun({ model: template?.model, sections: inputs });
+      const reviewed = await withAgentCaller(supabase, auth.userId, {
+        feature: 'narrative',
+        activity: 'narrative.review',
+        agent: 'reviewer',
+        metadata: { runId: run.id },
+      }, () => reviewRun({ model: template?.model, sections: inputs }));
+      const review = reviewed.result;
 
       // Stored with the run so every reader sees it. Only the run's creator may change the run, so a
       // review by someone else is returned but not kept.
@@ -321,7 +338,7 @@ export async function POST(request: NextRequest) {
         .update({ verification: { ...(run.verification ?? {}), review }, updated_at: new Date().toISOString() })
         .eq('id', run.id)
         .select('id');
-      return NextResponse.json({ review, saved: (saved ?? []).length > 0 });
+      return NextResponse.json({ review, saved: (saved ?? []).length > 0, usage: reviewed.usage });
     }
 
     // ------------------------------------------------------------------
@@ -374,15 +391,23 @@ export async function POST(request: NextRequest) {
     let errorMessage: string | null = null;
     let blocks: NarrativeBlock[] = [];
     let dataSummary: Row = {};
+    let usage: ClientUsage | undefined;
     try {
-      const outcome = await executeSection({
+      const ran = await withAgentCaller(supabase, auth.userId, {
+        feature: 'narrative',
+        activity: 'narrative.section',
+        agent: sections[0].key,
+      }, () => executeSection({
         supabase, spec, section: sections[0], entityId, asOfDate, params, prior: [],
-      });
+      }));
+      const outcome = ran.result;
+      usage = ran.usage;
       blocks = outcome.blocks;
       dataSummary = { notes: outcome.notes, verification: outcome.verification };
     } catch (e: any) {
       status = 'FAILED';
       errorMessage = e?.message || String(e);
+      usage = e?.usage;
     }
     const run: Row = {
       id: null, narrative_id: narrativeId, entity_id: entityId, parameters: params, blocks, status,
@@ -400,7 +425,7 @@ export async function POST(request: NextRequest) {
       if (error) console.error('[narratives/run] failed to store run:', error.message);
       else Object.assign(run, saved);
     }
-    return NextResponse.json({ run: runRecord(run, []) });
+    return NextResponse.json({ run: runRecord(run, []), usage });
   } catch (error: any) {
     console.error('[narratives/run] Error:', error);
     return fail(error.message || 'Unknown error', 500);

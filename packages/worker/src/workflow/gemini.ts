@@ -1,4 +1,6 @@
-import { GEMINI_MODEL, geminiKey, geminiUrl } from '@tapestrai/mcp-server/src/feeds/model';
+import { invokeAgent } from '@tapestrai/mcp-server/src/agent/harness';
+import { geminiAnswerText } from '@tapestrai/mcp-server/src/agent/usage';
+import { GEMINI_MODEL } from '@tapestrai/mcp-server/src/feeds/model';
 import type { AgentModel, ModelToolCall, ModelTurn } from './agent';
 
 /**
@@ -40,12 +42,13 @@ export function geminiModel(fetcher: typeof fetch = fetch): AgentModel {
       })),
     }),
     async turn(system, tools, messages): Promise<ModelTurn> {
-      const key = geminiKey();
-      if (!key) throw new Error('No Gemini key is set for the worker. Set GEMINI_API_KEY.');
-      const response = await fetcher(geminiUrl(key), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const { response } = await invokeAgent<{ candidates?: Array<{ content?: { role?: string; parts?: Part[] }; finishReason?: string }> }>({
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        feature: 'workflow',
+        activity: 'workflow.agent',
+        fetchImpl: fetcher,
+        body: {
           contents: messages,
           systemInstruction: { parts: [{ text: system }] },
           ...(tools.length > 0
@@ -55,10 +58,9 @@ export function geminiModel(fetcher: typeof fetch = fetch): AgentModel {
               }
             : {}),
           generationConfig: { temperature: 0.2, maxOutputTokens: 16000 },
-        }),
+        },
       });
-      if (!response.ok) throw new Error(`The model returned an error (${response.status}). ${(await response.text()).slice(0, 500)}`);
-      const data = (await response.json()) as { candidates?: Array<{ content?: { role?: string; parts?: Part[] }; finishReason?: string }> };
+      const data = response;
       const candidate = data.candidates?.[0];
       if (!candidate) throw new Error('The model returned nothing.');
       const parts = candidate.content?.parts || [];
@@ -71,7 +73,7 @@ export function geminiModel(fetcher: typeof fetch = fetch): AgentModel {
       return {
         // Echoed back whole: each function call carries a signature the next request needs.
         message: { role: candidate.content?.role || 'model', parts },
-        text: parts.map((part) => (typeof part.text === 'string' ? part.text : '')).join('').trim(),
+        text: geminiAnswerText(data),
         calls,
         stop: candidate.finishReason === 'SAFETY' ? 'refused' : candidate.finishReason === 'MAX_TOKENS' && calls.length === 0 ? 'limit' : calls.length > 0 ? 'tools' : 'end',
       };
