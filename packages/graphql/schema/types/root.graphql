@@ -84,6 +84,27 @@ type Query {
   complianceResultContributors(resultId: ID!): ComplianceResultContributors!
   compliancePopulationPreview(input: CompliancePopulationPreviewInput!): CompliancePopulationPreview!
   complianceFundBoard: ComplianceFundBoard!
+  # Booked book plus any number of buys and sells, scored together.
+  evaluateComplianceProforma(
+    anchorEntityId: ID!
+    legs: [ComplianceProformaLegInput!]!
+    asOfDate: Date!
+    knowledgeDate: DateTime
+    sourceScope: String
+    ruleCodes: [String!]
+  ): ComplianceProformaScore!
+  # Largest additional par of one security. legs are the rest of the package.
+  investmentCapacity(
+    anchorEntityId: ID!
+    securityId: ID
+    securityCode: String
+    asOfDate: Date!
+    knowledgeDate: DateTime
+    sourceScope: String
+    ruleCodes: [String!]
+    limitKind: String
+    legs: [ComplianceProformaLegInput!]
+  ): ComplianceCapacity!
 
   # Reference List (Controlled Vocabulary) queries
   referenceLists(domainCode: String, isActive: Boolean): [ReferenceList!]!
