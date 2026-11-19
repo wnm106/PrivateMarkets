@@ -25,7 +25,6 @@ const CHUNKS_QUERY = `
     }
   }
 `;
-const FILE_URL_QUERY = `query($id: ID!) { documentFileUrl(id: $id) }`;
 const RESULT = `document { ${DOCUMENT_FIELDS} sections { ${SECTION_FIELDS} } } errors { message }`;
 const UPDATE_DOCUMENT = `mutation($input: UpdateDocumentInput!) { updateDocument(input: $input) { ${RESULT} } }`;
 const RETAG_DOCUMENT = `mutation($id: ID!) { retagDocument(id: $id) { ${RESULT} } }`;
@@ -233,10 +232,9 @@ export default function DocumentPage() {
     loadChunks(0);
   };
 
-  const openOriginal = async () => {
-    const { data, error } = await graphqlQuery<{ documentFileUrl: string | null }, { id: string }>(FILE_URL_QUERY, { id }, 'network-only');
-    if (error || !data?.documentFileUrl) setMessage(error?.message || 'The original file could not be opened.');
-    else window.open(data.documentFileUrl, '_blank', 'noopener');
+  // Through the app, not straight from storage: storage hands HTML back as plain text, which shows the markup.
+  const openOriginal = () => {
+    window.open(`/api/documents/${id}/file`, '_blank', 'noopener');
   };
 
   const templateTitle = (code: string | null) => (code ? template?.sections.find((section) => section.code === code)?.title || code : null);

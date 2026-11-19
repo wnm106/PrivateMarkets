@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentWork, agentsAtWork, runEntityIds, runIsMine } from './agent-work';
+import { agentWork, agentsAtWork, finishedWork, runEntityIds, runIsMine } from './agent-work';
 
 const node = (id: string, type: string, label: string, config: Record<string, unknown> = {}) => ({ id, type, label, position: { x: 0, y: 0 }, config });
 
@@ -108,6 +108,60 @@ describe('agent work', () => {
     // A review already decided no longer makes the run mine.
     expect(runIsMine(mine, 'me', none, new Set(['rev-done']))).toBe(false);
     expect(runIsMine(run({}), null, none, none)).toBe(false);
+  });
+
+  it('keeps what a finished run produced', () => {
+    expect(finishedWork(run({}))).toBeNull();
+    expect(finishedWork(run({ status: 'CANCELLED' }))).toBeNull();
+
+    const answered = finishedWork(
+      run({
+        status: 'SUCCEEDED',
+        finished_at: '2026-11-19T00:58:19Z',
+        input: { request: '  What data quality issues do I have?  ' },
+        steps: [
+          done('scan', 'tool'),
+          { node_id: 'work', node_type: 'agent', node_label: 'Write the brief', status: 'SUCCEEDED', output: { summary: ' There are no open exceptions. ', proposal: { items: [] } } },
+        ],
+      }),
+    );
+    expect(answered).toEqual({
+      runId: 'run-1',
+      workflowName: 'Cash matching',
+      outcome: 'done',
+      request: 'What data quality issues do I have?',
+      agentName: 'Write the brief',
+      result: 'There are no open exceptions.',
+      changes: null,
+      finishedAt: '2026-11-19T00:58:19Z',
+    });
+
+    const reviewed = finishedWork(
+      run({
+        status: 'SUCCEEDED',
+        steps: [{ node_id: 'work', node_type: 'agent', node_label: 'Work the breaks', status: 'SUCCEEDED', output: { summary: 'Matched two.', proposal: { items: [{}, {}] } } }],
+        events: [event('agent.identity', 'work', 'Running as Reconciler')],
+        reviews: [{ status: 'APPROVED' }],
+      }),
+    );
+    expect(reviewed).toMatchObject({ agentName: 'Reconciler', changes: '2 changes proposed, approved', request: null });
+
+    expect(finishedWork(run({ status: 'FAILED', error_message: 'The Anthropic key was rejected.' }))).toMatchObject({ outcome: 'failed', result: 'The Anthropic key was rejected.', agentName: null });
+    expect(finishedWork(run({ status: 'SUCCEEDED', steps: [done('scan', 'tool')] }))?.result).toMatch(/no agent step/);
+  });
+
+  it('lists finished runs newest first', () => {
+    const board = agentsAtWork(
+      [],
+      [],
+      [
+        run({ id: 'older', status: 'SUCCEEDED', finished_at: '2026-11-18T10:00:00Z' }),
+        run({ id: 'still-going' }),
+        run({ id: 'newer', status: 'FAILED', finished_at: '2026-11-19T00:00:00Z' }),
+      ],
+    );
+    expect(board.finished.map((item) => item.runId)).toEqual(['newer', 'older']);
+    expect(agentsAtWork([], []).finished).toEqual([]);
   });
 
   it('gives each agent its standing and counts the runs', () => {

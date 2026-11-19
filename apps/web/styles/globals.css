@@ -6380,6 +6380,7 @@ button.sidebar-logo:hover {
 }
 
 .home-module-needs-you,
+.home-module-agents,
 .home-module-places,
 .home-module-data-health { grid-column: 1 / -1; }
 
@@ -6651,6 +6652,47 @@ button.sidebar-logo:hover {
 .home-work-item.state-queued .home-work-bar > span { background: var(--ink-4); }
 
 .home-work-detail { font-size: 12px; color: var(--ink-3); }
+
+/* Finished runs: what each produced, so a handed-off request has somewhere to come back to. */
+.home-finished {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.home-work + .home-finished,
+.home-lane-empty + .home-finished { margin-top: 14px; }
+
+.home-finished-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 10px;
+}
+
+.home-finished-item {
+  padding-left: 10px;
+  border-left: 3px solid #2f9e6e;
+}
+
+.home-finished-item.outcome-failed { border-left-color: var(--red); }
+
+.home-finished-request {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--ink-3);
+  margin-top: 3px;
+}
+
+.home-finished-result { margin: 6px 0 4px; }
+.home-finished-result.is-clipped { max-height: 132px; }
+.home-finished-result > :first-child { margin-top: 0; }
+.home-finished-result > :last-child { margin-bottom: 0; }
+.home-finished-item.outcome-failed .home-finished-result { color: var(--red); }
+
+.home-work-detail a { color: var(--entity-link); }
 
 .home-agent-roster {
   list-style: none;

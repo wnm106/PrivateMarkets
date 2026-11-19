@@ -5269,6 +5269,8 @@ type MyUniverse {
 type AgentsAtWork {
   agents: [AgentStatus!]!
   work: [AgentWork!]!
+  """Runs that finished in the last day, newest first, with what each produced."""
+  finished: [FinishedWork!]!
   """Runs with a step running or queued."""
   running: Int!
   """Runs waiting on a person."""
@@ -5282,6 +5284,22 @@ type AgentStatus {
   """working, queued, waiting (its proposals are with a person), or idle."""
   state: String!
   runs: Int!
+}
+
+"""A workflow run that has finished, with what it produced."""
+type FinishedWork {
+  runId: ID!
+  workflowName: String!
+  """done or failed."""
+  outcome: String!
+  """What the person asked for, when the run was handed a typed request."""
+  request: String
+  agentName: String
+  """The agent's own account of what it found and did. For a failed run, why it failed."""
+  result: String!
+  """What came of any changes it proposed. Null when it proposed none."""
+  changes: String
+  finishedAt: DateTime
 }
 
 """One workflow run in flight."""

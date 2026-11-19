@@ -43,7 +43,7 @@ export function composeTargets(workflows: readonly ComposeWorkflow[]): ComposeTa
     .map((workflow) => ({
       key: `workflow:${workflow.id}`,
       label: workflow.name,
-      hint: 'Runs in the background. What it proposes comes back here for your decision.',
+      hint: 'Runs in the background. Its answer appears under Agents at work, and any changes it proposes come back for your decision.',
     }));
   return [ASSISTANT_TARGET, ...handoff];
 }

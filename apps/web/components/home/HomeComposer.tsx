@@ -115,7 +115,7 @@ export function HomeComposer({ summary, onStarted }: { summary: HomeSummary | nu
       {sent?.kind === 'run' && (
         <div className="home-composer-note" role="status">
           <span className="home-clear-mark" aria-hidden>✓</span>
-          Handed to {sent.name}. <Link href={`/workflows/runs/${sent.runId}`}>See the run</Link>
+          Handed to {sent.name}. Its answer will appear under Agents at work when it finishes. <Link href={`/workflows/runs/${sent.runId}`}>See the run</Link>
         </div>
       )}
       {sent?.kind === 'problem' && <div className="home-composer-note is-problem" role="alert">{sent.message}</div>}

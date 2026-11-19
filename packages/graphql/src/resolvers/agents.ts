@@ -32,6 +32,9 @@ export function agentFailure(error: unknown, code: string): MutationError {
 
 /** How many runs of each status are read for the home page. Older ones are still on the Workflows page. */
 const ACTIVE_RUNS_PER_STATUS = 6;
+/** A finished run stays on the home page this long, and at most this many are shown. */
+const FINISHED_WINDOW_MS = 24 * 60 * 60 * 1000;
+const FINISHED_SHOWN = 5;
 
 export function mapAgent(row: Row) {
   return {
@@ -70,6 +73,14 @@ export const agentResolvers = {
         ['RUNNING', 'QUEUED', 'WAITING'].map((status) => context.supabase.rpc('workflow_runs_list', { p_workflow_id: null, p_status: status, p_limit: ACTIVE_RUNS_PER_STATUS })),
       );
       const ids = lists.flatMap((result) => (result.error ? [] : ((result.data as Row[] | null) || []).map((row) => String(row.id))));
+      const finishedLists = await Promise.all(
+        ['SUCCEEDED', 'FAILED'].map((status) => context.supabase.rpc('workflow_runs_list', { p_workflow_id: null, p_status: status, p_limit: FINISHED_SHOWN * 2 })),
+      );
+      const since = Date.now() - FINISHED_WINDOW_MS;
+      // A list row says who started the run and what it was started on, which is enough to decide whose it is.
+      let finishedRows = finishedLists
+        .flatMap((result) => (result.error ? [] : (result.data as Row[] | null) || []))
+        .filter((row) => typeof row.finished_at === 'string' && Date.parse(row.finished_at) >= since);
       const [runs, roster] = await Promise.all([
         Promise.all(ids.map((id) => context.supabase.rpc('workflow_run_get', { p_run_id: id }))),
         context.supabase.rpc('agents_list', { p_client_id: null }),
@@ -83,7 +94,7 @@ export const agentResolvers = {
       let active = runs.flatMap((result) => (result.error || !result.data ? [] : [result.data as Row]));
       if (args.mine === true) {
         // A run is the caller's when they started it, or it works on or proposes changes to records in their universe.
-        const wanted = [...new Set(active.flatMap(runEntityIds))];
+        const wanted = [...new Set([...active, ...finishedRows].flatMap(runEntityIds))];
         const [mineIds, reviewIds] = await Promise.all([
           wanted.length > 0 ? context.supabase.rpc('universe_entities', { p_entity_ids: wanted }) : Promise.resolve({ data: [], error: null }),
           context.supabase.rpc('universe_review_ids'),
@@ -91,8 +102,15 @@ export const agentResolvers = {
         const entities = new Set<string>(mineIds.error ? [] : ((mineIds.data as string[] | null) || []).map(String));
         const reviews = new Set<string>(reviewIds.error ? [] : ((reviewIds.data as string[] | null) || []).map(String));
         active = active.filter((run) => runIsMine(run, context.user?.id || null, entities, reviews));
+        finishedRows = finishedRows.filter((run) => runIsMine(run, context.user?.id || null, entities, reviews));
       }
-      return agentsAtWork(active, [...byCode.values()]);
+      const newest = finishedRows.sort((a, b) => String(b.finished_at).localeCompare(String(a.finished_at))).slice(0, FINISHED_SHOWN);
+      const finished = await Promise.all(newest.map((row) => context.supabase.rpc('workflow_run_get', { p_run_id: row.id })));
+      return agentsAtWork(
+        active,
+        [...byCode.values()],
+        finished.flatMap((result) => (result.error || !result.data ? [] : [result.data as Row])),
+      );
     },
   },
 

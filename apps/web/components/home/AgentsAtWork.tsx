@@ -1,13 +1,16 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
 import { relativeTime } from '@/lib/home';
+import { markdownToHtml } from '@/lib/markdown';
 
 /**
- * The workflow runs in flight and which agent is behind each, with the
- * standing of every agent beneath. Refreshes on its own while anything is
+ * The workflow runs in flight and which agent is behind each, then the runs
+ * that finished in the last day with what each produced, then the standing of
+ * every agent. A finished run stays here so a request that was handed off
+ * has somewhere to come back to. Refreshes on its own while anything is
  * running, and when `refreshKey` changes (a run was just started). With
  * `mine`, only runs the person started or that touch their universe.
  */
@@ -34,9 +37,21 @@ interface AgentStatus {
   runs: number;
 }
 
+interface FinishedWork {
+  runId: string;
+  workflowName: string;
+  outcome: 'done' | 'failed';
+  request: string | null;
+  agentName: string | null;
+  result: string;
+  changes: string | null;
+  finishedAt: string | null;
+}
+
 interface Board {
   agents: AgentStatus[];
   work: AgentWork[];
+  finished: FinishedWork[];
   running: number;
   waiting: number;
 }
@@ -47,6 +62,7 @@ const QUERY = `
       running waiting
       agents { code name description state runs }
       work { runId workflowName state agentCode agentName stepLabel detail percent stepsDone stepsTotal startedAt }
+      finished { runId workflowName outcome request agentName result changes finishedAt }
     }
   }
 `;
@@ -54,6 +70,44 @@ const QUERY = `
 const REFRESH_MS = 15_000;
 
 const STATE_LABEL: Record<AgentStatus['state'], string> = { working: 'working', queued: 'queued', waiting: 'waiting on you', idle: 'idle' };
+
+/** Results longer than this open clipped, with a way to read the rest in place. */
+const RESULT_PREVIEW_CHARS = 420;
+
+function Finished({ item }: { item: FinishedWork }) {
+  const long = item.result.length > RESULT_PREVIEW_CHARS;
+  const [open, setOpen] = useState(false);
+  // The renderer knows three heading levels. Deeper ones are shown as the third.
+  const html = useMemo(() => markdownToHtml(item.result.replace(/^#{4,}\s/gm, '### ')), [item.result]);
+  return (
+    <li className={`home-finished-item outcome-${item.outcome}`}>
+      <div className="home-work-head">
+        <Link href={`/workflows/runs/${item.runId}`} className="home-work-title">
+          {item.workflowName}
+        </Link>
+        <span className="home-work-percent">
+          {item.outcome === 'failed' ? 'Failed' : 'Done'}
+          {item.finishedAt ? ` · ${relativeTime(item.finishedAt)}` : ''}
+        </span>
+      </div>
+      {item.request && <div className="home-finished-request">You asked: {item.request}</div>}
+      <div className={`home-brief-body home-finished-result${long && !open ? ' is-clipped' : ''}`} dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="home-work-detail">
+        {long && (
+          <>
+            <button type="button" className="home-link-button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+              {open ? 'Show less' : 'Read it all'}
+            </button>
+            {' · '}
+          </>
+        )}
+        {item.agentName ? `${item.agentName} · ` : ''}
+        {item.changes ? `${item.changes} · ` : ''}
+        <Link href={`/workflows/runs/${item.runId}`}>Open the run</Link>
+      </div>
+    </li>
+  );
+}
 
 export function AgentsAtWork({ refreshKey = 0, mine = false }: { refreshKey?: number; mine?: boolean }) {
   const [board, setBoard] = useState<Board | null>(null);
@@ -81,6 +135,9 @@ export function AgentsAtWork({ refreshKey = 0, mine = false }: { refreshKey?: nu
   }, [active, refreshKey, mine]);
 
   if (!board) return <div className="home-empty">{problem || 'Checking what the agents are doing…'}</div>;
+
+  // A page left open across an update can hold an answer from before this list existed.
+  const finished = board.finished || [];
 
   return (
     <div className="home-agents">
@@ -117,6 +174,17 @@ export function AgentsAtWork({ refreshKey = 0, mine = false }: { refreshKey?: nu
             </li>
           ))}
         </ul>
+      )}
+
+      {finished.length > 0 && (
+        <div className="home-finished">
+          <div className="home-finished-title">Finished in the last day</div>
+          <ul className="home-work">
+            {finished.map((item) => (
+              <Finished key={item.runId} item={item} />
+            ))}
+          </ul>
+        </div>
       )}
 
       {board.agents.length > 0 && (

@@ -40,9 +40,28 @@ export interface AgentStatus {
   runs: number;
 }
 
+/** A run that has finished, with what it produced. */
+export interface FinishedWork {
+  runId: string;
+  workflowName: string;
+  /** done, or failed. */
+  outcome: 'done' | 'failed';
+  /** What the person asked for, when the run was handed a typed request. */
+  request: string | null;
+  /** The agent that wrote the result: its name, or its step's label. */
+  agentName: string | null;
+  /** The agent's own account of what it found and did, as it wrote it. For a failed run, why it failed. */
+  result: string;
+  /** One line on what came of it: changes proposed and how the review went. Null when nothing was proposed. */
+  changes: string | null;
+  finishedAt: string | null;
+}
+
 export interface AgentsAtWork {
   agents: AgentStatus[];
   work: AgentWork[];
+  /** Runs that finished recently, newest first. */
+  finished: FinishedWork[];
   /** Runs with a step running or queued. */
   running: number;
   /** Runs waiting on a person. */
@@ -166,13 +185,62 @@ export function runIsMine(run: Row, userId: string | null, universe: ReadonlySet
   return runEntityIds(run).some((id) => universe.has(id));
 }
 
+/** What a finished run produced. Null for a run still in flight, or one that was cancelled. */
+export function finishedWork(run: Row): FinishedWork | null {
+  const status = String(run.status || '');
+  if (status !== 'SUCCEEDED' && status !== 'FAILED') return null;
+  const steps = rows(run.steps);
+  const events = rows(run.events);
+  // The last agent step that wrote a summary is the run's answer.
+  const answered = steps.filter((step) => step.node_type === 'agent' && typeof step.output?.summary === 'string' && step.output.summary.trim());
+  const last = answered[answered.length - 1];
+  const identity = last ? events.filter((event) => event.event_type === 'agent.identity' && event.node_id === last.node_id).pop() : undefined;
+  const named = typeof identity?.summary === 'string' && identity.summary.startsWith('Running as ') ? identity.summary.slice('Running as '.length) : null;
+
+  const proposed = answered.reduce((sum, step) => sum + (Array.isArray(step.output?.proposal?.items) ? step.output.proposal.items.length : 0), 0);
+  const reviews = rows(run.reviews);
+  const approved = reviews.filter((review) => review.status === 'APPROVED').length;
+  const rejected = reviews.filter((review) => review.status === 'REJECTED').length;
+  let changes: string | null = null;
+  if (proposed > 0) {
+    const verdict = approved > 0 && rejected === 0 ? 'approved' : rejected > 0 && approved === 0 ? 'rejected' : approved > 0 ? 'partly approved' : 'not reviewed';
+    changes = `${plural(proposed, 'change')} proposed, ${verdict}`;
+  }
+
+  const request = typeof run.input?.request === 'string' && run.input.request.trim() ? run.input.request.trim() : null;
+  const failed = status === 'FAILED';
+  return {
+    runId: String(run.id),
+    workflowName: String(run.workflow_name || 'A workflow'),
+    outcome: failed ? 'failed' : 'done',
+    request,
+    agentName: last ? named || String(last.node_label || 'Agent') : null,
+    result: failed
+      ? String(run.error_message || 'The run failed before it finished.')
+      : last
+        ? String(last.output.summary).trim()
+        : 'Finished. This workflow has no agent step, so there is no written result.',
+    changes,
+    finishedAt: run.finished_at || null,
+  };
+}
+
 const STATE_ORDER: Record<AgentWorkState, number> = { working: 0, queued: 1, waiting: 2 };
 
 /**
  * The runs in flight and the standing of each named agent. `agents` is the
  * roster a client sees: its own, and the shared ones it has not replaced.
  */
-export function agentsAtWork(runs: readonly Row[], agents: ReadonlyArray<{ code: string; name: string; description?: string | null; isActive?: boolean }>): AgentsAtWork {
+export function agentsAtWork(
+  runs: readonly Row[],
+  agents: ReadonlyArray<{ code: string; name: string; description?: string | null; isActive?: boolean }>,
+  finishedRuns: readonly Row[] = [],
+): AgentsAtWork {
+  const finished = finishedRuns
+    .map(finishedWork)
+    .filter((item): item is FinishedWork => item !== null)
+    .sort((a, b) => String(b.finishedAt || '').localeCompare(String(a.finishedAt || '')));
+
   const work = runs
     .map(agentWork)
     .filter((item): item is AgentWork => item !== null)
@@ -196,6 +264,7 @@ export function agentsAtWork(runs: readonly Row[], agents: ReadonlyArray<{ code:
   return {
     agents: roster,
     work,
+    finished,
     running: work.filter((item) => item.state !== 'waiting').length,
     waiting: work.filter((item) => item.state === 'waiting').length,
   };
