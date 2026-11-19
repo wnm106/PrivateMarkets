@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentWork, agentsAtWork } from './agent-work';
+import { agentWork, agentsAtWork, runEntityIds, runIsMine } from './agent-work';
 
 const node = (id: string, type: string, label: string, config: Record<string, unknown> = {}) => ({ id, type, label, position: { x: 0, y: 0 }, config });
 
@@ -85,6 +85,29 @@ describe('agent work', () => {
     expect(agentWork(run({ status: 'QUEUED', current_node: null }))).toMatchObject({ state: 'queued', stepLabel: 'Not started', detail: 'Waiting for a worker to pick it up', agentName: null, percent: 0 });
     expect(agentWork(run({ current_node: 'scan' }))).toMatchObject({ state: 'working', agentName: null, stepLabel: 'Find breaks', detail: 'Running' });
     expect(agentWork(run({ graph: null, current_node: 'x' }))).toMatchObject({ stepsTotal: 1, percent: 0 });
+  });
+
+  it('knows which runs are one person\u2019s business', () => {
+    const A = '11111111-1111-4111-8111-111111111111';
+    const B = '22222222-2222-4222-8222-222222222222';
+    const C = '33333333-3333-4333-8333-333333333333';
+    const mine = run({
+      started_by: 'someone-else',
+      input: { filters: { entityIds: [A, 'not-an-id'] } },
+      reviews: [
+        { id: 'rev-open', status: 'OPEN', proposal: { items: [{ target: { entityId: B } }, { target: {}, args: { entityId: C } }, { target: { entityId: A } }] } },
+        { id: 'rev-done', status: 'APPROVED', proposal: { items: [{ target: { entityId: '44444444-4444-4444-8444-444444444444' } }] } },
+      ],
+    });
+    expect(runEntityIds(mine)).toEqual([A, B, C]);
+    const none = new Set<string>();
+    expect(runIsMine(mine, 'me', none, none)).toBe(false);
+    expect(runIsMine(mine, 'someone-else', none, none)).toBe(true);
+    expect(runIsMine(mine, 'me', new Set([C]), none)).toBe(true);
+    expect(runIsMine(mine, 'me', none, new Set(['rev-open']))).toBe(true);
+    // A review already decided no longer makes the run mine.
+    expect(runIsMine(mine, 'me', none, new Set(['rev-done']))).toBe(false);
+    expect(runIsMine(run({}), null, none, none)).toBe(false);
   });
 
   it('gives each agent its standing and counts the runs', () => {

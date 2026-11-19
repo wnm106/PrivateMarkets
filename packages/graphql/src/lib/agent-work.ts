@@ -139,6 +139,33 @@ export function agentWork(run: Row): AgentWork | null {
   };
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The records a run is about: those it was started on, and those its open reviews propose to change. */
+export function runEntityIds(run: Row): string[] {
+  const ids: string[] = [];
+  const chosen = run.input?.filters?.entityIds;
+  if (Array.isArray(chosen)) ids.push(...chosen.map(String));
+  for (const review of rows(run.reviews)) {
+    if (review.status !== 'OPEN') continue;
+    for (const item of rows(review.proposal?.items)) {
+      const id = item.target?.entityId ?? item.args?.entityId;
+      if (typeof id === 'string') ids.push(id);
+    }
+  }
+  return [...new Set(ids.filter((id) => UUID.test(id)))];
+}
+
+/**
+ * Whether a run is one person's business: they started it, one of its open
+ * reviews is theirs, or it is about a record in their universe.
+ */
+export function runIsMine(run: Row, userId: string | null, universe: ReadonlySet<string>, reviewIds: ReadonlySet<string>): boolean {
+  if (userId && run.started_by === userId) return true;
+  if (rows(run.reviews).some((review) => review.status === 'OPEN' && reviewIds.has(String(review.id)))) return true;
+  return runEntityIds(run).some((id) => universe.has(id));
+}
+
 const STATE_ORDER: Record<AgentWorkState, number> = { working: 0, queued: 1, waiting: 2 };
 
 /**

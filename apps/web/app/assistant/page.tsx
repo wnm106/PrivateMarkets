@@ -5,7 +5,7 @@ import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { usePublishViewContext } from '@/lib/view-context';
 
 const SETTINGS_FIELDS = `enabled preset timezone morningHour nextDeliveryAt followCount`;
-const FOLLOW_FIELDS = `id subjectType subjectId subjectCode label delivery createdAt`;
+const FOLLOW_FIELDS = `id subjectType subjectId subjectCode label delivery includeChildren createdAt`;
 
 const PAGE_QUERY = `
   query AssistantPage {
@@ -36,6 +36,14 @@ const SAVE_FOLLOW = `
   }
 `;
 const DELETE_FOLLOW = `mutation DeleteAssistantFollow($id: ID!) { deleteAssistantFollow(id: $id) { success errors { message } } }`;
+const SET_FOLLOW_CHILDREN = `
+  mutation SetAssistantFollowChildren($id: ID!, $includeChildren: Boolean!) {
+    setAssistantFollowChildren(id: $id, includeChildren: $includeChildren) {
+      follow { ${FOLLOW_FIELDS} }
+      errors { message }
+    }
+  }
+`;
 const BRIEF_NOW = `mutation DeliverAssistantBrief { deliverAssistantBrief { success errors { message } } }`;
 
 const PRESETS = [
@@ -69,6 +77,7 @@ interface Follow {
   subjectCode: string | null;
   label: string;
   delivery: string;
+  includeChildren?: boolean;
   createdAt: string;
 }
 
@@ -195,6 +204,20 @@ export default function AssistantPage() {
       return;
     }
     setFollows((current) => [...current, saved.follow as Follow]);
+  };
+
+  const setFollowChildren = async (id: string, includeChildren: boolean) => {
+    setMessage('');
+    const result = await graphqlMutation<{ setAssistantFollowChildren: { follow: Follow | null; errors: { message: string }[] } }>(SET_FOLLOW_CHILDREN, {
+      id,
+      includeChildren,
+    });
+    const saved = result.data?.setAssistantFollowChildren;
+    if (result.error || !saved || saved.errors.length > 0 || !saved.follow) {
+      setMessage(saved?.errors[0]?.message || result.error?.message || 'That could not be changed.');
+      return;
+    }
+    setFollows((current) => current.map((follow) => (follow.id === id ? (saved.follow as Follow) : follow)));
   };
 
   const removeFollow = async (id: string) => {
@@ -410,7 +433,15 @@ export default function AssistantPage() {
                 <tbody>
                   {follows.map((follow) => (
                     <tr key={follow.id} style={body}>
-                      <td style={cell}>{follow.label}</td>
+                      <td style={cell}>
+                        {follow.label}
+                        {follow.subjectType === 'ENTITY' && (
+                          <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: 'var(--ink-3)', marginTop: 4 }}>
+                            <input type="checkbox" checked={follow.includeChildren === true} onChange={(event) => setFollowChildren(follow.id, event.target.checked)} />
+                            And the records under it, such as a fund&rsquo;s positions. These arrive in your summary, not right away.
+                          </label>
+                        )}
+                      </td>
                       <td style={cell}>{deliveryLabel(follow.delivery)}</td>
                       <td style={cell}>
                         <button type="button" className="btn btn-sm" onClick={() => removeFollow(follow.id)}>Remove</button>

@@ -1,5 +1,5 @@
 import type { Context } from '../context';
-import { agentsAtWork } from '../lib/agent-work';
+import { agentsAtWork, runEntityIds, runIsMine } from '../lib/agent-work';
 
 /**
  * Named agents: the standing definitions a workflow agent step can run as.
@@ -65,7 +65,7 @@ export const agentResolvers = {
      * the runs themselves. A source that cannot be read drops out instead of
      * failing the whole answer: someone who cannot see runs still sees the roster.
      */
-    agentsAtWork: async (_: unknown, __: unknown, context: Context) => {
+    agentsAtWork: async (_: unknown, args: { mine?: boolean | null }, context: Context) => {
       const lists = await Promise.all(
         ['RUNNING', 'QUEUED', 'WAITING'].map((status) => context.supabase.rpc('workflow_runs_list', { p_workflow_id: null, p_status: status, p_limit: ACTIVE_RUNS_PER_STATUS })),
       );
@@ -80,10 +80,19 @@ export const agentResolvers = {
         const seen = byCode.get(agent.code);
         if (!seen || (seen.isShared && !agent.isShared)) byCode.set(agent.code, agent);
       }
-      return agentsAtWork(
-        runs.flatMap((result) => (result.error || !result.data ? [] : [result.data as Row])),
-        [...byCode.values()],
-      );
+      let active = runs.flatMap((result) => (result.error || !result.data ? [] : [result.data as Row]));
+      if (args.mine === true) {
+        // A run is the caller's when they started it, or it works on or proposes changes to records in their universe.
+        const wanted = [...new Set(active.flatMap(runEntityIds))];
+        const [mineIds, reviewIds] = await Promise.all([
+          wanted.length > 0 ? context.supabase.rpc('universe_entities', { p_entity_ids: wanted }) : Promise.resolve({ data: [], error: null }),
+          context.supabase.rpc('universe_review_ids'),
+        ]);
+        const entities = new Set<string>(mineIds.error ? [] : ((mineIds.data as string[] | null) || []).map(String));
+        const reviews = new Set<string>(reviewIds.error ? [] : ((reviewIds.data as string[] | null) || []).map(String));
+        active = active.filter((run) => runIsMine(run, context.user?.id || null, entities, reviews));
+      }
+      return agentsAtWork(active, [...byCode.values()]);
     },
   },
 

@@ -82,6 +82,20 @@ export const responsibilityResolvers = {
       }));
     },
 
+    myUniverse: async (_: unknown, __: unknown, context: Context) => {
+      const [summary, reviews] = await Promise.all([context.supabase.rpc('universe_summary'), context.supabase.rpc('universe_review_ids')]);
+      if (summary.error) throw summary.error;
+      const row = (summary.data || {}) as Row;
+      return {
+        hasAny: row.has_any === true,
+        followed: Number(row.followed) || 0,
+        responsibleRecords: Number(row.responsible_records) || 0,
+        responsibleDomains: list(row.responsible_domains).map(String),
+        // Someone who cannot see reviews has none that are theirs.
+        reviewIds: reviews.error ? [] : ((reviews.data as string[] | null) || []).map(String),
+      };
+    },
+
     responsibilityChoices: async (_: unknown, args: { clientId?: string | null }, context: Context) => {
       const { data, error } = await context.supabase.rpc('responsibility_choices', { p_client_id: args.clientId || null });
       if (error) throw error;

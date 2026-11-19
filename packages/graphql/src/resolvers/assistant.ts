@@ -43,6 +43,7 @@ export function mapFollow(row: Row) {
     subjectCode: row.subject_code || null,
     label: row.label || '',
     delivery: row.delivery || 'DIGEST',
+    includeChildren: row.include_children === true,
     createdAt: row.created_at || null,
   };
 }
@@ -96,6 +97,16 @@ export const assistantResolvers = {
         return { follow: mapFollow(data as Row), errors: [] };
       } catch (error) {
         return { follow: null, errors: [failure(error, 'SAVE_FAILED', 'subject')] };
+      }
+    },
+
+    setAssistantFollowChildren: async (_: unknown, args: { id: string; includeChildren: boolean }, context: Context) => {
+      try {
+        const { data, error } = await context.supabase.rpc('assistant_follow_children', { p_id: args.id, p_include: args.includeChildren === true });
+        if (error) throw error;
+        return { follow: mapFollow(data as Row), errors: [] };
+      } catch (error) {
+        return { follow: null, errors: [failure(error, 'SAVE_FAILED', 'includeChildren')] };
       }
     },
 

@@ -2997,8 +2997,10 @@ type Query {
   responsibleForEntity(entityId: ID!, activity: String): [ResponsiblePerson!]!
   """The named agents a workflow agent step can run as: the shared ones and this session's clients' own."""
   agents(clientId: ID): [Agent!]!
-  """The workflow runs in flight, which agent is behind each, and the standing of every agent."""
-  agentsAtWork: AgentsAtWork!
+  """The workflow runs in flight, which agent is behind each, and the standing of every agent. With mine, only runs the caller started or that touch their universe."""
+  agentsAtWork(mine: Boolean): AgentsAtWork!
+  """The records that are the caller's to care about: what they follow and what they are responsible for."""
+  myUniverse: MyUniverse!
   """The people, roles, and activities a responsibility can be set to."""
   responsibilityChoices(clientId: ID): ResponsibilityChoices!
   """What starts this workflow when something happens: feed events or new data quality failures."""
@@ -3406,6 +3408,8 @@ type Mutation {
   saveAssistantSettings(input: SaveAssistantSettingsInput!): SaveAssistantSettingsResult!
   saveAssistantFollow(input: SaveAssistantFollowInput!): SaveAssistantFollowResult!
   deleteAssistantFollow(id: ID!): MutationResult!
+  """Says whether one of the caller's follows also covers the records under it. Only a followed record can."""
+  setAssistantFollowChildren(id: ID!, includeChildren: Boolean!): SaveAssistantFollowResult!
   """Names a person or a role as responsible for a record or a domain. Needs responsibility.manage."""
   saveResponsibility(input: SaveResponsibilityInput!): SaveResponsibilityResult!
   deleteResponsibility(id: ID!): MutationResult!
@@ -5242,6 +5246,24 @@ type SaveAgentResult {
   errors: [MutationError!]!
 }
 
+"""
+A person's universe: the records they follow, the records and domains they are
+responsible for, and the records under those. It narrows what they are shown.
+It grants nothing and routes nothing.
+"""
+type MyUniverse {
+  """False when the caller follows no record and is responsible for nothing. There is then nothing to narrow to."""
+  hasAny: Boolean!
+  """Records followed."""
+  followed: Int!
+  """Records the caller is responsible for, as themselves or through a role."""
+  responsibleRecords: Int!
+  """Domains the caller is responsible for."""
+  responsibleDomains: [String!]!
+  """The open reviews that are the caller's business: assigned to them, or changing something in their universe."""
+  reviewIds: [ID!]!
+}
+
 type AgentsAtWork {
   agents: [AgentStatus!]!
   work: [AgentWork!]!
@@ -5482,6 +5504,8 @@ type AssistantFollow {
   subjectCode: String
   label: String!
   delivery: String!
+  """For a record: also the records under it, such as a fund's positions."""
+  includeChildren: Boolean!
   createdAt: DateTime
 }
 

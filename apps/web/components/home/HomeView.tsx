@@ -2,6 +2,7 @@
 
 import { AgentsAtWork } from '@/components/home/AgentsAtWork';
 import { HomeComposer } from '@/components/home/HomeComposer';
+import { HOME_SCOPE_KEY, UNIVERSE_QUERY, isNarrowed, narrowNeedsYou, parseScope, universeLabel, type HomeScope, type Universe } from '@/lib/home-universe';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { goToSignIn } from '@/components/layout/UserMenu';
@@ -77,9 +78,43 @@ export function HomeView({ user, places }: { user: HomeUser; places: HomePlace[]
   const [now, setNow] = useState<Date | null>(null);
   // Bumped when the composer starts a run, so the agents panel shows it at once.
   const [runsStarted, setRunsStarted] = useState(0);
+  // What the person follows and is responsible for, and whether the page is narrowed to it.
+  const [universe, setUniverse] = useState<Universe | null>(null);
+  const [scope, setScope] = useState<HomeScope>('mine');
 
   const role = homeRole(user);
-  const needsYou = useNeedsYou(me?.id || null, follows, role === 'data-ops');
+  const allNeedsYou = useNeedsYou(me?.id || null, follows, role === 'data-ops');
+  const narrowed = isNarrowed(universe, scope);
+  const needsYou = useMemo(() => {
+    if (!allNeedsYou) return null;
+    const mine = narrowNeedsYou(allNeedsYou.items, allNeedsYou.reviews, universe?.reviewIds || [], narrowed);
+    return { ...allNeedsYou, items: mine.items, reviews: mine.reviews, hiddenReviews: mine.hiddenReviews };
+  }, [allNeedsYou, universe, narrowed]);
+
+  useEffect(() => {
+    try {
+      setScope(parseScope(window.localStorage.getItem(HOME_SCOPE_KEY)));
+    } catch {
+      // Private mode: the choice just is not remembered.
+    }
+    let cancelled = false;
+    // A person with no universe, or one this cannot be read for, sees everything, as before.
+    void graphqlQuery<{ myUniverse: Universe }>(UNIVERSE_QUERY, {}, 'network-only').then((result) => {
+      if (!cancelled) setUniverse(result.data?.myUniverse || null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const chooseScope = (next: HomeScope) => {
+    setScope(next);
+    try {
+      window.localStorage.setItem(HOME_SCOPE_KEY, next);
+    } catch {
+      // Not remembered. The page still switches.
+    }
+  };
   const { brief, problem: briefProblem } = useBrief();
 
   useEffect(() => {
@@ -203,7 +238,7 @@ export function HomeView({ user, places }: { user: HomeUser; places: HomePlace[]
           </span>
         </div>
         {code === 'needs-you' && <NeedsYouBoard items={needsYou?.items ?? null} reviews={needsYou?.reviews} />}
-        {code === 'agents' && <AgentsAtWork refreshKey={runsStarted} />}
+        {code === 'agents' && <AgentsAtWork refreshKey={runsStarted} mine={narrowed} />}
         {code === 'brief' &&
           (briefProblem ? <div className="home-empty">{briefProblem}</div> : brief ? <BriefView brief={brief} /> : <div className="home-empty">Loading your brief…</div>)}
         {code === 'places' && <PlacesModule places={pinned} customizing={customizing && canSave} onUnpin={(key) => setPin(key, false)} />}
@@ -290,6 +325,32 @@ export function HomeView({ user, places }: { user: HomeUser; places: HomePlace[]
       )}
 
       <HomeComposer summary={summary} onStarted={() => setRunsStarted((count) => count + 1)} />
+
+      {universe?.hasAny && (
+        <div className="home-scope" role="group" aria-label="What this page shows">
+          <div className="home-scope-switch">
+            <button type="button" className={`home-scope-option${narrowed ? ' is-on' : ''}`} aria-pressed={narrowed} onClick={() => chooseScope('mine')}>
+              My records
+            </button>
+            <button type="button" className={`home-scope-option${narrowed ? '' : ' is-on'}`} aria-pressed={!narrowed} onClick={() => chooseScope('all')}>
+              Everything
+            </button>
+          </div>
+          <span className="home-muted">
+            {narrowed
+              ? `Showing reviews and runs for ${universeLabel(universe)}, and anything assigned to you.`
+              : 'Showing every review and run you can see.'}
+            {narrowed && needsYou && needsYou.hiddenReviews > 0 && (
+              <>
+                {' '}
+                <button type="button" className="home-link-button" onClick={() => chooseScope('all')}>
+                  {needsYou.hiddenReviews} other review{needsYou.hiddenReviews === 1 ? '' : 's'} hidden
+                </button>
+              </>
+            )}
+          </span>
+        </div>
+      )}
 
       {modules.includes('needs-you') && <FocusTiles summary={summary} showExceptions={role === 'data-ops'} />}
 

@@ -8,7 +8,8 @@ import { relativeTime } from '@/lib/home';
 /**
  * The workflow runs in flight and which agent is behind each, with the
  * standing of every agent beneath. Refreshes on its own while anything is
- * running, and when `refreshKey` changes (a run was just started).
+ * running, and when `refreshKey` changes (a run was just started). With
+ * `mine`, only runs the person started or that touch their universe.
  */
 
 interface AgentWork {
@@ -41,8 +42,8 @@ interface Board {
 }
 
 const QUERY = `
-  query HomeAgentsAtWork {
-    agentsAtWork {
+  query HomeAgentsAtWork($mine: Boolean) {
+    agentsAtWork(mine: $mine) {
       running waiting
       agents { code name description state runs }
       work { runId workflowName state agentCode agentName stepLabel detail percent stepsDone stepsTotal startedAt }
@@ -54,7 +55,7 @@ const REFRESH_MS = 15_000;
 
 const STATE_LABEL: Record<AgentStatus['state'], string> = { working: 'working', queued: 'queued', waiting: 'waiting on you', idle: 'idle' };
 
-export function AgentsAtWork({ refreshKey = 0 }: { refreshKey?: number }) {
+export function AgentsAtWork({ refreshKey = 0, mine = false }: { refreshKey?: number; mine?: boolean }) {
   const [board, setBoard] = useState<Board | null>(null);
   const [problem, setProblem] = useState('');
   const active = (board?.running ?? 0) > 0;
@@ -62,7 +63,7 @@ export function AgentsAtWork({ refreshKey = 0 }: { refreshKey?: number }) {
   useEffect(() => {
     let cancelled = false;
     const load = () =>
-      graphqlQuery<{ agentsAtWork: Board }>(QUERY, {}, 'network-only').then((result) => {
+      graphqlQuery<{ agentsAtWork: Board }>(QUERY, { mine }, 'network-only').then((result) => {
         if (cancelled) return;
         if (result.error || !result.data) setProblem(result.error?.message || 'The agents could not be loaded.');
         else {
@@ -77,7 +78,7 @@ export function AgentsAtWork({ refreshKey = 0 }: { refreshKey?: number }) {
       cancelled = true;
       if (timer) window.clearInterval(timer);
     };
-  }, [active, refreshKey]);
+  }, [active, refreshKey, mine]);
 
   if (!board) return <div className="home-empty">{problem || 'Checking what the agents are doing…'}</div>;
 
@@ -86,7 +87,7 @@ export function AgentsAtWork({ refreshKey = 0 }: { refreshKey?: number }) {
       {board.work.length === 0 ? (
         <div className="home-lane-empty">
           <span className="home-clear-mark" aria-hidden>✓</span>
-          Nothing is running. Hand off a task above, or start a workflow.
+          {mine ? 'Nothing is running on your records.' : 'Nothing is running. Hand off a task above, or start a workflow.'}
         </div>
       ) : (
         <ul className="home-work">

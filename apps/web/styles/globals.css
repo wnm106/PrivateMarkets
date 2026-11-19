@@ -6582,6 +6582,44 @@ button.sidebar-logo:hover {
 
 .home-chip:hover { border-color: var(--brand-blue); color: var(--ink); }
 
+/* My records / Everything: narrows the page to what the person follows and is responsible for. */
+.home-scope {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+  font-size: 12px;
+}
+
+.home-scope .home-muted { white-space: normal; }
+
+.home-scope-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.home-scope-option {
+  border: none;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.home-scope-option + .home-scope-option { border-left: 1px solid var(--line); }
+.home-scope-option.is-on { background: var(--brand-blue); color: #fff; }
+
+@media (max-width: 640px) {
+  .home-scope { flex-direction: column; align-items: flex-start; }
+}
+
 /* Agents at work: runs in flight, then the roster. */
 .home-work { list-style: none; display: flex; flex-direction: column; gap: 12px; }
 
