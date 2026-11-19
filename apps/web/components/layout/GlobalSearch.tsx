@@ -12,7 +12,7 @@ interface SearchHit {
   domainCode: string;
   domainName: string;
   depth: number;
-  match: 'NAME' | 'PARENT' | 'RELATED';
+  match: 'NAME' | 'ALIAS' | 'PARENT' | 'RELATED';
   matchedName: string | null;
   matchedDomainName: string | null;
 }

@@ -1,5 +1,24 @@
+import { fetchEntitySearchHits } from '@tapestrai/graphql/src/lib/entity-search';
+import { assembleAttributeSearch } from '@tapestrai/graphql/src/lib/semantic-aliases';
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
+
+async function aliasLabelsByAttribute(supabase: { from: (table: string) => any }, attributeIds: string[]): Promise<Map<string, string[]>> {
+  const labels = new Map<string, string[]>();
+  if (attributeIds.length === 0) return labels;
+  const { data, error } = await supabase
+    .from('attribute_aliases')
+    .select('attribute_id, alias_label, is_active')
+    .eq('is_active', true)
+    .in('attribute_id', attributeIds);
+  if (error) return labels;
+  for (const alias of data || []) {
+    const list = labels.get(alias.attribute_id) || [];
+    list.push(alias.alias_label);
+    labels.set(alias.attribute_id, list);
+  }
+  return labels;
+}
 
 const getAttributeMetadata: ToolDefinition = {
   name: 'get_attribute_metadata',
@@ -59,7 +78,7 @@ const getAttributeMetadata: ToolDefinition = {
 
 const getTemplateMetadata: ToolDefinition = {
   name: 'get_template_metadata',
-  description: 'Which attributes belong to an entity type, with names, descriptions, data types, reference targets, aggregation, and which are required. Call this before creating a record. For a question that filters, groups, or reads across relationships, call get_model_map instead. domainCode comes from list_domain_types. Use the returned attribute_code values. Do not invent field codes.',
+  description: 'Which attributes belong to an entity type, with names, descriptions, data types, reference targets, aggregation, alias labels, and which are required. alias_labels are other words for that field, such as Ending NAV for NAV. Call this before creating a record. For a question that filters, groups, or reads across relationships, call get_model_map instead. domainCode comes from list_domain_types. Use the returned attribute_code values. Do not invent field codes.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -90,6 +109,7 @@ const getTemplateMetadata: ToolDefinition = {
           display_order,
           display_label,
           attribute_register (
+            id,
             attribute_code,
             attribute_name,
             description,
@@ -114,6 +134,11 @@ const getTemplateMetadata: ToolDefinition = {
     const { data, error } = await query;
     if (error) throw error;
 
+    const attributeIds = [...new Set((data || []).flatMap((template: any) =>
+      (template.template_attribute_assignments || []).map((assignment: any) => assignment.attribute_register?.id).filter(Boolean),
+    ))];
+    const aliasLabels = await aliasLabelsByAttribute(supabase, attributeIds);
+
     // The attribute code/name live on the related attribute_register row; lift
     // them onto each assignment so callers see a flat attribute list.
     const templates = (data || []).map((template: any) => ({
@@ -122,6 +147,7 @@ const getTemplateMetadata: ToolDefinition = {
         ...assignment,
         attribute_code: assignment.attribute_register?.attribute_code ?? null,
         attribute_name: assignment.attribute_register?.attribute_name ?? null,
+        alias_labels: aliasLabels.get(assignment.attribute_register?.id) || [],
         reference_domain_code: assignment.attribute_register?.reference_domain_code ?? null,
         aggregation_type: assignment.attribute_register?.aggregation_type ?? null,
         weight_attribute_code: assignment.attribute_register?.weight_attribute_code ?? null,
@@ -903,23 +929,33 @@ const createEntityIdentifier: ToolDefinition = {
 const listDomainTypes: ToolDefinition = {
   name: 'list_domain_types',
   description:
-    'Every entity type: domain code, name, and description. Call this before query_data, create_entity, or any argument named domainCode. Use the returned domain_code. Do not invent one.',
+    'Every entity type: domain code, name, description, and aliases. An alias is another word for that type, such as Borrower for ISSUER and Tranche for SECURITY. Call this before query_data, create_entity, or any argument named domainCode. Use the returned domain_code. Do not invent one.',
   category: 'domain-read',
   inputSchema: { type: 'object', properties: {} },
   execute: async (_args, supabase) => {
-    const { data, error } = await supabase
-      .from('domain_types')
-      .select('domain_code, domain_name, description, is_active')
-      .order('domain_code');
+    const [{ data, error }, aliases] = await Promise.all([
+      supabase.from('domain_types').select('domain_code, domain_name, description, is_active').order('domain_code'),
+      supabase.from('domain_aliases').select('domain_code, alias_label, alias_code').eq('is_active', true),
+    ]);
     if (error) throw error;
-    return { domains: data || [], count: data?.length || 0 };
+    const byDomain = new Map<string, { alias_label: string; alias_code: string }[]>();
+    for (const alias of aliases.error ? [] : (aliases.data || [])) {
+      const list = byDomain.get(alias.domain_code) || [];
+      list.push({ alias_label: alias.alias_label, alias_code: alias.alias_code });
+      byDomain.set(alias.domain_code, list);
+    }
+    const domains = (data || []).map((domain: { domain_code: string }) => ({
+      ...domain,
+      aliases: byDomain.get(domain.domain_code) || [],
+    }));
+    return { domains, count: domains.length };
   },
 };
 
 const searchAttributes: ToolDefinition = {
   name: 'search_attributes',
   description:
-    'Find fields by the words the user used, matching code, name, or description. Call this before a query filter or before create_attribute. If more than one match fits, ask which one. Do not invent an attribute code while a match exists.',
+    'Find a field, an entity type, or an entity name from the words a person used. Matches attribute code, name, description, and stored aliases (Ending NAV is NAV). entityTypes are words for a record type (Borrower is ISSUER). entityNames are words for the record name (Project name is the borrower name, attribute_code entity_name). Call this before a query filter or before create_attribute. If more than one match fits, ask which one. Do not invent an attribute code while a match exists.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -934,14 +970,76 @@ const searchAttributes: ToolDefinition = {
     if (!phrase) throw new Error('query is required');
     const code = phrase.toUpperCase().replace(/\s+/g, '_');
     const cap = Math.min(Math.max(Number(args.limit) || 15, 1), 30);
-    const { data, error } = await supabase
-      .from('attribute_register')
-      .select('attribute_code, attribute_name, description, data_type, reference_domain_code')
-      .or(`attribute_code.ilike.%${code}%,attribute_name.ilike.%${phrase}%,description.ilike.%${phrase}%`)
-      .order('attribute_code')
-      .limit(cap);
-    if (error) throw error;
-    return { attributes: data || [], count: data?.length || 0, query: phrase };
+    const [attributes, attributeAliases, nameAliases, domainAliases, domains] = await Promise.all([
+      supabase.from('attribute_register').select('id, attribute_code, attribute_name, description, data_type, reference_domain_code, domain_code').or(`attribute_code.ilike.%${code}%,attribute_name.ilike.%${phrase}%,description.ilike.%${phrase}%`).order('attribute_code').limit(cap),
+      supabase.from('attribute_aliases').select('attribute_id, alias_label, alias_code, domain_code').eq('is_active', true).or(`alias_label.ilike.%${phrase}%,alias_code.ilike.%${code}%`).limit(cap),
+      supabase.from('entity_name_aliases').select('domain_code, alias_label, alias_code').eq('is_active', true).or(`alias_label.ilike.%${phrase}%,alias_code.ilike.%${code}%`).limit(cap),
+      supabase.from('domain_aliases').select('domain_code, alias_label, alias_code').eq('is_active', true).or(`alias_label.ilike.%${phrase}%,alias_code.ilike.%${code}%`).limit(cap),
+      supabase.from('domain_types').select('domain_code, domain_name').eq('is_active', true),
+    ]);
+    if (attributes.error) throw attributes.error;
+    const aliasIds = [...new Set((attributeAliases.error ? [] : attributeAliases.data || []).map((row: { attribute_id: string }) => row.attribute_id))];
+    const known = new Set((attributes.data || []).map((row: { id: string }) => row.id));
+    const missing = aliasIds.filter((id) => !known.has(id));
+    const extra = missing.length
+      ? await supabase.from('attribute_register').select('id, attribute_code, attribute_name, description, data_type, reference_domain_code, domain_code').in('id', missing)
+      : { data: [], error: null };
+    if (extra.error) throw extra.error;
+    const found = assembleAttributeSearch(phrase, {
+      attributes: [...(attributes.data || []), ...(extra.data || [])],
+      attributeAliases: attributeAliases.error ? [] : (attributeAliases.data || []).map((row: any) => ({
+        attributeId: row.attribute_id,
+        aliasLabel: row.alias_label,
+        aliasCode: row.alias_code,
+        domainCode: row.domain_code,
+      })),
+      nameAliases: nameAliases.error ? [] : (nameAliases.data || []).map((row: any) => ({
+        domainCode: row.domain_code,
+        aliasLabel: row.alias_label,
+        aliasCode: row.alias_code,
+      })),
+      domainAliases: domainAliases.error ? [] : (domainAliases.data || []).map((row: any) => ({
+        domainCode: row.domain_code,
+        aliasLabel: row.alias_label,
+        aliasCode: row.alias_code,
+      })),
+      domains: domains.error ? [] : (domains.data || []).map((row: any) => ({ domainCode: row.domain_code, domainName: row.domain_name })),
+      limit: cap,
+    });
+    return { ...found, count: found.attributes.length + found.entityTypes.length + found.entityNames.length, query: phrase };
+  },
+};
+
+const searchEntities: ToolDefinition = {
+  name: 'search_entities',
+  description:
+    'Find records by a name a person said. Matches the record name and any other name stored for that record, such as a project name for a borrower. Each hit includes the record id, code, name, entity type, and which name matched. For a count or a filter across records, use query_data. For the words for an entity type, use list_domain_types. For a field, use search_attributes.',
+  category: 'domain-read',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'The name a person used, such as a borrower name or a project name' },
+      limit: { type: 'number', description: 'Max records (default 15)' },
+    },
+    required: ['query'],
+  },
+  execute: async (args, supabase) => {
+    const query = String(args.query || '').trim();
+    if (query.length < 2) throw new Error('query must be at least 2 characters');
+    const hits = await fetchEntitySearchHits(supabase, query, args.limit);
+    return {
+      entities: hits.map((hit) => ({
+        entityId: hit.id,
+        entityCode: hit.entityCode,
+        entityName: hit.entityName,
+        domainCode: hit.domainCode,
+        domainName: hit.domainName,
+        match: hit.match,
+        matchedName: hit.matchedName,
+      })),
+      count: hits.length,
+      query,
+    };
   },
 };
 
@@ -979,6 +1077,7 @@ export function registerDomainTools(registry: ToolRegistry): void {
   // Metadata tools - essential for agents to understand data context
   registry.registerTool(getAttributeMetadata);
   registry.registerTool(searchAttributes);
+  registry.registerTool(searchEntities);
   registry.registerTool(listDomainTypes);
   registry.registerTool(getTemplateMetadata);
   

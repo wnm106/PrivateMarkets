@@ -4,6 +4,12 @@
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
+import {
+  classifyHeader,
+  type AttributeAlias,
+  type DomainAlias,
+  type EntityNameAlias,
+} from '../semantic-aliases';
 import { ParsedField } from './data-parsers';
 
 export interface FieldMapping {
@@ -53,6 +59,10 @@ export async function recommendFieldMappings(
     options?.templateCode,
     supabase
   );
+  const [nameAliases, domainAliases] = await Promise.all([
+    loadNameAliases(supabase, targetDomainCode),
+    loadDomainAliases(supabase),
+  ]);
 
   // Fetch identifier definitions for this domain
   const identifiers = await fetchIdentifierDefinitions(targetDomainCode, supabase);
@@ -75,9 +85,48 @@ export async function recommendFieldMappings(
   const unmappedSourceFieldObjects = sourceFields.filter(f => unmappedSourceFields.has(f.name));
   const unmappedTargetAttributeObjects = targetAttributes.filter(a => unmappedTargetAttributes.has(a.attributeCode));
 
+  const attributeAliases: AttributeAlias[] = targetAttributes.flatMap((attr) =>
+    (attr.aliasLabels || []).map((aliasLabel) => ({ attributeCode: attr.attributeCode, aliasLabel, domainCode: targetDomainCode })),
+  );
+  let nameTaken = mappings.some((mapping) => mapping.targetAttribute === 'entity_name' || mapping.targetAttribute === 'name');
   for (const sourceField of unmappedSourceFieldObjects) {
-    const bestMatch = findBestMatch(sourceField, unmappedTargetAttributeObjects);
-    
+    const classified = classifyHeader(sourceField.name, {
+      domainCode: targetDomainCode,
+      domainAliases,
+      nameAliases,
+      attributeAliases,
+    });
+    if (classified.kind === 'attribute_alias' && classified.attributeCode && unmappedTargetAttributes.has(classified.attributeCode)) {
+      mappings.push({
+        sourceField: sourceField.name,
+        targetAttribute: classified.attributeCode,
+        confidence: 0.96,
+        mappingType: 'semantic',
+        notes: `Matched the attribute alias "${classified.aliasLabel}"`,
+      });
+      unmappedSourceFields.delete(sourceField.name);
+      unmappedTargetAttributes.delete(classified.attributeCode);
+      continue;
+    }
+    if (classified.kind === 'entity_name' && classified.aliasCode) {
+      const targetAttribute = nameTaken ? `entity_alias:${classified.aliasCode}` : 'entity_name';
+      nameTaken = true;
+      mappings.push({
+        sourceField: sourceField.name,
+        targetAttribute,
+        confidence: 0.96,
+        mappingType: 'semantic',
+        notes: targetAttribute === 'entity_name'
+          ? `Matched the entity name alias "${classified.aliasLabel}"`
+          : `Matched another name of the record ("${classified.aliasLabel}")`,
+      });
+      unmappedSourceFields.delete(sourceField.name);
+      continue;
+    }
+    const bestMatch = findBestMatch(
+      sourceField,
+      unmappedTargetAttributeObjects.filter((attr) => unmappedTargetAttributes.has(attr.attributeCode)),
+    );
     if (bestMatch && bestMatch.confidence >= 0.6) {
       mappings.push(bestMatch.mapping);
       unmappedSourceFields.delete(sourceField.name);
@@ -179,6 +228,33 @@ async function loadAliasLabels(supabase: SupabaseClient, attributeIds: string[])
     labels.set(alias.attribute_id, list);
   }
   return labels;
+}
+
+async function loadNameAliases(supabase: SupabaseClient, domainCode: string): Promise<EntityNameAlias[]> {
+  const { data, error } = await supabase
+    .from('entity_name_aliases')
+    .select('domain_code, alias_label, alias_code, is_active')
+    .eq('is_active', true)
+    .eq('domain_code', domainCode);
+  if (error) return [];
+  return (data || []).map((row: { domain_code: string; alias_label: string; alias_code: string }) => ({
+    domainCode: row.domain_code,
+    aliasLabel: row.alias_label,
+    aliasCode: row.alias_code,
+  }));
+}
+
+async function loadDomainAliases(supabase: SupabaseClient): Promise<DomainAlias[]> {
+  const { data, error } = await supabase
+    .from('domain_aliases')
+    .select('domain_code, alias_label, alias_code, is_active')
+    .eq('is_active', true);
+  if (error) return [];
+  return (data || []).map((row: { domain_code: string; alias_label: string; alias_code: string }) => ({
+    domainCode: row.domain_code,
+    aliasLabel: row.alias_label,
+    aliasCode: row.alias_code,
+  }));
 }
 
 function matchesStoredAlias(sourceName: string, aliasLabels?: string[]): boolean {

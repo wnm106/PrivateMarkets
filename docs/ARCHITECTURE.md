@@ -71,11 +71,16 @@ Defines the structure of the MDM system:
 
 ```sql
 domain_types              -- FUND, ISSUER, DEAL, SECURITY, PRICE, POSITION
+domain_aliases            -- Other words for an entity type (Borrower = ISSUER)
+entity_name_aliases       -- Words for a record's name (Project name = borrower name)
 attribute_register        -- Attribute definitions with types and validation
+attribute_aliases         -- Other words for a field (Ending NAV = NAV)
 domain_templates          -- Template configurations per domain
 template_attribute_assignments  -- Which attributes belong to templates
 reference_lists           -- Enumerated values
 ```
+
+The words people use, and how import and chat resolve them, are described in [ALIASES.md](ALIASES.md). A specific record's other names live on `entity_instances.entity_aliases`.
 
 ### 2. Entity Instances
 

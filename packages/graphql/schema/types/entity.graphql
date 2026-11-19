@@ -68,6 +68,7 @@ type EntityEdge {
 
 enum EntitySearchMatch {
   NAME
+  ALIAS
   PARENT
   RELATED
 }

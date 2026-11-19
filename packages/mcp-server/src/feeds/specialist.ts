@@ -41,6 +41,8 @@ export interface SpecialistCatalog {
   sources: SpecialistSource[];
   relationships: SpecialistRelationship[];
   maps: FeedMap[];
+  domainAliases?: { domainCode: string; aliasLabel: string }[];
+  nameAliases?: { domainCode: string; aliasLabel: string; aliasCode: string }[];
 }
 
 export interface SpecialistTableChoice {
@@ -158,12 +160,28 @@ const STOP = new Set(['the', 'of', 'a', 'an', 'and', 'for', 'to', 'from']);
 const DOMAIN_ALIASES: Record<string, string[]> = {
   ISSUER: ['issuer', 'company', 'obligor', 'borrower'],
   FUND: ['fund', 'portfolio', 'vehicle'],
-  SECURITY: ['security', 'instrument'],
+  SECURITY: ['security', 'instrument', 'tranche'],
   POSITION: ['position', 'holding', 'poition'],
   DEAL: ['deal', 'transaction'],
   CASH_FLOW: ['cashflow'],
   INVESTOR: ['investor'],
 };
+
+type AliasBook = Record<string, string[]>;
+let activeAliasBook: AliasBook = DOMAIN_ALIASES;
+let activeNameAliases: { domainCode: string; aliasLabel: string; aliasCode: string }[] = [];
+
+function bookFrom(catalog: SpecialistCatalog): AliasBook {
+  const book: AliasBook = {};
+  for (const [domain, words] of Object.entries(DOMAIN_ALIASES)) book[domain] = [...words];
+  for (const alias of catalog.domainAliases || []) {
+    const list = book[alias.domainCode] || [];
+    const word = alias.aliasLabel.toLowerCase();
+    if (!list.includes(word)) list.push(word);
+    book[alias.domainCode] = list;
+  }
+  return book;
+}
 
 const IDENTITY_WORDS = new Set(['code', 'id', 'identifier', 'lei', 'isin', 'cusip', 'ticker', 'number']);
 
@@ -186,6 +204,7 @@ export function columnsUsedByMap(map: FeedMap): string[] {
   for (const domain of map.domains) {
     add(domain.identityColumn);
     add(domain.nameColumn);
+    for (const alias of domain.aliasColumns || []) add(alias.column);
     for (const attribute of domain.attributes) add(attribute.column);
     for (const parent of domain.parents) add(parent.column);
   }
@@ -312,13 +331,16 @@ function dataTypeFor(profile: ColumnProfile): string {
 }
 
 function aliases(domainCode: string): string[] {
-  return DOMAIN_ALIASES[domainCode] || [domainCode.toLowerCase().replace(/_/g, '')];
+  return activeAliasBook[domainCode] || [domainCode.toLowerCase().replace(/_/g, '')];
 }
 
 function domainFromHeader(column: string, known: Set<string>): string | null {
+  const phrase = column.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const named = activeNameAliases.find((alias) => known.has(alias.domainCode) && phrase === alias.aliasLabel.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim());
+  if (named) return named.domainCode;
   const parts = tokens(column);
   let best: { domain: string; known: boolean } | null = null;
-  for (const [domain, words] of Object.entries(DOMAIN_ALIASES)) {
+  for (const [domain, words] of Object.entries(activeAliasBook)) {
     if (!parts.some((part) => words.includes(part))) continue;
     const isKnown = known.has(domain);
     if (!best || (isKnown && !best.known)) best = { domain, known: isKnown };
@@ -346,6 +368,7 @@ function isAsOfHeader(column: string): boolean {
 }
 
 function scoreAttribute(header: string, attribute: AttributeChoice, domainCode: string): number {
+  if ((attribute.aliasLabels || []).some((label) => phrase(header) === phrase(label))) return 0.96;
   const aliasWords = new Set(aliases(domainCode));
   const raw = tokens(header);
   const stripped = raw.filter((token) => !aliasWords.has(token));
@@ -353,6 +376,7 @@ function scoreAttribute(header: string, attribute: AttributeChoice, domainCode: 
   const attributeTokens = new Set([
     ...tokens(attribute.attributeName),
     ...tokens(attribute.attributeCode.replace(/_/g, ' ')),
+    ...(attribute.aliasLabels || []).flatMap((label) => tokens(label)),
   ]);
   let overlap = 0;
   for (const token of headerTokens) {
@@ -510,6 +534,19 @@ function isStub(domain: FeedDomainSpec): boolean {
 }
 
 export function readSource(input: SpecialistInput): SpecialistReading {
+  const previousBook = activeAliasBook;
+  const previousNames = activeNameAliases;
+  activeAliasBook = bookFrom(input.catalog);
+  activeNameAliases = input.catalog.nameAliases || [];
+  try {
+    return readSourceWithAliases(input);
+  } finally {
+    activeAliasBook = previousBook;
+    activeNameAliases = previousNames;
+  }
+}
+
+function readSourceWithAliases(input: SpecialistInput): SpecialistReading {
   const answers = input.answers || {};
   const accepted = new Set(input.acceptedRecommendationIds || []);
   const dismissed = new Set(input.dismissedRecommendationIds || []);
@@ -657,6 +694,18 @@ export function readSource(input: SpecialistInput): SpecialistReading {
         ...blankAssignment(nameColumn, rows, 'name'),
         domainCode,
         suggestion: { method: 'name', confidence: 0.86, reason: `${nameColumn} names ${domainCode}` },
+      });
+    }
+    for (const extra of columns) {
+      if (extra === identity || extra === nameColumn || consumed.has(extra)) continue;
+      const alias = activeNameAliases.find((item) => item.domainCode === domainCode && phrase(item.aliasLabel) === phrase(extra));
+      if (!alias) continue;
+      consumed.add(extra);
+      assignments.push({
+        ...blankAssignment(extra, rows, 'alias'),
+        domainCode,
+        attributeCode: alias.aliasCode,
+        suggestion: { method: 'name', confidence: 0.9, reason: `${extra} is another name for the same ${domainCode} record` },
       });
     }
     for (const column of columns) {
@@ -1149,7 +1198,7 @@ function proposeDomains(
   for (const column of columns) {
     const first = tokens(column).find((token) => token.length >= 4);
     if (!first) continue;
-    if (Object.values(DOMAIN_ALIASES).some((words) => words.includes(first))) continue;
+    if (Object.values(activeAliasBook).some((words) => words.includes(first))) continue;
     const list = groups.get(first) || [];
     list.push(column);
     groups.set(first, list);

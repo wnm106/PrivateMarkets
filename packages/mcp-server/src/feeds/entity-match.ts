@@ -34,12 +34,15 @@ export interface MatchEntity {
   provisional: boolean;
   identifiers: Map<string, string[]>;
   identifierTerms?: Map<string, IdentifierTerm[]>;
+  /** Other names of this record, such as a project name. */
+  aliases?: string[];
 }
 
 export interface IncomingEntity {
   code: string;
   name: string;
   attributes: Map<string, string>;
+  aliases?: string[];
 }
 
 export type ResolveHit =
@@ -134,6 +137,7 @@ export class EntityMatchIndex {
     this.byId.set(entity.id, entity);
     this.indexCode(entity, entity.code);
     this.indexName(entity, entity.name);
+    for (const alias of entity.aliases || []) this.indexName(entity, alias);
     this.indexIdentifiers(entity, entity.identifiers);
     this.indexIdentifiers(entity, this.termValues(entity));
   }
@@ -143,6 +147,7 @@ export class EntityMatchIndex {
     if (!entity) return;
     this.indexCode(entity, incoming.code);
     this.indexName(entity, incoming.name);
+    for (const alias of incoming.aliases || []) this.indexName(entity, alias);
     const incomingValues = attributeValues(incoming.attributes);
     for (const [code, rawValues] of incomingValues) {
       if (!this.tracks(code)) continue;
@@ -322,6 +327,10 @@ export class EntityMatchIndex {
       add(this.byCodeName.get(name));
     }
     if (code && code !== name) add(this.byName.get(code));
+    for (const alias of incoming.aliases || []) {
+      const key = nameKey(alias);
+      if (key && key !== name) add(this.byName.get(key));
+    }
     return found;
   }
 
