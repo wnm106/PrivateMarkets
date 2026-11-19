@@ -223,6 +223,7 @@ export interface FundSurface {
     strategy: string;
     sector: string;
     issuer: string;
+    issuerId: string | null;
     cost: number;
     fairValue: number;
     income: number;
@@ -268,7 +269,7 @@ export interface FundSurface {
     requiredCall: number | null;
     trailingCall: number | null;
   };
-  nextCall: { amount: number; notice: string; date: string } | null;
+  nextCall: { id: string; amount: number; notice: string; date: string } | null;
   largestInvestor: { name: string; sharePct: number | null } | null;
   pastDue: { amount: number; name: string } | null;
   investorCount: number;
@@ -650,6 +651,7 @@ export async function loadFundSurface(
         strategy: POSITION_STRATEGY[strategy] || strategy || '—',
         sector: t(issuerId, 'SECTOR') || '—',
         issuer: named.get(issuerId)?.entity_name || '—',
+        issuerId: issuerId || null,
         cost,
         fairValue,
         income,
@@ -952,7 +954,7 @@ export async function loadFundSurface(
       requiredCall: futureQuarters.length ? (targetCalledPct / 100 * commitments - called) / futureQuarters.length : null,
       trailingCall,
     },
-    nextCall: next ? { amount: next.amount, notice: next.notice, date: next.date } : null,
+    nextCall: next ? { id: next.id, amount: next.amount, notice: next.notice, date: next.date } : null,
     largestInvestor: largest ? { name: largest.name, sharePct: largest.sharePct } : null,
     pastDue: pastDueInvestors.length
       ? { amount: pastDueInvestors.reduce((sum, item) => sum + item.pastDue, 0), name: pastDueInvestors.map((item) => item.name).join(', ') }

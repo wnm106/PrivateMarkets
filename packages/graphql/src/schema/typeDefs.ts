@@ -2768,6 +2768,7 @@ type FundPositionRow {
   strategy: String!
   sector: String!
   issuer: String!
+  issuerId: ID
   cost: Float!
   fairValue: Float!
   income: Float!
@@ -2837,6 +2838,7 @@ type FundPacing {
 }
 
 type FundNextCall {
+  id: ID!
   amount: Float!
   notice: String
   date: String

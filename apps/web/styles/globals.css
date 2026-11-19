@@ -10206,6 +10206,8 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .fs-tile { padding: 7px 10px; }
 .fs-tile b { font-size: 16px; margin: 0; }
 .fs-tile span, .fs-tile small { font-size: 11px; }
+/* A sourced value keeps the look of the figure it wraps; the label rules above target spans too. */
+.fs .fs-tile b .attr-inspectable, .fs .da-fact strong .attr-inspectable { font: inherit; color: inherit; }
 .fs-panel { padding: 8px 10px; }
 .fs-main { grid-template-columns: minmax(0, 1.6fr) minmax(240px, 0.7fr); gap: 12px; }
 .fs-block { margin-top: 12px; }

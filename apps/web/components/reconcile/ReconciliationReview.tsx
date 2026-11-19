@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ColDef } from 'ag-grid-community';
-import { AppGrid } from '@/components/grid/AppGrid';
+import { AppGrid, type CellContextMenuEvent } from '@/components/grid/AppGrid';
+import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 import {
   DECIDE_RECONCILIATION_RUN_MUTATION,
   RECONCILIATION_RUN_QUERY,
@@ -22,6 +23,7 @@ interface Cell {
 
 interface Line {
   id: string;
+  lineEntityId: string;
   lineCode: string;
   lineName: string;
   attributeCode: string;
@@ -87,6 +89,7 @@ export function ReconciliationReview({ runId }: { runId: string }) {
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState('');
   const [sources, setSources] = useState<Record<string, string>>({});
+  const inspect = useAttributeInspect();
 
   const load = () => {
     graphqlQuery<{ reconciliationRun: Run | null }>(RECONCILIATION_RUN_QUERY, { id: runId }, 'network-only')
@@ -213,6 +216,33 @@ export function ReconciliationReview({ runId }: { runId: string }) {
     return <div className="view-fade"><div className="page-meta">{error || 'Loading review…'}</div></div>;
   }
 
+  const day = (value: string | null | undefined) => (value ? String(value).slice(0, 10) : undefined);
+
+  /** Opens the line's attribute, read at the date the reviewed figure came from. */
+  const openLine = (event: { preventDefault: () => void; stopPropagation?: () => void } | undefined, line: Line, value: string | null | undefined, prior = false) => {
+    if (!line.lineEntityId || !line.attributeCode) return;
+    event?.preventDefault();
+    event?.stopPropagation?.();
+    inspect.open({
+      entityId: line.lineEntityId,
+      entityName: line.lineName,
+      attributeCode: line.attributeCode,
+      attributeName: line.attributeName,
+      value: value == null ? undefined : displayValue(value),
+      asOfDate: day(prior ? run.compareAsOfDate : run.asOfDate),
+      onChanged: load,
+    });
+  };
+
+  const openCell = (event: CellContextMenuEvent<any>) => {
+    const line = event.data as Line | undefined;
+    const colId = event.column?.getColId?.() || '';
+    if (!line || colId === 'resolution') return;
+    const key = colId.startsWith('src:') ? colId.slice(4) : colId === 'prior' ? 'PRIOR' : colId === 'current' ? 'CURRENT' : '';
+    const value = key ? line.cells.find((cell) => cell.key === key)?.value : line.goldenValue;
+    openLine(event.event as MouseEvent | undefined, line, value, colId === 'prior');
+  };
+
 
   return (
     <div className="view-fade">
@@ -253,7 +283,13 @@ export function ReconciliationReview({ runId }: { runId: string }) {
                 <strong>{identity.name}</strong>
                 <div className="recon-identity-figures">
                   <span>Calculated<strong>{displayNumber(identity.calculated)}</strong></span>
-                  <span>Reported<strong>{displayNumber(identity.compareValue)}</strong></span>
+                  <span
+                    className={line ? 'attr-inspectable' : undefined}
+                    title={line ? 'Right-click to view sources' : undefined}
+                    onContextMenu={line ? (event) => openLine(event, line, identity.compareValue == null ? null : String(identity.compareValue)) : undefined}
+                  >
+                    Reported<strong>{displayNumber(identity.compareValue)}</strong>
+                  </span>
                 </div>
                 {identity.message && <p>{identity.message}</p>}
                 {line && !locked && line.status === 'OPEN' && (
@@ -287,6 +323,7 @@ export function ReconciliationReview({ runId }: { runId: string }) {
             autoHeight
             autoRowHeight
             context={reviewContext}
+            onCellContextMenu={openCell}
             getRowClass={(params) => (params.data?.isBreak ? 'recon-break' : '')}
             emptyMessage="No source lines."
           />
@@ -303,6 +340,7 @@ export function ReconciliationReview({ runId }: { runId: string }) {
             autoHeight
             autoRowHeight
             context={reviewContext}
+            onCellContextMenu={openCell}
             getRowClass={(params) => (params.data?.isBreak ? 'recon-break' : '')}
             emptyMessage="No prior-period lines."
           />

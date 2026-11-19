@@ -4,6 +4,20 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { domainHref } from '@/lib/domain-routes';
 import { cashMoney, cashTypeLabel, clearingAdjustment, moveCashRule, type AdjustmentSide, type CashRec, type CashRule } from '@/lib/cash-rec';
+import type { RecBind } from '@/lib/fund-rec';
+import { RecBit, RecCell } from './RecInspect';
+
+/** The stored attribute a cash figure is read from, for the right-click sources panel. */
+function src(entityId: string, entityName: string, domainCode: string, code: string, name: string, dataType = ''): RecBind[] {
+  return [{ entityId, entityName, domainCode, code, name, dataType }];
+}
+
+const txnSrc = (txn: { id: string; description?: string | null; code: string }, code: string, name: string, dataType = '') => (
+  src(txn.id, txn.description || txn.code, 'BANK_TRANSACTION', code, name, dataType)
+);
+const flowSrc = (flow: { id: string; positionName?: string | null; name: string }, code: string, name: string, dataType = '') => (
+  src(flow.id, flow.positionName || flow.name, 'CASH_FLOW', code, name, dataType)
+);
 
 type StatusFilter = 'ALL' | 'OPEN' | 'PROPOSED' | 'APPROVED';
 
@@ -207,9 +221,9 @@ export function CashRecTab({
                   const gap = txn.variance == null ? txn.amount : txn.variance;
                   return (
                     <tr key={txn.id} className={`pick ${txn.id === selectedId ? 'sel' : rowTone(txn.status)}`} aria-selected={txn.id === selectedId} onClick={() => selectTxn(txn.id)}>
-                      <td className="date">{txn.date}</td>
-                      <td><Link href={`${domainHref('BANK_TRANSACTION')}/${txn.id}`} onClick={(event) => event.stopPropagation()}>{txn.description || txn.code}</Link><small>{txn.accountName}{txn.counterparty ? ` · ${txn.counterparty}` : ''}</small></td>
-                      <td className="num">{cashMoney(txn.amount)}</td>
+                      <RecCell className="date" sources={txnSrc(txn, 'BANK_TXN_DATE', 'Date', 'DATE')} display={txn.date}>{txn.date}</RecCell>
+                      <RecCell sources={txnSrc(txn, 'BANK_TXN_DESCRIPTION', 'Description')} display={txn.description || txn.code}><Link href={`${domainHref('BANK_TRANSACTION')}/${txn.id}`} onClick={(event) => event.stopPropagation()}>{txn.description || txn.code}</Link><small>{txn.accountName}{txn.counterparty ? <RecBit sources={txnSrc(txn, 'BANK_TXN_COUNTERPARTY', 'Counterparty')} display={txn.counterparty}>{` · ${txn.counterparty}`}</RecBit> : ''}</small></RecCell>
+                      <RecCell className="num" sources={txnSrc(txn, 'BANK_TXN_AMOUNT', 'Amount', 'CURRENCY')} display={cashMoney(txn.amount)}>{cashMoney(txn.amount)}</RecCell>
                       <td><span className={`da-st ${tone(txn.status)}`}>{txn.ruleName || 'Open'}</span></td>
                       <td className={`num ${txn.variance == null ? 'muted' : Math.abs(gap) < 0.01 ? 'zero' : 'neg'}`}>{cashMoney(gap)}</td>
                     </tr>
@@ -252,10 +266,10 @@ export function CashRecTab({
                       onClick={jump ? () => selectTxn(jump) : undefined}
                     >
                       <td className="chk"><input type="checkbox" checked={inPair} disabled={!selected || selected.status === 'APPROVED' || taken || locked} aria-label={`Pair ${flow.positionName || flow.name}`} onClick={(event) => event.stopPropagation()} onChange={() => toggleFlow(flow.id)} /></td>
-                      <td className="date">{flow.date}</td>
+                      <RecCell className="date" sources={flowSrc(flow, 'CASHFLOW_DATE', 'Date', 'DATE')} display={flow.date}>{flow.date}</RecCell>
                       <td><Link href={`${domainHref('CASH_FLOW')}/${flow.id}`} onClick={(event) => event.stopPropagation()}>{flow.positionName || flow.name}</Link></td>
-                      <td><span className={`cr-type ${typeTone(flow.type)}`}>{cashTypeLabel(flow.type)}</span></td>
-                      <td className="num">{cashMoney(flow.amount)}</td>
+                      <RecCell sources={flowSrc(flow, 'CASHFLOW_TYPE', 'Type')} display={cashTypeLabel(flow.type)}><span className={`cr-type ${typeTone(flow.type)}`}>{cashTypeLabel(flow.type)}</span></RecCell>
+                      <RecCell className="num" sources={flowSrc(flow, 'AMOUNT', 'Amount', 'CURRENCY')} display={cashMoney(flow.amount)}>{cashMoney(flow.amount)}</RecCell>
                       <td><span className={`da-st ${tone(flow.status)}`}>{STATUS_LABEL[flow.status]}</span></td>
                     </tr>
                   );
@@ -298,13 +312,13 @@ export function CashRecTab({
                     <tr key={`${match.id}:${flow.id}`} className={`${index === 0 ? 'lead' : 'more'} ${txn.id === selectedId ? 'sel' : ''}`}>
                       {span > 0 && <td rowSpan={span} className="act"><button type="button" className="btn btn-sm btn-primary" disabled={locked} onClick={() => void onApprove(txn.id)}>Approve</button></td>}
                       {span > 0 && <td rowSpan={span}><button type="button" className="cr-link" onClick={() => selectTxn(txn.id)}>{txn.description || txn.code}</button><small>{txn.accountName}{txn.counterparty ? ` · ${txn.counterparty}` : ''}</small></td>}
-                      {span > 0 && <td rowSpan={span} className="date">{txn.date}</td>}
-                      {span > 0 && <td rowSpan={span} className="num">{cashMoney(match.bankAmount)}</td>}
+                      {span > 0 && <td rowSpan={span} className="date"><RecBit sources={txnSrc(txn, 'BANK_TXN_DATE', 'Date', 'DATE')} display={txn.date}>{txn.date}</RecBit></td>}
+                      {span > 0 && <td rowSpan={span} className="num"><RecBit sources={txnSrc(txn, 'BANK_TXN_AMOUNT', 'Amount', 'CURRENCY')} display={cashMoney(match.bankAmount)}>{cashMoney(match.bankAmount)}</RecBit></td>}
                       {span > 0 && <td rowSpan={span}><span className="cr-rule">{match.ruleName}</span><small>{match.confidence}% confidence</small></td>}
                       <td><Link href={`${domainHref('CASH_FLOW')}/${flow.id}`}>{flow.positionName || flow.name}</Link></td>
-                      <td><span className={`cr-type ${typeTone(flow.type)}`}>{cashTypeLabel(flow.type)}</span></td>
-                      <td className="date">{flow.date}</td>
-                      <td className="num">{cashMoney(flow.amount)}</td>
+                      <RecCell sources={flowSrc(flow, 'CASHFLOW_TYPE', 'Type')} display={cashTypeLabel(flow.type)}><span className={`cr-type ${typeTone(flow.type)}`}>{cashTypeLabel(flow.type)}</span></RecCell>
+                      <RecCell className="date" sources={flowSrc(flow, 'CASHFLOW_DATE', 'Date', 'DATE')} display={flow.date}>{flow.date}</RecCell>
+                      <RecCell className="num" sources={flowSrc(flow, 'AMOUNT', 'Amount', 'CURRENCY')} display={cashMoney(flow.amount)}>{cashMoney(flow.amount)}</RecCell>
                       {span > 0 && <td rowSpan={span} className={`num ${Math.abs(match.variance) < 0.01 ? 'zero' : 'neg'}`}>{cashMoney(match.variance)}</td>}
                     </tr>
                   );
@@ -341,8 +355,8 @@ export function CashRecTab({
                 <tbody>
                   {cash.adjustments.map((item) => (
                     <tr key={item.id}>
-                      <td><Link href={`${domainHref('CASH_ADJUSTMENT')}/${item.id}`}>{item.reason}</Link><small>{item.side === 'BANK' ? 'Bank' : 'Position book'}</small></td>
-                      <td className="num">{cashMoney(item.amount)}</td>
+                      <RecCell sources={src(item.id, item.reason, 'CASH_ADJUSTMENT', 'ADJ_REASON', 'Reason')} display={item.reason}><Link href={`${domainHref('CASH_ADJUSTMENT')}/${item.id}`}>{item.reason}</Link><small><RecBit sources={src(item.id, item.reason, 'CASH_ADJUSTMENT', 'ADJ_SIDE', 'Side')} display={item.side}>{item.side === 'BANK' ? 'Bank' : 'Position book'}</RecBit></small></RecCell>
+                      <RecCell className="num" sources={src(item.id, item.reason, 'CASH_ADJUSTMENT', 'ADJ_AMOUNT', 'Amount', 'CURRENCY')} display={cashMoney(item.amount)}>{cashMoney(item.amount)}</RecCell>
                     </tr>
                   ))}
                 </tbody>

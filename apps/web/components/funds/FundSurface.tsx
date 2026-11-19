@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION } from '@/lib/graphql';
 import { domainHref } from '@/lib/domain-routes';
 import { useTemporalStore } from '@/lib/store';
 import { FUND_PANEL_KEYS, mountedPanel, tabReason, useLiveSurface } from '@/components/surfaces/useLiveSurface';
 import { useSurfaceNav } from '@/lib/surface-nav';
+import { attrBind, useInspectBind, type AttrBind } from '@/components/detail/InspectValue';
 
 const TABS = [
   ['nav', 'NAV'],
@@ -74,14 +75,14 @@ interface Surface {
   activities: Array<{ id: string; date: string; label: string; kind: string; amount: number; signed: number; status: string; statusLabel: string; outstanding: number | null; notice: string; pctOfCommitments: number | null }>;
   statements: Array<{ kind: string; title: string; period: string; comparable: boolean; rows: Line[] }>;
   marks: Array<{ id: string; name: string; mark: number | null; agent: number | null; difference: number | null; impact: number | null; status: string | null }>;
-  positions: Array<{ id: string; name: string; strategy: string; sector: string; issuer: string; cost: number; fairValue: number; income: number; realized: number; gain: number; moic: number | null; grossIrr: number | null; mark: number | null; coupon: string; leverage: number | null; floating: boolean; active: boolean }>;
+  positions: Array<{ id: string; name: string; strategy: string; sector: string; issuer: string; issuerId: string | null; cost: number; fairValue: number; income: number; realized: number; gain: number; moic: number | null; grossIrr: number | null; mark: number | null; coupon: string; leverage: number | null; floating: boolean; active: boolean }>;
   forecastLabels: string[];
   forecastRows: Array<{ label: string; emphasize: boolean; cells: Cell[] }>;
   investors: Array<{ id: string; investorId: string; name: string; typeCode: string; typeLabel: string; commitment: number; sharePct: number | null; called: number; unfunded: number; distributions: number; nav: number; status: string; pastDue: number }>;
   investorTypes: Array<{ label: string; amount: number; sharePct: number | null }>;
   exposure: { strategy: Bar[]; sector: Bar[]; issuer: Bar[] };
   pacing: { calledPct: number | null; planPct: number | null; planLabel: string; behindPts: number | null; behindAmount: number | null; requiredCall: number | null; trailingCall: number | null };
-  nextCall: { amount: number; notice: string; date: string } | null;
+  nextCall: { id: string; amount: number; notice: string; date: string } | null;
   largestInvestor: { name: string; sharePct: number | null } | null;
   pastDue: { name: string; amount: number | null } | null;
   investorCount: number;
@@ -107,14 +108,14 @@ const QUERY = `
       activities { id date label kind amount signed status statusLabel outstanding notice pctOfCommitments }
       statements { kind title period comparable rows { id label role indent administrator shadow variance variancePct status reviewable } }
       marks { id name mark agent difference impact status }
-      positions { id name strategy sector issuer cost fairValue income realized gain moic grossIrr mark coupon leverage floating active }
+      positions { id name strategy sector issuer issuerId cost fairValue income realized gain moic grossIrr mark coupon leverage floating active }
       forecastLabels
       forecastRows { label emphasize cells { amount entityId attributeCode } }
       investors { id investorId name typeCode typeLabel commitment sharePct called unfunded distributions nav status pastDue }
       investorTypes { label amount sharePct }
       exposure { strategy { key label amount sharePct limitPct status limitId } sector { key label amount sharePct limitPct status limitId } issuer { key label amount sharePct limitPct status limitId } }
       pacing { calledPct planPct planLabel behindPts behindAmount requiredCall trailingCall }
-      nextCall { amount notice date }
+      nextCall { id amount notice date }
       largestInvestor { name sharePct }
       pastDue { name amount }
       errors { message }
@@ -172,17 +173,43 @@ function plainMillions(amount: number | null | undefined): string {
   return String(Math.round(amount / 1_000_000 * 1000) / 1000);
 }
 
+type InspectOpen = (event: MouseEvent, bind: AttrBind | null, value?: string) => void;
+
+/** Opens a value's attribute detail. The surface provides it so an edit made there reloads the surface. */
+const InspectContext = createContext<InspectOpen>(() => undefined);
+
+const INSPECT_TITLE = 'Right-click to view sources';
+
+/** A read-only value that points back to its attribute. Unbound values render as they are. */
+function Src({ bind, value, children }: { bind: AttrBind | null | undefined; value?: string; children: ReactNode }) {
+  const open = useContext(InspectContext);
+  if (!bind) return <>{children}</>;
+  return (
+    <span className="attr-inspectable" title={INSPECT_TITLE} onContextMenu={(event) => open(event, bind, value)}>
+      {children}
+    </span>
+  );
+}
+
 function EditableValue({
-  value, display, kind, label, onSave,
+  value, display, kind, label, bind, onSave,
 }: {
-  value: string; display?: string; kind: 'text' | 'number' | 'date'; label: string; onSave: (value: string) => Promise<void>;
+  value: string; display?: string; kind: 'text' | 'number' | 'date'; label: string; bind?: AttrBind | null; onSave: (value: string) => Promise<void>;
 }) {
+  const open = useContext(InspectContext);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
   if (!editing) {
     return (
-      <button type="button" className="da-edit" onClick={() => setEditing(true)} aria-label={`Edit ${label}`}>
+      <button
+        type="button"
+        className={bind ? 'da-edit attr-inspectable' : 'da-edit'}
+        title={bind ? INSPECT_TITLE : undefined}
+        onClick={() => setEditing(true)}
+        onContextMenu={bind ? (event) => open(event, bind, display || value) : undefined}
+        aria-label={`Edit ${label}`}
+      >
         {display || value || '—'}
       </button>
     );
@@ -205,15 +232,16 @@ function EditableValue({
 }
 
 function MoneyEdit({
-  amount, label, digits = 1, format = 'plain', onSave,
+  amount, label, digits = 1, format = 'plain', bind, onSave,
 }: {
-  amount: number | null; label: string; digits?: number; format?: 'plain' | 'dollars'; onSave: (dollars: string) => Promise<void>;
+  amount: number | null; label: string; digits?: number; format?: 'plain' | 'dollars'; bind?: AttrBind | null; onSave: (dollars: string) => Promise<void>;
 }) {
   const shown = plainMillions(amount);
   return (
     <EditableValue
       kind="number"
       label={label}
+      bind={bind}
       value={shown}
       display={format === 'dollars' ? dollars(amount, digits) : paren(amount, digits)}
       onSave={async (next) => {
@@ -300,13 +328,16 @@ function Chart({
   );
 }
 
-function Tiles({ items }: { items: Array<[string, string, string, string?]> }) {
+/** label, value, note, tone, and the attribute the value is read from. */
+type Tile = [string, string, string, string?, (AttrBind | null)?];
+
+function Tiles({ items }: { items: Tile[] }) {
   return (
     <div className="fs-tiles">
-      {items.map(([label, value, note, tone]) => (
+      {items.map(([label, value, note, tone, bind]) => (
         <div className="fs-tile" key={label}>
           <span>{label}</span>
-          <b>{value}</b>
+          <b><Src bind={bind} value={value}>{value}</Src></b>
           <small className={tone || ''}>{note}</small>
         </div>
       ))}
@@ -392,6 +423,8 @@ export function FundSurface({ fundId }: { fundId: string }) {
     await load();
   };
 
+  const inspect = useInspectBind(() => { void load(); });
+
   const save = (id: string, code: string, value: string) => write([{ id, code, value }]);
   const saveMoney = (id: string, code: string) => (value: string) => save(id, code, value);
 
@@ -406,6 +439,11 @@ export function FundSurface({ fundId }: { fundId: string }) {
   if (!surface) return <div className="xp-error">{error || 'Fund not found'}</div>;
 
   const fund = surface;
+  /** Where a value on this surface is stored: the fund, or one of the records linked to it. */
+  const on = (id: string | null | undefined, domainCode: string, code: string, name: string, entityName?: string | null) => attrBind(id, domainCode, code, name, entityName);
+  const ofFund = (code: string, name: string) => on(fund.fundId, 'FUND', code, name, fund.fundName);
+  const ofStatement = (code: string, name: string) => on(fund.statementId, 'NAV_STATEMENT', code, name, fund.periodLabel ? `NAV statement ${fund.periodLabel}` : 'NAV statement');
+  const ofFacility = (code: string, name: string) => on(fund.facility?.id, 'CREDIT_FACILITY', code, name, `${fund.fundName} facility`);
   const resolved = fund.reviewFlagged - fund.reviewOpen;
   const behind = (fund.pacing.behindPts || 0) > 0.05;
   const investors = fund.investors.filter((item) => {
@@ -422,6 +460,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
   }), { cost: 0, fairValue: 0, income: 0, realized: 0, gain: 0 });
 
   return (
+    <InspectContext.Provider value={inspect}>
     <div className="da fs">
       {error && <div className="xp-error">{error}</div>}
       {notice && <p className="da-note">{notice}</p>}
@@ -430,9 +469,11 @@ export function FundSurface({ fundId }: { fundId: string }) {
           <span className="da-chip">Investment period</span>
           <h1><Link href={`${domainHref('FUND')}/${fund.fundId}`}>{fund.fundName}</Link></h1>
           <p>
-            <select aria-label="Strategy" value={fund.strategyCode} onChange={(event) => { void save(fund.fundId, 'FUND_STRATEGY', event.target.value); }}>
-              {STRATEGIES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
-            </select>
+            <Src bind={ofFund('FUND_STRATEGY', 'Strategy')} value={fund.strategyLabel}>
+              <select aria-label="Strategy" value={fund.strategyCode} onChange={(event) => { void save(fund.fundId, 'FUND_STRATEGY', event.target.value); }}>
+                {STRATEGIES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+              </select>
+            </Src>
             {'. '}
             <select
               aria-label="Fund structure"
@@ -444,16 +485,16 @@ export function FundSurface({ fundId }: { fundId: string }) {
               <option value="PUBLIC_BDC">Public BDC</option>
             </select>
             {', '}
-            <EditableValue label="Vintage" kind="text" value={fund.vintage} display={fund.vintage || '—'} onSave={(value) => save(fund.fundId, 'FUND_VINTAGE', value)} />
+            <EditableValue label="Vintage" kind="text" bind={ofFund('FUND_VINTAGE', 'Vintage')} value={fund.vintage} display={fund.vintage || '—'} onSave={(value) => save(fund.fundId, 'FUND_VINTAGE', value)} />
             {' vintage. Reporting as of '}
-            <EditableValue label="Reporting date" kind="date" value={fund.reportingDate} display={when(fund.reportingDate)} onSave={(value) => save(fund.fundId, 'FUND_REPORTING_DATE', value)} />
+            <EditableValue label="Reporting date" kind="date" bind={ofFund('FUND_REPORTING_DATE', 'Reporting Date')} value={fund.reportingDate} display={when(fund.reportingDate)} onSave={(value) => save(fund.fundId, 'FUND_REPORTING_DATE', value)} />
           </p>
         </div>
         <div className="da-facts">
-          <div className="da-fact big"><span>NAV</span><strong>{dollars(fund.nav)}</strong></div>
+          <div className="da-fact big"><span>NAV</span><strong><Src bind={ofFund('NAV', 'NAV')} value={dollars(fund.nav)}>{dollars(fund.nav)}</Src></strong></div>
           <div className="da-fact">
             <span>Commitments</span>
-            <strong><MoneyEdit amount={fund.commitments} format="dollars" label="Commitments" onSave={saveMoney(fund.fundId, 'FUND_TOTAL_COMMITMENTS')} /></strong>
+            <strong><MoneyEdit amount={fund.commitments} format="dollars" label="Commitments" bind={ofFund('FUND_TOTAL_COMMITMENTS', 'Total Commitments')} onSave={saveMoney(fund.fundId, 'FUND_TOTAL_COMMITMENTS')} /></strong>
           </div>
           <div className="da-fact"><span>Called</span><strong>{pct(fund.pacing.calledPct, 0)} ({dollars(fund.called)})</strong></div>
           <div className="da-fact"><span>Unfunded</span><strong>{dollars(fund.unfunded)}</strong></div>
@@ -514,9 +555,9 @@ export function FundSurface({ fundId }: { fundId: string }) {
       {tab === 'nav' && (
         <>
           <Tiles items={[
-            ['NAV', dollars(fund.nav), `Administrator, ${when(fund.reportingDate)}`],
+            ['NAV', dollars(fund.nav), `Administrator, ${when(fund.reportingDate)}`, '', ofFund('NAV', 'NAV')],
             ['Investments at fair value', dollars(fund.investmentsFairValue), `${fund.activePositions} active positions`],
-            ['Credit facility', dollars(fund.facility?.drawn || 0), fund.nav ? `${pct((fund.facility?.drawn || 0) / fund.nav * 100, 0)} of NAV` : '—'],
+            ['Credit facility', dollars(fund.facility?.drawn || 0), fund.nav ? `${pct((fund.facility?.drawn || 0) / fund.nav * 100, 0)} of NAV` : '—', '', ofFacility('FACILITY_DRAWN', 'Drawn')],
             ['NAV per $100 committed', fund.commitments ? `$${((fund.nav / fund.commitments) * 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—', 'Net of fees and leverage'],
           ]} />
           <div className="fs-main">
@@ -535,7 +576,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
                     {fund.rollforward.map((line) => (
                       <tr key={line.id} className={line.role === 'TOTAL' ? 'par' : ''}>
                         <td>{line.label}</td>
-                        <td className={`num ${line.signed != null && line.signed < 0 ? 'fs-neg' : ''}`}>{paren(line.administrator)}</td>
+                        <td className={`num ${line.signed != null && line.signed < 0 ? 'fs-neg' : ''}`}><Src bind={ofStatement(line.id, line.label)} value={paren(line.administrator)}>{paren(line.administrator)}</Src></td>
                       </tr>
                     ))}
                   </tbody>
@@ -552,11 +593,11 @@ export function FundSurface({ fundId }: { fundId: string }) {
                   {fund.composition.map((line) => (
                     <tr key={line.id}>
                       <td>{line.label}</td>
-                      <td className={`num ${line.signed != null && line.signed < 0 ? 'fs-neg' : ''}`}>{paren(line.signed)}</td>
+                      <td className={`num ${line.signed != null && line.signed < 0 ? 'fs-neg' : ''}`}><Src bind={ofStatement(line.id, line.label)} value={paren(line.signed)}>{paren(line.signed)}</Src></td>
                       <td className="num">{fund.nav && line.signed != null ? pct(line.signed / fund.nav * 100) : '—'}</td>
                     </tr>
                   ))}
-                  <tr className="par"><td>Net asset value</td><td className="num">{paren(fund.nav)}</td><td className="num">100.0%</td></tr>
+                  <tr className="par"><td>Net asset value</td><td className="num"><Src bind={ofFund('NAV', 'NAV')} value={paren(fund.nav)}>{paren(fund.nav)}</Src></td><td className="num">100.0%</td></tr>
                 </tbody>
               </table>
             </div>
@@ -570,7 +611,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
             ['Called to date', pct(fund.pacing.calledPct), `${dollars(fund.called)} of ${dollars(fund.commitments)}`],
             ['Plan at ' + (fund.pacing.planLabel || 'quarter'), pct(fund.pacing.planPct), behind ? `Behind plan by ${points(fund.pacing.behindPts)} (${dollars(fund.pacing.behindAmount)})` : 'On plan', behind ? 'fs-warn' : ''],
             ['Required call per quarter', dollars(fund.pacing.requiredCall), `To reach ${pct(fund.targetCalledPct, 0)} by ${monthYear(fund.investmentPeriodEnd)}; trailing 4Q average ${dollars(fund.pacing.trailingCall)}`, (fund.pacing.requiredCall || 0) > (fund.pacing.trailingCall || 0) ? 'fs-warn' : ''],
-            ['Investment period ends', monthYear(fund.investmentPeriodEnd), fund.monthsRemaining != null ? `${fund.monthsRemaining} months remaining` : ''],
+            ['Investment period ends', monthYear(fund.investmentPeriodEnd), fund.monthsRemaining != null ? `${fund.monthsRemaining} months remaining` : '', '', ofFund('FUND_INVESTMENT_PERIOD_END', 'Investment Period End')],
           ]} />
           <section>
             <div className="da-sechead"><h2>Capital called as a share of commitments</h2><p>Actual to date, projected from the deal pipeline, and the deployment plan.</p></div>
@@ -597,11 +638,11 @@ export function FundSurface({ fundId }: { fundId: string }) {
                   {fund.plans.map((plan) => (
                     <tr key={plan.id}>
                       <td>{plan.label}</td>
-                      <td className="num"><MoneyEdit amount={plan.callAmount} label={`${plan.label} call`} onSave={saveMoney(plan.id, 'PLAN_CALL_AMOUNT')} /></td>
+                      <td className="num"><MoneyEdit amount={plan.callAmount} label={`${plan.label} call`} bind={on(plan.id, 'CAPITAL_PLAN', 'PLAN_CALL_AMOUNT', 'Projected Call', plan.label)} onSave={saveMoney(plan.id, 'PLAN_CALL_AMOUNT')} /></td>
                       <td className="num">{paren(plan.cumulative)}</td>
                       <td className="num">{pct(plan.calledPct)}</td>
                       <td className="num">{paren(plan.unfunded)}</td>
-                      <td className="num"><EditableValue kind="number" label={`${plan.label} plan`} value={plan.planPct == null ? '' : String(plan.planPct)} display={pct(plan.planPct)} onSave={(value) => save(plan.id, 'PLAN_CALLED_PCT', value)} /></td>
+                      <td className="num"><EditableValue kind="number" label={`${plan.label} plan`} bind={on(plan.id, 'CAPITAL_PLAN', 'PLAN_CALLED_PCT', 'Plan Called', plan.label)} value={plan.planPct == null ? '' : String(plan.planPct)} display={pct(plan.planPct)} onSave={(value) => save(plan.id, 'PLAN_CALLED_PCT', value)} /></td>
                       <td className={`num ${plan.versusPts != null && plan.versusPts < 0 ? 'fs-neg' : ''}`}>{points(plan.versusPts)}</td>
                     </tr>
                   ))}
@@ -618,7 +659,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
             ['Called to date', dollars(fund.called), `${pct(fund.pacing.calledPct, 0)} of commitments`],
             ['Distributed', dollars(fund.distributed), `DPI ${multiple(fund.dpi)}`],
             ['Net paid-in', dollars(fund.netPaidIn), 'Called less distributions'],
-            ['Next call (projected)', fund.nextCall ? dollars(fund.nextCall.amount) : '—', fund.nextCall?.notice || ''],
+            ['Next call (projected)', fund.nextCall ? dollars(fund.nextCall.amount) : '—', fund.nextCall?.notice || '', '', on(fund.nextCall?.id, 'CAPITAL_ACTIVITY', 'ACTIVITY_AMOUNT', 'Amount')],
           ]} />
           <section>
             <div className="da-sechead"><h2>Calls and distributions by quarter</h2><p>$M.</p></div>
@@ -640,17 +681,19 @@ export function FundSurface({ fundId }: { fundId: string }) {
                 <tbody>
                   {fund.activities.map((item) => (
                     <tr key={item.id}>
-                      <td><EditableValue kind="date" label="Date" value={item.date} display={when(item.date)} onSave={(value) => save(item.id, 'ACTIVITY_DATE', value)} /></td>
+                      <td><EditableValue kind="date" label="Date" bind={on(item.id, 'CAPITAL_ACTIVITY', 'ACTIVITY_DATE', 'Date', item.label)} value={item.date} display={when(item.date)} onSave={(value) => save(item.id, 'ACTIVITY_DATE', value)} /></td>
                       <td>{item.label}</td>
                       <td className={`num ${item.kind === 'DISTRIBUTION' ? 'fs-neg' : ''}`}>
-                        <MoneyEdit amount={item.kind === 'DISTRIBUTION' ? -item.amount : item.amount} label="Amount" onSave={async (value) => save(item.id, 'ACTIVITY_AMOUNT', String(Math.abs(Number(value))))} />
+                        <MoneyEdit amount={item.kind === 'DISTRIBUTION' ? -item.amount : item.amount} label="Amount" bind={on(item.id, 'CAPITAL_ACTIVITY', 'ACTIVITY_AMOUNT', 'Amount', item.label)} onSave={async (value) => save(item.id, 'ACTIVITY_AMOUNT', String(Math.abs(Number(value))))} />
                       </td>
                       <td className="num">{pct(item.pctOfCommitments)}</td>
                       <td>
-                        <select aria-label={`${item.label} status`} value={item.status} onChange={(event) => { void save(item.id, 'ACTIVITY_STATUS', event.target.value); }}>
-                          {ACTIVITY_STATUSES.map((status) => <option key={status} value={status}>{status === 'FUNDED' ? 'Funded' : status === 'PAID' ? 'Paid' : status === 'PROJECTED' ? 'Projected' : 'Scheduled'}</option>)}
-                        </select>
-                        {item.outstanding ? <span className="fs-gap"><Status outstanding={item.outstanding} /></span> : null}
+                        <Src bind={on(item.id, 'CAPITAL_ACTIVITY', 'ACTIVITY_STATUS', 'Status', item.label)} value={item.statusLabel}>
+                          <select aria-label={`${item.label} status`} value={item.status} onChange={(event) => { void save(item.id, 'ACTIVITY_STATUS', event.target.value); }}>
+                            {ACTIVITY_STATUSES.map((status) => <option key={status} value={status}>{status === 'FUNDED' ? 'Funded' : status === 'PAID' ? 'Paid' : status === 'PROJECTED' ? 'Projected' : 'Scheduled'}</option>)}
+                          </select>
+                        </Src>
+                        {item.outstanding ? <span className="fs-gap"><Src bind={on(item.id, 'CAPITAL_ACTIVITY', 'ACTIVITY_OUTSTANDING', 'Outstanding', item.label)} value={dollars(item.outstanding)}><Status outstanding={item.outstanding} /></Src></span> : null}
                       </td>
                     </tr>
                   ))}
@@ -670,6 +713,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
             </div>
             <label className="fs-tol">
               Tolerance
+              <Src bind={ofStatement('STATEMENT_TOLERANCE_PCT', 'Tolerance')} value={`${fund.tolerancePct}%`}>
               <select
                 aria-label="Tolerance"
                 value={String(fund.tolerancePct)}
@@ -684,10 +728,11 @@ export function FundSurface({ fundId }: { fundId: string }) {
               >
                 {[0.25, 0.5, 1, 2].map((value) => <option key={value} value={value}>{value}%</option>)}
               </select>
+              </Src>
             </label>
           </div>
           {fund.statements.filter((item) => item.kind === 'BS' || item.kind === 'OPS').map((statement) => (
-            <Statement key={statement.kind} statement={statement} onResolve={(code, resolved) => {
+            <Statement key={statement.kind} statement={statement} bindLine={ofStatement} onResolve={(code, resolved) => {
               if (!fund.statementId) return Promise.resolve();
               const accepted = new Set(fund.statements.flatMap((item) => item.rows).filter((row) => row.status === 'RESOLVED').map((row) => row.id));
               if (resolved) accepted.delete(code);
@@ -700,7 +745,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
           ))}
           <div className="fs-two">
             {fund.statements.filter((item) => item.kind === 'CHANGES' || item.kind === 'CASH').map((statement) => (
-              <Statement key={statement.kind} statement={statement} onResolve={() => Promise.resolve()} onAmount={(code, sourceCode, value) => (fund.statementId ? write([{ id: fund.statementId, code, value, sourceCode }]) : Promise.resolve())} />
+              <Statement key={statement.kind} statement={statement} bindLine={ofStatement} onResolve={() => Promise.resolve()} onAmount={(code, sourceCode, value) => (fund.statementId ? write([{ id: fund.statementId, code, value, sourceCode }]) : Promise.resolve())} />
             ))}
           </div>
           <section className="fs-block">
@@ -712,8 +757,8 @@ export function FundSurface({ fundId }: { fundId: string }) {
                   {fund.marks.map((mark) => (
                     <tr key={mark.id}>
                       <td><Link href={`${domainHref('POSITION')}/${mark.id}`}>{mark.name}</Link></td>
-                      <td className="num"><EditableValue kind="number" label="Administrator mark" value={mark.mark == null ? '' : String(mark.mark)} display={mark.mark == null ? '—' : mark.mark.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} onSave={(value) => save(mark.id, 'POSITION_MARK', value)} /></td>
-                      <td className="num"><EditableValue kind="number" label="Agent mark" value={mark.agent == null ? '' : String(mark.agent)} display={mark.agent == null ? '—' : mark.agent.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} onSave={(value) => save(mark.id, 'POSITION_AGENT_MARK', value)} /></td>
+                      <td className="num"><EditableValue kind="number" label="Administrator mark" bind={on(mark.id, 'POSITION', 'POSITION_MARK', 'Administrator Mark', mark.name)} value={mark.mark == null ? '' : String(mark.mark)} display={mark.mark == null ? '—' : mark.mark.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} onSave={(value) => save(mark.id, 'POSITION_MARK', value)} /></td>
+                      <td className="num"><EditableValue kind="number" label="Agent mark" bind={on(mark.id, 'POSITION', 'POSITION_AGENT_MARK', 'Agent Mark', mark.name)} value={mark.agent == null ? '' : String(mark.agent)} display={mark.agent == null ? '—' : mark.agent.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} onSave={(value) => save(mark.id, 'POSITION_AGENT_MARK', value)} /></td>
                       <td className="num">{mark.difference == null ? '—' : mark.difference.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
                       <td className={`num ${mark.impact != null && mark.impact < 0 ? 'fs-neg' : ''}`}>{paren(mark.impact)}</td>
                       <td><Status status={mark.status} /></td>
@@ -736,7 +781,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
       {tab === 'returns' && (
         <>
           <Tiles items={[
-            ['Gross IRR', pct(fund.grossIrr), 'Since inception'],
+            ['Gross IRR', pct(fund.grossIrr), 'Since inception', '', ofFund('FUND_GROSS_IRR', 'Gross IRR')],
             ['Net IRR', pct(fund.netIrr), 'After fees, expenses and carry accrual'],
             ['TVPI', multiple(fund.tvpi), '(NAV + distributions) / paid-in'],
             ['DPI', multiple(fund.dpi), 'Distributions / paid-in'],
@@ -752,14 +797,14 @@ export function FundSurface({ fundId }: { fundId: string }) {
                     {fund.positions.map((position) => (
                       <tr key={position.id}>
                         <td><Link href={`${domainHref('POSITION')}/${position.id}`}>{position.name}</Link></td>
-                        <td>{position.strategy}</td>
-                        <td className="num"><MoneyEdit amount={position.cost} label="Cost" onSave={saveMoney(position.id, 'POSITION_COST')} /></td>
-                        <td className="num"><MoneyEdit amount={position.fairValue} label="Fair value" onSave={saveMoney(position.id, 'MARKET_VALUE')} /></td>
-                        <td className="num"><MoneyEdit amount={position.income} label="Income" onSave={saveMoney(position.id, 'POSITION_INCOME')} /></td>
-                        <td className="num">{position.realized ? <MoneyEdit amount={position.realized} label="Realized" onSave={saveMoney(position.id, 'POSITION_REALIZED_GAIN')} /> : '—'}</td>
+                        <td><Src bind={on(position.id, 'POSITION', 'POSITION_STRATEGY', 'Strategy', position.name)} value={position.strategy}>{position.strategy}</Src></td>
+                        <td className="num"><MoneyEdit amount={position.cost} label="Cost" bind={on(position.id, 'POSITION', 'POSITION_COST', 'Cost', position.name)} onSave={saveMoney(position.id, 'POSITION_COST')} /></td>
+                        <td className="num"><MoneyEdit amount={position.fairValue} label="Fair value" bind={on(position.id, 'POSITION', 'MARKET_VALUE', 'Fair Value', position.name)} onSave={saveMoney(position.id, 'MARKET_VALUE')} /></td>
+                        <td className="num"><MoneyEdit amount={position.income} label="Income" bind={on(position.id, 'POSITION', 'POSITION_INCOME', 'Income', position.name)} onSave={saveMoney(position.id, 'POSITION_INCOME')} /></td>
+                        <td className="num">{position.realized ? <MoneyEdit amount={position.realized} label="Realized" bind={on(position.id, 'POSITION', 'POSITION_REALIZED_GAIN', 'Realized Gain', position.name)} onSave={saveMoney(position.id, 'POSITION_REALIZED_GAIN')} /> : '—'}</td>
                         <td className={`num ${position.gain < 0 ? 'fs-neg' : ''}`}>{paren(position.gain)}</td>
                         <td className="num">{multiple(position.moic)}</td>
-                        <td className="num"><EditableValue kind="number" label="Gross IRR" value={position.grossIrr == null ? '' : String(position.grossIrr)} display={pct(position.grossIrr)} onSave={(value) => save(position.id, 'POSITION_GROSS_IRR', value)} /></td>
+                        <td className="num"><EditableValue kind="number" label="Gross IRR" bind={on(position.id, 'POSITION', 'POSITION_GROSS_IRR', 'Gross IRR', position.name)} value={position.grossIrr == null ? '' : String(position.grossIrr)} display={pct(position.grossIrr)} onSave={(value) => save(position.id, 'POSITION_GROSS_IRR', value)} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -784,10 +829,10 @@ export function FundSurface({ fundId }: { fundId: string }) {
                 <table className="da-grid">
                   <thead><tr><th>Step</th><th className="num">Pts</th></tr></thead>
                   <tbody>
-                    <tr><td>Gross IRR</td><td className="num"><EditableValue kind="number" label="Gross IRR" value={fund.grossIrr == null ? '' : String(fund.grossIrr)} display={pct(fund.grossIrr)} onSave={(value) => save(fund.fundId, 'FUND_GROSS_IRR', value)} /></td></tr>
-                    <tr><td>Management fee</td><td className="num fs-neg"><EditableValue kind="number" label="Management fee drag" value={fund.feeDrag == null ? '' : String(fund.feeDrag)} display={fund.feeDrag == null ? '—' : `(${fund.feeDrag.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })})`} onSave={(value) => save(fund.fundId, 'FUND_FEE_DRAG_PTS', value)} /></td></tr>
-                    <tr><td>Fund expenses</td><td className="num fs-neg"><EditableValue kind="number" label="Expense drag" value={fund.expenseDrag == null ? '' : String(fund.expenseDrag)} display={fund.expenseDrag == null ? '—' : `(${fund.expenseDrag.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })})`} onSave={(value) => save(fund.fundId, 'FUND_EXPENSE_DRAG_PTS', value)} /></td></tr>
-                    <tr><td>Carry accrual</td><td className="num fs-neg"><EditableValue kind="number" label="Carry drag" value={fund.carryDrag == null ? '' : String(fund.carryDrag)} display={fund.carryDrag == null ? '—' : `(${fund.carryDrag.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })})`} onSave={(value) => save(fund.fundId, 'FUND_CARRY_DRAG_PTS', value)} /></td></tr>
+                    <tr><td>Gross IRR</td><td className="num"><EditableValue kind="number" label="Gross IRR" bind={ofFund('FUND_GROSS_IRR', 'Gross IRR')} value={fund.grossIrr == null ? '' : String(fund.grossIrr)} display={pct(fund.grossIrr)} onSave={(value) => save(fund.fundId, 'FUND_GROSS_IRR', value)} /></td></tr>
+                    <tr><td>Management fee</td><td className="num fs-neg"><EditableValue kind="number" label="Management fee drag" bind={ofFund('FUND_FEE_DRAG_PTS', 'Management Fee Drag')} value={fund.feeDrag == null ? '' : String(fund.feeDrag)} display={fund.feeDrag == null ? '—' : `(${fund.feeDrag.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })})`} onSave={(value) => save(fund.fundId, 'FUND_FEE_DRAG_PTS', value)} /></td></tr>
+                    <tr><td>Fund expenses</td><td className="num fs-neg"><EditableValue kind="number" label="Expense drag" bind={ofFund('FUND_EXPENSE_DRAG_PTS', 'Fund Expense Drag')} value={fund.expenseDrag == null ? '' : String(fund.expenseDrag)} display={fund.expenseDrag == null ? '—' : `(${fund.expenseDrag.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })})`} onSave={(value) => save(fund.fundId, 'FUND_EXPENSE_DRAG_PTS', value)} /></td></tr>
+                    <tr><td>Carry accrual</td><td className="num fs-neg"><EditableValue kind="number" label="Carry drag" bind={ofFund('FUND_CARRY_DRAG_PTS', 'Carry Drag')} value={fund.carryDrag == null ? '' : String(fund.carryDrag)} display={fund.carryDrag == null ? '—' : `(${fund.carryDrag.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })})`} onSave={(value) => save(fund.fundId, 'FUND_CARRY_DRAG_PTS', value)} /></td></tr>
                   </tbody>
                   <tfoot><tr><td>Net IRR</td><td className="num">{fund.netIrr == null ? '—' : fund.netIrr.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td></tr></tfoot>
                 </table>
@@ -800,10 +845,10 @@ export function FundSurface({ fundId }: { fundId: string }) {
       {tab === 'liquidity' && (
         <>
           <Tiles items={[
-            ['Cash', dollars(fund.cash), when(fund.reportingDate)],
+            ['Cash', dollars(fund.cash), when(fund.reportingDate), '', ofFund('FUND_CASH_BALANCE', 'Cash on Hand')],
             ['Facility availability', dollars(fund.facilityAvailability), 'Limited by borrowing base'],
             ['Callable investor commitments', dollars(fund.unfunded), 'Unfunded, excluding GP'],
-            ['Unfunded borrower commitments', dollars(fund.unfundedBorrower), 'Delayed draw and revolvers'],
+            ['Unfunded borrower commitments', dollars(fund.unfundedBorrower), 'Delayed draw and revolvers', '', ofFund('FUND_UNFUNDED_BORROWER_COMMITMENTS', 'Unfunded Borrower Commitments')],
             ['Liquidity coverage', multiple(fund.liquidityCoverage, 1), `Cash plus availability over borrower commitments; minimum ${multiple(fund.liquidityMin, 2)}`, (fund.liquidityCoverage || 0) < fund.liquidityMin ? 'fs-warn' : ''],
           ]} />
           <div className="fs-main">
@@ -821,7 +866,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
                         {row.cells.map((cell, index) => (
                           <td key={`${row.label}-${index}`} className={`num ${cell.amount != null && cell.amount < 0 ? 'fs-neg' : ''}`}>
                             {cell.entityId && cell.attributeCode
-                              ? <MoneyEdit amount={cell.amount} label={row.label} onSave={saveMoney(cell.entityId, cell.attributeCode)} />
+                              ? <MoneyEdit amount={cell.amount} label={row.label} bind={on(cell.entityId, 'CASH_FORECAST', cell.attributeCode, row.label, fund.forecastLabels[index])} onSave={saveMoney(cell.entityId, cell.attributeCode)} />
                               : paren(cell.amount)}
                           </td>
                         ))}
@@ -836,12 +881,12 @@ export function FundSurface({ fundId }: { fundId: string }) {
               <div className="fs-panel">
                 {fund.facility ? (
                   <dl className="fs-kv">
-                    <dt>Commitment</dt><dd><MoneyEdit format="dollars" amount={fund.facility.commitment} label="Facility commitment" onSave={saveMoney(fund.facility.id, 'FACILITY_COMMITMENT')} /></dd>
-                    <dt>Drawn</dt><dd><MoneyEdit format="dollars" amount={fund.facility.drawn} label="Drawn" onSave={saveMoney(fund.facility.id, 'FACILITY_DRAWN')} /></dd>
-                    <dt>Borrowing base</dt><dd><MoneyEdit format="dollars" amount={fund.facility.borrowingBase} label="Borrowing base" onSave={saveMoney(fund.facility.id, 'FACILITY_BORROWING_BASE')} /></dd>
+                    <dt>Commitment</dt><dd><MoneyEdit format="dollars" amount={fund.facility.commitment} label="Facility commitment" bind={ofFacility('FACILITY_COMMITMENT', 'Commitment')} onSave={saveMoney(fund.facility.id, 'FACILITY_COMMITMENT')} /></dd>
+                    <dt>Drawn</dt><dd><MoneyEdit format="dollars" amount={fund.facility.drawn} label="Drawn" bind={ofFacility('FACILITY_DRAWN', 'Drawn')} onSave={saveMoney(fund.facility.id, 'FACILITY_DRAWN')} /></dd>
+                    <dt>Borrowing base</dt><dd><MoneyEdit format="dollars" amount={fund.facility.borrowingBase} label="Borrowing base" bind={ofFacility('FACILITY_BORROWING_BASE', 'Borrowing Base')} onSave={saveMoney(fund.facility.id, 'FACILITY_BORROWING_BASE')} /></dd>
                     <dt>Availability</dt><dd>{dollars(fund.facility.availability)}</dd>
                     <dt>Utilization</dt><dd>{pct(fund.facility.utilization, 0)}</dd>
-                    <dt>Maturity</dt><dd><EditableValue kind="date" label="Maturity" value={fund.facility.maturity} display={monthYear(fund.facility.maturity)} onSave={(value) => save(fund.facility!.id, 'FACILITY_MATURITY', value)} /></dd>
+                    <dt>Maturity</dt><dd><EditableValue kind="date" label="Maturity" bind={ofFacility('FACILITY_MATURITY', 'Maturity')} value={fund.facility.maturity} display={monthYear(fund.facility.maturity)} onSave={(value) => save(fund.facility!.id, 'FACILITY_MATURITY', value)} /></dd>
                   </dl>
                 ) : <p className="da-note">No credit facility is linked to this fund.</p>}
                 {fund.facility && fund.facility.commitment > 0 && (
@@ -857,7 +902,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
         <>
           <Tiles items={[
             ['Investors', String(fund.investorCount), 'Including GP and affiliates'],
-            ['Commitments', dollars(fund.commitments), `Closed ${monthYear(fund.commitmentsClosed)}`],
+            ['Commitments', dollars(fund.commitments), `Closed ${monthYear(fund.commitmentsClosed)}`, '', ofFund('FUND_TOTAL_COMMITMENTS', 'Total Commitments')],
             ['Largest investor', pct(fund.largestInvestor?.sharePct), fund.largestInvestor?.name || '—'],
             ['Past due', dollars(fund.pastDue?.amount || 0), fund.pastDue?.name || 'None', fund.pastDue ? 'fs-warn' : ''],
           ]} />
@@ -877,18 +922,22 @@ export function FundSurface({ fundId }: { fundId: string }) {
                     <tr key={investor.id}>
                       <td><Link href={`${domainHref('INVESTOR')}/${investor.investorId}`}>{investor.name}</Link></td>
                       <td>
-                        <select aria-label={`${investor.name} type`} value={investor.typeCode} onChange={(event) => { void save(investor.investorId, 'INVESTOR_TYPE', event.target.value); }}>
-                          {INVESTOR_TYPES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
-                        </select>
+                        <Src bind={on(investor.investorId, 'INVESTOR', 'INVESTOR_TYPE', 'Investor Type', investor.name)} value={investor.typeLabel}>
+                          <select aria-label={`${investor.name} type`} value={investor.typeCode} onChange={(event) => { void save(investor.investorId, 'INVESTOR_TYPE', event.target.value); }}>
+                            {INVESTOR_TYPES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+                          </select>
+                        </Src>
                       </td>
-                      <td className="num"><MoneyEdit amount={investor.commitment} label="Commitment" onSave={saveMoney(investor.id, 'COMMITMENT_AMOUNT')} /></td>
+                      <td className="num"><MoneyEdit amount={investor.commitment} label="Commitment" bind={on(investor.id, 'INVESTOR_COMMITMENT', 'COMMITMENT_AMOUNT', 'Commitment', investor.name)} onSave={saveMoney(investor.id, 'COMMITMENT_AMOUNT')} /></td>
                       <td className="num">{pct(investor.sharePct)}</td>
                       <td className="num">{paren(investor.called)}</td>
                       <td className="num">{paren(investor.unfunded)}</td>
                       <td className="num">{paren(investor.distributions)}</td>
                       <td className="num">{paren(investor.nav)}</td>
                       <td>
-                        {investor.status === 'PAST_DUE' ? <span className="da-st bind">Past due {dollars(investor.pastDue)}</span> : <Status status="CURRENT" />}
+                        <Src bind={on(investor.id, 'INVESTOR_COMMITMENT', investor.status === 'PAST_DUE' ? 'COMMITMENT_PAST_DUE' : 'COMMITMENT_STATUS', investor.status === 'PAST_DUE' ? 'Past Due' : 'Status', investor.name)} value={investor.status === 'PAST_DUE' ? dollars(investor.pastDue) : 'Current'}>
+                          {investor.status === 'PAST_DUE' ? <span className="da-st bind">Past due {dollars(investor.pastDue)}</span> : <Status status="CURRENT" />}
+                        </Src>
                       </td>
                     </tr>
                   ))}
@@ -926,7 +975,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
       {tab === 'accounts' && (
         <>
           <Tiles items={[
-            ['Commitments', dollars(fund.commitments), `${fund.investorCount} investors`],
+            ['Commitments', dollars(fund.commitments), `${fund.investorCount} investors`, '', ofFund('FUND_TOTAL_COMMITMENTS', 'Total Commitments')],
             ['Called', dollars(fund.called), pct(fund.pacing.calledPct, 0)],
             ['Unfunded', dollars(fund.unfunded), 'Remaining commitment'],
             ['Distributions', dollars(fund.distributed), multiple(fund.dpi) + ' DPI'],
@@ -943,7 +992,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
                   {fund.investors.map((investor) => (
                     <tr key={investor.id}>
                       <td>{investor.name}</td>
-                      <td className="num">{paren(investor.commitment)}</td>
+                      <td className="num"><Src bind={on(investor.id, 'INVESTOR_COMMITMENT', 'COMMITMENT_AMOUNT', 'Commitment', investor.name)} value={paren(investor.commitment)}>{paren(investor.commitment)}</Src></td>
                       <td className="num">{paren(investor.called)}</td>
                       <td className="num">{paren(investor.unfunded)}</td>
                       <td className="num">{paren(investor.distributions)}</td>
@@ -960,9 +1009,9 @@ export function FundSurface({ fundId }: { fundId: string }) {
       {tab === 'filings' && (
         <>
           <Tiles items={[
-            ['NAV', dollars(fund.nav), `Reporting ${when(fund.reportingDate)}`],
+            ['NAV', dollars(fund.nav), `Reporting ${when(fund.reportingDate)}`, '', ofFund('NAV', 'NAV')],
             ['NAV per $100 committed', fund.commitments ? `$${((fund.nav / fund.commitments) * 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—', 'Public BDC disclosure'],
-            ['Period', fund.periodLabel || '—', fund.certified ? 'Certified' : 'Not certified'],
+            ['Period', fund.periodLabel || '—', fund.certified ? 'Certified' : 'Not certified', '', ofStatement('STATEMENT_PERIOD_LABEL', 'Period Label')],
             ['Statements', String(fund.statements.length), 'Ready for shareholder filing'],
           ]} />
           <section className="fs-block">
@@ -1023,9 +1072,14 @@ export function FundSurface({ fundId }: { fundId: string }) {
                   </div>
                   <span>
                     {dollars(bar.amount)} · {pct(bar.sharePct)} <Status status={bar.status} />
+                    {!bar.limitId && bar.limitPct != null && group !== 'strategy' && (
+                      <span className="fs-gap">
+                        <Src bind={ofFund(group === 'sector' ? 'FUND_SECTOR_LIMIT_PCT' : 'FUND_ISSUER_LIMIT_PCT', group === 'sector' ? 'Sector Limit' : 'Issuer Limit')} value={pct(bar.limitPct, 0)}>{pct(bar.limitPct, 0)}</Src>
+                      </span>
+                    )}
                     {bar.limitId && (
                       <span className="fs-gap">
-                        <EditableValue kind="number" label={`${bar.label} limit`} value={bar.limitPct == null ? '' : String(bar.limitPct)} display={pct(bar.limitPct, 0)} onSave={(value) => save(bar.limitId!, 'LIMIT_PCT', value)} />
+                        <EditableValue kind="number" label={`${bar.label} limit`} bind={on(bar.limitId, 'EXPOSURE_LIMIT', 'LIMIT_PCT', 'Limit', bar.label)} value={bar.limitPct == null ? '' : String(bar.limitPct)} display={pct(bar.limitPct, 0)} onSave={(value) => save(bar.limitId!, 'LIMIT_PCT', value)} />
                       </span>
                     )}
                   </span>
@@ -1042,11 +1096,11 @@ export function FundSurface({ fundId }: { fundId: string }) {
                   {fund.positions.filter((position) => position.active).map((position) => (
                     <tr key={position.id}>
                       <td><Link href={`${domainHref('POSITION')}/${position.id}`}>{position.name}</Link></td>
-                      <td>{position.sector}</td>
-                      <td className="num">{paren(position.fairValue)}</td>
-                      <td className="num"><EditableValue kind="number" label="Mark" value={position.mark == null ? '' : String(position.mark)} display={position.mark == null ? '—' : position.mark.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} onSave={(value) => save(position.id, 'POSITION_MARK', value)} /></td>
-                      <td className="num"><EditableValue kind="text" label="Coupon" value={position.coupon} onSave={(value) => save(position.id, 'POSITION_COUPON', value)} /></td>
-                      <td className="num"><EditableValue kind="number" label="Leverage" value={position.leverage == null ? '' : String(position.leverage)} display={multiple(position.leverage, 1)} onSave={(value) => save(position.id, 'POSITION_LEVERAGE', value)} /></td>
+                      <td><Src bind={on(position.issuerId, 'ISSUER', 'SECTOR', 'Sector', position.issuer)} value={position.sector}>{position.sector}</Src></td>
+                      <td className="num"><Src bind={on(position.id, 'POSITION', 'MARKET_VALUE', 'Fair Value', position.name)} value={paren(position.fairValue)}>{paren(position.fairValue)}</Src></td>
+                      <td className="num"><EditableValue kind="number" label="Mark" bind={on(position.id, 'POSITION', 'POSITION_MARK', 'Administrator Mark', position.name)} value={position.mark == null ? '' : String(position.mark)} display={position.mark == null ? '—' : position.mark.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} onSave={(value) => save(position.id, 'POSITION_MARK', value)} /></td>
+                      <td className="num"><EditableValue kind="text" label="Coupon" bind={on(position.id, 'POSITION', 'POSITION_COUPON', 'Coupon', position.name)} value={position.coupon} onSave={(value) => save(position.id, 'POSITION_COUPON', value)} /></td>
+                      <td className="num"><EditableValue kind="number" label="Leverage" bind={on(position.id, 'POSITION', 'POSITION_LEVERAGE', 'Leverage', position.name)} value={position.leverage == null ? '' : String(position.leverage)} display={multiple(position.leverage, 1)} onSave={(value) => save(position.id, 'POSITION_LEVERAGE', value)} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -1056,13 +1110,15 @@ export function FundSurface({ fundId }: { fundId: string }) {
         </>
       )}
     </div>
+    </InspectContext.Provider>
   );
 }
 
 function Statement({
-  statement, onResolve, onAmount,
+  statement, bindLine, onResolve, onAmount,
 }: {
   statement: Surface['statements'][number];
+  bindLine: (code: string, name: string) => AttrBind | null;
   onResolve: (code: string, resolved: boolean) => Promise<void>;
   onAmount: (code: string, sourceCode: string, value: string) => Promise<void>;
 }) {
@@ -1090,13 +1146,13 @@ function Statement({
                   <td style={{ paddingLeft: 12 + row.indent * 16 }}>{row.label}</td>
                   {quiet ? <td /> : (
                     <td className={`num ${row.administrator != null && row.administrator < 0 ? 'fs-neg' : ''}`}>
-                      <MoneyEdit amount={row.administrator} digits={2} label={`${row.label} fund admin`} onSave={(value) => onAmount(row.id, 'FUND_ADMIN', value)} />
+                      <MoneyEdit amount={row.administrator} digits={2} label={`${row.label} fund admin`} bind={bindLine(row.id, row.label)} onSave={(value) => onAmount(row.id, 'FUND_ADMIN', value)} />
                     </td>
                   )}
                   {statement.comparable && !quiet && (
                     <>
                       <td className="num">
-                        {row.shadow == null ? '—' : <MoneyEdit amount={row.shadow} digits={2} label={`${row.label} internal`} onSave={(value) => onAmount(row.id, 'INTERNAL', value)} />}
+                        {row.shadow == null ? '—' : <MoneyEdit amount={row.shadow} digits={2} label={`${row.label} internal`} bind={bindLine(row.id, row.label)} onSave={(value) => onAmount(row.id, 'INTERNAL', value)} />}
                       </td>
                       <td className={`num ${row.variance != null && row.variance < 0 ? 'fs-neg' : ''}`}>{row.variance == null || Math.abs(row.variance) <= 1 ? '—' : paren(row.variance, 2)}</td>
                       <td className="num">{row.variancePct == null || Math.abs(row.variance || 0) <= 1 ? '—' : pct(row.variancePct, 2)}</td>

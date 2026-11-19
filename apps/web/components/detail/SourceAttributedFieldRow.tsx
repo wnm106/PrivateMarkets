@@ -79,9 +79,16 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onValueChange, on
   return (
     <>
       <div
-        className={presentation === 'card' ? 'sa-field-card' : 'sa-field-row'}
+        className={`${presentation === 'card' ? 'sa-field-card' : 'sa-field-row'} attr-inspectable`}
         style={{ '--field-color': borderColor, '--span-rows': spanRows } as React.CSSProperties}
+        title="Right-click to view sources"
         onClick={() => setExpanded((open) => !open)}
+        onContextMenu={(event) => {
+          // Right-click opens the same source detail a click does, here on the record.
+          event.preventDefault();
+          event.stopPropagation();
+          setExpanded(true);
+        }}
       >
         <div className="sa-field-label">
           {field.label}
