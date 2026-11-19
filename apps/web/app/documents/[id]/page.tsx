@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePublishViewContext } from '@/lib/view-context';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import {
-  Chip, DOCUMENT_FIELDS, DocumentStatus, EntityLinksEditor, SECTION_FIELDS, TEMPLATE_FIELDS, TYPE_FIELDS, danger, field, fieldLabel,
+  Chip, DOCUMENT_FIELDS, DocumentStatus, RecordName, Tabs, EntityLinksEditor, SECTION_FIELDS, TEMPLATE_FIELDS, TYPE_FIELDS, danger, field, fieldLabel,
   formBox, formRow, hint, sectionHead, sectionTitle, shortDate, splitList, tagLabel,
   type DocumentRow, type DocumentSectionRow, type DocumentTypeRow, type EntityLink, type TemplateRow,
 } from '@/components/documents/shared';
@@ -79,7 +79,10 @@ export default function DocumentPage() {
   const [sectionId, setSectionId] = useState<string | null>(null);
   const [chunks, setChunks] = useState<ChunkRow[]>([]);
   const [more, setMore] = useState(false);
+  const [tab, setTab] = useState<'passages' | 'details'>('passages');
   const [draft, setDraft] = useState<Draft | null>(null);
+  // True while the Details form holds changes that are not saved.
+  const [dirty, setDirty] = useState(false);
   const [working, setWorking] = useState(false);
   const [describing, setDescribing] = useState<{ id: string; summary: string; topics: string[] } | null>(null);
   const jumped = useRef(false);
@@ -108,6 +111,14 @@ export default function DocumentPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // The Details form shows the document as it is, until a person starts changing it.
+  useEffect(() => {
+    if (!document || dirty) return;
+    setDraft({
+      title: document.title, typeId: document.typeId, documentDate: document.documentDate || '', tags: document.tags.join(', '), entities: document.entities,
+    });
+  }, [document, dirty]);
 
   const busy = document?.status === 'RECEIVED' || document?.status === 'PROCESSING';
   useEffect(() => {
@@ -211,9 +222,15 @@ export default function DocumentPage() {
       },
     }, 'Saved.');
     if (ok) {
-      setDraft(null);
+      // The saved document comes back and fills the form again.
+      setDirty(false);
       loadChunks(0);
     }
+  };
+
+  const edit = (patch: Partial<Draft>) => {
+    setDraft((current) => (current ? { ...current, ...patch } : current));
+    setDirty(true);
   };
 
   const saveDescription = async () => {
@@ -282,10 +299,11 @@ export default function DocumentPage() {
           </div>
 
           <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start', margin: '8px 0 4px' }}>
-            <DocumentStatus document={document} />
+            <DocumentStatus document={document} explain />
             <div>
-              {document.entities.length === 0 ? <span style={hint}>Not linked to a record</span> : document.entities.map((entity) => (
-                <div key={`${entity.entityId}:${entity.role}`}>{entity.entityName} <span style={hint}>{entity.role.toLowerCase()}</span></div>
+              <div style={{ ...hint, textTransform: 'uppercase', fontSize: 11 }}>Linked records</div>
+              {document.entities.length === 0 ? <span style={hint}>None yet. Add them on the Details tab.</span> : document.entities.map((entity) => (
+                <div key={`${entity.entityId}:${entity.role}`}><RecordName link={entity} /> <span style={hint}>{entity.role.toLowerCase()}</span></div>
               ))}
             </div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxWidth: 360 }}>
@@ -293,9 +311,6 @@ export default function DocumentPage() {
             </div>
             <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexWrap: 'wrap' }}>
               <button type="button" className="btn" onClick={openOriginal}>Open the original</button>
-              <button type="button" className="btn" onClick={() => setDraft({
-                title: document.title, typeId: document.typeId, documentDate: document.documentDate || '', tags: document.tags.join(', '), entities: document.entities,
-              })}>Edit details</button>
               <button type="button" className="btn" disabled={working || document.chunkCount === 0}
                 onClick={async () => { if (await run(RETAG_DOCUMENT, 'retagDocument', { id }, 'Sections were tagged again.')) loadChunks(0); }}>
                 Tag again
@@ -307,41 +322,60 @@ export default function DocumentPage() {
             </div>
           </div>
 
-          {draft && (
-            <form onSubmit={(event) => { event.preventDefault(); save(); }} style={{ ...formBox, marginTop: 12 }}>
+          <Tabs
+            label="Document"
+            tabs={[
+              { id: 'passages', label: 'Sections and passages' },
+              { id: 'details', label: dirty ? 'Details (not saved)' : 'Details' },
+            ]}
+            current={tab}
+            onChange={(next) => setTab(next as 'passages' | 'details')}
+          />
+
+          {tab === 'details' && draft && (
+            <form onSubmit={(event) => { event.preventDefault(); save(); }} style={{ ...formBox, marginTop: 4 }}>
               <div style={formRow}>
                 <label style={field}>
                   <span style={fieldLabel}>Title</span>
-                  <input className="text-input" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
+                  <input className="text-input" value={draft.title} onChange={(event) => edit({ title: event.target.value })} />
                 </label>
                 <label style={field}>
                   <span style={fieldLabel}>Document type</span>
-                  <select className="text-input" value={draft.typeId} onChange={(event) => setDraft({ ...draft, typeId: event.target.value })}>
+                  <select className="text-input" value={draft.typeId} onChange={(event) => edit({ typeId: event.target.value })}>
                     {types.filter((type) => type.isActive || type.id === document.typeId).map((type) => <option key={type.id} value={type.id}>{type.typeName}</option>)}
                   </select>
                 </label>
                 <label style={field}>
                   <span style={fieldLabel}>Document date</span>
-                  <input className="text-input" type="date" value={draft.documentDate} onChange={(event) => setDraft({ ...draft, documentDate: event.target.value })} />
+                  <input className="text-input" type="date" value={draft.documentDate} onChange={(event) => edit({ documentDate: event.target.value })} />
                 </label>
               </div>
               {draft.typeId !== document.typeId && <div style={hint}>A different type has its own template, so the sections are tagged again and choices made by hand are cleared.</div>}
               <label style={field}>
                 <span style={fieldLabel}>Tags (separated by commas). Every passage of the document carries them.</span>
-                <input className="text-input" value={draft.tags} onChange={(event) => setDraft({ ...draft, tags: event.target.value })} />
+                <input className="text-input" value={draft.tags} onChange={(event) => edit({ tags: event.target.value })} />
               </label>
-              <div style={field}>
-                <span style={fieldLabel}>Records this document is about</span>
-                <EntityLinksEditor links={draft.entities} onChange={(entities) => setDraft({ ...draft, entities })} />
+              <EntityLinksEditor links={draft.entities} onChange={(entities) => edit({ entities })} />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button type="submit" className="btn btn-primary" disabled={working || !dirty}>{working ? 'Saving…' : 'Save'}</button>
+                <button type="button" className="btn" disabled={working || !dirty} onClick={() => setDirty(false)}>Undo changes</button>
+                {!dirty && <span style={hint}>Nothing to save.</span>}
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button type="submit" className="btn btn-primary" disabled={working}>{working ? 'Saving…' : 'Save'}</button>
-                <button type="button" className="btn" onClick={() => setDraft(null)}>Cancel</button>
-              </div>
+              <dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '4px 16px', margin: '8px 0 0', fontSize: 13 }}>
+                <dt style={hint}>File</dt><dd style={{ margin: 0 }}>{document.fileName}</dd>
+                <dt style={hint}>Added</dt><dd style={{ margin: 0 }}>{shortDate(document.createdAt)}</dd>
+                <dt style={hint}>Read as</dt><dd style={{ margin: 0 }}>{[document.format ? document.format.toUpperCase() : null, document.pageCount ? `${document.pageCount} pages` : null, `${document.chunkCount} passages`].filter(Boolean).join(', ')}</dd>
+                <dt style={hint}>Template</dt><dd style={{ margin: 0 }}>{document.templateVersion ? `${document.typeName}, version ${document.templateVersion}` : 'None published for this type yet'}</dd>
+                <dt style={hint}>Search by meaning</dt><dd style={{ margin: 0 }}>{document.embeddingModel ? `${document.embeddedCount} of ${document.chunkCount} passages embedded with ${document.embeddingModel}` : 'Not embedded'}</dd>
+              </dl>
             </form>
           )}
 
-          {document.chunkCount > 0 && (
+          {tab === 'passages' && document.chunkCount === 0 && (
+            <div style={{ ...hint, margin: '12px 0' }}>This document has no passages yet. They appear once it has been read.</div>
+          )}
+
+          {tab === 'passages' && document.chunkCount > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 380px) minmax(0, 1fr)', gap: 24, marginTop: 8 }}>
               <div>
                 <div style={sectionHead}>

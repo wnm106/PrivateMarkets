@@ -10,6 +10,7 @@ import { EntityReports } from '@/components/reporting/EntityReports';
 import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard';
 import { RelationshipEntityGrids } from './RelationshipEntityGrids';
 import { RecordTemplateChoices } from './RecordTemplateChoices';
+import { RecordDocuments } from '@/components/documents/RecordDocuments';
 import { classifyRecordRelationships, singularRelatedRefs } from '@/lib/relationship-grids';
 import { definingParentDomains, toParentLinkCounts, type ParentLinkCount, type ParentRelationshipType } from '@/lib/parent-entities';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
@@ -92,7 +93,7 @@ export function GoldenRecordSections({
   const calcRefreshKey = lineageData
     .map((row) => `${row.attributeCode}:${row.currentValue ?? ''}:${row.lastUpdated ?? ''}`)
     .join('|');
-  const [tab, setTab] = useState<'attributes' | 'dashboards' | 'quality' | 'relationships'>('attributes');
+  const [tab, setTab] = useState<'attributes' | 'dashboards' | 'quality' | 'relationships' | 'documents'>('attributes');
   const [relationshipCatalog, setRelationshipCatalog] = useState<{
     types: ParentRelationshipType[];
     linkCounts: ParentLinkCount[];
@@ -265,9 +266,16 @@ export function GoldenRecordSections({
           active={tab === 'relationships'}
           onClick={() => setTab('relationships')}
         />
+        <SectionTab
+          label="Documents"
+          active={tab === 'documents'}
+          onClick={() => setTab('documents')}
+        />
       </div>
 
-      {tab === 'dashboards' ? (
+      {tab === 'documents' ? (
+        <RecordDocuments entityId={entity.id} entityName={entity.entityName} />
+      ) : tab === 'dashboards' ? (
         <EntityReports domainCode={entity.domainCode} entityId={entity.id} asOfDate={asOfDate} embedded />
       ) : tab === 'quality' ? (
         <DataQualityDashboard embedded domainCode={entity.domainCode} entityId={entity.id} />

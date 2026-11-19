@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { usePublishViewContext } from '@/lib/view-context';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import {
-  Chip, DOCUMENT_FIELDS, DocumentStatus, EntityLinksEditor, TYPE_FIELDS, bodyRow, cell, danger, field, fieldLabel, formBox, formRow,
+  Chip, DOCUMENT_FIELDS, DocumentStatus, EntityLinksEditor, RecordName, TYPE_FIELDS, bodyRow, cell, danger, field, fieldLabel, formBox, formRow,
   headRow, hint, sectionHead, sectionTitle, shortDate, table, tagLabel,
   type DocumentRow, type DocumentTypeRow, type EntityLink,
 } from '@/components/documents/shared';
@@ -136,6 +136,31 @@ export default function DocumentsPage() {
     setDraftError('');
     setDraft({ file: null, typeId: types.find((type) => type.isActive)?.id || '', title: '', documentDate: '', tags: '', entities: [] });
   };
+
+  // Arriving from a record's Documents tab (/documents?link=<record id>): open the form with that record already linked.
+  const [linkRequest, setLinkRequest] = useState<string | null>(null);
+  useEffect(() => {
+    setLinkRequest(new URLSearchParams(window.location.search).get('link'));
+  }, []);
+  useEffect(() => {
+    if (!linkRequest || types.length === 0) return;
+    let cancelled = false;
+    graphqlQuery<{ entity: { id: string; entityName: string; entityCode: string; domainCode: string; domainName: string } | null }, { id: string }>(
+      `query($id: ID) { entity(id: $id) { id entityName entityCode domainCode domainName } }`, { id: linkRequest }, 'network-only',
+    ).then(({ data }) => {
+      if (cancelled) return;
+      const record = data?.entity;
+      setLinkRequest(null);
+      setDraftError(record ? '' : 'The record to link was not found. You can still add the document and link a record below.');
+      setDraft({
+        file: null, typeId: types.find((type) => type.isActive)?.id || '', title: '', documentDate: '', tags: '',
+        entities: record ? [{ entityId: record.id, entityName: record.entityName, entityCode: record.entityCode, domainCode: record.domainCode, typeName: record.domainName, role: 'SUBJECT' }] : [],
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [linkRequest, types]);
 
   const upload = async () => {
     if (!draft) return;
@@ -316,10 +341,7 @@ export default function DocumentsPage() {
             <span style={fieldLabel}>Tags (optional, separated by commas)</span>
             <input className="text-input" value={draft.tags} placeholder="revolver, 2022 vintage" onChange={(event) => setDraft({ ...draft, tags: event.target.value })} />
           </label>
-          <div style={field}>
-            <span style={fieldLabel}>Records this document is about</span>
-            <EntityLinksEditor links={draft.entities} onChange={(entities) => setDraft({ ...draft, entities })} />
-          </div>
+          <EntityLinksEditor links={draft.entities} saveLabel="Add document" onChange={(entities) => setDraft({ ...draft, entities })} />
           {draftError && <div role="alert" style={danger}>{draftError}</div>}
           <div style={{ display: 'flex', gap: 8 }}>
             <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Adding…' : 'Add document'}</button>
@@ -363,7 +385,7 @@ export default function DocumentsPage() {
                   </td>
                   <td style={cell}>
                     {document.entities.length === 0 ? <span style={hint}>Not linked</span> : document.entities.map((entity) => (
-                      <div key={`${entity.entityId}:${entity.role}`}>{entity.entityName} <span style={hint}>{entity.role.toLowerCase()}</span></div>
+                      <div key={`${entity.entityId}:${entity.role}`}><RecordName link={entity} /> <span style={hint}>{entity.role.toLowerCase()}</span></div>
                     ))}
                   </td>
                   <td style={cell}><DocumentStatus document={document} /></td>

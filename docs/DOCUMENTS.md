@@ -131,6 +131,14 @@ Anthropic has no embedding model. The default is Voyage AI's `voyage-4` at 1,024
 
 The model is recorded on each chunk. The column holds 1,024 dimensions; a model of another size needs a migration.
 
+## Linked records
+
+A document is linked to the records it is about, each with what the record is to it (borrower, lender, fund, subject). Links are set when the document is added, or afterwards on the document's Details tab: search for a record by name or code, pick it, choose its role, and save. A document can only be linked to a record that already exists.
+
+Each record's page has a Documents tab. It lists the documents linked to that record with the record's role in each, searches across just those documents, and its Add a document button opens the form with the record already linked (`/documents?link=<record id>`).
+
+Links are per document, not per passage: every passage counts as being about all the document's records.
+
 ## Permissions
 
 Any member of a client can read and search that client's documents. `document.manage` lets a person add and remove documents, link them to records, tag sections by hand and change templates. Client admins have it. A document type or template with no client is shared; only a tenant admin changes those.
