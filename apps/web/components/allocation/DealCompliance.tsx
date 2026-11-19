@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { graphqlMutation } from '@/lib/graphql';
 import { dealCheckResults, resultsForAssignedRules, resultsForFund } from '@/lib/deal-compliance-view';
-import { usePublishPageData } from '@/lib/view-context';
+import { usePublishTab } from '@/lib/view-context';
 
 export interface ComplianceFundRef {
   fundId: string;
@@ -487,21 +487,26 @@ export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds, sc
     return visible;
   }, [selectedResults, rules, query, category, bucket, sort]);
 
-  usePublishPageData({
-    tally: dealTally,
-    selectedFund: selected?.fundName || null,
-    rules: rows.slice(0, 80).map((result) => {
-      const rule = rules.get(result.ruleId);
-      return {
-        fund: selected?.fundName || null,
-        rule: rule?.ruleName || result.ruleId,
-        category: rule?.ruleCategory || null,
-        status: result.status,
-        value: result.computedValue ?? null,
-        hardLimit: result.hardLimitValue ?? null,
-        group: result.groupByValue || null,
-      };
-    }),
+  usePublishTab('compliance', {
+    label: 'Compliance',
+    purpose: 'How this deal scores against each compliance rule, pro forma, for the fund selected in the tab.',
+    howToRead: 'tally counts the rules across the deal. rules lists the selected fund only. value is the rule\'s computed pro forma figure and hardLimit its limit.',
+    data: {
+      tally: dealTally,
+      selectedFund: selected?.fundName || null,
+      rules: rows.slice(0, 80).map((result) => {
+        const rule = rules.get(result.ruleId);
+        return {
+          fund: selected?.fundName || null,
+          rule: rule?.ruleName || result.ruleId,
+          category: rule?.ruleCategory || null,
+          status: result.status,
+          value: result.computedValue ?? null,
+          hardLimit: result.hardLimitValue ?? null,
+          group: result.groupByValue || null,
+        };
+      }),
+    },
   });
 
   return (

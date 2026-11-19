@@ -262,13 +262,16 @@ export const complianceResolvers = {
         // Direction is set on the fund limit. Keep the previous version's value only
         // so a test that has not been given a fund limit yet still breaches the same way.
         let limitDirection = input.limitDirection || null;
-        if (!limitDirection && existingVersions?.[0]?.id) {
+        // The editor does not show fund consolidation, so a new version keeps the previous setting.
+        let consolidateDescendants: boolean | null = typeof input.consolidateDescendants === 'boolean' ? input.consolidateDescendants : null;
+        if ((!limitDirection || consolidateDescendants === null) && existingVersions?.[0]?.id) {
           const { data: previous } = await cx(context)
             .from('rule_versions')
-            .select('limit_direction')
+            .select('limit_direction, consolidate_descendants')
             .eq('id', existingVersions[0].id)
             .maybeSingle();
-          limitDirection = previous?.limit_direction || null;
+          limitDirection = limitDirection || previous?.limit_direction || null;
+          if (consolidateDescendants === null) consolidateDescendants = Boolean(previous?.consolidate_descendants);
         }
 
         if (existingVersions?.[0]?.id) {
@@ -310,6 +313,7 @@ export const complianceResolvers = {
             hard_limit_value: input.hardLimitValue,
             hard_limit_attribute_code: input.hardLimitAttributeCode,
             soft_limit_factor: input.softLimitFactor,
+            consolidate_descendants: consolidateDescendants ?? false,
             default_source_scope: input.defaultSourceScope || 'GOLDEN',
             metadata: input.metadata || {},
             created_by: context.user?.id,

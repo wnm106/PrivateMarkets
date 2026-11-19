@@ -9,7 +9,16 @@
  */
 import { DASHBOARD_SHELL, ENTITY_SPEC, NARRATIVE_BLOCKS, type SkillArtifact } from './skill-artifacts';
 
-export type SkillId = 'design-dashboard' | 'design-narrative' | 'create-entity';
+export type SkillId =
+  | 'design-dashboard'
+  | 'design-narrative'
+  | 'create-entity'
+  | 'add-field'
+  | 'create-compliance-rule'
+  | 'start-workflow'
+  | 'create-relationship-type'
+  | 'create-dq-rule'
+  | 'manual-override';
 export type SkillPhase = 'guided' | 'spec' | 'build' | 'apply';
 export type SlotStatus = 'empty' | 'stated' | 'ambiguous' | 'resolved' | 'confirmed';
 
@@ -35,7 +44,7 @@ export interface SkillDef {
   id: SkillId;
   name: string;
   /** Tool profile to use while the skill is active. */
-  toolContext: 'report-designer' | 'entity-admin';
+  toolContext: 'report-designer' | 'entity-admin' | 'compliance' | 'data-quality' | 'workflow' | 'lineage';
   intro: string;
   placeholder: string;
   /** Shown in Admin → Skills. How a person starts this skill. */
@@ -350,6 +359,418 @@ const ENTITY_SLOTS: SlotDef[] = [
   },
 ];
 
+const FIELD_SLOTS: SlotDef[] = [
+  {
+    id: 'domain',
+    label: 'Entity type',
+    prompt: 'Which entity type should the field go on?',
+    clarity: 'A real domain code from list_domain_types, not a loose noun.',
+    required: true,
+    identity: true,
+    dependents: ['reuse', 'template', 'specAccepted'],
+  },
+  {
+    id: 'meaning',
+    label: 'Meaning',
+    prompt: 'What does the field hold? Give me a business name and an example value.',
+    clarity: 'A name and a real example such as "Maturity date, 2029-06-30". "Some date" does not pass.',
+    required: true,
+    dependents: ['reuse', 'dataType', 'specAccepted'],
+  },
+  {
+    id: 'reuse',
+    label: 'Reuse',
+    prompt: 'An existing field may already hold this. Should I reuse it, or is this a new field?',
+    clarity: 'One existing attribute code the user accepted, or an explicit "new" after seeing the near matches. Two matches stay ambiguous.',
+    required: true,
+    identity: true,
+    dependents: ['dataType', 'template', 'specAccepted'],
+  },
+  {
+    id: 'dataType',
+    label: 'Data type',
+    prompt: 'What kind of value is it: text, number, whole number, true or false, date, currency, percentage or a pick-list?',
+    clarity: 'One data type that fits the example value. A reused field keeps its own type.',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'required',
+    label: 'Required',
+    prompt: 'Must every record have a value, or is it optional?',
+    clarity: 'Required or optional, and for which records if only some.',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'values',
+    label: 'Allowed values',
+    prompt: 'It is a pick-list: which values may a person choose?',
+    clarity: 'The full list, or an explicit "not a pick-list".',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'template',
+    label: 'Template and order',
+    prompt: 'Which template should show it, and where in the order?',
+    clarity: 'One template code from get_template_metadata and a position among the existing fields.',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'specAccepted',
+    label: 'Spec',
+    prompt: 'Here is the field I would add. Should I add it?',
+    clarity: 'The user explicitly accepts the spec. A single tool match is not acceptance.',
+    required: true,
+    identity: true,
+  },
+];
+
+const COMPLIANCE_RULE_SLOTS: SlotDef[] = [
+  {
+    id: 'purpose',
+    label: 'Purpose',
+    prompt: 'What risk does this rule limit, in one sentence? For example: no more than 5% of a fund in one issuer.',
+    clarity: 'A limit a reviewer could check: a measure, a basis and a threshold. "Keep exposure under control" does not pass.',
+    required: true,
+    dependents: ['category', 'measure', 'basis', 'limit', 'specAccepted'],
+  },
+  {
+    id: 'anchor',
+    label: 'Anchor',
+    prompt: 'Which entity type is the limit applied to, such as a fund?',
+    clarity: 'A real domain code from list_domain_types.',
+    required: true,
+    identity: true,
+    dependents: ['measure', 'basis', 'grouping', 'scope', 'specAccepted'],
+  },
+  {
+    id: 'category',
+    label: 'Category',
+    prompt: 'Which kind of rule is it: concentration, exposure, diversification, eligibility, leverage, liquidity, coverage, collateral quality or other?',
+    clarity: 'One of the rule categories the tool accepts.',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'measure',
+    label: 'What is measured',
+    prompt: 'What is added up or counted: which attribute, summed, counted, averaged or taken as the maximum?',
+    clarity: 'One attribute code that exists on the base records, with an aggregation, and the base record type.',
+    required: true,
+    identity: true,
+    dependents: ['basis', 'grouping', 'specAccepted'],
+  },
+  {
+    id: 'basis',
+    label: 'Compared with',
+    prompt: 'What is it compared with: the whole fund, the same group, a fixed number, or an attribute on the fund such as NAV?',
+    clarity: 'A denominator: the anchor total, the same group, a constant or a named anchor attribute. A count or a plain total has none.',
+    required: true,
+    identity: true,
+    dependents: ['limit', 'specAccepted'],
+  },
+  {
+    id: 'grouping',
+    label: 'Grouping',
+    prompt: 'Is the limit applied to each group, such as each issuer or each sector, or to the total?',
+    clarity: 'A group-by attribute or relationship path that exists, or an explicit "no grouping".',
+    required: true,
+    identity: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'limit',
+    label: 'Limit',
+    prompt: 'What are the limits: the hard limit that is a breach, and a soft limit for a warning if you want one? Is it a maximum or a minimum?',
+    clarity: 'A hard limit with its unit (percentage, ratio, currency or count) and direction. A soft limit is optional.',
+    required: true,
+    identity: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'conditions',
+    label: 'Conditions',
+    prompt: 'Does it count every position, or only some, such as only senior secured?',
+    clarity: 'Named conditions on real attributes, or an explicit "every position".',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'scope',
+    label: 'Scope',
+    prompt: 'Does it apply to every record of that type, or only to some, or to all except some?',
+    clarity: 'Applies to all, or the named records to include or carve out.',
+    required: true,
+    identity: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'effective',
+    label: 'Effective from',
+    prompt: 'From what date does it apply?',
+    clarity: 'A date, or "today".',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'name',
+    label: 'Code and name',
+    prompt: 'What should the rule be called? I will suggest a code.',
+    clarity: 'A name and an UPPER_SNAKE code that list_compliance_rules does not already use.',
+    required: true,
+    identity: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'specAccepted',
+    label: 'Spec',
+    prompt: 'Here is the rule I would create. Should I create it?',
+    clarity: 'The user explicitly accepts the spec. A single tool match is not acceptance.',
+    required: true,
+    identity: true,
+  },
+];
+
+const WORKFLOW_SLOTS: SlotDef[] = [
+  {
+    id: 'workflow',
+    label: 'Workflow',
+    prompt: 'Which workflow should I start?',
+    clarity: 'One published workflow from list_workflows. Two near matches stay ambiguous. An unpublished workflow cannot be started.',
+    required: true,
+    identity: true,
+    dependents: ['records', 'inputs', 'specAccepted'],
+  },
+  {
+    id: 'records',
+    label: 'Records',
+    prompt: 'Which records should it run on?',
+    clarity: 'Named records of the type the workflow works on, found with list_entities. A workflow that requires records does not run on everything.',
+    required: true,
+    identity: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'inputs',
+    label: 'Other values',
+    prompt: 'It asks for some values. What should I use for each?',
+    clarity: 'A value for every input the workflow lists, or an explicit "this workflow asks for none".',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'specAccepted',
+    label: 'Start',
+    prompt: 'I will start this run. Should I go ahead?',
+    clarity: 'The user explicitly confirms the workflow, the records and every value.',
+    required: true,
+    identity: true,
+  },
+];
+
+const RELATIONSHIP_TYPE_SLOTS: SlotDef[] = [
+  {
+    id: 'parent',
+    label: 'Parent type',
+    prompt: 'Which entity type is on the parent side?',
+    clarity: 'A real domain code from list_domain_types.',
+    required: true,
+    identity: true,
+    dependents: ['meaning', 'cardinality', 'name', 'specAccepted'],
+  },
+  {
+    id: 'child',
+    label: 'Child type',
+    prompt: 'Which entity type is on the child side?',
+    clarity: 'A real domain code from list_domain_types.',
+    required: true,
+    identity: true,
+    dependents: ['meaning', 'cardinality', 'name', 'specAccepted'],
+  },
+  {
+    id: 'meaning',
+    label: 'Meaning',
+    prompt: 'Say it as a sentence, parent first: for example "A fund holds positions".',
+    clarity: 'A sentence that names both types and the verb, so the direction is not in doubt.',
+    required: true,
+    dependents: ['name', 'specAccepted'],
+  },
+  {
+    id: 'cardinality',
+    label: 'How many',
+    prompt: 'How many of each: can one parent have many children, and can a child have more than one parent?',
+    clarity: 'One of one-to-one, one-to-many, many-to-one or composite, with the reason.',
+    required: true,
+    identity: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'duplicate',
+    label: 'Existing links',
+    prompt: 'These types may already be linked. Should I reuse that link, or is this a different relationship?',
+    clarity: 'No existing relationship between the two types means the same thing, or the user said why this one differs.',
+    required: true,
+    identity: true,
+    dependents: ['name', 'specAccepted'],
+  },
+  {
+    id: 'name',
+    label: 'Code and name',
+    prompt: 'What should it be called? I will suggest a code.',
+    clarity: 'A name and an UPPER_SNAKE code that get_relationship_types does not already use.',
+    required: true,
+    identity: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'specAccepted',
+    label: 'Spec',
+    prompt: 'Here is the relationship I would create. Should I create it?',
+    clarity: 'The user explicitly accepts the spec.',
+    required: true,
+    identity: true,
+  },
+];
+
+const DQ_RULE_SLOTS: SlotDef[] = [
+  {
+    id: 'domain',
+    label: 'Entity type',
+    prompt: 'Which entity type should the rule check?',
+    clarity: 'A real domain code from list_domain_types.',
+    required: true,
+    identity: true,
+    dependents: ['attribute', 'expression', 'specAccepted'],
+  },
+  {
+    id: 'problem',
+    label: 'The problem',
+    prompt: 'What is wrong with a bad record? Give me an example of one that should fail.',
+    clarity: 'A condition on named fields with a bad example, such as "maturity date before close date". "Bad data" does not pass.',
+    required: true,
+    dependents: ['attribute', 'type', 'expression', 'specAccepted'],
+  },
+  {
+    id: 'attribute',
+    label: 'Field',
+    prompt: 'Which field is the rule about, or is it about the record as a whole?',
+    clarity: 'One attribute code from search_attributes or get_template_metadata, or an explicit "the whole record".',
+    required: true,
+    identity: true,
+    dependents: ['expression', 'specAccepted'],
+  },
+  {
+    id: 'type',
+    label: 'Kind of check',
+    prompt: 'Is this a completeness, validity, consistency, timeliness or uniqueness check?',
+    clarity: 'One of the five rule types. Missing values are completeness, impossible values are validity, two fields that disagree are consistency, stale values are timeliness and duplicates are uniqueness.',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'expression',
+    label: 'Failing condition',
+    prompt: 'Here is the condition that marks a failing record. Does it say what you mean?',
+    clarity: 'A SQL predicate that is TRUE for records that FAIL, tried with preview_dq_rule on real records. One that fails every record is probably the wrong way round.',
+    required: true,
+    identity: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'severity',
+    label: 'Severity',
+    prompt: 'How serious is a failure: critical, high, medium or low?',
+    clarity: 'One of the four severities, and what it would block or who it would alert, if the user said.',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'name',
+    label: 'Code and name',
+    prompt: 'What should the rule be called? I will suggest a code.',
+    clarity: 'A name and an UPPER_SNAKE code that list_dq_rules does not already use. A near duplicate stays ambiguous.',
+    required: true,
+    identity: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'specAccepted',
+    label: 'Spec',
+    prompt: 'Here is the rule I would create. Should I create it?',
+    clarity: 'The user explicitly accepts the spec.',
+    required: true,
+    identity: true,
+  },
+];
+
+const OVERRIDE_SLOTS: SlotDef[] = [
+  {
+    id: 'record',
+    label: 'Record',
+    prompt: 'Which record is the value on?',
+    clarity: 'One record found with list_entities or get_entity. Two records with the same name stay ambiguous.',
+    required: true,
+    identity: true,
+    dependents: ['attribute', 'value', 'specAccepted'],
+  },
+  {
+    id: 'attribute',
+    label: 'Field',
+    prompt: 'Which field should be overridden?',
+    clarity: 'One attribute code from search_attributes or the record\'s template.',
+    required: true,
+    identity: true,
+    dependents: ['value', 'specAccepted'],
+  },
+  {
+    id: 'current',
+    label: 'Current value',
+    prompt: 'The field currently holds this value from this source. Is that the value you want to replace?',
+    clarity: 'The prevailing value and its source, read with get_field_lineage, and the user knows which source is being outranked.',
+    required: true,
+    identity: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'value',
+    label: 'New value',
+    prompt: 'What should the value be?',
+    clarity: 'A value in the field\'s own format: a date as YYYY-MM-DD, a percentage as the field stores it, a list value that exists.',
+    required: true,
+    identity: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'validFrom',
+    label: 'Effective from',
+    prompt: 'From what date should it apply?',
+    clarity: 'A date. The override then wins over every other source from that date.',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'reason',
+    label: 'Reason',
+    prompt: 'Why is the override needed? This is kept with the value.',
+    clarity: 'A reason a reviewer would accept, such as "administrator figure is stale, confirmed by email". "Correction" does not pass.',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'specAccepted',
+    label: 'Spec',
+    prompt: 'Here is the override I would store. Should I store it?',
+    clarity: 'The user explicitly accepts the record, field, value, date and reason.',
+    required: true,
+    identity: true,
+  },
+];
+
+const WRITE_RULES = `Write only in phase apply, and only what the ledger holds. Never call a write tool before the user has accepted the spec. Codes come from tools. After the last write, read the result back and tell the user exactly what was created and where it can be changed.`;
+
 const REPORT_DISCOVERY = [
   ['get_template_metadata'],
   ['get_relationship_types'],
@@ -450,26 +871,221 @@ When phase is apply, create in this order: domain if it is new, attributes that 
 </task>`,
     artifacts: [ENTITY_SPEC],
   },
+  {
+    id: 'add-field',
+    name: 'Field',
+    toolContext: 'entity-admin',
+    intro: 'I will check whether the field already exists before I add anything, and I will not add it until you confirm.',
+    placeholder: 'Which entity type needs the field, and what does it hold?',
+    startsWhen: 'You ask to add a field or attribute to an entity type.',
+    discovery: [
+      ['list_domain_types'],
+      ['search_attributes', 'get_attribute_metadata'],
+      ['get_template_metadata'],
+    ],
+    previewTools: [],
+    writeTools: ['create_attribute', 'add_attribute_list_value', 'assign_attribute_to_template'],
+    denyTools: ['create_domain_type', 'create_template', 'create_entity', 'create_entity_identifier', 'create_relationship_type', 'create_relationship', 'create_intersection', 'create_intersection_type', 'update_intersection'],
+    slots: FIELD_SLOTS,
+    prefix: `<model>
+A field is one row in attribute_register, shown on an entity type through a template assignment.
+- Reuse an existing attribute when the meaning and the data type match. "New" is a choice the user confirms after seeing the near matches.
+- Data types: STRING, NUMBER, INTEGER, DECIMAL, BOOLEAN, DATE, TIMESTAMP, JSON, REFERENCE, REFERENCE_LIST, CURRENCY, PERCENTAGE, EMAIL, URL, PHONE. create_attribute accepts STRING, NUMBER, INTEGER, BOOLEAN, DATE, TIMESTAMP, JSON, CURRENCY and PERCENTAGE. A pick-list is a field with values added by add_attribute_list_value.
+- A field that is calculated from other fields cannot be created here. Say so, and point to Admin, Attributes.
+- Required means every record must have a value, which shows up as missing data when it has none. Ask before making a field required on a type that already has records.
+</model>
+
+<task>
+Search before you propose: list_domain_types, search_attributes and get_template_metadata are required before you ask the user to confirm. Show the near matches by code, name and type. Ask only the open slot. Skip the allowed-values question unless the field is a pick-list: then mark it resolved with "not a pick-list".
+When phase is apply: create the attribute only if it is new, add each list value, then assign it to the template with the order and required flag from the ledger. Read the template back. ${WRITE_RULES}
+</task>`,
+    artifacts: [],
+  },
+  {
+    id: 'create-compliance-rule',
+    name: 'Compliance rule',
+    toolContext: 'compliance',
+    intro: 'I will pin down what is measured, what it is compared with and the limit before I create the rule.',
+    placeholder: 'What limit should the rule enforce?',
+    startsWhen: 'You ask to create or add a compliance rule, limit or concentration test.',
+    discovery: [
+      ['list_compliance_rules'],
+      ['list_domain_types'],
+      ['get_template_metadata'],
+      ['get_relationship_types'],
+    ],
+    previewTools: [],
+    writeTools: ['create_compliance_rule', 'create_compliance_rule_version', 'create_compliance_scope_assignment'],
+    denyTools: ['update_compliance_rule', 'delete_compliance_rule', 'delete_compliance_scope_assignment'],
+    slots: COMPLIANCE_RULE_SLOTS,
+    prefix: `<model>
+A compliance rule is an identity plus a version that holds the math.
+- Identity: ruleCode, ruleName, ruleCategory, anchorDomainCode (the record the limit applies to), appliesToAll.
+- Version: baseDomainCode and baseRollupPath (the records that are aggregated and how they reach the anchor), numeratorAttributeCode and numeratorAggregation, denominatorScope (SAME_GROUP, ANCHOR_TOTAL or CONSTANT) with denominatorSource (BASE or ANCHOR) and a denominator attribute or constant, groupByAttributeCode or groupByPath, resultUnit, hardLimitValue and softLimitValue or softLimitFactor, conditions, validFrom.
+- The limit direction is set per fund, so leave limitDirection off unless the user needs the legacy form. A hard limit is a breach. A soft limit is a warning.
+- Scope: appliesToAll true covers every record of the anchor type. Otherwise add INCLUDE or EXCLUDE assignments for named records.
+</model>
+
+<avoid>
+A duplicate ruleCode, an attribute or relationship code that no tool returned, a denominator that is not what the user described (the whole fund is ANCHOR_TOTAL, the same issuer is SAME_GROUP), limits in the wrong unit (5% is 5 as a PERCENTAGE unless the tool says otherwise), and creating the rule before the user has seen the plain-language reading.
+</avoid>
+
+<task>
+Before you ask the user to confirm, state the rule back in one plain sentence, for example "For each fund, the sum of market value in one issuer divided by the fund's NAV must not exceed 5%, warning at 4.5%, from today, for every fund." Use list_compliance_rules to avoid a duplicate code. Take attribute and relationship codes only from get_template_metadata and get_relationship_types. Ask only the open slot.
+When phase is apply, in this order: create_compliance_rule, create_compliance_rule_version, then create_compliance_scope_assignment for each record the scope names. Then evaluate_compliance_rule on a real record when you can, and report the result. If a write fails, stop, say what is already created, and ask. Do not delete anything yourself. ${WRITE_RULES}
+</task>`,
+    artifacts: [],
+  },
+  {
+    id: 'start-workflow',
+    name: 'Workflow run',
+    toolContext: 'workflow',
+    intro: 'I will find the workflow, learn what it asks for and confirm the records before I start it.',
+    placeholder: 'Which workflow, and which records?',
+    startsWhen: 'You ask to start, run or launch a workflow.',
+    discovery: [['list_workflows']],
+    previewTools: [],
+    writeTools: ['start_workflow_run'],
+    denyTools: [],
+    slots: WORKFLOW_SLOTS,
+    prefix: `<model>
+A workflow is a saved set of steps. A run starts from a published version. A workflow works on one type of record (appliesTo) or any. When requiresRecords is true a run must name records. It also asks for the values in inputs, each with a key, a label and a type of text, date or number.
+Starting a run does real work: it can call tools, write records and wait for people to review. It cannot be undone from here.
+</model>
+
+<task>
+Call list_workflows first and match the user's words to one published workflow by name or description. Two close matches stay ambiguous: list them with what tells them apart. A workflow that is not published cannot be started: say so.
+Read appliesTo, requiresRecords and inputs from list_workflows. Find the records with list_entities for that type, using the user's words, and show the names and codes you matched. Ask for each input value by its label. Skip the records question if the workflow requires none and works on any type: mark it resolved with "no records needed".
+Before you ask the user to confirm, list the workflow, the records by name and every value. When phase is apply call start_workflow_run once with input.filters ({ "domainCode", "entityIds" }) and each input value under its key. Report the run id and status, and say where the run can be followed. ${WRITE_RULES}
+</task>`,
+    artifacts: [],
+  },
+  {
+    id: 'create-relationship-type',
+    name: 'Relationship type',
+    toolContext: 'entity-admin',
+    intro: 'I will check how the two types already connect before I create a new relationship.',
+    placeholder: 'Which two entity types should be linked, and how?',
+    startsWhen: 'You ask to create or add a relationship type between two entity types.',
+    discovery: [['list_domain_types'], ['get_relationship_types']],
+    previewTools: [],
+    writeTools: ['create_relationship_type'],
+    denyTools: ['create_domain_type', 'create_attribute', 'create_template', 'assign_attribute_to_template', 'create_entity', 'create_entity_identifier', 'create_relationship', 'create_intersection', 'create_intersection_type', 'update_intersection'],
+    slots: RELATIONSHIP_TYPE_SLOTS,
+    prefix: `<model>
+A relationship type defines how two entity types connect. It has a parent type, a child type and a cardinality: ONE_TO_ONE, ONE_TO_MANY, MANY_TO_ONE or COMPOSITE. Compliance rules and roll-ups follow relationship types, so the direction matters: a rule that rolls positions up to a fund follows the position-to-fund relationship in a particular direction.
+This skill defines the type only. It does not link any two records. Linking records is done on the records.
+</model>
+
+<avoid>
+A parent and child the wrong way round, a type that duplicates an existing one with a new code, a cardinality that contradicts the user's sentence, and a code the user has not seen.
+</avoid>
+
+<task>
+Call list_domain_types and get_relationship_types before you ask the user to confirm. List every relationship that already connects the two types, in either direction, with its code and cardinality, and ask whether to reuse one. Restate the sentence the user gave in the form "<parent> <verb> <child>", then the cardinality in plain words ("one fund has many positions; a position belongs to one fund").
+When phase is apply call create_relationship_type once, then read it back with get_relationship_types. ${WRITE_RULES}
+</task>`,
+    artifacts: [],
+  },
+  {
+    id: 'create-dq-rule',
+    name: 'Data quality rule',
+    toolContext: 'data-quality',
+    intro: 'I will try the rule on real records before I create it, so you can see what it would catch.',
+    placeholder: 'Which entity type, and what is wrong with a bad record?',
+    startsWhen: 'You ask to create or add a data quality rule or validation.',
+    discovery: [
+      ['list_dq_rules'],
+      ['list_domain_types'],
+      ['search_attributes', 'get_template_metadata', 'get_attribute_metadata'],
+    ],
+    previewTools: ['preview_dq_rule'],
+    writeTools: ['create_dq_rule'],
+    denyTools: ['resolve_dq_exception'],
+    slots: DQ_RULE_SLOTS,
+    prefix: `<model>
+A data quality rule has a type (COMPLETENESS, VALIDITY, CONSISTENCY, TIMELINESS or UNIQUENESS), a severity (CRITICAL, HIGH, MEDIUM or LOW) and an expression. The expression is a SQL predicate that is TRUE for a record that FAILS the rule, written against lowercase attribute codes. For example "maturity_date < close_date" fails a record whose maturity is before its close, and "price IS NULL" fails a record with no price.
+Writing it the wrong way round is the common mistake: an expression that describes a good record fails every record that is fine.
+</model>
+
+<task>
+Call list_dq_rules, list_domain_types and search_attributes before you ask the user to confirm. If a rule already covers the problem, say so and ask whether to change that rule in Admin, Data quality rules instead.
+Write the expression from the user's description, using attribute codes the tools returned. Then call preview_dq_rule on that entity type and show how many of the sampled records would fail and a few examples. If it fails nearly every record, or none the user expected, say so and revise. If it returns an error, fix the expression and try again. The user must have seen the preview before you ask for confirmation.
+When phase is apply call create_dq_rule once, then say what it will now catch and that it shows on the data quality page. ${WRITE_RULES}
+</task>`,
+    artifacts: [],
+  },
+  {
+    id: 'manual-override',
+    name: 'Manual override',
+    toolContext: 'lineage',
+    intro: 'I will show what the field holds now and where it comes from before I store an override.',
+    placeholder: 'Which record and field, and what should the value be?',
+    startsWhen: 'You ask to override, overwrite or manually set a value on a record.',
+    discovery: [
+      ['get_entity', 'list_entities'],
+      ['search_attributes', 'get_attribute_metadata'],
+      ['get_field_lineage'],
+    ],
+    previewTools: [],
+    writeTools: ['submit_manual_override'],
+    denyTools: [],
+    slots: OVERRIDE_SLOTS,
+    prefix: `<model>
+A manual override stores a Manual Entry value on one record. An open manual value outranks every other source for that field from its effective date, so it replaces what the administrator or any feed sends until it is cleared. It is kept with its reason and the person who made it.
+</model>
+
+<avoid>
+Overriding a calculated field (it is derived from others and would be recomputed), overriding the wrong record because two share a name, a value in the wrong format, and a reason that does not say why.
+</avoid>
+
+<task>
+Find the record with list_entities or get_entity, the field with search_attributes, and read the field's lineage with get_field_lineage as of the date the user wants. Tell the user the current value, its source and any competing values before you ask for the new one. If the field is calculated, say it cannot be overridden and stop.
+Check the new value against the field's data type (get_attribute_metadata): dates as YYYY-MM-DD, numbers without symbols, a list value that exists.
+When phase is apply call submit_manual_override once with entityId, attributeCode, value, validFrom and overrideReason, then read the lineage again and show that the manual value now prevails. ${WRITE_RULES}
+</task>`,
+    artifacts: [],
+  },
 ];
 
 const SKILL_BY_ID: Record<SkillId, SkillDef> = {
   'design-dashboard': SKILLS[0],
   'design-narrative': SKILLS[1],
   'create-entity': SKILLS[2],
+  'add-field': SKILLS[3],
+  'create-compliance-rule': SKILLS[4],
+  'start-workflow': SKILLS[5],
+  'create-relationship-type': SKILLS[6],
+  'create-dq-rule': SKILLS[7],
+  'manual-override': SKILLS[8],
 };
 
 export function skillById(id: unknown): SkillDef | null {
-  if (id === 'design-dashboard' || id === 'design-narrative' || id === 'create-entity') return SKILL_BY_ID[id];
-  return null;
+  return typeof id === 'string' && Object.prototype.hasOwnProperty.call(SKILL_BY_ID, id) ? SKILL_BY_ID[id as SkillId] : null;
 }
 
-/** Starts a skill from an explicit designer selection or from a create/design request. */
+/** Starts a skill from an explicit designer selection or from a request to create, start or change something. */
 export function skillFromUserText(text: string): SkillDef | null {
-  const create = /\b(create|design|build|add|draft|make)\b/i.test(text);
+  const wantsToStart = /\b(start|run|launch|kick off|trigger)\b/i.test(text);
+  if (wantsToStart && /\bworkflows?\b/i.test(text)) return SKILL_BY_ID['start-workflow'];
+
+  // A question about overrides is not a request to make one.
+  if (/\b(override|overwrite)\s+(the|a|an|this|that|its|their|our)\b/i.test(text)
+    || /\b(apply|submit|enter|make|create|add|store|put in)\b[^.?!]{0,30}\boverride\b/i.test(text)) {
+    return SKILL_BY_ID['manual-override'];
+  }
+
+  const create = /\b(create|design|build|add|draft|make|define|set up|write)\b/i.test(text);
   if (!create) return null;
   if (/\bnarrative\b/i.test(text)) return SKILL_BY_ID['design-narrative'];
   if (/\bdashboard\b/i.test(text)) return SKILL_BY_ID['design-dashboard'];
-  if (/\b(entity type|new domain|new attribute|attribute|field|template)\b/i.test(text)) return SKILL_BY_ID['create-entity'];
+  if (/\b(data quality|dq|validation)\b[^.?!]{0,30}\b(rule|check|test)\b/i.test(text)) return SKILL_BY_ID['create-dq-rule'];
+  if (/\bcompliance\b[^.?!]{0,30}\b(rule|limit|test)\b|\b(concentration|exposure|leverage|diversification|liquidity)\s+(rule|limit|test)\b/i.test(text)) {
+    return SKILL_BY_ID['create-compliance-rule'];
+  }
+  if (/\brelationship types?\b/i.test(text)) return SKILL_BY_ID['create-relationship-type'];
+  if (/\b(entity type|new domain|template)\b/i.test(text)) return SKILL_BY_ID['create-entity'];
+  if (/\b(attribute|field)\b/i.test(text)) return SKILL_BY_ID['add-field'];
   return null;
 }
 

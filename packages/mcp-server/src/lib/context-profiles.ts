@@ -9,6 +9,7 @@ export type ToolContext =
   | 'entity-admin'        // Creating/editing entity types and schemas
   | 'compliance'          // Managing compliance rules
   | 'data-quality'        // Managing DQ rules and exceptions
+  | 'workflow'            // Finding and starting workflows
   | 'import'              // Data import workflows
   | 'lineage'             // Exploring data lineage and temporal history
   | 'report-designer'     // Designing dashboards and narratives
@@ -44,8 +45,14 @@ export const CONTEXT_PROFILES: Record<ToolContext, ContextProfile> = {
   'data-quality': {
     name: 'data-quality',
     description: 'Managing data quality rules and resolving exceptions',
-    allowedCategories: ['domain-read', 'dq'],
+    allowedCategories: ['domain-read', 'dq', 'dq-admin'],
     systemInstruction: `You are helping users manage data quality. You can view DQ exceptions, resolve them, and get DQ summaries. You can also read entity data for context. Focus on helping users understand and resolve data quality issues. DQ rule expressions are SQL predicates that are true for records that fail the rule, not predicates that describe passing records.`,
+  },
+  'workflow': {
+    name: 'workflow',
+    description: 'Finding a workflow and starting a run',
+    allowedCategories: ['domain-read', 'workflow'],
+    systemInstruction: `You are helping users start a workflow run. You can list the workflows, read what each one works on and asks for, find the records to run it on, and start a run. Starting a run does real work, so never start one until the person has confirmed the workflow, the records and every value.`,
   },
   'import': {
     name: 'import',
@@ -102,7 +109,7 @@ Narrative rules: instructions should say exactly what to analyse and how, refere
   'general': {
     name: 'general',
     description: 'Full access to all tools (admin users)',
-    allowedCategories: ['domain-read', 'domain-write', 'domain-admin', 'lineage', 'override', 'dq', 'import', 'compliance', 'intersection', 'reporting', 'narrative'],
+    allowedCategories: ['domain-read', 'domain-write', 'domain-admin', 'lineage', 'override', 'dq', 'dq-admin', 'import', 'compliance', 'workflow', 'intersection', 'reporting', 'narrative'],
     systemInstruction: `You are a general-purpose assistant for the tapestr.ai MDM system with full access to all tools. You can help with entity management, compliance rules, data quality, imports, lineage, and overrides. Adapt your focus based on what the user needs.`,
   },
 };

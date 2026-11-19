@@ -5,7 +5,7 @@ import { graphqlQuery } from '@/lib/graphql';
 import { attributeText } from '@/lib/experience';
 import { useTemporalStore } from '@/lib/store';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
-import { usePublishPageData } from '@/lib/view-context';
+import { usePublishTab } from '@/lib/view-context';
 import {
   applyStatementLayout,
   gridSections,
@@ -289,24 +289,29 @@ export function DealFinancials({
     .filter((name) => openSection === 'all' || name === openSection)
     .flatMap((name) => linesForSection(attributes, name, grain))
     .filter((line) => line.role !== 'section');
-  usePublishPageData(loading ? null : {
-    borrower: borrowerName || null,
-    grain,
-    section: openSection,
-    layout: layoutName,
-    from: book.firstEnd,
-    through: book.lastEnd,
-    actualThrough: pinned?.end || null,
-    headlines: headlines.map((attr) => ({
-      name: attr.name,
-      value: pinned ? pinned.values[attr.code] ?? null : null,
-    })),
-    columns: columns.slice(0, 16).map((column) => ({
-      label: column.label,
-      end: column.end,
-      actual: column.actual,
-      values: Object.fromEntries(visibleLines.map((line) => [line.name, column.values[line.code] ?? null])),
-    })),
+  usePublishTab('financials', {
+    label: 'Financials',
+    purpose: 'The borrower\'s financial statements by period: actuals and the projection, for the open statement section.',
+    howToRead: 'Each column is a period. actual is true for reported periods and false for projected ones. headlines are the latest reported figures. Only the open section\'s lines are included.',
+    data: loading ? null : {
+      borrower: borrowerName || null,
+      grain,
+      section: openSection,
+      layout: layoutName,
+      from: book.firstEnd,
+      through: book.lastEnd,
+      actualThrough: pinned?.end || null,
+      headlines: headlines.map((attr) => ({
+        name: attr.name,
+        value: pinned ? pinned.values[attr.code] ?? null : null,
+      })),
+      columns: columns.slice(0, 16).map((column) => ({
+        label: column.label,
+        end: column.end,
+        actual: column.actual,
+        values: Object.fromEntries(visibleLines.map((line) => [line.name, column.values[line.code] ?? null])),
+      })),
+    },
   });
 
   const openAttribute = (event: MouseEvent, attr: StatementAttribute, column: StatementColumn | null, display: string) => {

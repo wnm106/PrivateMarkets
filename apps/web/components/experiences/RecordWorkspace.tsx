@@ -7,9 +7,11 @@ import { AppGrid } from '@/components/grid/AppGrid';
 import { graphqlMutation, graphqlQuery, CREATE_ENTITY_MUTATION, ENTITY_QUERY, UPDATE_ENTITY_MUTATION } from '@/lib/graphql';
 import { domainHref } from '@/lib/domain-routes';
 import { useTemporalStore } from '@/lib/store';
+import { usePublishTabs, type TabPayload } from '@/lib/view-context';
 import type { EntityData } from '@/components/detail/types';
 import { DashboardRunner } from '@/components/reporting/DashboardRunner';
 import { AllocationBoard } from '@/components/allocation/AllocationBoard';
+import { CovenantTest } from '@/components/covenants/CovenantTest';
 import type { DataQuerySpec, ReportParameter } from '@/lib/reporting';
 import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
@@ -90,7 +92,79 @@ function today() {
 
 /** A many-record relationship and a dashboard each occupy their own tab. A one-to-one form stays on the canvas unless the experience places it on a tab. */
 function isOwnTab(section: ExperienceSection) {
-  return section.kind === 'GRID' || section.kind === 'DASHBOARD' || section.kind === 'ALLOCATION' || section.placement === 'TAB';
+  return section.kind === 'GRID' || section.kind === 'DASHBOARD' || section.kind === 'ALLOCATION' || section.kind === 'COVENANT_TEST' || section.placement === 'TAB';
+}
+
+/** Name and value of each field a section shows, for the assistant. */
+function fieldValues(entity: EntityData | undefined, fields: CatalogAttribute[]) {
+  if (!entity) return null;
+  return fields
+    .map((field) => ({ name: field.attributeName, group: field.displayGroup || field.displaySection || null, value: attributeText(entity.attributes?.[field.attributeCode]) }))
+    .filter((item) => item.value !== '');
+}
+
+/**
+ * What each tab of the working view tells the assistant, from the records already
+ * loaded for it, so the assistant sees every tab and not only the open one.
+ * A section that renders its own live content is described, with a note that its
+ * figures are only read when its tab is open.
+ */
+function recordTabs(
+  experience: RecordExperience,
+  anchor: EntityData,
+  related: Record<string, EntityData>,
+  catalogs: Record<string, Catalog>,
+  dashboards: Record<string, DashboardView | null>,
+): Record<string, TabPayload> {
+  const sections = experience.sections || [];
+  const canvas = sections.filter((section) => !isOwnTab(section));
+  const own = sections.filter(isOwnTab);
+
+  const describe = (section: ExperienceSection) => {
+    const catalog = section.domainCode ? catalogs[section.domainCode] : undefined;
+    const fields = catalog && section.domainCode
+      ? fieldsForSection(catalog.attributes, catalog.assigned, section.domainCode, section.columns || [])
+      : [];
+    const refs = relatedRefs(anchor, section);
+    if (section.kind === 'ALLOCATION') {
+      return { note: 'The deal allocation board. Its figures are read when this tab is open; its own tabs are published then.' };
+    }
+    if (section.kind === 'DASHBOARD') {
+      const dashboard = section.dashboardCode ? dashboards[section.dashboardCode] : undefined;
+      return {
+        dashboard: dashboard ? dashboard.dashboardName : section.dashboardCode || null,
+        description: dashboard?.description || null,
+        note: 'The insight runs its own queries. Its figures are read when this tab is open.',
+      };
+    }
+    if (section.kind === 'GRID') {
+      return {
+        count: refs.length,
+        rows: refs.slice(0, 80).map((ref) => ({ name: ref.name, code: ref.code, fields: fieldValues(related[ref.id], fields) })),
+      };
+    }
+    const target = section.relationshipCode ? (refs[0] ? related[refs[0].id] : undefined) : anchor;
+    return { record: section.relationshipCode ? refs[0]?.name || null : anchor.entityName, fields: fieldValues(target, fields) };
+  };
+
+  const canvasLabel = canvas.find((section) => !section.relationshipCode)?.title || anchor.domainName || 'Record';
+  const tabs: Record<string, TabPayload> = {
+    record: {
+      label: canvasLabel,
+      purpose: `The main view of this ${anchor.domainName || 'record'}: ${canvas.map((section) => section.title).join(', ') || 'its attributes'}.`,
+      data: { record: anchor.entityName, code: anchor.entityCode, sections: canvas.map((section) => ({ title: section.title, ...describe(section) })) },
+    },
+  };
+  for (const section of own) {
+    // A covenant test publishes its own figures from inside the tab, which stays mounted.
+    if (section.kind === 'COVENANT_TEST') continue;
+    tabs[section.key] = {
+      label: section.title,
+      purpose: `${section.title}${section.kind === 'GRID' ? `: the ${anchor.domainName || 'record'}'s related ${section.title.toLowerCase()}` : ''}, as set up in the working view ${experience.experienceName}.`,
+      data: describe(section),
+    };
+  }
+  return tabs;
 }
 
 export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: string; entityId: string }) {
@@ -360,6 +434,8 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
     await reloadAnchor();
   };
 
+  usePublishTabs(experience && anchor ? recordTabs(experience, anchor, related, catalogs, dashboards) : {});
+
   if (loading) {
     return <div className="view-fade"><div className="xp-empty">Loading working view…</div></div>;
   }
@@ -456,7 +532,13 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
         </div>
       )}
 
-      {activeTab && (
+      {tabs.filter((section) => section.kind === 'COVENANT_TEST').map((section) => (
+        <div key={section.key} hidden={activeTab?.key !== section.key}>
+          <CovenantTest covenantId={anchor.id} publishAs={section.key} label={section.title} />
+        </div>
+      ))}
+
+      {activeTab && activeTab.kind !== 'COVENANT_TEST' && (
         <SectionBody
           section={activeTab}
           anchor={anchor}

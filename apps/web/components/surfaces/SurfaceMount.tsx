@@ -8,6 +8,7 @@ import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { findSurface } from '@/lib/surface-registry';
 import { useSurfaceNav } from '@/lib/surface-nav';
 import { useTemporalStore } from '@/lib/store';
+import { usePublishTabs } from '@/lib/view-context';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 
 interface SurfaceMountProps {
@@ -76,6 +77,7 @@ export function SurfaceMount({ code, clientCode, permissions }: SurfaceMountProp
       mutate: (document, variables) => graphqlMutation(document, variables ?? {}) as never,
       href: (path) => path,
       useCrumbs: useSurfaceNav,
+      usePublishTabs,
       inspectAttribute: (target) => openInspect(target),
     }),
     [clientCode, permissionKey, asOfDate, knowledgeDate, code, router, openInspect],

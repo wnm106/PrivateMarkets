@@ -6,6 +6,8 @@ import { registerLineageTools } from '@tapestrai/mcp-server/src/tools/lineage-to
 import { registerDocumentTools } from '@tapestrai/mcp-server/src/tools/document-tools';
 import { registerOverrideTools } from '@tapestrai/mcp-server/src/tools/override-tools';
 import { registerDQTools } from '@tapestrai/mcp-server/src/tools/dq-tools';
+import { registerDQRuleTools } from '@tapestrai/mcp-server/src/tools/dq-rule-tools';
+import { registerWorkflowTools } from '@tapestrai/mcp-server/src/tools/workflow-tools';
 import { registerImportMapTools } from '@tapestrai/mcp-server/src/tools/import-map-tools';
 import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/position-file-tools';
 import { registerSpecialistTools } from '@tapestrai/mcp-server/src/tools/specialist-tools';
@@ -70,6 +72,8 @@ registerLineageTools(toolRegistry);
 registerDocumentTools(toolRegistry);
 registerOverrideTools(toolRegistry);
 registerDQTools(toolRegistry);
+registerDQRuleTools(toolRegistry);
+registerWorkflowTools(toolRegistry);
 registerImportMapTools(toolRegistry);
 registerPositionFileTools(toolRegistry);
 registerSpecialistTools(toolRegistry);

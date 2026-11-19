@@ -7,6 +7,7 @@ import { EntityReports } from '@/components/reporting/EntityReports';
 import { DOMAIN_TYPES_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, graphqlQuery } from '@/lib/graphql';
 import { definingParentDomains, mergeParentColumns, parentEntityColumns, toParentLinkCounts, type ParentEntityColumn } from '@/lib/parent-entities';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
+import { useWarmTabs } from '@/lib/view-context';
 import { EntityAttributeTable, type RelatedAttributeColumn } from './EntityAttributeTable';
 
 type HomeTab = 'records' | 'dashboards' | 'quality';
@@ -35,6 +36,7 @@ export function EntityHome({
   onTotalChange?: (total: number) => void;
 }) {
   const [tab, setTab] = useState<HomeTab>('records');
+  const warmed = useWarmTabs(['records', 'dashboards', 'quality'], tab);
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
   const [discovered, setDiscovered] = useState<ParentEntityColumn[]>([]);
 
@@ -109,30 +111,38 @@ export function EntityHome({
         </div>
       </div>
 
-      {tab === 'records' && (
-        <EntityAttributeTable
-          domainCode={domainCode}
-          domainKey={domainKey}
-          asOfDate={asOfDate}
-          refreshKey={refreshKey}
-          emptyMessage={emptyMessage}
-          related={parentColumns}
-          onTotalChange={onTotalChange}
-          selectedId={selected?.id}
-          onSelect={setSelected}
-        />
+      {/* Every tab stays mounted once warmed so the assistant sees all of them. */}
+      {warmed.has('records') && (
+        <div hidden={tab !== 'records'} className="entity-home-pane">
+          <EntityAttributeTable
+            domainCode={domainCode}
+            domainKey={domainKey}
+            asOfDate={asOfDate}
+            refreshKey={refreshKey}
+            emptyMessage={emptyMessage}
+            related={parentColumns}
+            onTotalChange={onTotalChange}
+            selectedId={selected?.id}
+            onSelect={setSelected}
+            publishAs="records"
+            publishLabel="Records"
+          />
+        </div>
       )}
 
-      {tab === 'dashboards' && (
-        selected ? (
+      {warmed.has('dashboards') && selected && (
+        <div hidden={tab !== 'dashboards'}>
           <EntityReports domainCode={domainCode} entityId={selected.id} asOfDate={asOfDate} embedded />
-        ) : (
-          <NeedsSelection onChoose={() => setTab('records')} />
-        )
+        </div>
+      )}
+      {tab === 'dashboards' && !selected && (
+        <NeedsSelection onChoose={() => setTab('records')} />
       )}
 
-      {tab === 'quality' && (
-        <DataQualityDashboard embedded domainCode={domainCode} />
+      {warmed.has('quality') && (
+        <div hidden={tab !== 'quality'}>
+          <DataQualityDashboard embedded active={tab === 'quality'} domainCode={domainCode} />
+        </div>
       )}
     </div>
   );

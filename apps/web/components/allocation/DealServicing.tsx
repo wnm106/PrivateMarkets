@@ -7,8 +7,27 @@ import { attributeText } from '@/lib/experience';
 import { domainHref } from '@/lib/domain-routes';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useTemporalStore } from '@/lib/store';
-import { usePublishPageData } from '@/lib/view-context';
+import { usePublishTab } from '@/lib/view-context';
 import { addMonths, heldShare, monthKey, projectSchedule, spreadFromPricing, type ScheduleDraw, type ScheduleMonth } from '@/lib/servicing-schedule';
+
+const COVENANT_TESTS = `
+  query DealCovenantTests($dealId: ID!, $asOfDate: Date) {
+    dealCovenantTests(dealId: $dealId, asOfDate: $asOfDate) {
+      covenantId value house houseName stale manualOverride
+      reported { sourceCode value }
+    }
+  }
+`;
+
+interface CovenantReading {
+  covenantId: string;
+  value: number | null;
+  house: number | null;
+  houseName: string | null;
+  stale: boolean;
+  manualOverride: boolean;
+  reported: Array<{ sourceCode: string; value: number | null }>;
+}
 
 const RATING: Record<string, string> = {
   R1: '1 Exceptional',
@@ -203,6 +222,7 @@ export function DealServicing({
   const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const [draws, setDraws] = useState<DrawRow[]>([]);
   const [covenants, setCovenants] = useState<Covenant[]>([]);
+  const [readings, setReadings] = useState<Record<string, CovenantReading>>({});
   const [reports, setReports] = useState<Report[]>([]);
   const [terms, setTerms] = useState<Terms | null>(null);
   const [loading, setLoading] = useState(true);
@@ -281,6 +301,21 @@ export function DealServicing({
 
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => {
+    let live = true;
+    void graphqlQuery<{ dealCovenantTests: CovenantReading[] }, { dealId: string; asOfDate?: string }>(
+      COVENANT_TESTS,
+      { dealId, asOfDate: asOfDate || undefined },
+      'network-only',
+    ).then((result) => {
+      if (!live) return;
+      const next: Record<string, CovenantReading> = {};
+      for (const reading of result.data?.dealCovenantTests || []) next[reading.covenantId] = reading;
+      setReadings(next);
+    });
+    return () => { live = false; };
+  }, [asOfDate, dealId]);
+
   const debt = useMemo(
     () => tranches.filter((tranche) => !tranche.equityLinked),
     [tranches],
@@ -335,27 +370,44 @@ export function DealServicing({
     })
     .filter((row) => row.funded > 0 || row.unfunded > 0);
 
-  usePublishPageData({
-    terms,
-    coupon,
-    drawnToDate,
-    nextPayment: nextPayment ? { date: nextPayment.date, total: nextPayment.total, interest: nextPayment.interest } : null,
-    funds: usage,
-    draws: sizedDraws.slice(0, 24).map((draw) => ({
-      date: draw.date,
-      purpose: draw.purpose,
-      amount: draw.amount,
-      status: draw.status,
-      tranche: draw.trancheName,
-    })),
-    covenants: covenants.map((row) => ({
-      name: row.name,
-      direction: row.direction,
-      level: row.level,
-      current: row.current,
-      unit: row.unit,
-    })),
-    reports: reports.map((row) => ({ name: row.name, due: row.due })),
+  usePublishTab('servicing', {
+    label: 'Servicing',
+    purpose: 'How the facility runs after close: terms and coupon, draws on the unfunded commitments, covenants and reporting due.',
+    howToRead: "Pro forma until the deal funds. funds shows funded and unfunded commitments per fund. draws are scheduled or actual, by status. covenants: calculated is the value under the deal's own definition, certificate is the borrower's reported figure, house is the same borrower under the house standard; status is Pass, Watch (inside a 10% cushion) or Breach.",
+    data: {
+      terms,
+      coupon,
+      drawnToDate,
+      nextPayment: nextPayment ? { date: nextPayment.date, total: nextPayment.total, interest: nextPayment.interest } : null,
+      funds: usage,
+      draws: sizedDraws.slice(0, 24).map((draw) => ({
+        date: draw.date,
+        purpose: draw.purpose,
+        amount: draw.amount,
+        status: draw.status,
+        tranche: draw.trancheName,
+      })),
+      covenants: covenants.map((row) => {
+        const reading = readings[row.id];
+        const certificate = reading?.reported.find((item) => item.sourceCode !== 'MANUAL');
+        return {
+          name: row.name,
+          direction: row.direction,
+          level: row.level,
+          calculated: row.current,
+          unit: row.unit,
+          firstTest: row.firstTest || null,
+          status: covenantStatus(row.direction, row.level, row.current),
+          cushion: Math.round(cushion(row.direction, row.level, row.current) * 100) / 100,
+          certificate: certificate?.value ?? null,
+          house: reading?.house ?? null,
+          houseDefinition: reading?.houseName ?? null,
+          needsRecalculating: Boolean(reading?.stale),
+          manualOverride: Boolean(reading?.manualOverride),
+        };
+      }),
+      reports: reports.map((row) => ({ name: row.name, due: row.due })),
+    },
   });
 
   return (
@@ -518,7 +570,7 @@ export function DealServicing({
       {(covenants.length > 0 || reports.length > 0) && (
         <section className="da-sec">
           <div className="da-sechead"><h2>Covenants and reporting</h2></div>
-          <div className="da-pair">
+          <div className="cv-stack">
             {covenants.length > 0 && (
               <div className="da-gridwrap">
                 <table className="da-grid" style={{ minWidth: 0 }}>
@@ -526,7 +578,9 @@ export function DealServicing({
                     <tr>
                       <th>Covenant</th>
                       <th className="num">Level</th>
-                      <th className="num">Current</th>
+                      <th className="num">Calculated</th>
+                      <th className="num">Certificate</th>
+                      <th className="num">House</th>
                       <th className="num">Cushion</th>
                       <th>Status</th>
                     </tr>
@@ -535,14 +589,18 @@ export function DealServicing({
                     {covenants.map((row) => {
                       const status = covenantStatus(row.direction, row.level, row.current);
                       const format = row.unit === 'CURRENCY' ? (value: number) => millions(value) : multiple;
+                      const reading = readings[row.id];
+                      const certificate = reading?.reported.find((item) => item.sourceCode !== 'MANUAL');
                       return (
                         <tr key={row.id}>
                           <td>
-                            <Link href={`${domainHref('DEAL_COVENANT')}/${row.id}`}>{row.name}</Link>
+                            <Link href={`/experiences/COVENANT_WORKSPACE/${row.id}`}>{row.name}</Link>
                             {row.firstTest && <small>First test {formatDay(row.firstTest, true)}</small>}
                           </td>
                           <td className="num"><InspectValue bind={attrBind(row.id, 'DEAL_COVENANT', 'COVENANT_LEVEL', 'Covenant Level', row.name)} value={row.level}>{format(row.level)}</InspectValue></td>
-                          <td className="num"><InspectValue bind={attrBind(row.id, 'DEAL_COVENANT', 'COVENANT_CURRENT', 'Current', row.name)} value={row.current}>{format(row.current)}</InspectValue></td>
+                          <td className="num"><InspectValue bind={attrBind(row.id, 'DEAL_COVENANT', 'COVENANT_CURRENT', 'Calculated', row.name)} value={row.current}>{format(row.current)}</InspectValue>{reading?.stale && <small>Needs recalculating</small>}{reading?.manualOverride && <small>Manual override</small>}</td>
+                          <td className="num">{certificate?.value != null ? format(certificate.value) : '—'}{certificate?.value != null && reading?.value != null && Math.abs(certificate.value - reading.value) >= (row.unit === 'CURRENCY' ? 1000 : 0.005) && <small className="cv-capped">Differs</small>}</td>
+                          <td className="num" title={reading?.houseName || undefined}>{reading?.house != null ? format(reading.house) : '—'}</td>
                           <td className="num">{Math.round(cushion(row.direction, row.level, row.current) * 100)}%</td>
                           <td><span className={status === 'Pass' ? 'da-st ok' : status === 'Watch' ? 'da-st near' : 'da-st breach'}>{status}</span></td>
                         </tr>

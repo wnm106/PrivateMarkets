@@ -16,6 +16,7 @@ import { definingParentDomains, toParentLinkCounts, type ParentLinkCount, type P
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
 import { attributeSectionLinks, fieldsForVisibility, groupForDisplay, type AttributeSectionOrder, type FieldVisibility } from '@/lib/attribute-layout';
 import { decompileCalcExpression } from '@/lib/calc-expression';
+import { usePublishTabs, useWarmTabs } from '@/lib/view-context';
 
 export interface TemplateAttribute {
   attributeCode: string;
@@ -243,6 +244,50 @@ export function GoldenRecordSections({
     : null;
   const relationshipCount = shown ? shown.parents.length + shown.children.length : null;
 
+  // The assistant sees every tab of the record, not only the open one. Documents,
+  // dashboards and data quality are mounted hidden below and publish themselves.
+  const warmed = useWarmTabs(['documents', 'dashboards', 'quality'], tab);
+  const shownIds = shown ? new Set([...shown.parents, ...shown.children].map((ref) => ref.entityId)) : null;
+  usePublishTabs({
+    attributes: {
+      label: 'Attributes',
+      purpose: `The ${entity.domainCode || 'record'}'s attribute values as of the selected dates, with the source that supplied each.`,
+      howToRead: 'A blank value means nothing was known at the selected As Of and Knowledge dates. calculated attributes are derived from others and cannot be edited. source is the system the prevailing value came from.',
+      data: lineageLoaded || displayEntries.length > 0 ? {
+        record: entity.entityName,
+        code: entity.entityCode,
+        count: displayEntries.length,
+        attributes: listedAttributes.slice(0, 200).map((attribute) => {
+          const lineage = lineageMap.get(attribute.attributeCode);
+          const stored = attributes[attribute.attributeCode];
+          const storedValue = stored && typeof stored === 'object' && 'value' in stored ? stored.value : stored;
+          const value = lineageLoaded ? lineage?.currentValue : (lineage?.currentValue ?? storedValue);
+          return {
+            name: attribute.attributeName || attribute.attributeCode,
+            section: attribute.displaySection || 'General',
+            value: hasStoredValue(value) ? String(value) : null,
+            required: attribute.required,
+            calculated: Boolean(derivedFormulas[attribute.attributeCode] || attribute.isDerived),
+            source: lineage?.competingValues?.find((item) => item.value === lineage.currentValue)?.sourceName || null,
+          };
+        }).filter((row) => row.value !== null || row.required),
+      } : null,
+    },
+    relationships: {
+      label: 'Relationships',
+      purpose: `The records this ${entity.domainCode || 'record'} is linked to, above it (parents) and below it (children).`,
+      howToRead: 'parents are records this one belongs to or depends on; children are records that belong to it. Only the relationships this record type uses are listed.',
+      data: shownIds ? {
+        parents: (entity.parentRelationships || []).filter((rel) => shownIds.has(rel.parentEntityId)).slice(0, 100).map((rel) => ({
+          relationship: rel.relationshipType, domain: rel.parentDomainCode, name: rel.parentEntityName, code: rel.parentEntityCode, primary: rel.isPrimary,
+        })),
+        children: (entity.childRelationships || []).filter((rel) => shownIds.has(rel.childEntityId)).slice(0, 100).map((rel) => ({
+          relationship: rel.relationshipType, domain: rel.childDomainCode, name: rel.childEntityName, code: rel.childEntityCode, primary: rel.isPrimary,
+        })),
+      } : null,
+    },
+  });
+
   return (
     <div>
       <div style={{ display: 'flex', gap: '4px', borderBottom: '2px solid var(--line)', marginBottom: '16px' }}>
@@ -273,13 +318,22 @@ export function GoldenRecordSections({
         />
       </div>
 
-      {tab === 'documents' ? (
-        <RecordDocuments entityId={entity.id} entityName={entity.entityName} />
-      ) : tab === 'dashboards' ? (
-        <EntityReports domainCode={entity.domainCode} entityId={entity.id} asOfDate={asOfDate} embedded />
-      ) : tab === 'quality' ? (
-        <DataQualityDashboard embedded domainCode={entity.domainCode} entityId={entity.id} />
-      ) : tab === 'relationships' ? (
+      {warmed.has('documents') && (
+        <div hidden={tab !== 'documents'}>
+          <RecordDocuments entityId={entity.id} entityName={entity.entityName} />
+        </div>
+      )}
+      {warmed.has('dashboards') && (
+        <div hidden={tab !== 'dashboards'}>
+          <EntityReports domainCode={entity.domainCode} entityId={entity.id} asOfDate={asOfDate} embedded />
+        </div>
+      )}
+      {warmed.has('quality') && (
+        <div hidden={tab !== 'quality'}>
+          <DataQualityDashboard embedded active={tab === 'quality'} domainCode={entity.domainCode} entityId={entity.id} />
+        </div>
+      )}
+      {tab === 'documents' || tab === 'dashboards' || tab === 'quality' ? null : tab === 'relationships' ? (
         !shown ? (
           <div className="field-section" aria-busy="true">
             <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>Loading…</div>

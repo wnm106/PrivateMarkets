@@ -8,6 +8,7 @@ A surface is a custom screen built on the platform. Each lives in `surfaces/<cod
 - Talk to the platform through `useSurfaceHost()`: `query`, `mutate`, `href`, `useCrumbs`, `asOfDate`, `permissions`, `clientCode`. Keep GraphQL documents inside the surface.
 - Use `host.navigate`, `host.basePath`, `host.useQueryParam` and `SurfaceLink` for navigation and URL state; do not import `next/navigation` or `next/link`.
 - Styling comes from the host's global stylesheet and `@tapestrai/ui` (for example the `pipe-*` and `da-*` classes). A surface does not ship its own global CSS yet.
+- A surface with tabs must tell the assistant what every tab shows, open or not, with `host.usePublishTabs`. Follow `docs/SURFACE_TABS.md`.
 - Do not define routes, middleware, or auth. The host owns them.
 - Row-level security and tenancy enforce data isolation. Surface gating (`clients`, `requiredPermissions`) only controls who sees the screen.
 

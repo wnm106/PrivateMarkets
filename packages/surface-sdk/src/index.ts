@@ -62,6 +62,23 @@ export interface SurfaceHost {
   useCrumbs(crumbs: SurfaceCrumb[]): void;
   /** Open the platform's source drawer for a displayed value. */
   inspectAttribute(target: SurfaceAttributeTarget): void;
+  /**
+   * Tell the assistant what every tab of the surface shows, open or not. A hook: call it
+   * unconditionally. A surface with tabs must call it. See docs/SURFACE_TABS.md.
+   */
+  usePublishTabs(tabs: Record<string, SurfaceTabPayload | null>): void;
+}
+
+/** What one tab tells the assistant. Pass the figures as the tab derives them, not raw records. */
+export interface SurfaceTabPayload {
+  /** The tab's label as the user sees it. */
+  label: string;
+  /** One sentence on what the tab is for and the question it answers. */
+  purpose: string;
+  /** Terms or rules needed to read the data, such as which level to report at. */
+  howToRead?: string;
+  /** The figures and labels the tab shows. Null while the tab loads. */
+  data: Record<string, unknown> | null;
 }
 
 export interface SurfaceManifest {

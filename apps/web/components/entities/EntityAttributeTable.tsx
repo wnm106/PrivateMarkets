@@ -10,8 +10,10 @@ import { withParentNames } from '@/lib/parent-entities';
 import { AttributeCellEditor } from '@/components/entities/AttributeCellEditor';
 import { AppGrid, type GridApi } from '@/components/grid/AppGrid';
 import { columnSearchFilterParams } from '@/lib/grid-filters';
-import { ADD_COMPETING_SOURCE_MUTATION, ATTRIBUTE_REGISTER_QUERY, DATA_SOURCE_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
+import { ADD_COMPETING_SOURCE_MUTATION, ATTRIBUTE_REGISTER_QUERY, ATTRIBUTE_SECTIONS_QUERY, DATA_SOURCE_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
+import { attributesInDisplayOrder, type AttributeSectionOrder } from '@/lib/attribute-layout';
 import { GRID_QUERY, type GridResultPayload } from '@/lib/reporting';
+import { usePublishTab } from '@/lib/view-context';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 import { isRowAttributeCode } from '@/components/detail/attribute-source';
 
@@ -56,6 +58,8 @@ interface CatalogAttr {
   isEditable?: boolean | null;
   aggregationType?: string | null;
   weightAttributeCode?: string | null;
+  displaySection?: string | null;
+  displayGroup?: number | null;
 }
 
 interface Col {
@@ -359,7 +363,12 @@ export function EntityAttributeTable({
   onSelect,
   entityIds,
   embedded = false,
+  publishAs,
+  publishLabel,
 }: {
+  /** Publish the register to the assistant under this tab key. Set it when the grid is a tab. */
+  publishAs?: string;
+  publishLabel?: string;
   domainCode: string;
   domainKey: string;
   asOfDate?: string;
@@ -451,19 +460,27 @@ export function EntityAttributeTable({
   useEffect(() => {
     let cancelled = false;
     setCatalogReady(false);
-    graphqlQuery<{ attributeRegister: CatalogAttr[] }, { domainCode: string }>(
-      ATTRIBUTE_REGISTER_QUERY,
-      { domainCode },
-      'network-only'
-    ).then((res) => {
+    Promise.all([
+      graphqlQuery<{ attributeRegister: CatalogAttr[] }, { domainCode: string }>(
+        ATTRIBUTE_REGISTER_QUERY,
+        { domainCode },
+        'network-only'
+      ),
+      graphqlQuery<{ attributeSections: AttributeSectionOrder[] }, { domainCode: string }>(
+        ATTRIBUTE_SECTIONS_QUERY,
+        { domainCode },
+        'network-only'
+      ).catch(() => null),
+    ]).then(([res, sectionRes]) => {
       if (cancelled) return;
+      const sections = sectionRes?.data?.attributeSections || [];
       if (res.error) {
         setError(errorText(res.error));
         setCatalog([]);
       } else {
         const attrs = res.data?.attributeRegister || [];
         const seen = new Set<string>();
-        const cols = attrs
+        const kept = attrs
           .filter((a) => {
             // The grid reserves "<alias>.<attribute>" for attributes reached through a
             // declared lookup, so a dotted code is not addressable as a plain column and
@@ -471,7 +488,19 @@ export function EntityAttributeTable({
             if (!a.attributeCode || a.attributeCode.includes('.') || seen.has(a.attributeCode)) return false;
             seen.add(a.attributeCode);
             return true;
-          })
+          });
+        // Same order as the record editor: sections in their set order, then each
+        // attribute's position within its section, then name.
+        const ordered = attributesInDisplayOrder(
+          kept.map((a) => ({
+            attr: a,
+            section: a.displaySection || 'General',
+            sortOrder: a.displayGroup || 0,
+            name: a.attributeName || a.attributeCode,
+          })),
+          sections,
+        ).map((item) => item.attr);
+        const cols = ordered
           .map((a) => ({
             code: a.attributeCode,
             name: a.attributeName || a.attributeCode,
@@ -481,8 +510,7 @@ export function EntityAttributeTable({
             editable: a.isEditable !== false,
             aggregationType: a.aggregationType,
             weightAttributeCode: a.weightAttributeCode,
-          }))
-          .sort((a, b) => a.name.localeCompare(b.name));
+          }));
         setCatalog(cols);
       }
       setCatalogReady(true);
@@ -643,6 +671,21 @@ export function EntityAttributeTable({
       clear: () => { setGlobalDraft(''); setGlobalSearch(''); },
     });
   }
+
+  usePublishTab(publishAs || 'records', publishAs ? {
+    label: publishLabel || 'Records',
+    purpose: `The ${domainCode} records in the register, one row per record with its attribute values as of the selected dates.`,
+    howToRead: 'Values are shown as the grid shows them. matched is every record that fits the current filters; rows is the first part of them. A blank means no value was known.',
+    data: catalogReady && !loading ? {
+      matched,
+      shown: rows.length,
+      filters: activeChips.map((chip) => chip.label),
+      columns: columns.map((col) => col.name),
+      rows: rows.slice(0, 60).map((row) => Object.fromEntries(
+        columns.map((col) => [col.name, formatCell(row[col.code], col) || null]).filter(([, value]) => value !== null),
+      )),
+    } : null,
+  } : null);
 
   const shown = rows.length;
   const scopeOnly = scopedIds != null && filters.every((filter) => filter.field === 'entity_id' && filter.op === 'in');

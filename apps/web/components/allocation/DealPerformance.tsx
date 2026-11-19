@@ -8,7 +8,7 @@ import { heldShare, spreadFromPricing } from '@/lib/servicing-schedule';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { DealActualReturns } from './DealActualReturns';
 import { projectPerformance, type PerformanceCase, type PerformanceFees } from '@/lib/deal-performance';
-import { usePublishPageData } from '@/lib/view-context';
+import { usePublishTab } from '@/lib/view-context';
 
 /** Stored attribute behind each line of the gross-to-net bridge. */
 const BRIDGE: Record<string, { amount: string; irr?: string; moic?: string }> = {
@@ -269,33 +269,38 @@ export function DealPerformance({
   const D = (code: string, name: string) => attrBind(dealId, 'DEAL', code, name, borrowerName);
   const T = (row: { id: string; name: string }, code: string, name: string) => attrBind(row.id, 'DEAL_TRANCHE', code, name, row.name);
 
-  usePublishPageData(model ? {
-    grossIrr: model.grossIrr,
-    netIrr: model.netIrr,
-    grossMoic: model.grossMoic,
-    netMoic: model.netMoic,
-    grossProfit: model.grossProfit,
-    netProfit: model.netProfit,
-    invested: model.invested,
-    dpi: model.dpi,
-    cashYield: model.cashYield,
-    fees,
-    rating,
-    mark,
-    loss,
-    nonAccrual,
-    senior,
-    spreadBps,
-    tranches: model.tranches.map((row) => ({
-      name: row.name,
-      position: row.position,
-      coupon: row.coupon,
-      profit: row.profit,
-      irr: row.irr,
-      moic: row.moic,
-    })),
-    bridge: model.bridge.map((row) => ({ label: row.label, amount: row.amount, irr: row.irr, moic: row.moic })),
-  } : null);
+  usePublishTab('performance', {
+    label: 'Performance',
+    purpose: 'Projected returns on our allocated position, gross to net, from the servicing cash flows, plus the actual returns once the deal has funded.',
+    howToRead: 'Pro forma until the deal closes. bridge walks gross profit down to net profit to investors through fees and expenses. tranches show returns by debt tranche.',
+    data: model ? {
+      grossIrr: model.grossIrr,
+      netIrr: model.netIrr,
+      grossMoic: model.grossMoic,
+      netMoic: model.netMoic,
+      grossProfit: model.grossProfit,
+      netProfit: model.netProfit,
+      invested: model.invested,
+      dpi: model.dpi,
+      cashYield: model.cashYield,
+      fees,
+      rating,
+      mark,
+      loss,
+      nonAccrual,
+      senior,
+      spreadBps,
+      tranches: model.tranches.map((row) => ({
+        name: row.name,
+        position: row.position,
+        coupon: row.coupon,
+        profit: row.profit,
+        irr: row.irr,
+        moic: row.moic,
+      })),
+      bridge: model.bridge.map((row) => ({ label: row.label, amount: row.amount, irr: row.irr, moic: row.moic })),
+    } : null,
+  });
 
   return (
     <div className="da">

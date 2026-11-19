@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION } from '@/lib/graphql';
 import { domainHref } from '@/lib/domain-routes';
@@ -15,7 +15,7 @@ import { DealPerformance } from './DealPerformance';
 import { DEAL_PANEL_KEYS, mountedPanel, tabReason, useLiveSurface } from '@/components/surfaces/useLiveSurface';
 import { useSurfaceNav } from '@/lib/surface-nav';
 import { attrBind, InspectValue, useInspectBind, type AttrBind } from '@/components/detail/InspectValue';
-import { usePublishPageData, usePublishViewContext } from '@/lib/view-context';
+import { usePublishTab, usePublishViewContext, useWarmTabs } from '@/lib/view-context';
 
 const REASONS = [
   ['LIQ', 'Liquidity or reserve constraint'],
@@ -273,14 +273,20 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const [selected, setSelected] = useState<string | null>(null);
   const [edit, setEdit] = useState<{ fundId: string; trancheId: string; amount: string; reason: string; note: string; type: 'override' | 'exclude' } | null>(null);
   const [tab, setTab] = useState<'capital' | 'memo' | 'compliance' | 'syndicate' | 'closing' | 'servicing' | 'financials' | 'performance'>('capital');
+  const live = useLiveSurface('DEAL_PIPELINE', dealId);
+  // Every tab stays mounted once warmed, so the assistant sees all of them, not only the open one.
+  const warmKeys = useMemo(() => {
+    const open = live.pages.map((page) => mountedPanel(page, DEAL_PANEL_KEYS)).filter((key): key is string => Boolean(key));
+    return (open.length ? open : [...DEAL_PANEL_KEYS]).filter((key) => key !== 'capital');
+  }, [live.pages]);
+  const warmed = useWarmTabs(warmKeys, tab);
   const complianceScore = useDealComplianceScore({
     dealId,
     asOfDate,
     holds,
     adjustments,
-    enabled: seeded && (tab === 'capital' || tab === 'compliance'),
+    enabled: seeded && (tab === 'capital' || warmed.has('compliance')),
   });
-  const live = useLiveSurface('DEAL_PIPELINE', dealId);
   useEffect(() => {
     if (live.pages.length === 0) return;
     const open = live.pages.filter((page) => mountedPanel(page, DEAL_PANEL_KEYS));
@@ -464,7 +470,11 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       unallocated: preview?.unallocated ?? null,
     },
   });
-  usePublishPageData(tab === 'capital' && preview ? {
+  usePublishTab('capital', {
+    label: 'Capital',
+    purpose: 'How the deal\'s hold is allocated across our funds, by tranche: the allocation grid, liquidity and the portfolio detail.',
+    howToRead: 'This is the allocation grid as shown, with any unsaved adjustments. Report allocations by portfolio, the top level in portfolios. A portfolio is a fund. Its subPortfolios are its sleeves and sum to it. Describe subPortfolios only when asked to break a portfolio down. Do not list them as separate funds, and never add them to the portfolio total.',
+    data: preview ? {
     tranches: tranches.map((tranche) => ({
       name: tranche.name,
       size: tranche.size,
@@ -474,7 +484,6 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       unfunded: tranche.unfunded,
       pricing: tranche.pricing || null,
     })),
-    howToRead: 'Report allocations by portfolio, the top level in portfolios. A portfolio is a fund. Its subPortfolios are its sleeves and sum to it. Describe subPortfolios only when asked to break a portfolio down. Do not list them as separate funds, and never add them to the portfolio total.',
     portfolios: preview.rows.filter((row) => row.level === 'PORTFOLIO').map((row) => {
       const cells = (item: typeof row) => item.cells.map((cell) => ({
         trancheId: cell.trancheId,
@@ -496,7 +505,8 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
         })),
       };
     }),
-  } : null);
+    } : null,
+  });
   const dealBind = (code: string, name: string) => attrBind(dealId, 'DEAL', code, name, title);
   const trancheBind = (tranche: Tranche, code: string, name: string) => attrBind(tranche.id, 'DEAL_TRANCHE', code, name, tranche.name);
 
@@ -588,73 +598,87 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       {notice && <p className="da-note">{notice}</p>}
       {loading && !preview && <div className="xp-empty">Loading allocation…</div>}
 
-      {tab === 'memo' && (
-        <IcMemo
-          dealId={dealId}
-          asOfDate={asOfDate}
-          preview={preview}
-          onOpenCapital={() => setTab('capital')}
-          onChanged={() => { void load({ holds, adjustments }); }}
-        />
+      {warmed.has('memo') && (
+        <div hidden={tab !== 'memo'}>
+          <IcMemo
+            dealId={dealId}
+            asOfDate={asOfDate}
+            preview={preview}
+            onOpenCapital={() => setTab('capital')}
+            onChanged={() => { void load({ holds, adjustments }); }}
+          />
+        </div>
       )}
 
-      {tab === 'syndicate' && preview && (
-        <DealSyndicate
-          dealId={dealId}
-          stage={preview.stage}
-          tranches={preview.tranches}
-          rows={preview.rows}
-        />
+      {warmed.has('syndicate') && preview && (
+        <div hidden={tab !== 'syndicate'}>
+          <DealSyndicate
+            dealId={dealId}
+            stage={preview.stage}
+            tranches={preview.tranches}
+            rows={preview.rows}
+          />
+        </div>
       )}
 
-      {tab === 'closing' && preview && (
-        <DealClosing
-          dealId={dealId}
-          closeDate={preview.closeDate}
-          onOpenTab={setTab}
-        />
+      {warmed.has('closing') && preview && (
+        <div hidden={tab !== 'closing'}>
+          <DealClosing
+            dealId={dealId}
+            closeDate={preview.closeDate}
+            onOpenTab={setTab}
+          />
+        </div>
       )}
 
-      {tab === 'servicing' && preview && (
-        <DealServicing
-          dealId={dealId}
-          stage={preview.stage}
-          closeDate={preview.closeDate}
-          tranches={preview.tranches}
-          rows={preview.rows}
-        />
+      {warmed.has('servicing') && preview && (
+        <div hidden={tab !== 'servicing'}>
+          <DealServicing
+            dealId={dealId}
+            stage={preview.stage}
+            closeDate={preview.closeDate}
+            tranches={preview.tranches}
+            rows={preview.rows}
+          />
+        </div>
       )}
 
-      {tab === 'financials' && preview && (
-        <DealFinancials borrowerId={preview.borrowerId} borrowerName={preview.borrower} />
+      {warmed.has('financials') && preview && (
+        <div hidden={tab !== 'financials'}>
+          <DealFinancials borrowerId={preview.borrowerId} borrowerName={preview.borrower} />
+        </div>
       )}
 
-      {tab === 'performance' && preview && (
-        <DealPerformance
-          dealId={dealId}
-          borrowerName={preview.borrower}
-          stage={preview.stage}
-          closeDate={preview.closeDate}
-          oid={preview.oid}
-          tranches={preview.tranches}
-          rows={preview.rows}
-        />
+      {warmed.has('performance') && preview && (
+        <div hidden={tab !== 'performance'}>
+          <DealPerformance
+            dealId={dealId}
+            borrowerName={preview.borrower}
+            stage={preview.stage}
+            closeDate={preview.closeDate}
+            oid={preview.oid}
+            tranches={preview.tranches}
+            rows={preview.rows}
+          />
+        </div>
       )}
 
-      {tab === 'compliance' && preview && (
-        <DealCompliance
-          dealId={dealId}
-          asOfDate={asOfDate}
-          holds={holds}
-          adjustments={adjustments}
-          funds={preview.rows.map((row) => ({
-            fundId: row.fundId,
-            fundName: row.fundName,
-            parentFundId: row.parentFundId,
-            level: row.level,
-          }))}
-          score={complianceScore}
-        />
+      {warmed.has('compliance') && preview && (
+        <div hidden={tab !== 'compliance'}>
+          <DealCompliance
+            dealId={dealId}
+            asOfDate={asOfDate}
+            holds={holds}
+            adjustments={adjustments}
+            funds={preview.rows.map((row) => ({
+              fundId: row.fundId,
+              fundName: row.fundName,
+              parentFundId: row.parentFundId,
+              level: row.level,
+            }))}
+            score={complianceScore}
+          />
+        </div>
       )}
 
       {tab === 'capital' && preview && (

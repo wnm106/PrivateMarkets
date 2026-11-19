@@ -9,6 +9,7 @@ import {
   type DashboardTemplate,
   type NarrativeTemplate,
 } from '@/lib/reporting';
+import { usePublishTab } from '@/lib/view-context';
 import { DashboardRunner } from './DashboardRunner';
 import { NarrativeRunner } from './NarrativeRunner';
 
@@ -57,6 +58,16 @@ export function EntityReports({ domainCode, entityId, asOfDate, embedded = false
 
   const activeDashboard = selected?.kind === 'dashboard' ? dashboards.find((d) => d.id === selected.id) : undefined;
   const activeNarrative = selected?.kind === 'narrative' ? narratives.find((n) => n.id === selected.id) : undefined;
+
+  usePublishTab('dashboards', {
+    label: 'Dashboards',
+    purpose: 'The dashboards and narratives defined for this type of record, run for the record being viewed.',
+    howToRead: 'The figures inside a dashboard or narrative are computed when it runs and are not listed here. Read the open one from the screen, or ask for the underlying data.',
+    data: loading ? null : {
+      dashboards: dashboards.map((item) => ({ name: item.dashboardName, description: item.description || null, open: selected?.kind === 'dashboard' && selected.id === item.id })),
+      narratives: narratives.map((item) => ({ name: item.narrativeName, description: item.description || null, open: selected?.kind === 'narrative' && selected.id === item.id })),
+    },
+  });
 
   if (loading) {
     return embedded ? <div className="value-timeline-empty">Loading dashboards…</div> : null;

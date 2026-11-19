@@ -3,6 +3,14 @@ export interface AttributeDisplay {
   displayFormat?: string | null;
   numericPrecision?: number | null;
   unitOfMeasure?: string | null;
+  /** For REFERENCE attributes: the entity type the value points to. */
+  referenceDomainCode?: string | null;
+}
+
+/** The entity type a field points to, when it is a reference to a record. */
+export function referenceTarget(meta?: AttributeDisplay | null): string | null {
+  const type = (meta?.dataType || '').trim().toUpperCase();
+  return type === 'REFERENCE' && meta?.referenceDomainCode ? meta.referenceDomainCode : null;
 }
 
 export type DisplayKind = 'date' | 'currency' | 'percentage' | 'number' | 'integer' | 'boolean' | 'text';
@@ -53,6 +61,27 @@ export function inputTypeFor(kind: DisplayKind): 'date' | 'number' | 'text' {
   if (kind === 'date') return 'date';
   if (kind === 'currency' || kind === 'percentage' || kind === 'number' || kind === 'integer') return 'number';
   return 'text';
+}
+
+const NUMERIC_KINDS = new Set<DisplayKind>(['currency', 'percentage', 'number', 'integer']);
+
+/** Date uses a date control. A number stays a text field: a currency or percent mask is not a valid number, and switching the control to type=number clears it. */
+export function editorInputType(kind: DisplayKind): 'date' | 'text' {
+  return kind === 'date' ? 'date' : 'text';
+}
+
+export function editorInputMode(kind: DisplayKind): 'decimal' | 'numeric' | undefined {
+  if (kind === 'integer') return 'numeric';
+  if (NUMERIC_KINDS.has(kind)) return 'decimal';
+  return undefined;
+}
+
+/** A focused number shows the stored digits. The mask is only for the resting field. */
+export function editorFieldValue(value: string, meta: AttributeDisplay | null | undefined, focused: boolean): string {
+  const kind = attributeDisplayKind(meta);
+  const raw = inputValueFor(kind, value);
+  if (!focused && NUMERIC_KINDS.has(kind)) return formatAttributeDisplay(raw, meta) || raw;
+  return raw;
 }
 
 export function inputStepFor(kind: DisplayKind): string | undefined {

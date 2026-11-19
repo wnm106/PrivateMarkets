@@ -1,6 +1,6 @@
 import type { ChatConversation } from './chat-history';
 import type { ChatVoice } from './chat-voice';
-import type { SkillState, SkillView } from '@tapestrai/mcp-server/src/lib/chat-skills';
+import type { SkillId, SkillState, SkillView } from '@tapestrai/mcp-server/src/lib/chat-skills';
 import { authHeaders } from './reporting';
 
 export interface ChatMessage {
@@ -32,7 +32,7 @@ export interface ChatContext {
     id?: string;
     snapshot?: Record<string, unknown>;
   };
-  toolContext?: 'entity-explorer' | 'entity-admin' | 'compliance' | 'data-quality' | 'import' | 'lineage' | 'report-designer' | 'general';
+  toolContext?: 'entity-explorer' | 'entity-admin' | 'compliance' | 'data-quality' | 'workflow' | 'import' | 'lineage' | 'report-designer' | 'general';
   /** Existing thread to append to; omit to let the server start a new one. */
   conversationId?: string;
   /** Stored attachment ids to send with this turn. */
@@ -42,7 +42,7 @@ export interface ChatContext {
   /** How this reply should be phrased. */
   voice?: ChatVoice;
   /** Guided skill to run. A designer sets this; otherwise the server infers it. */
-  skill?: 'design-dashboard' | 'design-narrative' | 'create-entity';
+  skill?: SkillId;
   /** Ledger from the previous turn, so the interview continues if it is not stored yet. */
   skillState?: SkillState | null;
 }

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
+import { usePublishTab } from '@/lib/view-context';
 import { AnswerView, askDocuments, type DocumentAnswer } from './AnswerView';
 import {
   DOCUMENT_FIELDS, DocumentStatus, bodyRow, cell, danger, headRow, hint, shortDate, table, type DocumentRow,
@@ -54,6 +55,23 @@ export function RecordDocuments({ entityId, entityName }: { entityId: string; en
     setMessage('');
     setAnswer(response.answer ? { query: asked, ...response.answer } : null);
   };
+
+  usePublishTab('documents', {
+    label: 'Documents',
+    purpose: `The agreements and other documents linked to ${entityName}, what each is and what this record is to it.`,
+    howToRead: 'role is what this record is to the document. A document with no passages has not been read yet, so its contents cannot be searched.',
+    data: documents === null ? null : {
+      count: documents.length,
+      documents: documents.slice(0, 100).map((document) => ({
+        title: document.title,
+        type: document.typeName,
+        role: document.entities.filter((link) => link.entityId === entityId).map((link) => roleText(link.role)).join(', '),
+        documentDate: document.documentDate || null,
+        pages: document.pageCount || null,
+        passages: document.chunkCount || 0,
+      })),
+    },
+  });
 
   const addHref = `/documents?link=${encodeURIComponent(entityId)}`;
 

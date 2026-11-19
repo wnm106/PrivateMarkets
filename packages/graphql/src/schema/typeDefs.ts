@@ -2922,6 +2922,108 @@ type FundSurface {
 # File: root.graphql
 # Root Query Type
 
+"""A covenant tested on one date: its value from the deal's own definition, the house standard, and the borrower's certificate."""
+type CovenantTest {
+  covenantId: ID!
+  code: String!
+  name: String!
+  dealId: ID
+  dealName: String
+  """NET_LEVERAGE, TOTAL_LEVERAGE, INTEREST_COVERAGE, FIXED_CHARGE_COVERAGE, or LIQUIDITY."""
+  metric: String
+  """MAX or MIN."""
+  direction: String
+  """MULTIPLE or CURRENCY."""
+  unit: String
+  level: Float
+  firstTest: Date
+  """The test date is before the covenant's first test. The value is shown for monitoring."""
+  beforeFirstTest: Boolean!
+  asOf: Date!
+  """End of the latest borrower quarter on or before the as-of date."""
+  testDate: Date
+  """What this deal's definition gives now."""
+  value: Float
+  numerator: Float
+  denominator: Float
+  """The golden value stored for the covenant."""
+  stored: Float
+  """A manual entry is overriding the calculation."""
+  manualOverride: Boolean!
+  """The stored value no longer matches the definition and needs recalculating."""
+  stale: Boolean!
+  """PASS, WATCH, BREACH, or NO_DATA."""
+  status: String!
+  cushion: Float
+  """The same borrower under the house standard for this metric."""
+  house: Float
+  houseId: ID
+  houseName: String
+  """Values from other sources, such as the borrower's compliance certificate."""
+  reported: [CovenantReading!]!
+  """Certificate value less the calculated value."""
+  reportedDifference: Float
+  isLibrary: Boolean!
+  isHouse: Boolean!
+  components: [CovenantComponentResult!]!
+  """Why the value could not be calculated."""
+  missing: [String!]!
+  """Quarter ends, oldest first."""
+  history: [CovenantHistoryPoint!]!
+}
+
+"""One line of a covenant definition and what it contributed on the test date."""
+type CovenantComponentResult {
+  id: ID!
+  name: String!
+  side: String!
+  line: String
+  lineName: String
+  sign: String!
+  measure: String!
+  capType: String!
+  capValue: Float
+  effectiveFrom: Date
+  effectiveTo: Date
+  clause: String
+  """In force on the test date."""
+  active: Boolean!
+  """The statement value for the period, before any cap."""
+  raw: Float
+  capLimit: Float
+  allowed: Float
+  """What it added to its side, after the cap and the sign."""
+  applied: Float
+  capped: Boolean!
+}
+
+type CovenantReading {
+  sourceCode: String!
+  sourceName: String!
+  value: Float
+  validFrom: Date
+}
+
+type CovenantHistoryPoint {
+  testDate: Date!
+  value: Float
+  house: Float
+  """The level in force on this quarter end."""
+  level: Float
+  """On or after the first test. Earlier quarters are for monitoring."""
+  tested: Boolean!
+}
+
+"""A definition in the library that a covenant can copy."""
+type CovenantDefinitionChoice {
+  id: ID!
+  name: String!
+  description: String
+  metric: String
+  isHouse: Boolean!
+  componentCount: Int!
+}
+
 type Query {
   # Generic entity queries
   entities(
@@ -3005,6 +3107,12 @@ type Query {
   agents(clientId: ID): [Agent!]!
   """The workflow runs in flight, which agent is behind each, and the standing of every agent. With mine, only runs the caller started or that touch their universe."""
   agentsAtWork(mine: Boolean): AgentsAtWork!
+  """One covenant tested on a date, with its definition line by line and quarter-end history."""
+  covenantTest(covenantId: ID!, asOfDate: Date, history: Int): CovenantTest
+  """Every covenant on a deal, tested on a date, without history."""
+  dealCovenantTests(dealId: ID!, asOfDate: Date): [CovenantTest!]!
+  """Covenant definitions to copy from, house standards included."""
+  covenantLibrary(asOfDate: Date): [CovenantDefinitionChoice!]!
   """The records that are the caller's to care about: what they follow and what they are responsible for."""
   myUniverse: MyUniverse!
   """The people, roles, and activities a responsibility can be set to."""
@@ -3188,6 +3296,10 @@ type Query {
 
 type Mutation {
   saveSurfaceCatalog(surfaceCode: String!, tabs: JSON!): SurfaceCatalog!
+  """Replace a covenant's definition from a first test date with a copy of a library definition. Earlier quarters keep the definition they were tested under."""
+  copyCovenantDefinition(covenantId: ID!, fromCovenantId: ID!, effectiveFrom: Date!): CovenantTest!
+  """Store the covenant's calculated value again for every quarter end."""
+  recalculateCovenant(covenantId: ID!): CovenantTest!
 
   # Generic entity mutations
   createEntity(input: CreateEntityInput!): CreateEntityResult!

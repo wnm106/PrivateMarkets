@@ -7,6 +7,7 @@ import { POSITION_FILE_MAP } from './position-file-map';
 import { normalizeSourceCode, resolveRowContext } from './row-context';
 import { compactIdentifier } from '../../../graphql/src/lib/entity-resolution/similarity';
 import type { DomainLoadStats, EntityResolution, EntityResolutionDecision, FeedLoadResult, FeedMap, FeedPreview, LoadReject, NormalizationHit, ParsedTable } from './types';
+import { emptyReferenceIndex, indexReferences, matchReference, referenceLookups, type ReferenceIndex } from './references';
 import { applyTransform, coerceAttributeValue, dayBefore, planPeriod, indexReferenceLists, normalizeToList, parseUsDate, type ListValueRow } from './values';
 
 const OPEN_TO = '9999-12-31';
@@ -21,6 +22,13 @@ interface AttributeMeta {
   attribute_code: string;
   data_type: string;
   reference_list_code: string | null;
+  /** For REFERENCE attributes: the entity type the value names. */
+  reference_domain_code: string | null;
+}
+
+/** The entity type a reference attribute points to. */
+function referenceDomainOf(meta: AttributeMeta | undefined): string | null {
+  return meta && meta.data_type === 'REFERENCE' && meta.reference_domain_code ? meta.reference_domain_code : null;
 }
 
 /** Values one source reported for one record as of one date. A file can hold several per record. */
@@ -214,7 +222,7 @@ async function loadCatalog(db: SupabaseClient, map: FeedMap, clientId: string): 
       ? db.schema('metadata_register').from('domain_templates').select('id, template_code').in('template_code', templateCodes)
       : Promise.resolve({ data: [], error: null }),
     attributeCodes.length
-      ? db.schema('metadata_register').from('attribute_register').select('id, attribute_code, data_type, reference_list_code').in('attribute_code', attributeCodes)
+      ? db.schema('metadata_register').from('attribute_register').select('id, attribute_code, data_type, reference_list_code, reference_domain_code').in('attribute_code', attributeCodes)
       : Promise.resolve({ data: [], error: null }),
     db.schema('metadata_register').from('reference_list_values').select('value_code, value_label, synonyms, list:reference_lists!inner(list_code)'),
     db.schema('metadata_register').from('relationship_types').select('relationship_code, parent_domain_code, child_domain_code, is_required').eq('is_active', true),
@@ -298,6 +306,62 @@ function normalizationFor(
     matchType: normalized.matchType,
   };
   return { stored: normalized.canonicalCode || raw, hit };
+}
+
+/**
+ * Lookups for every record the reference values in these drafts could name:
+ * records in this file (already given ids) and records already stored for the client.
+ */
+async function loadReferenceIndexes(
+  db: SupabaseClient,
+  catalog: Catalog,
+  entities: EntityDraft[],
+  fileIds: Map<string, Map<string, string>>,
+  drafts: Map<string, EntityDraft[]>,
+): Promise<Map<string, ReferenceIndex>> {
+  const rawsByDomain = new Map<string, Set<string>>();
+  for (const entity of entities) {
+    for (const period of entity.periods.values()) {
+      for (const [attributeCode, raw] of period.attributes) {
+        const target = referenceDomainOf(catalog.attributes.get(attributeCode));
+        if (!target || !raw.trim()) continue;
+        if (!rawsByDomain.has(target)) rawsByDomain.set(target, new Set());
+        rawsByDomain.get(target)!.add(raw.trim());
+      }
+    }
+  }
+
+  const indexes = new Map<string, ReferenceIndex>();
+  for (const [target, raws] of rawsByDomain) {
+    const index = emptyReferenceIndex();
+    const inFile = fileIds.get(target);
+    if (inFile) {
+      indexReferences(index, (drafts.get(target) || []).flatMap((draft) => {
+        const id = inFile.get(draft.code);
+        return id ? [{ id, code: draft.code, name: draft.name }] : [];
+      }));
+    }
+    const { ids, texts } = referenceLookups(raws);
+    const lookups: Array<{ column: 'id' | 'entity_code' | 'entity_name'; values: string[] }> = [
+      { column: 'id', values: ids },
+      { column: 'entity_code', values: texts },
+      { column: 'entity_name', values: texts },
+    ];
+    for (const lookup of lookups) {
+      for (let from = 0; from < lookup.values.length; from += 200) {
+        const found = await db.schema('entity_instances').from('master_entities')
+          .select('id, entity_code, entity_name')
+          .eq('domain_code', target)
+          .eq('client_id', catalog.clientId)
+          .is('merged_into_id', null)
+          .in(lookup.column, lookup.values.slice(from, from + 200));
+        if (found.error) throw new Error(found.error.message);
+        indexReferences(index, (found.data || []).map((row: any) => ({ id: row.id, code: row.entity_code, name: row.entity_name })));
+      }
+    }
+    indexes.set(target, index);
+  }
+  return indexes;
 }
 
 function distinctNormalizations(hits: NormalizationHit[]): NormalizationHit[] {
@@ -1031,6 +1095,8 @@ export async function executeParsedFeed(
       pendingAttributes.length = 0;
     };
 
+    const referenceIndexes = await loadReferenceIndexes(db, catalog, entities, ids, drafts);
+
     for (const entity of entities) {
       const entityId = idByCode.get(entity.code);
       if (!entityId) continue;
@@ -1048,8 +1114,27 @@ export async function executeParsedFeed(
         const sourceColumn = domain.attributes.find((attribute) => attribute.attributeCode === attributeCode)?.column;
         const transformKind = sourceColumn ? map.transforms?.[sourceColumn]?.kind : undefined;
         const normalize = Boolean(meta.reference_list_code) && (transformKind === 'list' || (transformKind === undefined && !map.transforms));
-        const { stored, hit } = normalize ? normalizationFor(catalog, attributeCode, raw) : { stored: raw, hit: null };
+        const normalized = normalize ? normalizationFor(catalog, attributeCode, raw) : { stored: raw, hit: null };
+        const hit = normalized.hit;
+        let stored = normalized.stored;
         if (hit) hits.push(hit);
+        // A reference stores the id of the record it names, found by id, code or name.
+        const referenceDomain = referenceDomainOf(meta);
+        let referenceMatch: string | null = null;
+        if (referenceDomain) {
+          const match = matchReference(referenceIndexes.get(referenceDomain) || emptyReferenceIndex(), raw);
+          if (match.kind === 'match') {
+            stored = match.id;
+            referenceMatch = match.matchType;
+          } else {
+            referenceMatch = match.kind;
+            const why = match.kind === 'ambiguous'
+              ? `More than one ${referenceDomain} record is named "${raw}". Stored as typed.`
+              : `No ${referenceDomain} record matches "${raw}". Stored as typed.`;
+            warnings.push(`${domainCode} ${entity.code}: ${attributeCode} ${why}`);
+            reject({ kind: 'value', domainCode, entityCode: entity.code, attributeCode, value: raw, message: why, row: origin?.row, column: origin?.column });
+          }
+        }
         if (hit?.matchType === 'unmapped') {
           warnings.push(`${domainCode} ${entity.code}: ${attributeCode} value "${raw}" is not in ${hit.listCode}`);
           reject({ kind: 'value', domainCode, entityCode: entity.code, attributeCode, value: raw, message: `Not on list ${hit.listCode}. Stored as typed.`, row: origin?.row, column: origin?.column });
@@ -1067,9 +1152,10 @@ export async function executeParsedFeed(
           golden_value_date: coerced.golden_value_date,
         };
         const valueMetadata = {
-          raw_value: coerced.raw_value,
+          raw_value: referenceDomain ? raw.trim() : coerced.raw_value,
           list_code: hit?.listCode || null,
           match_type: hit?.matchType || null,
+          ...(referenceDomain ? { reference_domain: referenceDomain, reference_match: referenceMatch } : {}),
           ...(origin && options.provenance ? { source_ref: sourceRef(table, origin, options.provenance) } : {}),
         };
         const sliceKey = varying ? `${entityId}|${meta.id}|${valueSource.id}|${validFrom}` : `${entityId}|${meta.id}|${validFrom}`;

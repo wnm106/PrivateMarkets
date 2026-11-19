@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ColDef } from 'ag-grid-community';
 import { AppGrid } from '@/components/grid/AppGrid';
-import { usePublishViewContext } from '@/lib/view-context';
+import { usePublishTabs, usePublishViewContext, type TabPayload } from '@/lib/view-context';
 import { useTemporalStore } from '@/lib/store';
 import { CLEAR_MANUAL_OVERRIDE_MUTATION, DATA_QUALITY_DASHBOARD_QUERY, DATA_QUALITY_DASHBOARD_WITH_ENTITIES_QUERY, DQ_AVAILABILITY_DETAIL_QUERY, FIELD_LINEAGE_QUERY, STALE_ATTRIBUTES_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { CommittedDateInput } from '@/components/forms/CommittedDateInput';
@@ -328,14 +328,93 @@ function knowledgeArgument(knowledgeDate: string): string | null {
   return parsed.toISOString();
 }
 
+const top = <T,>(rows: T[], limit: number) => rows.slice(0, limit);
+
+/**
+ * What each pillar of the dashboard tells the assistant, from the one load that feeds
+ * all of them, so the assistant sees every pillar and not only the open one.
+ */
+function qualityTabs(
+  dashboard: Dashboard | null,
+  stale: StaleReport | null,
+  scope: { fromDate: string; toDate: string; domainCode: string; entityId?: string },
+): Record<string, TabPayload> {
+  if (!dashboard) return {};
+  const { summary } = dashboard;
+  const where = scope.entityId ? 'this record' : scope.domainCode ? `every ${scope.domainCode} record` : 'every record';
+  const ref = (row: { entityCode: string; entityName: string; domainCode: string }) => ({ code: row.entityCode, name: row.entityName, domain: row.domainCode });
+  const common = { period: `${scope.fromDate} to ${scope.toDate}`, scope: where, entityCount: summary.entityCount };
+  return {
+    'dq-availability': {
+      label: 'Data quality: Availability',
+      purpose: `Whether the required attributes have values for ${where}, by attribute.`,
+      howToRead: 'Required attributes come from the entity template. missing is a required value with no value. resolved means a gap at the start of the period now has a value. introduced means a value at the start is now missing.',
+      data: {
+        ...common, availabilityPercent: summary.availabilityPercent, requiredValues: summary.requiredSlots, populated: summary.populatedSlots, missing: summary.missingSlots,
+        entitiesMissingRequired: summary.entitiesMissingRequired, filledIn: summary.availabilityResolvedCount, nowMissing: summary.availabilityIntroducedCount,
+        attributes: top(dashboard.availability.filter((row) => row.missingCount > 0 || row.resolvedCount > 0 || row.introducedCount > 0), 80).map((row) => ({
+          attribute: row.attributeName, domain: row.domainCode, required: row.requiredCount, missing: row.missingCount, availabilityPercent: row.availabilityPercent, resolved: row.resolvedCount, introduced: row.introducedCount,
+        })),
+      },
+    },
+    'dq-quality': {
+      label: 'Data quality: Quality',
+      purpose: `Whether ${where} pass the data quality rules, by rule.`,
+      howToRead: 'A rule expression is true for records that fail it. failing counts records failing the rule, accepted are failures someone has accepted. resolved and introduced compare with the start of the period.',
+      data: {
+        ...common, qualityPercent: summary.qualityPercent, rulesEvaluated: summary.rulesEvaluated, passingChecks: summary.passingChecks, failingChecks: summary.failingChecks,
+        entitiesFailingRules: summary.entitiesFailingRules, nowPassing: summary.qualityResolvedCount, nowFailing: summary.qualityIntroducedCount,
+        rules: top(dashboard.quality.filter((rule) => rule.failingCount > 0 || rule.resolvedCount > 0 || rule.introducedCount > 0), 60).map((rule) => ({
+          rule: rule.ruleName, code: rule.ruleCode, severity: rule.severity, domain: rule.domainCode, attribute: rule.attributeName, evaluated: rule.evaluated,
+          records: rule.entityCount, failing: rule.failingCount, passing: rule.passingCount, accepted: rule.acceptedCount, resolved: rule.resolvedCount, introduced: rule.introducedCount,
+          failingExamples: top(rule.failingEntities, 5).map((row) => ({ ...ref(row), message: row.message, value: row.actualValue })),
+        })),
+      },
+    },
+    'dq-trajectory': {
+      label: 'Data quality: Trajectory',
+      purpose: `Which attribute values changed over the period for ${where}.`,
+      howToRead: 'changeCount counts values that differ between the start and the end of the period. Each example shows the previous and current value.',
+      data: {
+        ...common, valuesChanged: summary.attributeChangeCount, recordsChanged: summary.changedEntityCount, attributesChanged: summary.changedAttributeCount,
+        attributes: top(dashboard.trajectory, 60).map((row) => ({
+          attribute: row.attributeName, domain: row.domainCode, changeCount: row.changeCount,
+          examples: top(row.changes, 5).map((change) => ({ ...ref(change), previous: change.previousValue, current: change.currentValue })),
+        })),
+      },
+    },
+    'dq-handoff': {
+      label: 'Data quality: Handoff',
+      purpose: `Manual overrides on ${where} that can be released because a priority source now matches the manual value.`,
+      howToRead: 'ready means the priority source\'s value matches the override as of the end of the period, so the manual value can be cleared.',
+      data: {
+        ...common, overridesReady: summary.overrideMatchCount,
+        overrides: top(dashboard.overrideMatches, 80).map((row) => ({ ...ref(row), attribute: row.attributeName, override: row.overrideValue, reason: row.overrideReason, prioritySource: row.prioritySourceName, priorityValue: row.priorityValue, ready: row.ready })),
+      },
+    },
+    'dq-freshness': {
+      label: 'Data quality: Freshness',
+      purpose: `Which prevailing values for ${where} have not been received recently.`,
+      howToRead: 'A value is stale when its source has not sent it in olderThanDays days as of the date shown. ageDays is days since it was received.',
+      data: stale ? {
+        scope: where, asOfDate: stale.asOfDate, olderThanDays: stale.olderThanDays, staleValues: stale.count,
+        values: top(stale.attributes, 80).map((row) => ({ ...ref(row), attribute: row.attributeName, source: row.sourceName, value: row.value, receivedAt: row.receivedAt, ageDays: row.ageDays })),
+      } : null,
+    },
+  };
+}
+
 export function DataQualityDashboard({
   domainCode: fixedDomain,
   entityId,
   embedded = false,
+  active = true,
 }: {
   domainCode?: string;
   entityId?: string;
   embedded?: boolean;
+  /** False when the dashboard is mounted on a hidden tab. It still publishes its figures but does not take over the page's focus. */
+  active?: boolean;
 } = {}) {
   const asOfDate = useTemporalStore((state) => state.asOfDate);
   const setAsOfDate = useTemporalStore((state) => state.setAsOfDate);
@@ -368,7 +447,7 @@ export function DataQualityDashboard({
     ? dashboard?.quality.find((rule) => `rule-${rule.ruleId}` === openKey)
     : undefined;
 
-  usePublishViewContext({
+  usePublishViewContext(!active ? null : {
     activity: 'viewing',
     kind: 'data-quality',
     label: openRule?.ruleName || (domainCode ? `${domainCode} data quality` : 'Data quality'),
@@ -531,6 +610,7 @@ export function DataQualityDashboard({
   };
 
   const summary = dashboard?.summary;
+  usePublishTabs(qualityTabs(dashboard, staleReport, { fromDate, toDate, domainCode, entityId }));
   const filteredEntities = useMemo(() => {
     const rows = (dashboard?.entities ?? []).filter((entity) => {
       if (section === 'availability') return entity.missingCount > 0 || entity.availabilityResolvedCount > 0 || entity.availabilityIntroducedCount > 0;

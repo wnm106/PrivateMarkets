@@ -32,6 +32,7 @@ import { homeResolvers } from './home';
 import { agentUsageResolvers } from './agent-usage';
 import { responsibilityResolvers } from './responsibilities';
 import { agentResolvers } from './agents';
+import { covenantResolvers } from './covenants';
 
 export const resolvers = {
   Query: {
@@ -79,6 +80,7 @@ export const resolvers = {
     ...homeResolvers.Query,
     ...responsibilityResolvers.Query,
     ...agentResolvers.Query,
+    ...covenantResolvers.Query,
     ...agentUsageResolvers.Query,
   },
   
@@ -122,6 +124,7 @@ export const resolvers = {
     ...homeResolvers.Mutation,
     ...responsibilityResolvers.Mutation,
     ...agentResolvers.Mutation,
+    ...covenantResolvers.Mutation,
   },
   
   Subscription: {},

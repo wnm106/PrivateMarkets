@@ -7,11 +7,13 @@ export type ToolCategory =
   | 'domain-admin'       // Create domain types, attributes, templates
   | 'lineage'            // Lineage and temporal queries
   | 'override'           // Manual overrides
-  | 'dq'                 // Data quality rules and exceptions
+  | 'dq'                 // Data quality rules and exceptions (read and resolve)
+  | 'dq-admin'           // Creating data quality rules
   | 'import'             // Import map tools
   | 'compliance'         // Compliance rules
   | 'reporting'          // Dashboard / narrative design
   | 'narrative'          // Running narratives: evidence, composing, saving runs
+  | 'workflow'           // Finding and starting workflows
   | 'intersection'       // Intersection tools
   | 'reconciliation';    // Fund close: NAV, position, and cash reconciliation
 

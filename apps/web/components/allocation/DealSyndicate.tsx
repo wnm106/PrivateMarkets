@@ -7,7 +7,7 @@ import { attributeText } from '@/lib/experience';
 import { domainHref } from '@/lib/domain-routes';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useTemporalStore } from '@/lib/store';
-import { usePublishPageData } from '@/lib/view-context';
+import { usePublishTab } from '@/lib/view-context';
 
 const ROLE: Record<string, string> = {
   PARTICIPANT: 'Participant',
@@ -280,26 +280,31 @@ export function DealSyndicate({
     ...lenders.slice().sort((left, right) => left.order - right.order || left.name.localeCompare(right.name)),
   ];
 
-  usePublishPageData({
-    status: status || null,
-    facility,
-    ourHold: ourTotal,
-    outside: otherTotal,
-    ordered: orderTotal,
-    gap,
-    tranches: book.shown.map((tranche) => ({
-      name: tranche.name,
-      size: tranche.size,
-      ours: book.ours(tranche.id),
-      outside: book.outside(tranche.id),
-      ordered: book.ordered(tranche.id),
-    })),
-    lenders: listed.map((seat) => ({
-      name: seat.name,
-      house: seat.house,
-      role: seat.role,
-      type: seat.lenderType,
-    })),
+  usePublishTab('syndicate', {
+    label: 'Syndicate',
+    purpose: 'Who holds the facility: our hold, outside lenders and orders, and how much is still to place.',
+    howToRead: 'gap is the facility not yet placed: positive means still to place, negative means placed above the facility. ours, outside and ordered are per tranche.',
+    data: {
+      status: status || null,
+      facility,
+      ourHold: ourTotal,
+      outside: otherTotal,
+      ordered: orderTotal,
+      gap,
+      tranches: book.shown.map((tranche) => ({
+        name: tranche.name,
+        size: tranche.size,
+        ours: book.ours(tranche.id),
+        outside: book.outside(tranche.id),
+        ordered: book.ordered(tranche.id),
+      })),
+      lenders: listed.map((seat) => ({
+        name: seat.name,
+        house: seat.house,
+        role: seat.role,
+        type: seat.lenderType,
+      })),
+    },
   });
 
   const statusLabel = status || (stage === 'CLOSED' ? 'Closed' : stage === 'CLOSING' ? 'Launched' : 'Not launched');

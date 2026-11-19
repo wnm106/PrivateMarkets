@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import { ATTRIBUTE_REGISTER_QUERY, REFERENCE_LIST_DETAIL_QUERY, graphqlQuery } from '@/lib/graphql';
-import { attributeDisplayKind, formatAttributeDisplay, inputStepFor, inputTypeFor, inputValueFor, type AttributeDisplay } from '@/lib/attribute-display';
+import { attributeDisplayKind, editorFieldValue, editorInputMode, editorInputType, referenceTarget, type AttributeDisplay } from '@/lib/attribute-display';
+import { EntityReferencePicker } from '@/components/forms/EntityReferencePicker';
 
 export interface ListOption {
   value: string;
@@ -43,6 +44,7 @@ function displayFrom(row: AttributeMeta | undefined): AttributeDisplay {
     displayFormat: row.displayFormat,
     numericPrecision: row.numericPrecision,
     unitOfMeasure: row.unitOfMeasure,
+    referenceDomainCode: row.referenceDomainCode,
   };
 }
 
@@ -62,6 +64,7 @@ async function fetchCatalog(): Promise<Catalog> {
       displayFormat: string | null;
       numericPrecision: number | null;
       unitOfMeasure: string | null;
+      referenceDomainCode: string | null;
     }>;
   }>(ATTRIBUTE_REGISTER_QUERY, {}, 'network-only');
   const byAttribute = new Map<string, AttributeMeta>();
@@ -75,6 +78,7 @@ async function fetchCatalog(): Promise<Catalog> {
       displayFormat: attribute.displayFormat,
       numericPrecision: attribute.numericPrecision,
       unitOfMeasure: attribute.unitOfMeasure,
+      referenceDomainCode: attribute.referenceDomainCode,
     });
     if (listCode) listCodes.add(listCode);
   }
@@ -201,13 +205,42 @@ export function AttributeValueInput({
 }) {
   const options = useAttributeListOptions(attributeCode);
   const display = useAttributeDisplay(attributeCode);
-  const [focused, setFocused] = useState(false);
+  const [focused, setFocused] = useState(Boolean(autoFocus));
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const revealStart = useRef(Boolean(autoFocus));
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input || !revealStart.current) return;
+    revealStart.current = false;
+    input.scrollLeft = 0;
+  });
   const waitingForList = Boolean(attributeCode) && options === null;
   const listed = options || [];
   // A typed number is not a list. Only attributes with real choices become a dropdown.
   // Otherwise the first digit becomes the only option and further typing stops.
   const known = listed.some((option) => option.value === value);
   const choices = value && !known ? [{ value, label: value }, ...listed] : listed;
+
+  const target = referenceTarget({ dataType: dataType || display?.dataType, referenceDomainCode: display?.referenceDomainCode });
+  if (target) {
+    return (
+      <EntityReferencePicker
+        domainCode={target}
+        value={value}
+        onChange={onChange}
+        onSelect={onSelect}
+        className={className && className !== 'select' ? className : 'text-input'}
+        placeholder={placeholder}
+        ariaLabel={ariaLabel}
+        autoFocus={autoFocus}
+        disabled={disabled}
+        style={style}
+        onKeyDown={onKeyDown}
+        onBlur={onBlur}
+        onClick={onClick}
+      />
+    );
+  }
 
   if (waitingForList) {
     return (
@@ -249,15 +282,15 @@ export function AttributeValueInput({
     unitOfMeasure: display?.unitOfMeasure,
   };
   const kind = attributeDisplayKind(meta);
-  const numeric = kind === 'currency' || kind === 'percentage' || kind === 'number' || kind === 'integer';
-  const raw = inputValueFor(kind, value);
-  const shown = !focused && numeric ? (formatAttributeDisplay(raw, meta) || raw) : raw;
-  const inputType = kind === 'date' ? 'date' : focused && numeric ? inputTypeFor(kind) : 'text';
+  const shown = editorFieldValue(value, meta, focused);
+  const inputType = editorInputType(kind);
+
   return (
     <input
+      ref={inputRef}
       className={className && className !== 'select' ? className : 'text-input'}
       type={inputType}
-      step={focused ? inputStepFor(kind) : undefined}
+      inputMode={editorInputMode(kind)}
       value={shown}
       placeholder={placeholder}
       aria-label={ariaLabel}
@@ -266,7 +299,11 @@ export function AttributeValueInput({
       style={style}
       onClick={onClick}
       onKeyDown={onKeyDown}
-      onFocus={() => setFocused(true)}
+      onFocus={(event) => {
+        revealStart.current = true;
+        setFocused(true);
+        event.currentTarget.scrollLeft = 0;
+      }}
       onBlur={() => {
         setFocused(false);
         onBlur?.();

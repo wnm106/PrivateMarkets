@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
-import { usePublishViewContext } from '@/lib/view-context';
+import { usePublishTabs, usePublishViewContext, type TabPayload } from '@/lib/view-context';
 import { formatTokens, formatUsd } from '@tapestrai/mcp-server/src/agent/pricing';
 
 /**
@@ -131,6 +131,49 @@ function when(value: string): string {
   }).format(date);
 }
 
+/** What each tab tells the assistant, from the one load that feeds them all. Costs are US dollars. */
+function usageTabs(usage: Usage): Record<string, TabPayload> {
+  const bucket = (row: Bucket) => ({ name: row.key, feature: row.feature || null, provider: row.provider || null, calls: row.calls, inputTokens: row.inputTokens ?? null, outputTokens: row.outputTokens ?? null, thinkingTokens: row.thinkingTokens ?? null, totalTokens: row.totalTokens, costUsd: row.costUsd });
+  const period = `${usage.from} to ${usage.to}`;
+  return {
+    overview: {
+      label: 'Overview',
+      purpose: 'How many model calls were made in the period, how many tokens they used and what they cost, day by day.',
+      howToRead: 'Days are in America/New_York. thinkingTokens are the model\'s reasoning tokens and are counted in totalTokens. errors counts failed calls.',
+      data: { period, totals: usage.totals, byDay: usage.byDay },
+    },
+    agents: {
+      label: 'Agents',
+      purpose: 'Token use and cost by named agent.',
+      data: { period, agents: usage.byAgent.map(bucket) },
+    },
+    features: {
+      label: 'Features',
+      purpose: 'Token use and cost by the feature of the app that made the call, such as the chat or a narrative.',
+      data: { period, features: usage.byFeature.map(bucket) },
+    },
+    users: {
+      label: 'Users',
+      purpose: 'Token use and cost by person.',
+      data: { period, users: usage.byUser.map((row) => ({ name: row.label, calls: row.calls, totalTokens: row.totalTokens, costUsd: row.costUsd })) },
+    },
+    models: {
+      label: 'Models',
+      purpose: 'Token use and cost by model, with each model\'s input, output and thinking tokens.',
+      data: { period, models: usage.byModel.map(bucket) },
+    },
+    calls: {
+      label: 'Calls',
+      purpose: 'The individual model calls, newest first: who made each, which model, tokens, cost, time taken and whether it failed.',
+      howToRead: 'status is the call\'s outcome and error says why it failed. latencyMs is the time the call took.',
+      data: {
+        period, total: usage.totals.calls, shown: Math.min(usage.calls.length, 60),
+        calls: usage.calls.slice(0, 60).map((call) => ({ at: call.createdAt, user: call.userLabel, client: call.clientName, feature: call.feature, activity: call.activity, agent: call.agent, model: call.model, totalTokens: call.totalTokens, costUsd: call.costUsd, status: call.status, error: call.error, latencyMs: call.latencyMs })),
+      },
+    },
+  };
+}
+
 export default function AgentUsagePage() {
   const [tab, setTab] = useState<Tab>('overview');
   const [days, setDays] = useState(30);
@@ -144,6 +187,7 @@ export default function AgentUsagePage() {
   const [message, setMessage] = useState('');
   const [selected, setSelected] = useState<CallDetail | null>(null);
   usePublishViewContext({ activity: 'viewing', kind: 'agent usage', label: 'Agent usage', summary: 'Token use and cost of model calls' });
+  usePublishTabs(usage ? usageTabs(usage) : {});
 
   useEffect(() => {
     let live = true;

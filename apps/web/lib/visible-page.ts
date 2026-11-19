@@ -40,9 +40,14 @@ function readTable(table: HTMLTableElement): { name?: string; rows: Array<Record
   return name ? { name, rows } : { rows };
 }
 
+/** A tab kept mounted but hidden is published as its own tab; its markup is not the page. */
+function shown(element: Element): boolean {
+  return !element.closest('[hidden]');
+}
+
 function readFacts(root: ParentNode): Record<string, string> {
   const facts: Record<string, string> = {};
-  root.querySelectorAll('.da-fact, .da-holdbox').forEach((block) => {
+  [...root.querySelectorAll('.da-fact, .da-holdbox')].filter(shown).forEach((block) => {
     const label = clean(block.querySelector('span')?.textContent);
     const value = clean(block.querySelector('strong, b')?.textContent);
     if (label && value) facts[label] = value;
@@ -55,15 +60,18 @@ export function readVisiblePage(root: ParentNode, path: string): VisiblePage {
   const title = clean(root.querySelector('h1')?.textContent);
   const summary = clean(root.querySelector('h1 + p, .da-title p')?.textContent).slice(0, 280);
   const headings = [...root.querySelectorAll('h2')]
+    .filter(shown)
     .map((heading) => clean(heading.textContent))
     .filter(Boolean)
     .slice(0, 12);
   const facts = readFacts(root);
   const filters = [...root.querySelectorAll('[aria-pressed="true"]')]
+    .filter(shown)
     .map((control) => clean(control.textContent))
     .filter(Boolean)
     .slice(0, 12);
   const tables = [...root.querySelectorAll('table')]
+    .filter(shown)
     .slice(0, 6)
     .map((table) => readTable(table))
     .filter((table): table is NonNullable<typeof table> => Boolean(table));

@@ -183,7 +183,6 @@ export function AttributeSourcePanel({
               <div className="sa-drill-th">Source</div>
               <div className="sa-drill-th">Value</div>
               <div className="sa-drill-th sa-drill-received">Last received</div>
-              <div className="sa-drill-th">Reliability</div>
               <div className="sa-drill-th">Status</div>
             </div>
             {drilldown.candidates.map((c, i) => {
@@ -192,8 +191,6 @@ export function AttributeSourcePanel({
               const cSrc = dbCandidate
                 ? { name: dbCandidate.name, hex: dbCandidate.hex }
                 : (sources[normalizedSrc as SourceKey] ?? { name: c.src, hex: '#475569' });
-              const relPct = c.reliability ?? 0;
-              const relBarColor = relPct >= 90 ? 'var(--green)' : relPct >= 70 ? 'var(--accent-2)' : 'var(--red)';
               const receivedAge = receiptAgeDays(c.receivedAt);
               const receivedStale = isStaleReceipt(c.receivedAt, c.src);
 
@@ -238,12 +235,6 @@ export function AttributeSourcePanel({
                     ) : (
                       '—'
                     )}
-                  </div>
-                  <div className="sa-drill-td sa-drill-reliability">
-                    <div className="sa-drill-rel-pct">{relPct}%</div>
-                    <div className="sa-drill-rel-bar">
-                      <div style={{ width: `${relPct}%`, background: relBarColor }} />
-                    </div>
                   </div>
                   <div className="sa-drill-td sa-drill-status">
                     {c.status === 'winner' && <span className="sa-status-badge winner">WINNER</span>}
@@ -450,8 +441,8 @@ function SourceValueEditor({
     <AttributeValueInput
       attributeCode={attributeCode}
       dataType={dataType}
-      className="text-input"
-      style={{ fontSize: '13px', padding: '4px 6px', minWidth: '120px' }}
+      className="text-input sa-source-editor"
+      style={{ fontSize: '13px', padding: '4px 6px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}
       value={draft}
       autoFocus
       ariaLabel="Source value"

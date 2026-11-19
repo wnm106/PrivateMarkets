@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export type ViewActivity = 'viewing' | 'editing' | 'creating';
 
@@ -31,15 +31,65 @@ interface ViewContextState {
 
 type Listener = (state: ViewContextState) => void;
 
+/** What one tab of a surface tells the assistant. See docs/SURFACE_TABS.md. */
+export interface TabPayload {
+  /** The tab's label as the user sees it. */
+  label: string;
+  /** One sentence on what the tab is for and the question it answers. */
+  purpose: string;
+  /** Terms or rules needed to read the data, such as which level to report at. */
+  howToRead?: string;
+  /** The figures and labels the tab shows, as the tab derives them. Null while the tab loads. */
+  data: Record<string, unknown> | null;
+}
+
+/**
+ * A copy of the data without its attribute source references (keys named `sources` or
+ * ending in `Sources`). Those point the UI at an attribute and mean nothing to a reader.
+ */
+export function withoutSources<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => withoutSources(item)) as unknown as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => key !== 'sources' && !key.endsWith('Sources'))
+        .map(([key, item]) => [key, withoutSources(item)]),
+    ) as T;
+  }
+  return value;
+}
+
 let nextId = 1;
 let stack: StackEntry[] = [];
 let pageStack: Array<{ id: number; data: Record<string, unknown> | null }> = [];
+let tabStack: Array<{ id: number; key: string; entry: TabPayload | null }> = [];
 let state: ViewContextState = { focus: null, pageData: null, version: 0 };
 const listeners = new Set<Listener>();
 
+/** The page's own data plus every published tab, keyed by tab. */
+export function combinePageData(
+  base: Record<string, unknown> | null,
+  tabs: Array<{ key: string; entry: TabPayload | null }>,
+): Record<string, unknown> | null {
+  const published = tabs.filter((item): item is { key: string; entry: TabPayload } => item.entry !== null);
+  if (!published.length) return base;
+  return {
+    ...(base || {}),
+    tabs: Object.fromEntries(published.map(({ key, entry }) => [key, {
+      label: entry.label,
+      purpose: entry.purpose,
+      ...(entry.howToRead ? { howToRead: entry.howToRead } : {}),
+      ...(entry.data
+        ? { data: entry.data }
+        : { note: 'This tab has not finished loading. Say so instead of guessing its figures.' }),
+    }])),
+  };
+}
+
 function emit() {
   const focus = [...stack].reverse().find((entry) => entry.focus)?.focus ?? null;
-  const pageData = [...pageStack].reverse().find((entry) => entry.data)?.data ?? null;
+  const base = [...pageStack].reverse().find((entry) => entry.data)?.data ?? null;
+  const pageData = combinePageData(base, tabStack);
   state = { focus, pageData, version: state.version + 1 };
   for (const listener of listeners) listener(state);
 }
@@ -117,6 +167,101 @@ export function usePublishPageData(data: Record<string, unknown> | null) {
   useEffect(() => () => {
     if (idRef.current) removePage(idRef.current);
   }, []);
+}
+
+function publishTab(id: number, key: string, entry: TabPayload | null) {
+  const existing = tabStack.find((item) => item.id === id);
+  if (existing) {
+    existing.key = key;
+    existing.entry = entry;
+  } else tabStack.push({ id, key, entry });
+  emit();
+}
+
+function removeTab(id: number) {
+  tabStack = tabStack.filter((item) => item.id !== id);
+  emit();
+}
+
+/**
+ * Publishes one tab of a surface. Every tab of a surface does this, mounted or not
+ * on screen, so the assistant sees all of them at once under `tabs` and not only the
+ * open one. Pass the data as the tab derives it, with its purpose, not raw records.
+ */
+export function usePublishTab(key: string, entry: TabPayload | null) {
+  const idRef = useRef(0);
+  const serialized = JSON.stringify(entry ?? null);
+  const entryRef = useRef(entry);
+  entryRef.current = entry;
+
+  useEffect(() => {
+    if (!idRef.current) idRef.current = nextId++;
+    publishTab(idRef.current, key, entryRef.current);
+  }, [key, serialized]);
+
+  useEffect(() => () => {
+    if (idRef.current) removeTab(idRef.current);
+  }, []);
+}
+
+/**
+ * Publishes every tab of a surface from one place, for a surface that already holds
+ * all its tabs' data in one load. Use this instead of mounting each tab to publish it.
+ * A null entry is a tab that has not loaded yet.
+ */
+export function usePublishTabs(tabs: Record<string, TabPayload | null>) {
+  const ids = useRef(new Map<string, number>());
+  const serialized = JSON.stringify(tabs);
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+
+  useEffect(() => {
+    const current = tabsRef.current;
+    for (const [key, id] of [...ids.current]) {
+      if (key in current) continue;
+      removeTab(id);
+      ids.current.delete(key);
+    }
+    for (const [key, entry] of Object.entries(current)) {
+      let id = ids.current.get(key);
+      if (!id) {
+        id = nextId++;
+        ids.current.set(key, id);
+      }
+      publishTab(id, key, entry);
+    }
+  }, [serialized]);
+
+  useEffect(() => () => {
+    for (const id of ids.current.values()) removeTab(id);
+    ids.current.clear();
+  }, []);
+}
+
+/**
+ * The tabs to keep mounted. The open tab mounts at once; the rest follow one at a
+ * time so their data loads and reaches the assistant without a burst of requests.
+ * A warmed tab stays mounted, hidden, so its data stays current.
+ */
+export function useWarmTabs(keys: readonly string[], active: string, delayMs = 350): ReadonlySet<string> {
+  const [warmed, setWarmed] = useState<ReadonlySet<string>>(() => new Set([active]));
+  const keyList = keys.join('|');
+
+  useEffect(() => {
+    setWarmed((current) => (current.has(active) ? current : new Set([...current, active])));
+  }, [active]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setWarmed((current) => {
+        const next = keyList.split('|').find((key) => key && !current.has(key));
+        return next ? new Set([...current, next]) : current;
+      });
+    }, delayMs);
+    return () => window.clearTimeout(timer);
+  }, [keyList, warmed, delayMs]);
+
+  return warmed;
 }
 
 function plainValue(value: unknown, depth = 0): unknown {

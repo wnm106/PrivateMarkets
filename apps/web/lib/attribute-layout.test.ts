@@ -1,6 +1,29 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { attributeSectionLinks, fieldsForVisibility, planAttributeMove, sectionAnchor, sectionsForDisplay } from './attribute-layout';
+import { attributeSectionLinks, attributesInDisplayOrder, fieldsForVisibility, planAttributeMove, sectionAnchor, sectionsForDisplay } from './attribute-layout';
+
+describe('attributes in display order', () => {
+  it('orders by section, then position, then name, like the record editor', () => {
+    const items = [
+      { name: 'Zeta', section: 'General', sortOrder: 2 },
+      { name: 'Coupon', section: 'Terms', sortOrder: 1 },
+      { name: 'Alpha', section: 'General', sortOrder: 2 },
+      { name: 'First', section: 'General', sortOrder: 1 },
+      { name: 'Loose', section: 'Unranked', sortOrder: 0 },
+    ];
+    const sections = [
+      { sectionName: 'Terms', displayOrder: 1 },
+      { sectionName: 'General', displayOrder: 2 },
+    ];
+    assert.deepEqual(attributesInDisplayOrder(items, sections).map((item) => item.name), [
+      'Coupon',
+      'First',
+      'Alpha',
+      'Zeta',
+      'Loose',
+    ]);
+  });
+});
 
 describe('attribute section anchors', () => {
   it('slugs a section name into a stable id fragment', () => {

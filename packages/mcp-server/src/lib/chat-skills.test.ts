@@ -155,3 +155,85 @@ describe('chat skills', () => {
     expect(skillSystemAddendum(entity, spec)).toContain('CAPITAL_CALL');
   });
 });
+
+describe('guided skills for configuration and operations', () => {
+  const ids = ['add-field', 'create-compliance-rule', 'start-workflow', 'create-relationship-type', 'create-dq-rule', 'manual-override'] as const;
+
+  function readyState(id: (typeof ids)[number]): SkillState {
+    const skill = skillById(id)!;
+    const state = emptySkillState(skill);
+    for (const slot of skill.slots) {
+      if (slot.id === 'specAccepted') continue;
+      state.slots[slot.id] = { status: slot.identity ? 'confirmed' : 'resolved', value: slot.label };
+    }
+    state.discoveries = [...new Set(skill.discovery.map((group) => group[0]))];
+    return state;
+  }
+
+  it('starts the right skill from a plain request', () => {
+    expect(skillFromUserText('Add a field for maturity date to the deal type')?.id).toBe('add-field');
+    expect(skillFromUserText('I need to add a new attribute for rating')?.id).toBe('add-field');
+    expect(skillFromUserText('Create a compliance rule for issuer concentration')?.id).toBe('create-compliance-rule');
+    expect(skillFromUserText('Add a concentration limit of 5% per issuer')?.id).toBe('create-compliance-rule');
+    expect(skillFromUserText('Start the quarterly close workflow for Fund I')?.id).toBe('start-workflow');
+    expect(skillFromUserText('Create a relationship type between fund and position')?.id).toBe('create-relationship-type');
+    expect(skillFromUserText('Create a data quality rule for negative prices')?.id).toBe('create-dq-rule');
+    expect(skillFromUserText('Override the NAV on this fund')?.id).toBe('manual-override');
+    expect(skillFromUserText('Submit an override for the reporting date')?.id).toBe('manual-override');
+    expect(skillFromUserText('Add an entity type for capital calls')?.id).toBe('create-entity');
+  });
+
+  it('does not start a skill from a question or a casual mention', () => {
+    expect(skillFromUserText('What overrides exist on this fund?')).toBeNull();
+    expect(skillFromUserText('How many workflows ran last week?')).toBeNull();
+    expect(skillFromUserText('Which compliance rules are breached?')).toBeNull();
+    expect(skillFromUserText('Show me the data quality rules')).toBeNull();
+  });
+
+  it('holds every write tool until the user accepts the spec, for each skill', () => {
+    for (const id of ids) {
+      const skill = skillById(id)!;
+      expect(skill.writeTools.length).toBeGreaterThan(0);
+      const early = emptySkillState(skill);
+      for (const tool of skill.writeTools) expect(skillAllowsTool(skill, early, tool)).toBe(false);
+
+      const state = readyState(id);
+      if (skill.previewTools.length) state.discoveries.push(...skill.previewTools);
+      expect(skillPhase(skill, state)).toBe('spec');
+      for (const tool of skill.writeTools) expect(skillAllowsTool(skill, state, tool)).toBe(false);
+
+      const accepted = ingestUserTurn(skill, state, 'yes, go ahead');
+      expect(skillPhase(skill, accepted)).toBe('apply');
+      for (const tool of skill.writeTools) expect(skillAllowsTool(skill, accepted, tool)).toBe(true);
+      for (const tool of skill.denyTools) expect(skillAllowsTool(skill, accepted, tool)).toBe(false);
+    }
+  });
+
+  it('will not ask for confirmation before the lookups have run', () => {
+    for (const id of ids) {
+      const skill = skillById(id)!;
+      const state = readyState(id);
+      state.discoveries = [];
+      expect(skillPhase(skill, state)).toBe('guided');
+      expect(skillSystemAddendum(skill, state)).toContain('Do not ask the user to confirm');
+    }
+  });
+
+  it('requires the rule to be tried on real records before a data quality rule is created', () => {
+    const skill = skillById('create-dq-rule')!;
+    const state = readyState('create-dq-rule');
+    state.slots.specAccepted = { status: 'confirmed', value: 'yes' };
+    expect(skillPhase(skill, state)).toBe('build');
+    expect(skillAllowsTool(skill, state, 'create_dq_rule')).toBe(false);
+    state.discoveries.push('preview_dq_rule');
+    expect(skillPhase(skill, state)).toBe('apply');
+    expect(skillAllowsTool(skill, state, 'create_dq_rule')).toBe(true);
+  });
+
+  it('keeps each skill to the tools it needs', () => {
+    expect(skillById('start-workflow')!.toolContext).toBe('workflow');
+    expect(skillById('create-compliance-rule')!.denyTools).toContain('delete_compliance_rule');
+    expect(skillById('create-relationship-type')!.denyTools).toContain('create_relationship');
+    expect(skillById('add-field')!.denyTools).toContain('create_domain_type');
+  });
+});

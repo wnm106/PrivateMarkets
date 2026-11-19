@@ -6,7 +6,10 @@ import { inlineCommitValue, inlineDraft } from '@/lib/inline-field';
 import { formatReceipt, isStaleReceipt, receiptAgeDays } from '@/lib/receipt-freshness';
 import { graphqlQuery } from '@/lib/graphql';
 import { AttributeSourcePanel, type SourceOption } from './AttributeSourcePanel';
-import { AttributeValueInput, listDisplayLabel, useAttributeListOptions } from '@/components/forms/AttributeValueInput';
+import Link from 'next/link';
+import { AttributeValueInput, listDisplayLabel, useAttributeDisplay, useAttributeListOptions } from '@/components/forms/AttributeValueInput';
+import { referenceTarget } from '@/lib/attribute-display';
+import { entityRefHref, useEntityRef } from '@/lib/entity-reference';
 import { formatAttributeValue, isNumericAttribute, type FieldData } from './attribute-source';
 
 export { formatAttributeValue, type FieldData };
@@ -186,7 +189,21 @@ function InlineFieldValue({
   const options = useAttributeListOptions(field.attributeCode);
   const numeric = isNumericAttribute(field.dataType);
   const shown = pending ?? field.value;
-  const display = listDisplayLabel(shown, options) || formatAttributeValue(shown, field.dataType);
+  const meta = useAttributeDisplay(field.attributeCode);
+  const target = referenceTarget({ dataType: field.dataType || meta?.dataType, referenceDomainCode: meta?.referenceDomainCode });
+  const ref = useEntityRef(shown, Boolean(target));
+  const display = target && ref ? ref.entityName : listDisplayLabel(shown, options) || formatAttributeValue(shown, field.dataType);
+  const refLink = target && ref ? (
+    <Link
+      href={entityRefHref(ref)}
+      className="sa-ref-link"
+      title={`Open ${ref.entityName}`}
+      aria-label={`Open ${ref.entityName}`}
+      onClick={(event) => event.stopPropagation()}
+    >
+      ↗
+    </Link>
+  ) : null;
 
   useEffect(() => {
     if (!editing) setDraft(inlineDraft(pending ?? field.value));
@@ -202,7 +219,11 @@ function InlineFieldValue({
   }, [field.value, pending, numeric]);
 
   if (!onSave) {
-    return <span className={`sa-field-value ${field.conflict ? 'conflict' : ''}`}>{display}</span>;
+    return (
+      <span className={`sa-field-value ${field.conflict ? 'conflict' : ''}`}>
+        {target && ref ? <Link href={entityRefHref(ref)} className="crumb-link">{display}</Link> : display}
+      </span>
+    );
   }
 
   const persist = (raw: string) => {
@@ -273,6 +294,7 @@ function InlineFieldValue({
           {display || '—'}
         </button>
       )}
+      {!editing && refLink}
       {saving && (
         <svg className="sa-save-spin" viewBox="0 0 16 16" width="14" height="14" role="status" aria-label="Saving">
           <path

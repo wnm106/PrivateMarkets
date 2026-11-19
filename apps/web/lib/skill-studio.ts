@@ -141,7 +141,90 @@ function purposeFor(skill: SkillDef, extra: Pick<SkillPurpose, 'notTrigger' | 'o
   };
 }
 
+/** What the studio says about the skills that change configuration or start work. */
+const OPERATIONAL: Partial<Record<SkillId, {
+  notTrigger: string;
+  outcome: string;
+  done: string;
+  check: string;
+  example: { title: string; body: string };
+}>> = {
+  'add-field': {
+    notTrigger: 'Creating a whole entity type, or changing a field that already exists.',
+    outcome: 'One field, reused or new, with its data type, allowed values, required flag and place on a template.',
+    done: 'The user accepted the spec, the field is reused or explicitly new, and the template was read back after the change.',
+    check: 'No new field duplicates an existing attribute',
+    example: { title: 'Rejected: "some date"', body: 'User: Add a date field.\nAgent: Which date, and what is an example value? "Maturity date, 2029-06-30" tells me what to look for.' },
+  },
+  'create-compliance-rule': {
+    notTrigger: 'Changing or deleting a rule that exists, or checking which rules are breached.',
+    outcome: 'A rule and its first version: what is measured, what it is compared with, how it is grouped, the limits, the conditions and the scope.',
+    done: 'The user accepted the plain-language reading, the rule, its version and scope were created in order, and one evaluation was reported.',
+    check: 'The rule reads back as one plain sentence the user accepted',
+    example: { title: 'Rejected: "keep exposure under control"', body: 'User: Add a rule to keep exposure under control.\nAgent: That is not a limit I can test. What is added up, what is it compared with, and what number is the breach?' },
+  },
+  'start-workflow': {
+    notTrigger: 'Designing or editing a workflow, or asking how a run went.',
+    outcome: 'One run of a published workflow on named records with every value it asks for.',
+    done: 'The user confirmed the workflow, the records and each value, and the run id and status were reported.',
+    check: 'The run is started once, only after confirmation',
+    example: { title: 'Rejected: "run it on everything"', body: 'User: Run the close on everything.\nAgent: This workflow needs named records. Which funds should it run on?' },
+  },
+  'create-relationship-type': {
+    notTrigger: 'Linking two records, or changing a relationship type that exists.',
+    outcome: 'One relationship type between two entity types with a direction and a cardinality.',
+    done: 'The user accepted the sentence and the cardinality, no existing relationship already meant the same, and the type was read back.',
+    check: 'The parent and child are the way round the sentence says',
+    example: { title: 'Rejected: wrong direction', body: 'User: Link positions to funds.\nAgent: Which side is the parent? "A fund holds positions" makes the fund the parent.' },
+  },
+  'create-dq-rule': {
+    notTrigger: 'Resolving an exception, or changing a rule that exists.',
+    outcome: 'One rule with a type, a severity and an expression that is true for the records that fail.',
+    done: 'The user saw the expression tried on real records, accepted the spec, and the rule was created once.',
+    check: 'The expression ran on real records before the rule was created',
+    example: { title: 'Rejected: expression the wrong way round', body: 'Agent: This expression fails every sampled record. It must be true for the records that fail, so "price < 0", not "price >= 0".' },
+  },
+  'manual-override': {
+    notTrigger: 'Asking what an override changed, or clearing one.',
+    outcome: 'One manual value on one record and field, with an effective date and a reason, that now prevails.',
+    done: 'The user saw the current value and its source, accepted the override, and the lineage was read back with the manual value prevailing.',
+    check: 'The user saw the value being replaced and its source',
+    example: { title: 'Rejected: "correction"', body: 'User: Reason: correction.\nAgent: What was wrong, and how do you know? The reason is kept with the value.' },
+  },
+};
+
+function operationalPlan(skill: SkillDef, notes: NonNullable<(typeof OPERATIONAL)[SkillId]>) {
+  const hasPreview = skill.previewTools.length > 0;
+  const phases: PhasePlan[] = [
+    { id: 'p1', name: 'Decisions', gate: 'confirm' },
+    { id: 'p2', name: 'Lookups', gate: 'none' },
+    { id: 'p3', name: 'Spec', gate: 'confirm' },
+    ...(hasPreview ? [{ id: 'p4', name: 'Try it', gate: 'validate' as const }] : []),
+    { id: hasPreview ? 'p5' : 'p4', name: 'Apply', gate: 'validate' },
+  ];
+  const applyId = phases[phases.length - 1].id;
+  const tools: ToolPlan[] = [
+    ...skill.discovery.map((group) => ({ name: group[0], phase: 'p2', rule: group.length > 1 ? `Any of ${group.join(', ')}. Codes come from tools, never from memory.` : 'Required before the user is asked to confirm. Codes come from tools, never from memory.' })),
+    ...skill.previewTools.map((name) => ({ name, phase: 'p4', rule: 'The user must have seen this result before the spec is accepted.' })),
+    ...skill.writeTools.map((name) => ({ name, phase: applyId, rule: 'Held until the user accepts the spec. Write only what the ledger holds.' })),
+  ];
+  return {
+    purpose: purposeFor(skill, { notTrigger: notes.notTrigger, outcome: notes.outcome, done: notes.done }),
+    phases,
+    tools,
+    checks: [
+      { kind: 'det' as const, text: 'No write tool runs before the spec is accepted', enabled: true },
+      { kind: 'det' as const, text: 'Every code comes from a tool result', enabled: true },
+      { kind: 'rub' as const, text: notes.check, enabled: true },
+      { kind: 'rub' as const, text: 'Reports exactly what was created and where it can be changed', enabled: true },
+    ],
+    examples: [notes.example],
+  };
+}
+
 function plans(skill: SkillDef): { purpose: SkillPurpose; phases: PhasePlan[]; tools: ToolPlan[]; checks: Array<Omit<StudioCheck, 'id'>>; examples: Array<Omit<StudioExample, 'id'>> } {
+  const operational = OPERATIONAL[skill.id];
+  if (operational) return operationalPlan(skill, operational);
   if (skill.id === 'design-narrative') {
     return {
       purpose: purposeFor(skill, {
@@ -256,6 +339,7 @@ function outputPhase(skill: SkillDef, phases: PhasePlan[]) {
   const build = phases.find((phase) => phase.gate === 'validate');
   const spec = phases.find((phase) => /brief|spec/i.test(phase.name));
   if (skill.id === 'create-entity') return spec?.id || phases[phases.length - 1].id;
+  if (OPERATIONAL[skill.id]) return phases[phases.length - 1].id;
   return build?.id || phases[phases.length - 1].id;
 }
 

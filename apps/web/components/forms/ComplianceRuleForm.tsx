@@ -582,6 +582,7 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
   };
 
   const filterCount = baseConditions.filter((c) => c.attributeCode).length;
+  const anchorConditions = formData.conditions.filter((c) => c.appliesTo === 'ANCHOR' && c.attributeCode);
 
   // One readable line per scope: conditions in a group are ANDed, groups are ORed.
   const describeCondition = (c: ComplianceCondition) => {
@@ -625,6 +626,14 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
   const needsDenominatorAttribute = formData.denominatorScope !== 'CONSTANT' && formData.denominatorScope !== 'NONE';
   const denEntity = formData.denominatorScope === 'ANCHOR' ? anchorLabel : baseLabel;
   const limitSubject = anchorLabel.toLowerCase();
+  const limitFieldName = formData.hardLimitAttributeCode
+    ? fieldLabel(formData.hardLimitAttributeCode, [], formData.anchorDomainCode)
+    : '';
+  const softFactor = Number(formData.softLimitFactor);
+  const limitFromField = limitFieldName
+    ? `The limit is read from ${limitFieldName} on each ${limitSubject}${Number.isFinite(softFactor) && softFactor > 0 && formData.softLimitFactor !== '' ? `, with a warning at ${Math.round(softFactor * 100)}% of it` : ''}. It is kept when you save.`
+    : '';
+  const anchorFilterText = anchorConditions.length ? describeScope(anchorConditions) : '';
   const limitHelp = !groupOn
     ? `One limit applies to the whole result. Each ${limitSubject} sets that limit as a minimum or a maximum.`
     : formData.limitMode === 'RANK'
@@ -726,13 +735,16 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
           <button type="button" className="rf-term lim" onClick={() => jump('rb-limit')}>
             <span className="rf-k">Limits</span>
             <span className="rf-v">{!groupOn || formData.limitMode === 'UNIFORM' ? (groupOn ? 'Same for every group' : 'One limit') : formData.limitMode === 'RANK' ? 'By rank' : 'By named group'}</span>
-            <span className="rf-s">{!groupOn ? 'Set on each fund' : formData.limitMode === 'RANK' ? 'Each rank, largest group first, has its own limit' : formData.limitMode === 'NAMED' ? 'Each named group has its own limit' : 'Set on each fund'}</span>
+            <span className="rf-s">{limitFieldName ? `From each ${limitSubject}'s ${limitFieldName}` : !groupOn ? 'Set on each fund' : formData.limitMode === 'RANK' ? 'Each rank, largest group first, has its own limit' : formData.limitMode === 'NAMED' ? 'Each named group has its own limit' : 'Set on each fund'}</span>
           </button>
           <span className="rf-op" aria-hidden>→</span>
           <button type="button" className="rf-term flt" onClick={() => jump('rb-measure')}>
             <span className="rf-k">Filters</span>
-            <span className={`rf-v ${recordFilterCount ? '' : 'rf-empty'}`}>{recordFilterCount ? `${recordFilterCount} condition${recordFilterCount > 1 ? 's' : ''}` : 'None'}</span>
-            <span className="rf-s">{recordFilterLines.length ? recordFilterLines.map((line) => line.text).join(' · ') : 'Every record counts'}</span>
+            <span className={`rf-v ${recordFilterCount || anchorConditions.length ? '' : 'rf-empty'}`}>{recordFilterCount + anchorConditions.length ? `${recordFilterCount + anchorConditions.length} condition${recordFilterCount + anchorConditions.length > 1 ? 's' : ''}` : 'None'}</span>
+            <span className="rf-s">{[
+              ...recordFilterLines.map((line) => line.text),
+              ...(anchorFilterText ? [`Only ${limitSubject} records where ${anchorFilterText}`] : []),
+            ].join(' · ') || 'Every record counts'}</span>
           </button>
         </div>
         {onTest && (
@@ -1029,6 +1041,8 @@ export function ComplianceRuleForm({ initial, lockIdentity, onSubmit, onCancel, 
             ]}
           />
           <p className="rb-note">{limitHelp}</p>
+          {limitFromField && <p className="rb-note">{limitFromField}</p>}
+          {anchorFilterText && <p className="rb-note">Scored only for {limitSubject} records where {anchorFilterText}. This filter is kept when you save.</p>}
         </div>
       </section>
 
@@ -1454,6 +1468,12 @@ export function buildComplianceVersionInput(ruleId: string, data: ComplianceRule
     denominatorConstantValue: data.denominatorConstantValue ? parseFloat(data.denominatorConstantValue) : undefined,
     resultUnit: data.resultUnit,
     defaultSourceScope: data.defaultSourceScope,
+    // The form does not edit these, but a rule can carry them. Saving a new
+    // version keeps them, so editing the name does not drop the limit.
+    hardLimitAttributeCode: data.hardLimitAttributeCode || undefined,
+    softLimitFactor: data.softLimitFactor && data.softLimitFactor.trim() !== '' && Number.isFinite(Number(data.softLimitFactor)) ? Number(data.softLimitFactor) : undefined,
+    softLimitValue: data.softLimitValue && data.softLimitValue.trim() !== '' && Number.isFinite(Number(data.softLimitValue)) ? Number(data.softLimitValue) : undefined,
+    hardLimitValue: data.hardLimitValue && data.hardLimitValue.trim() !== '' && Number.isFinite(Number(data.hardLimitValue)) ? Number(data.hardLimitValue) : undefined,
     metadata: {
       ...(columns ? stripCompositeMetadata(data.versionMetadata) : (data.versionMetadata || {})),
       limitMode: data.groupByAttributeCode ? data.limitMode || 'UNIFORM' : 'UNIFORM',
@@ -1480,8 +1500,9 @@ export function buildComplianceVersionInput(ruleId: string, data: ComplianceRule
       conditions: packLineConditions(line.conditions),
       totalConditions: packLineConditions(line.totalConditions),
     })) : undefined,
+    // Anchor filters are not edited here either. They pass through unchanged.
     conditions: data.conditions
-      .filter((c) => c.attributeCode && c.appliesTo !== 'ANCHOR')
+      .filter((c) => c.attributeCode)
       .map((c, idx) => ({
         appliesTo: c.appliesTo,
         conditionGroup: c.conditionGroup,

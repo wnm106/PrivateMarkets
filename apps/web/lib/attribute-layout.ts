@@ -175,6 +175,14 @@ export function groupForDisplay<T extends AttributeDisplayItem>(
     .sort((a, b) => a.displayOrder - b.displayOrder || a.section.localeCompare(b.section));
 }
 
+/** Attributes flattened in the record editor's order: by section, then by position within the section. */
+export function attributesInDisplayOrder<T extends AttributeDisplayItem>(
+  items: T[],
+  sections: AttributeSectionOrder[],
+): T[] {
+  return groupForDisplay(items, sections).flatMap((group) => group.items);
+}
+
 function clamp(value: number | null | undefined, min: number, max: number) {
   const span = Number(value);
   if (!Number.isFinite(span)) return min;
