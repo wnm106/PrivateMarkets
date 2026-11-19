@@ -4,7 +4,7 @@
  * default and folds a saved layout over it. Everything here is pure.
  */
 
-export type HomeModuleCode = 'needs-you' | 'brief' | 'places' | 'following' | 'data-health';
+export type HomeModuleCode = 'needs-you' | 'agents' | 'brief' | 'places' | 'following' | 'data-health';
 
 export interface HomeModuleDef {
   code: HomeModuleCode;
@@ -14,6 +14,7 @@ export interface HomeModuleDef {
 
 export const HOME_MODULES: readonly HomeModuleDef[] = [
   { code: 'needs-you', title: 'Needs you', description: 'Reviews, files, and runs waiting on an action.' },
+  { code: 'agents', title: 'Agents at work', description: 'Workflow runs in flight, and which agent is behind each.' },
   { code: 'brief', title: 'Your brief', description: 'The latest summary from your assistant.' },
   { code: 'following', title: 'Following', description: 'The latest change on each thing you follow.' },
   { code: 'places', title: 'Your surfaces', description: 'The surfaces and pages you work in.' },

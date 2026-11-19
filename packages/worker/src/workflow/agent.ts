@@ -1,5 +1,6 @@
 import { isReadTool, resolveTemplates } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { normalizeItems, type ListValue, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { agentCharter, agentProposable, agentReadTools, outsideAgentDomains, type AgentDef } from '@tapestrai/graphql/src/lib/workflow-agents';
 import { runWithAgentContext, takeAgentAudits } from '@tapestrai/mcp-server/src/agent/harness';
 import { checkListValues } from './list-check';
 import { message, type AgentRequest, type AgentResult, type ToolRunner } from './engine';
@@ -135,10 +136,12 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 }
 
-export function systemPrompt(proposable: ToolSpec[]): string {
+export function systemPrompt(proposable: ToolSpec[], agent?: AgentDef | null): string {
+  const charter = agentCharter(agent);
   const catalog = proposable.map((tool) => `### ${tool.name}\n${tool.description}\nSettings: ${JSON.stringify(tool.inputSchema)}`).join('\n\n');
   return [
     'You are one step in an automated workflow on a private markets data platform. The platform holds funds, deals, issuers, securities, and positions as records with attributes, and keeps every value\'s source and history.',
+    ...(charter ? [charter] : []),
     'Your job in this step is described in the first message. Earlier steps have already run; their results are included there.',
     '## How you work',
     'You can read with the tools you have been given. You cannot change anything directly. To change data, record the change with propose_changes. A person reviews what you propose, and only what they approve is carried out, by a later step.',
@@ -184,8 +187,9 @@ export async function runAgentStep(request: AgentRequest, deps: AgentDeps): Prom
       clientId: request.actor.clientId,
       feature: 'workflow',
       activity: 'workflow.agent',
-      agent: request.node.label || request.node.id,
-      metadata: { nodeId: request.node.id, nodeType: request.node.type },
+      // A named agent is recorded by its code, so its calls add up across workflows.
+      agent: request.agent?.code || request.node.label || request.node.id,
+      metadata: { nodeId: request.node.id, nodeType: request.node.type, ...(request.agent ? { agentCode: request.agent.code, agentName: request.agent.name } : {}) },
     },
     () => executeAgentStep(request, deps),
   );
@@ -197,12 +201,14 @@ async function executeAgentStep(request: AgentRequest, deps: AgentDeps): Promise
   const maxRounds = Math.min(MAX_ROUNDS, Math.max(1, Math.trunc(Number(config.maxRounds)) || DEFAULT_ROUNDS));
 
   const all = deps.tools.specs();
-  const allowed = new Set(strings(config.tools).filter(isReadTool));
+  // A named agent narrows the step's tools to its own. It never adds one the step could not have.
+  const agent = request.agent ?? null;
+  const allowed = new Set(agentReadTools(agent, strings(config.tools)));
   const readSpecs = all.filter((tool) => allowed.has(tool.name));
-  const proposableNames = strings(config.proposable);
-  const proposable = all.filter((tool) => !isReadTool(tool.name) && (proposableNames.length === 0 || proposableNames.includes(tool.name)));
-  const canPropose = new Set(proposable.map((tool) => tool.name));
-  const system = systemPrompt(proposable);
+  const writeNames = all.filter((tool) => !isReadTool(tool.name)).map((tool) => tool.name);
+  const canPropose = new Set(agentProposable(agent, strings(config.proposable), writeNames));
+  const proposable = all.filter((tool) => canPropose.has(tool.name));
+  const system = systemPrompt(proposable, agent);
   const tools = proposable.length > 0 ? [...readSpecs, PROPOSE_SPEC] : readSpecs;
 
   const state: AgentState = restore(request.state, model.provider) || {
@@ -230,9 +236,16 @@ async function executeAgentStep(request: AgentRequest, deps: AgentDeps): Promise
     const refused: string[] = [];
     const notes: string[] = [];
     const allowedHere = added.filter((item) => {
-      if (canPropose.has(item.tool)) return true;
-      refused.push(`"${item.summary}" names ${item.tool}, which this step cannot propose. Proposable tools: ${[...canPropose].join(', ') || 'none'}.`);
-      return false;
+      if (!canPropose.has(item.tool)) {
+        refused.push(`"${item.summary}" names ${item.tool}, which this step cannot propose. Proposable tools: ${[...canPropose].join(', ') || 'none'}.`);
+        return false;
+      }
+      const outside = outsideAgentDomains(agent, item);
+      if (outside) {
+        refused.push(outside);
+        return false;
+      }
+      return true;
     });
     // Values that come from a list are held to the list before anything is recorded.
     const pool = [...state.items, ...allowedHere];

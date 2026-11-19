@@ -6520,6 +6520,237 @@ button.sidebar-logo:hover {
 
 .home-focus-sub { font-size: 12px; color: var(--ink-3); }
 
+/* The composer: ask the assistant, or hand a task to a workflow. */
+.home-composer {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  padding: 12px 14px;
+  margin: 4px 0 16px;
+}
+
+.home-composer:focus-within { border-color: var(--brand-blue); }
+
+.home-composer-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  outline: none;
+  resize: vertical;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.45;
+  min-height: 44px;
+}
+
+.home-composer-input::placeholder { color: var(--ink-4); }
+
+.home-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.home-composer-target { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; flex: 0 0 auto; }
+.home-composer-target select { max-width: 240px; }
+.home-composer-hint { flex: 1; min-width: 0; font-size: 12px; white-space: normal; }
+.home-composer-bar .btn { flex: 0 0 auto; white-space: nowrap; }
+
+.home-composer-note { font-size: 12.5px; color: var(--ink-2); margin-top: 8px; }
+.home-composer-note a { color: var(--entity-link); }
+.home-composer-note.is-problem { color: var(--red); }
+
+.home-composer-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+.home-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.home-chip:hover { border-color: var(--brand-blue); color: var(--ink); }
+
+/* Agents at work: runs in flight, then the roster. */
+.home-work { list-style: none; display: flex; flex-direction: column; gap: 12px; }
+
+.home-work-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+
+.home-work-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+  min-width: 0;
+}
+
+.home-work-title:hover { text-decoration: underline; }
+.home-work-title .home-muted { font-weight: 400; white-space: normal; }
+
+.home-work-percent { font-size: 11px; font-weight: 700; color: var(--ink-3); flex: 0 0 auto; }
+
+.home-work-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+  margin: 6px 0 4px;
+}
+
+.home-work-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--brand-blue); transition: width 300ms ease; }
+.home-work-item.state-waiting .home-work-bar > span { background: var(--amber); }
+.home-work-item.state-queued .home-work-bar > span { background: var(--ink-4); }
+
+.home-work-detail { font-size: 12px; color: var(--ink-3); }
+
+.home-agent-roster {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.home-agent { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.home-agent-name { font-weight: 600; color: var(--ink-2); }
+
+.home-agent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink-4);
+  box-sizing: border-box;
+}
+
+.home-agent.state-working .home-agent-dot { background: #2f9e6e; border-color: #2f9e6e; }
+.home-agent.state-queued .home-agent-dot { background: var(--ink-4); }
+.home-agent.state-waiting .home-agent-dot { background: var(--amber); border-color: var(--amber); }
+
+@media (max-width: 640px) {
+  .home-composer-bar { flex-wrap: wrap; }
+  .home-composer-hint { flex-basis: 100%; order: 3; }
+}
+
+/* Needs your decision: reviews that can be decided on the home page. */
+.home-decisions { margin-bottom: 18px; }
+
+.home-decision-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.home-decision {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--brand-blue);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.home-decision.is-overdue { border-left-color: var(--red); }
+.home-decision.is-done { border-left-color: var(--line); }
+
+.home-decision-text { min-width: 0; flex: 1; }
+
+.home-decision-from {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.home-decision-agent {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: #e6f3fd;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.home-decision-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-top: 4px;
+}
+
+.home-decision-summary {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+  margin-top: 3px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.home-decision-lines {
+  list-style: disc;
+  margin: 6px 0 0 16px;
+  font-size: 12px;
+  color: var(--ink-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.home-decision-lines .home-muted { list-style: none; margin-left: -16px; }
+
+.home-decision-trust {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+  margin-top: 8px;
+  padding-left: 8px;
+  border-left: 3px solid var(--line);
+}
+
+.home-decision-trust.confidence-high { border-left-color: #2f9e6e; }
+.home-decision-trust.confidence-medium { border-left-color: var(--amber); }
+.home-decision-trust.confidence-low { border-left-color: var(--red); }
+
+.home-decision-problem { font-size: 12px; color: var(--red); margin-top: 6px; }
+
+.home-decision-done { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
+.home-decision-done a { color: var(--entity-link); }
+
+.home-decision-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.home-decision-actions .btn { white-space: nowrap; text-align: center; }
+
+@media (max-width: 640px) {
+  .home-decision { flex-direction: column; }
+  .home-decision-actions { flex-direction: row; }
+}
+
 /* Needs you: two lanes of grouped rows. */
 .home-lanes {
   display: grid;

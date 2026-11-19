@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { toAgentDef } from '@tapestrai/graphql/src/lib/workflow-agents';
 import { JobError, type JobHandler } from '../worker';
 import { runAgentStep, type AgentModel } from './agent';
 import { claudeModel } from './claude';
@@ -45,6 +46,11 @@ export function engineDeps(supabase: SupabaseClient, tools: WorkflowTools = work
     agent: (request) => runAgentStep(request, { tools, model }),
     foundation: (args, actor) => tools.foundation(args, actor),
     outbound: workflowOutbound({ supabase }),
+    agents: async (clientId, code) => {
+      const { data, error } = await supabase.rpc('workflow_worker_agent', { p_client_id: clientId, p_code: code });
+      if (error) throw new Error(error.message);
+      return toAgentDef(data);
+    },
   };
 }
 

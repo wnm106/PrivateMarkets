@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { CONDITION_OPS, nodeTypeDef, upstreamOf, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
+import { CONDITION_OPS, isReadTool, nodeTypeDef, upstreamOf, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { ReviewerPicker } from '@/components/workflows/ReviewerPicker';
 import { kindOf, parseObject, type ToolOption, type WorkflowProblem } from '@/lib/workflows';
 import { graphqlQuery } from '@/lib/graphql';
 import { RESPONSIBILITY_CHOICES_QUERY, type ResponsibilityChoices } from '@/lib/responsibilities';
+import { AGENTS_QUERY, agentChoices, agentScopeLabel, type Agent } from '@/lib/agents';
 
 /** The settings for the step or connection selected on the canvas. */
 
@@ -115,6 +116,23 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, clientId
   const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
   const [activities, setActivities] = useState<ResponsibilityChoices['activities']>([]);
   const isReview = node.type === 'review';
+  const isAgent = node.type === 'agent';
+  const [agents, setAgents] = useState<Agent[]>([]);
+
+  // The named agents an agent step can run as.
+  useEffect(() => {
+    if (!isAgent) return;
+    let cancelled = false;
+    void graphqlQuery<{ agents: Agent[] }>(AGENTS_QUERY, { clientId: clientId || null }).then((result) => {
+      if (!cancelled) setAgents(result.data?.agents || []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAgent, clientId]);
+  const runsAs = String(config.agent || '');
+  const offered = useMemo(() => agentChoices(agents, clientId, runsAs), [agents, clientId, runsAs]);
+  const chosenAgent = offered.find((agent) => agent.code === runsAs);
 
   // The activities a review can be routed by. Only a review step asks.
   useEffect(() => {
@@ -315,6 +333,21 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, clientId
 
       {node.type === 'agent' && (
         <>
+          <Field name="Runs as" help="A named agent brings its charter and limits this step to its tools and domains. Manage them under Admin, Agents.">
+            <select className="text-input" style={full} value={runsAs} onChange={(event) => set({ agent: event.target.value || null })}>
+              <option value="">No named agent</option>
+              {runsAs && !chosenAgent && <option value={runsAs}>{runsAs} (not found)</option>}
+              {offered.map((agent) => (
+                <option key={agent.id} value={agent.code}>{agent.name}{agent.isActive ? '' : ' (switched off)'}</option>
+              ))}
+            </select>
+          </Field>
+          {chosenAgent && (
+            <span style={hint}>
+              {chosenAgent.description ? `${chosenAgent.description} ` : ''}Limited to {agentScopeLabel(chosenAgent, isReadTool)}.
+              {chosenAgent.toolNames.length > 0 && ' Tick no tools below to give it all of its own; tick some to narrow further.'}
+            </span>
+          )}
           <Field name="Instructions" help="What the agent should achieve and how to judge it. It sees the run's input and every earlier step's result.">
             <textarea className="text-input" rows={9} style={{ ...full, fontSize: 12, lineHeight: 1.45 }} value={String(config.instructions || '')} onChange={(event) => set({ instructions: event.target.value })} />
           </Field>

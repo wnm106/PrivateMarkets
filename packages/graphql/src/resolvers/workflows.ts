@@ -67,7 +67,10 @@ export function mapWorkflow(row: Row) {
 
 export function mapReview(row: Row) {
   const proposal = row.proposal ? asProposal(row.proposal) : null;
+  const agent = row.proposal && typeof row.proposal === 'object' ? (row.proposal as Row).agent : null;
   return {
+    agentCode: agent && typeof agent.code === 'string' ? agent.code : null,
+    agentName: agent && typeof agent.name === 'string' ? agent.name : null,
     id: row.id,
     runId: row.run_id,
     clientId: row.client_id,
@@ -311,6 +314,12 @@ export const workflowResolvers = {
       const { data, error } = await context.supabase.rpc('workflow_portal_get', { p_token: args.token });
       if (error) throw error;
       return data ?? null;
+    },
+
+    workflowReview: async (_: unknown, args: { id: string }, context: Context) => {
+      const { data, error } = await context.supabase.rpc('workflow_review_get', { p_review_id: args.id });
+      if (error) throw error;
+      return data ? mapReview(data as Row) : null;
     },
 
     workflowAnalytics: async (_: unknown, args: { days?: number | null }, context: Context) => {

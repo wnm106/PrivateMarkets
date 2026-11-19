@@ -36,7 +36,7 @@ describe('home role defaults', () => {
 
   it('lets a saved list replace the role default', () => {
     assert.ok(visibleModules(member, []).includes('data-health'));
-    assert.deepEqual(visibleModules(dataOps, ['brief', 'data-health']), ['needs-you', 'following', 'places']);
+    assert.deepEqual(visibleModules(dataOps, ['brief', 'data-health']), ['needs-you', 'agents', 'following', 'places']);
   });
 
   it('starts a toggle from the role default and drops unknown codes', () => {

@@ -93,6 +93,8 @@ function extractProposals(text: string): Array<{ raw: string; value: Record<stri
 export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const isOpen = useTemporalStore((state) => state.chatOpen);
   const setChatOpen = useTemporalStore((state) => state.setChatOpen);
+  const chatDraft = useTemporalStore((state) => state.chatDraft);
+  const clearChatDraft = useTemporalStore((state) => state.clearChatDraft);
   const inspect = useDetailDrawer();
   const inspectOpen = inspect.view != null;
   const asOfDate = useTemporalStore((state) => state.asOfDate);
@@ -431,6 +433,23 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
     setSkillView(null);
     skillStateRef.current = null;
   };
+
+  // A question asked from elsewhere in the app (the home page composer) is put
+  // in the box and sent once, as if it had been typed here.
+  const sendDraftRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen || !chatDraft) return;
+    setInput(chatDraft);
+    sendDraftRef.current = true;
+    clearChatDraft();
+  }, [isOpen, chatDraft, clearChatDraft]);
+  useEffect(() => {
+    if (!sendDraftRef.current || !input.trim() || isLoading) return;
+    sendDraftRef.current = false;
+    void handleSend();
+    // handleSend reads the input this effect waits for.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input, isLoading]);
 
   const beginRename = (conversation: ChatConversation) => {
     setConfirmingDeleteId(null);

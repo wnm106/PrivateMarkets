@@ -31,6 +31,7 @@ import { assistantResolvers } from './assistant';
 import { homeResolvers } from './home';
 import { agentUsageResolvers } from './agent-usage';
 import { responsibilityResolvers } from './responsibilities';
+import { agentResolvers } from './agents';
 
 export const resolvers = {
   Query: {
@@ -77,6 +78,7 @@ export const resolvers = {
     ...assistantResolvers.Query,
     ...homeResolvers.Query,
     ...responsibilityResolvers.Query,
+    ...agentResolvers.Query,
     ...agentUsageResolvers.Query,
   },
   
@@ -119,6 +121,7 @@ export const resolvers = {
     ...assistantResolvers.Mutation,
     ...homeResolvers.Mutation,
     ...responsibilityResolvers.Mutation,
+    ...agentResolvers.Mutation,
   },
   
   Subscription: {},

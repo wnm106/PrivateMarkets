@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { ToolRegistry } from '@tapestrai/mcp-server/src/lib/tool-registry';
 import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/compliance-tools';
+import { registerDocumentTools } from '@tapestrai/mcp-server/src/tools/document-tools';
 import { registerDomainTools } from '@tapestrai/mcp-server/src/tools/domain-tools';
 import { registerDqCheckTools } from '@tapestrai/mcp-server/src/tools/dq-check-tools';
 import { registerDQTools } from '@tapestrai/mcp-server/src/tools/dq-tools';
@@ -77,6 +78,7 @@ export function buildRegistry(): ToolRegistry {
   registerDqCheckTools(registry);
   registerRecTools(registry);
   registerSelectionTools(registry);
+  registerDocumentTools(registry);
   return registry;
 }
 

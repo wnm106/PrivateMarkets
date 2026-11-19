@@ -1,3 +1,4 @@
+import { agentCodeOf, agentReviewActivity, type AgentDef } from '@tapestrai/graphql/src/lib/workflow-agents';
 import {
   asGraph,
   evaluateCondition,
@@ -176,6 +177,8 @@ export interface AgentRequest {
   state: unknown;
   checkpoint(state: unknown): Promise<void>;
   event(type: string, summary: string, detail?: unknown): Promise<void>;
+  /** The named agent the step runs as, when it names one. */
+  agent?: AgentDef | null;
 }
 
 export interface AgentResult {
@@ -190,6 +193,8 @@ export interface EngineDeps {
   /** What the entity type behind a proposed creation requires. Empty when it cannot be found. */
   foundation(args: Record<string, unknown>, actor: Actor): Promise<FoundationAttribute[]>;
   outbound?: Outbound;
+  /** The named agent with this code for a client: its own, or else the shared one. Null when there is none. */
+  agents?(clientId: string, code: string): Promise<AgentDef | null>;
 }
 
 export interface AdvanceResult {
@@ -265,10 +270,30 @@ async function runTool(node: WorkflowNode, ctx: StepContext): Promise<StepOutcom
 async function runAgent(node: WorkflowNode, ctx: StepContext): Promise<StepOutcome> {
   const { store } = ctx.deps;
   const actor: Actor = { userId: ctx.run.startedBy, clientId: ctx.run.clientId };
+
+  // A step that names an agent runs as it, or not at all.
+  const agentCode = agentCodeOf(node.config);
+  let agent: AgentDef | null = null;
+  if (agentCode) {
+    if (!ctx.deps.agents) throw new Error(`This step runs as the agent "${agentCode}", and this worker cannot look agents up.`);
+    agent = await ctx.deps.agents(ctx.run.clientId, agentCode);
+    if (!agent) throw new Error(`There is no agent with the code "${agentCode}" for this client. Choose another on the step, or create it under Admin, Agents.`);
+    if (!agent.isActive) throw new Error(`The agent ${agent.name} is switched off. Switch it on under Admin, Agents, or choose another on the step.`);
+    if (!ctx.step?.state) {
+      await store.event(ctx.run.id, node.id, 'agent.identity', 'AGENT', null, `Running as ${agent.name}`, {
+        agentCode: agent.code,
+        activityCodes: agent.activityCodes,
+        domainCodes: agent.domainCodes,
+        shared: agent.shared,
+      });
+    }
+  }
+
   const result = await ctx.deps.agent({
     node,
     scope: ctx.scope,
     actor,
+    agent,
     state: ctx.step?.state ?? null,
     checkpoint: async (state) => {
       if (!(await store.saveStep(ctx.run.id, ctx.owner, node.id, { state }))) throw new Halted();
@@ -298,7 +323,10 @@ async function runAgent(node: WorkflowNode, ctx: StepContext): Promise<StepOutco
       : `The agent proposed ${counts.total} change${counts.total === 1 ? '' : 's'}: ${counts.confident} confident, ${counts.needsReview} needing review`,
     { counts, summary: result.summary },
   );
-  return { outcome: null, output: { summary: result.summary, proposal, counts } };
+  return {
+    outcome: null,
+    output: { summary: result.summary, proposal, counts, ...(agent ? { agent: { code: agent.code, name: agent.name, activityCodes: agent.activityCodes } } : {}) },
+  };
 }
 
 async function runReview(node: WorkflowNode, ctx: StepContext): Promise<StepOutcome> {
@@ -312,14 +340,22 @@ async function runReview(node: WorkflowNode, ctx: StepContext): Promise<StepOutc
       await store.event(ctx.run.id, node.id, 'review.skipped', 'SYSTEM', null, 'Nothing was proposed, so there was nothing to review');
       return { outcome: 'approved', output: { outcome: 'approved', skipped: true, approved: [], rejected: [] } };
     }
+    // A review that names no activity is routed by the activity of the agent whose proposal it is.
+    const routing = reviewRouting(node.config, ctx.scope);
+    const by = record(source.agent);
+    if (!routing.activity) {
+      routing.activity = agentReviewActivity({ activityCodes: Array.isArray(by.activityCodes) ? by.activityCodes.map(String) : [] });
+    }
+    // The stored proposal says which named agent it came from, so the reviewer is told.
+    const stored = typeof by.code === 'string' && by.code ? { ...proposal, agent: { code: by.code, name: typeof by.name === 'string' && by.name ? by.name : by.code } } : proposal;
     review = await store.openReview(
       ctx.run.id,
       node.id,
       String(node.config.title || node.label || 'Review'),
       String(node.config.instructions || ''),
       typeof source.summary === 'string' ? source.summary : '',
-      proposal,
-      reviewRouting(node.config, ctx.scope),
+      stored,
+      routing,
     );
     if (review.status === 'OPEN') {
       const counts = proposalCounts(proposal);

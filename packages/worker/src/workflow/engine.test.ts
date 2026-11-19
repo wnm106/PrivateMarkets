@@ -120,6 +120,38 @@ function deps(store: WorkflowStore, overrides: Partial<EngineDeps> = {}) {
 }
 
 describe('advanceRun', () => {
+  function cleanupAs(agent: string) {
+    const graph = JSON.parse(JSON.stringify(CLEANUP)) as { nodes: Array<{ type: string; config: Record<string, unknown> }> };
+    for (const node of graph.nodes) if (node.type === 'agent') node.config.agent = agent;
+    return graph;
+  }
+
+  it('fails a step that names an agent the client does not have, or one switched off', async () => {
+    const missing = memoryStore(cleanupAs('ghost'));
+    const asked: string[] = [];
+    const none = deps(missing.store, { agents: async (_clientId, code) => (asked.push(code), null) });
+    expect(await advanceRun('run-1', 'job-1', none.deps)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('no agent with the code "GHOST"') });
+    expect(asked).toEqual(['GHOST']);
+
+    const off = memoryStore(cleanupAs('STEWARD'));
+    const steward = { code: 'STEWARD', name: 'Steward', description: '', charter: '', activityCodes: [], domainCodes: [], toolNames: [], isActive: false, shared: true };
+    expect(await advanceRun('run-1', 'job-1', deps(off.store, { agents: async () => steward }).deps)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('switched off') });
+  });
+
+  it('runs a step as its named agent and routes the review by the agent\u2019s activity', async () => {
+    const memory = memoryStore(cleanupAs('RECONCILER'));
+    const reconciler = { code: 'RECONCILER', name: 'Reconciler', description: '', charter: '', activityCodes: ['RECONCILIATION'], domainCodes: [], toolNames: [], isActive: true, shared: true };
+    const given: Array<string | undefined> = [];
+    const { deps: engine } = deps(memory.store, {
+      agents: async () => reconciler,
+      agent: async (request) => (given.push(request.agent?.code), { summary: 'Done.', items: proposed() }),
+    });
+    expect(await advanceRun('run-1', 'job-1', engine)).toMatchObject({ status: 'WAITING' });
+    expect(given).toEqual(['RECONCILER']);
+    expect(memory.events.some((event) => event.type === 'agent.identity' && event.summary === 'Running as Reconciler')).toBe(true);
+    expect(memory.routings[0].activity).toBe('RECONCILIATION');
+  });
+
   it('runs to the review, waits, then applies what was approved as the reviewer', async () => {
     const memory = memoryStore(CLEANUP, { limit: 5 });
     const { deps: engine, calls } = deps(memory.store);
@@ -334,6 +366,63 @@ describe('runAgentStep', () => {
     { name: 'submit_manual_override', description: 'Set a value', inputSchema: { type: 'object', properties: {} } },
     { name: 'delete_compliance_rule', description: 'Delete a rule', inputSchema: { type: 'object', properties: {} } },
   ];
+
+  it('runs as a named agent: its charter, its tools, and its domains', async () => {
+    const ran: string[] = [];
+    const systems: string[] = [];
+    const offered: string[][] = [];
+    const tools = { names: () => new Set(specs.map((spec) => spec.name)), specs: () => specs, run: async (name: string) => (ran.push(name), { ok: true }) };
+    const model = scripted([
+      {
+        stop: 'tools',
+        calls: [
+          { id: '1', name: 'get_entity', input: { entityId: 'e7' } },
+          {
+            id: '2',
+            name: 'propose_changes',
+            input: {
+              changes: [
+                { action: 'UPDATE', target: { kind: 'Fund', label: 'F1', domainCode: 'FUND' }, summary: 'Set fund value', tool: 'submit_manual_override', args: { entityId: 'f1' }, confidence: 'HIGH', rationale: 'r' },
+                { action: 'UPDATE', target: { kind: 'Issuer', label: 'I1', domainCode: 'ISSUER' }, summary: 'Set issuer value', tool: 'submit_manual_override', args: { entityId: 'i1' }, confidence: 'HIGH', rationale: 'r' },
+                { action: 'DELETE', target: { kind: 'Rule', label: 'R1' }, summary: 'Delete rule', tool: 'delete_compliance_rule', args: {}, confidence: 'HIGH', rationale: 'r' },
+              ],
+            },
+          },
+        ],
+      },
+      { stop: 'end', text: 'Proposed one change.' },
+    ]);
+    const turn = model.turn.bind(model);
+    model.turn = async (system, toolSpecs, messages) => {
+      systems.push(system);
+      offered.push(toolSpecs.map((spec) => spec.name));
+      return turn(system, toolSpecs, messages);
+    };
+    // The step ticks no tools and allows any change. The agent's own list decides.
+    const { request: built } = request({ instructions: 'Work the break', agent: 'RECONCILER' });
+    built.agent = {
+      code: 'RECONCILER',
+      name: 'Reconciler',
+      description: 'Works breaks.',
+      charter: 'Find the cause first.',
+      activityCodes: ['RECONCILIATION'],
+      domainCodes: ['FUND'],
+      toolNames: ['get_entity', 'submit_manual_override'],
+      isActive: true,
+      shared: true,
+    };
+    const result = await runAgentStep(built, { tools, model: () => model });
+
+    expect(systems[0]).toContain('You are Reconciler. Works breaks.');
+    expect(systems[0]).toContain('Find the cause first.');
+    expect(offered[0]).toEqual(['get_entity', 'propose_changes']);
+    expect(ran).toEqual(['get_entity']);
+    // The issuer change is outside its domains, and deleting a rule is not one of its tools.
+    expect(result.items.map((item) => item.summary)).toEqual(['Set fund value']);
+    const results = (model.seen[1][2] as { results: Array<{ name: string; content: string }> }).results;
+    expect(results[1].content).toMatch(/Reconciler works on FUND only/);
+    expect(results[1].content).toMatch(/delete_compliance_rule, which this step cannot propose/);
+  });
 
   it('reads with its tools, cannot write, and only proposes what the step allows', async () => {
     const ran: string[] = [];

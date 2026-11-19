@@ -1,5 +1,7 @@
 'use client';
 
+import { AgentsAtWork } from '@/components/home/AgentsAtWork';
+import { HomeComposer } from '@/components/home/HomeComposer';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { goToSignIn } from '@/components/layout/UserMenu';
@@ -58,6 +60,7 @@ const SAVE_LAYOUT = `
 
 const MODULE_LINKS: Partial<Record<HomeModuleCode, { href: string; label: string }>> = {
   'needs-you': { href: '/workflows', label: 'All workflows' },
+  agents: { href: '/admin/agents', label: 'Agents' },
   brief: { href: '/assistant', label: 'Assistant settings' },
   following: { href: '/assistant', label: 'Manage follows' },
   'data-health': { href: '/quality', label: 'Data quality' },
@@ -72,6 +75,8 @@ export function HomeView({ user, places }: { user: HomeUser; places: HomePlace[]
   const [customizing, setCustomizing] = useState(false);
   const [saveProblem, setSaveProblem] = useState<string | null>(null);
   const [now, setNow] = useState<Date | null>(null);
+  // Bumped when the composer starts a run, so the agents panel shows it at once.
+  const [runsStarted, setRunsStarted] = useState(0);
 
   const role = homeRole(user);
   const needsYou = useNeedsYou(me?.id || null, follows, role === 'data-ops');
@@ -197,7 +202,8 @@ export function HomeView({ user, places }: { user: HomeUser; places: HomePlace[]
             )}
           </span>
         </div>
-        {code === 'needs-you' && <NeedsYouBoard items={needsYou?.items ?? null} />}
+        {code === 'needs-you' && <NeedsYouBoard items={needsYou?.items ?? null} reviews={needsYou?.reviews} />}
+        {code === 'agents' && <AgentsAtWork refreshKey={runsStarted} />}
         {code === 'brief' &&
           (briefProblem ? <div className="home-empty">{briefProblem}</div> : brief ? <BriefView brief={brief} /> : <div className="home-empty">Loading your brief…</div>)}
         {code === 'places' && <PlacesModule places={pinned} customizing={customizing && canSave} onUnpin={(key) => setPin(key, false)} />}
@@ -282,6 +288,8 @@ export function HomeView({ user, places }: { user: HomeUser; places: HomePlace[]
           </div>
         </section>
       )}
+
+      <HomeComposer summary={summary} onStarted={() => setRunsStarted((count) => count + 1)} />
 
       {modules.includes('needs-you') && <FocusTiles summary={summary} showExceptions={role === 'data-ops'} />}
 

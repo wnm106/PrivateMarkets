@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
 import { domainHref } from '@/lib/domain-routes';
 import { markdownToHtml } from '@/lib/markdown';
+import { cardOrder } from '@/lib/home-decisions';
+import { DecisionCards } from '@/components/home/DecisionCards';
 import {
   groupNeedsYou,
   needsYouItems,
@@ -112,6 +114,8 @@ async function loadSources(follows: HomeFollow[], includeClientWide: boolean) {
 export interface NeedsYouState {
   items: NeedsYouItem[];
   urgentExceptionCount: number;
+  /** The open reviews, for the decision cards. */
+  reviews: ReviewSource[];
 }
 
 /** Waits for the follows (they decide which exceptions count), then loads everything once. */
@@ -122,7 +126,7 @@ export function useNeedsYou(userId: string | null, follows: HomeFollow[] | null,
     let cancelled = false;
     loadSources(follows, clientWide).then((sources) => {
       if (cancelled) return;
-      setState({ items: needsYouItems({ now: new Date(), userId, ...sources }), urgentExceptionCount: sources.urgentExceptionCount });
+      setState({ items: needsYouItems({ now: new Date(), userId, ...sources }), urgentExceptionCount: sources.urgentExceptionCount, reviews: sources.reviews || [] });
     });
     return () => {
       cancelled = true;
@@ -267,15 +271,28 @@ function Lane({ lane, title, hint, empty, groups }: { lane: NeedsYouLane; title:
   );
 }
 
-export function NeedsYouBoard({ items }: { items: NeedsYouItem[] | null }) {
-  const groups = useMemo(() => (items ? groupNeedsYou(items) : []), [items]);
+/** How many reviews are shown as cards. The rest stay in the Decide lane. */
+const CARD_LIMIT = 4;
+
+export function NeedsYouBoard({ items, reviews }: { items: NeedsYouItem[] | null; reviews?: ReviewSource[] }) {
+  const cardIds = useMemo(() => cardOrder(reviews || [], CARD_LIMIT).map((review) => review.id), [reviews]);
+  // A review shown as a card is not listed again below. One whose card could not load stays listed.
+  const [carded, setCarded] = useState<string[]>([]);
+  const groups = useMemo(() => {
+    if (!items) return [];
+    const hidden = new Set(carded.map((id) => `review-${id}`));
+    return groupNeedsYou(items.filter((item) => !hidden.has(item.id)));
+  }, [items, carded]);
   if (!items) return <div className="home-empty">Checking what is waiting on you…</div>;
   return (
-    <div className="home-lanes">
-      {LANES.map((lane) => (
-        <Lane key={lane.lane} {...lane} groups={groups.filter((group) => group.lane === lane.lane)} />
-      ))}
-    </div>
+    <>
+      <DecisionCards reviewIds={cardIds} onShown={setCarded} />
+      <div className="home-lanes">
+        {LANES.map((lane) => (
+          <Lane key={lane.lane} {...lane} groups={groups.filter((group) => group.lane === lane.lane)} />
+        ))}
+      </div>
+    </>
   );
 }
 

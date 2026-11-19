@@ -2987,12 +2987,18 @@ type Query {
   workflowRun(id: ID!): WorkflowRun
   """Reviews waiting for a person, the ones due soonest first. status defaults to OPEN. mine keeps those the caller can decide now."""
   workflowReviews(status: String, mine: Boolean): [WorkflowReview!]!
+  """One review with its proposal, for deciding it where it is shown. Null when it is not found or not visible."""
+  workflowReview(id: ID!): WorkflowReview
   """Who a review step can be assigned to: people holding workflow.review in the client, and the roles that grant it. Leave out clientId for a shared workflow."""
   workflowReviewerChoices(clientId: ID): WorkflowReviewerChoices!
   """Who is responsible for a record or a domain. Filter by record, by domain, or to the caller's own."""
   responsibilities(entityId: ID, domainCode: String, mine: Boolean): [Responsibility!]!
   """Who is responsible for one record right now, after the nearest assignment wins."""
   responsibleForEntity(entityId: ID!, activity: String): [ResponsiblePerson!]!
+  """The named agents a workflow agent step can run as: the shared ones and this session's clients' own."""
+  agents(clientId: ID): [Agent!]!
+  """The workflow runs in flight, which agent is behind each, and the standing of every agent."""
+  agentsAtWork: AgentsAtWork!
   """The people, roles, and activities a responsibility can be set to."""
   responsibilityChoices(clientId: ID): ResponsibilityChoices!
   """What starts this workflow when something happens: feed events or new data quality failures."""
@@ -3403,6 +3409,9 @@ type Mutation {
   """Names a person or a role as responsible for a record or a domain. Needs responsibility.manage."""
   saveResponsibility(input: SaveResponsibilityInput!): SaveResponsibilityResult!
   deleteResponsibility(id: ID!): MutationResult!
+  """Creates or changes a named agent. A shared agent (no client) needs a tenant admin; a client's needs agent.manage."""
+  saveAgent(input: SaveAgentInput!): SaveAgentResult!
+  deleteAgent(id: ID!): MutationResult!
   deliverAssistantBrief: MutationResult!
   """Saves the caller's home page choices. Null for a list returns it to the default."""
   saveHomeLayout(input: SaveHomeLayoutInput!): SaveHomeLayoutResult!
@@ -5001,6 +5010,9 @@ type WorkflowReview {
   """{ items }: each proposed change with its tool call, confidence, and open questions. Null in a list."""
   proposal: JSON
   counts: JSON
+  """The named agent that proposed it, when the step ran as one. Null in a list."""
+  agentCode: String
+  agentName: String
   itemCount: Int!
   """OPEN, APPROVED, REJECTED, or CANCELLED."""
   status: String!
@@ -5185,6 +5197,85 @@ input SaveResponsibilityInput {
 type SaveResponsibilityResult {
   responsibility: Responsibility
   errors: [MutationError!]!
+}
+
+"""A standing definition a workflow agent step can run as. It narrows the step and never widens it."""
+type Agent {
+  id: ID!
+  """Null for a shared agent, offered to every client."""
+  clientId: ID
+  code: String!
+  name: String!
+  description: String
+  """Who the agent is and how it should judge. Added to the step's instructions."""
+  charter: String!
+  """The kinds of work it does."""
+  activityCodes: [String!]!
+  activityNames: [String!]!
+  """The domains it may propose changes in. Empty means any."""
+  domainCodes: [String!]!
+  """The tools it may use, reading and proposing. Empty means whatever the step allows."""
+  toolNames: [String!]!
+  isActive: Boolean!
+  isShared: Boolean!
+  canManage: Boolean!
+  updatedAt: DateTime
+}
+
+input SaveAgentInput {
+  """Leave out to create."""
+  id: ID
+  """Leave out for a shared agent."""
+  clientId: ID
+  code: String!
+  name: String!
+  description: String
+  charter: String
+  activityCodes: [String!]
+  domainCodes: [String!]
+  toolNames: [String!]
+  isActive: Boolean
+}
+
+type SaveAgentResult {
+  agent: Agent
+  errors: [MutationError!]!
+}
+
+type AgentsAtWork {
+  agents: [AgentStatus!]!
+  work: [AgentWork!]!
+  """Runs with a step running or queued."""
+  running: Int!
+  """Runs waiting on a person."""
+  waiting: Int!
+}
+
+type AgentStatus {
+  code: String!
+  name: String!
+  description: String
+  """working, queued, waiting (its proposals are with a person), or idle."""
+  state: String!
+  runs: Int!
+}
+
+"""One workflow run in flight."""
+type AgentWork {
+  runId: ID!
+  workflowName: String!
+  """working, queued, or waiting (on a person)."""
+  state: String!
+  agentCode: String
+  """The named agent, or the agent step's label. Null when no agent step is involved."""
+  agentName: String
+  stepLabel: String!
+  detail: String!
+  """0 to 100: steps finished, plus how far through its rounds a running agent is."""
+  percent: Int!
+  stepsDone: Int!
+  stepsTotal: Int!
+  startedAt: DateTime
 }
 
 input ReassignWorkflowReviewInput {
