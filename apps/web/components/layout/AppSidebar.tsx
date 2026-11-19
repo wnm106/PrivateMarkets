@@ -52,6 +52,7 @@ const ADMIN = [
   { href: '/admin/experiences', label: 'Record Experiences', icon: 'domains' },
   { href: '/admin/narratives', label: 'Narratives', icon: 'list' },
   { href: '/admin/skills', label: 'Skills', icon: 'list' },
+  { href: '/admin/assistant-connections', label: 'Assistant connections', icon: 'nodes' },
   { href: '/admin/feeds', label: 'Feeds', icon: 'download' },
   { href: '/admin/document-templates', label: 'Document templates', icon: 'layers' },
   { href: '/admin/jobs', label: 'Jobs', icon: 'list' },

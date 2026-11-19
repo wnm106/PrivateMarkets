@@ -15,9 +15,12 @@ import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/complia
 import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
 import { QUERY_DATA_GUIDE, registerQueryTools } from '@tapestrai/mcp-server/src/tools/query-data';
 import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrative-tools';
+import { registerExternalIdTools } from '@tapestrai/mcp-server/src/tools/external-id-tools';
+import { loadExternalServers } from '@tapestrai/mcp-server/src/external/load';
+import { buildExternalToolset, externalServersPrompt, type ExternalToolset } from '@tapestrai/mcp-server/src/external/toolset';
 import { NARRATIVE_COMPOSE_GUIDE } from '@tapestrai/mcp-server/src/lib/narrative-guide';
 import { formatLessons, lessonFromRow, matchLessons } from '@tapestrai/mcp-server/src/lib/chat-lessons';
-import { getContextProfile } from '@tapestrai/mcp-server/src/lib/context-profiles';
+import { getContextProfile, isCategoryAllowed } from '@tapestrai/mcp-server/src/lib/context-profiles';
 import {
   coerceSkillState,
   completeAssistantTurn,
@@ -81,6 +84,7 @@ registerComplianceTools(toolRegistry);
 registerReportingTools(toolRegistry);
 registerQueryTools(toolRegistry);
 registerNarrativeTools(toolRegistry);
+registerExternalIdTools(toolRegistry);
 
 async function callGemini(
   body: Record<string, any>,
@@ -250,6 +254,8 @@ function screenContextBlock(context: Record<string, any> | null | undefined): st
 }
 
 export async function POST(request: NextRequest) {
+  // The client's own MCP servers, connected on first use this turn and closed when it ends.
+  let externalToolset: ExternalToolset | null = null;
   try {
     const { messages, context, toolContext, conversationId, attachmentIds, designerDraft, voice, skill: requestedSkill, skillState: clientSkillState } = await request.json();
     const requestedAttachmentIds: string[] = Array.isArray(attachmentIds) ? attachmentIds : [];
@@ -405,6 +411,23 @@ export async function POST(request: NextRequest) {
     const tools = toolRegistry
       .listToolsForGemini(skill?.toolContext ?? toolContext)
       .filter((tool) => skillAllowsTool(skill, skillState, tool.name));
+
+    // Outside systems the client has connected. Offered only to a signed-in
+    // caller, in a context that allows them, and not while a guided skill runs.
+    // The client id comes from the caller's own session. A server that cannot
+    // be loaded leaves the assistant with Tapestry's own tools.
+    if (auth && clientId && !skill && isCategoryAllowed('external', toolContext)) {
+      try {
+        const servers = await loadExternalServers(supabase, clientId);
+        if (servers.length) {
+          externalToolset = buildExternalToolset(servers);
+          tools.push(...externalToolset.declarations);
+          systemInstruction += externalServersPrompt(servers, externalToolset);
+        }
+      } catch (error) {
+        console.error('[Chat API] Could not load assistant connections:', error);
+      }
+    }
     if (tools.some((tool) => tool.name === 'query_data')) {
       systemInstruction += QUERY_DATA_GUIDE;
       if (auth) {
@@ -533,7 +556,9 @@ export async function POST(request: NextRequest) {
             results.set(call, outcome);
             continue;
           }
-          const value = await toolRegistry.executeTool(name, args || {}, toolSupabase);
+          const value = externalToolset?.has(name)
+            ? await externalToolset.execute(name, args || {})
+            : await toolRegistry.executeTool(name, args || {}, toolSupabase);
           const outcome = { ok: true, value };
           successfulTools.add(name);
           callCache.set(cacheKey, outcome);
@@ -628,5 +653,7 @@ export async function POST(request: NextRequest) {
       { error: error.message || 'Unknown error occurred', details: error.toString() },
       { status: 500 }
     );
+  } finally {
+    await externalToolset?.close();
   }
 }

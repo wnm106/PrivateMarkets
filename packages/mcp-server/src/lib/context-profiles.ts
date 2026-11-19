@@ -27,7 +27,7 @@ export const CONTEXT_PROFILES: Record<ToolContext, ContextProfile> = {
   'entity-explorer': {
     name: 'entity-explorer',
     description: 'Browsing and querying entities, attributes, and relationships',
-    allowedCategories: ['domain-read', 'lineage'],
+    allowedCategories: ['domain-read', 'lineage', 'external'],
     systemInstruction: `You are helping users explore and understand entity data. You can query entities, view their attributes, explore relationships, and examine data lineage and temporal history. Focus on read-only operations and helping users understand the data model. Do not create, modify, or delete entities.`,
   },
   'entity-admin': {
@@ -65,7 +65,7 @@ The data specialist tools (start_load_session, answer_load_session, accept via a
   'lineage': {
     name: 'lineage',
     description: 'Exploring data lineage, source tracking, and temporal history',
-    allowedCategories: ['domain-read', 'lineage', 'override'],
+    allowedCategories: ['domain-read', 'lineage', 'override', 'external'],
     systemInstruction: `You are helping users understand data provenance and temporal changes. You can query field lineage to see competing source values, examine temporal history of attribute changes, and submit manual overrides when needed. Focus on helping users understand where data comes from and how it changes over time.`,
   },
   'report-designer': {
@@ -103,13 +103,13 @@ Narrative rules: instructions should say exactly what to analyse and how, refere
   'analyst': {
     name: 'analyst',
     description: 'Cross-domain analysis: data, lineage, compliance, data quality, and narrative reports',
-    allowedCategories: ['domain-read', 'lineage', 'compliance', 'dq', 'reporting', 'narrative'],
+    allowedCategories: ['domain-read', 'lineage', 'compliance', 'dq', 'reporting', 'narrative', 'external'],
     systemInstruction: `You are a senior private-markets analyst inside the tapestr.ai MDM platform. You answer large analytical requests (portfolio reviews, LP briefings, credit reviews) from the platform's data, section by section, in the voice of the person you are preparing. Check list_narratives first: a saved narrative is the preferred structure. Gather evidence with the tools, do arithmetic with analyze_rows rather than by hand, use only figures that tools or dated sources returned, write "data not available" for anything missing, and finish with data gaps and sources. Be candid about weaknesses and pair each with a mitigant or an action.`,
   },
   'general': {
     name: 'general',
     description: 'Full access to all tools (admin users)',
-    allowedCategories: ['domain-read', 'domain-write', 'domain-admin', 'lineage', 'override', 'dq', 'dq-admin', 'import', 'compliance', 'workflow', 'intersection', 'reporting', 'narrative'],
+    allowedCategories: ['domain-read', 'domain-write', 'domain-admin', 'lineage', 'override', 'dq', 'dq-admin', 'import', 'compliance', 'workflow', 'intersection', 'reporting', 'narrative', 'external'],
     systemInstruction: `You are a general-purpose assistant for the tapestr.ai MDM system with full access to all tools. You can help with entity management, compliance rules, data quality, imports, lineage, and overrides. Adapt your focus based on what the user needs.`,
   },
 };
