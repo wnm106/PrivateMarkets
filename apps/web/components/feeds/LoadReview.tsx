@@ -159,6 +159,7 @@ export function LoadReview({
   onLoad,
   onPreview,
   onPromoted,
+  guided,
   onReload,
   onClose,
   resolutions = [],
@@ -192,7 +193,17 @@ export function LoadReview({
   onAsOfDate: (value: string) => void;
   onChange: (index: number, next: ColumnAssignment) => void;
   onLoad: () => void;
-  onPreview: () => Promise<LoadPreviewResult>;
+  onPreview: (resolutions?: EntityResolutionDecision[]) => Promise<LoadPreviewResult>;
+  /**
+   * Set when this screen is one stage of a guided run. The run stages and
+   * promotes, so the screen ends by confirming the mapping, with the choice
+   * made for any record that matched more than one.
+   */
+  guided?: {
+    confirming: boolean;
+    onConfirm: (resolutions: EntityResolutionDecision[]) => void;
+    onAbandon: () => void;
+  };
   /** A staged batch was promoted or reverted, so the file and the queue have changed. */
   onPromoted?: () => void;
   onReload: () => void;
@@ -216,6 +227,7 @@ export function LoadReview({
   const [previewKey, setPreviewKey] = useState('');
   const [stageState, setStageState] = useState<StageState>('none');
   const [stageSignal, setStageSignal] = useState(0);
+  const [decisions, setDecisions] = useState<EntityResolutionDecision[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const [editKey, setEditKey] = useState('');
   const [drafts, setDrafts] = useState<Record<string, { choice: 'suggested' | 'other' | 'skip'; otherKey: string }>>({});
@@ -303,6 +315,7 @@ export function LoadReview({
   const ready = mappingReady && reviewed;
   const stale = Boolean(preview) && !reviewed;
   const stepState = (done: boolean, attention: boolean, current: boolean): StepState => (done ? 'done' : attention ? 'attention' : current ? 'current' : 'waiting');
+  const unresolved = preview?.resolutions || [];
   const steps: { label: string; state: StepState; note?: string }[] = [
     { label: 'File read', state: 'done', note: `${rowCount.toLocaleString()} rows` },
     {
@@ -323,11 +336,11 @@ export function LoadReview({
     },
     { label: 'Promote', state: stageState === 'promoted' ? 'done' : stageState === 'staged' ? 'current' : 'waiting' },
   ];
-  async function runPreview() {
+  async function runPreview(chosen: EntityResolutionDecision[] = decisions) {
     setPreviewing(true);
     setPreviewError(null);
     try {
-      setPreview(await onPreview());
+      setPreview(await onPreview(chosen));
       setPreviewKey(currentKey);
     } catch (err: any) {
       setPreviewError(err?.message || 'The review could not be run');
@@ -430,14 +443,16 @@ export function LoadReview({
     : `${assignments.length} column${assignments.length === 1 ? '' : 's'}. We’re confident about ${confident}; ${pending.length} need${pending.length === 1 ? 's' : ''} your decision.`;
 
   return (
-    <div className="load-review">
+    <div className={guided ? "load-review load-review-guided" : "load-review"}>
       <div className="load-review-body">
         <div className="load-review-inner">
-          <div className="crumbs">
-            <button type="button" className="crumb-link load-crumb" onClick={onClose}>Load data</button>
-            <span className="sep">›</span>
-            <span className="crumb-current">{fileName}</span>
-          </div>
+          {!guided && (
+            <div className="crumbs">
+              <button type="button" className="crumb-link load-crumb" onClick={onClose}>Load data</button>
+              <span className="sep">›</span>
+              <span className="crumb-current">{fileName}</span>
+            </div>
+          )}
           <div className="load-title-row">
             <h1 className="load-title">Load {fileName}</h1>
             <button type="button" className="btn" disabled={reloading || loading} onClick={onReload}>
@@ -447,7 +462,7 @@ export function LoadReview({
           <p className="load-sub">{rowCount.toLocaleString()} rows. Check what’s in the file, confirm where each column goes, then stage it: the values are checked against the data quality rules before anything is live. Reload file reads the stored copy again and replaces this mapping.</p>
           {mapNote && <p className="load-sub" style={{ marginTop: 8 }}>{mapNote}</p>}
           <IntakePanel intake={intake || null} tables={tables || []} tableId={tableId || null} disabled={loading || reloading} onSelectTable={(id) => onSelectTable?.(id)} onViewOriginal={hasDocument ? () => setViewing({}) : undefined} />
-          <LoadStepper steps={steps} />
+          {!guided && <LoadStepper steps={steps} />}
           {viewing && <SourceViewer instanceId={fileId} fileName={fileName} target={viewing} onClose={() => setViewing(null)} />}
           {resultText && (
             <p className="load-sub" style={{ marginTop: -8 }}>
@@ -633,9 +648,19 @@ export function LoadReview({
             </div>
           </section>
           {mappingReady && (
-            <LoadPreview preview={preview} running={previewing} error={previewError} stale={Boolean(preview) && !reviewed} onRun={runPreview} onShow={showInDocument} />
+            <LoadPreview preview={preview} running={previewing} error={previewError} stale={Boolean(preview) && !reviewed} onRun={() => runPreview()} onShow={showInDocument} />
           )}
-          {mappingReady && (
+          {guided && reviewed && unresolved.length > 0 && (
+            <EntityResolutionStep
+              resolutions={unresolved}
+              applying={previewing}
+              onApply={(chosen) => {
+                setDecisions(chosen);
+                void runPreview(chosen);
+              }}
+            />
+          )}
+          {mappingReady && !guided && (
             <StagedBatch
               fileId={fileId}
               assignments={assignments}
@@ -672,10 +697,18 @@ export function LoadReview({
             <button type="button" className="btn" disabled={reloading || loading} onClick={onReload}>
               {reloading ? 'Reading file…' : 'Reload file'}
             </button>
-            <button type="button" className="load-btn sec" disabled={loading || reloading} onClick={onClose}>Cancel</button>
+            {guided ? (
+              <button type="button" className="load-btn sec" disabled={loading || reloading || guided.confirming} onClick={() => window.confirm('Stop here? Nothing has been staged or loaded.') && guided.onAbandon()}>Stop this run</button>
+            ) : (
+              <button type="button" className="load-btn sec" disabled={loading || reloading} onClick={onClose}>Cancel</button>
+            )}
             {mappingReady && !reviewed ? (
-              <button type="button" className="load-btn" disabled={previewing || loading || reloading} onClick={runPreview}>
-                {previewing ? 'Reviewing…' : 'Review before loading'}
+              <button type="button" className="load-btn" disabled={previewing || loading || reloading} onClick={() => runPreview()}>
+                {previewing ? 'Reviewing…' : guided ? 'Review what will happen' : 'Review before loading'}
+              </button>
+            ) : guided ? (
+              <button type="button" className="load-btn" disabled={!ready || unresolved.length > 0 || guided.confirming || loading || reloading} onClick={() => guided.onConfirm(decisions)}>
+                {guided.confirming ? 'Confirming…' : unresolved.length > 0 ? 'Choose the matching records first' : 'Confirm and stage the values'}
               </button>
             ) : (
               <>

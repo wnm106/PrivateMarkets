@@ -1,5 +1,7 @@
 'use client';
 
+import type { EntityResolution } from '@tapestrai/mcp-server/src/feeds/types';
+
 export interface PreviewReject {
   kind: 'record' | 'value' | 'link';
   domainCode: string;
@@ -20,6 +22,8 @@ export interface LoadPreviewResult {
   warnings: string[];
   rejects?: PreviewReject[];
   rejectCount?: number;
+  /** Records in the file that match more than one stored record. Nothing can be staged until each is decided. */
+  resolutions?: EntityResolution[];
 }
 
 const KIND_LABEL: Record<PreviewReject['kind'], string> = {

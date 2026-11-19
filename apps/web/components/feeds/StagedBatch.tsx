@@ -1,18 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { BatchChecks, countOf as count } from '@/components/feeds/BatchChecks';
 import { EntityResolutionStep } from '@/components/feeds/EntityResolutionStep';
 import type { ColumnAssignment } from '@/lib/feeds/suggest';
-import type { BatchDetail, BatchSummary, QualityFailure } from '@tapestrai/mcp-server/src/feeds/load-batches';
+import type { BatchDetail, BatchSummary } from '@tapestrai/mcp-server/src/feeds/load-batches';
 import type { EntityResolution, EntityResolutionDecision } from '@tapestrai/mcp-server/src/feeds/types';
 
 export type StageState = 'none' | 'staged' | 'blocked' | 'promoted';
-
-const SEVERITY_COLOR: Record<string, string> = { CRITICAL: '#b42318', HIGH: '#b54708', MEDIUM: '#475467', LOW: '#667085' };
-
-function count(value: number, one: string, many = `${one}s`) {
-  return `${value.toLocaleString()} ${value === 1 ? one : many}`;
-}
 
 async function call<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, body === undefined ? undefined : {
@@ -60,9 +55,6 @@ export function StagedBatch({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [resolutions, setResolutions] = useState<EntityResolution[]>([]);
-  const [editing, setEditing] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
-  const [reason, setReason] = useState('');
   const [override, setOverride] = useState('');
   const seenSignal = useRef(stageSignal);
 
@@ -136,17 +128,10 @@ export function StagedBatch({
     setError(null);
     try {
       const data = await call<{ batch: BatchDetail }>(`/api/feeds/batches/${target}`, { action, ...body });
-      if (action === 'edit') {
-        setBatch(data.batch);
-        setEditing(null);
-        setDraft('');
-        setReason('');
-      } else {
-        setBatch(data.batch.status === 'STAGED' ? data.batch : null);
-        setLast(data.batch.status === 'DISCARDED' ? last : data.batch);
-        setOverride('');
-        if (action === 'promote' || action === 'revert') onPromoted();
-      }
+      setBatch(data.batch.status === 'STAGED' ? data.batch : null);
+      setLast(data.batch.status === 'DISCARDED' ? last : data.batch);
+      setOverride('');
+      if (action === 'promote' || action === 'revert') onPromoted();
     } catch (err: any) {
       setError(err?.message || 'That could not be done');
     } finally {
@@ -154,35 +139,16 @@ export function StagedBatch({
     }
   }
 
-  const quality = batch?.quality || null;
-  const newFailures = quality?.failures.filter((item) => item.state === 'NEW') || [];
-  const oldFailures = quality?.failures.filter((item) => item.state === 'EXISTING') || [];
-
-  function failureRow(item: QualityFailure, index: number) {
-    const key = `${item.recordId}-${item.ruleCode}-${index}`;
-    const open = editing === key;
-    return (
-      <li key={key} style={{ marginBottom: 6 }}>
-        <b style={{ color: SEVERITY_COLOR[item.severity] || undefined }}>{item.severity.toLowerCase()}</b>{' · '}
-        <b>{item.entityName}</b>{item.recordAction === 'CREATE' ? ' (new)' : ''}{' · '}{item.ruleName}
-        {item.attributeName ? ` · ${item.attributeName}` : ''}
-        {item.actualValue ? `: ${item.actualValue}` : ''}
-        {item.message ? ` · ${item.message}` : ''}
-        {item.editable && item.valueId && !open && (
-          <>{' '}<button type="button" className="btn" disabled={busy !== null} onClick={() => { setEditing(key); setDraft(item.stagedValue || ''); setReason(''); }}>Correct</button></>
-        )}
-        {open && item.valueId && (
-          <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-            <input aria-label={`Corrected value for ${item.attributeName || item.attributeCode}`} value={draft} onChange={(event) => setDraft(event.target.value)} />
-            <input aria-label="Why the file is wrong" placeholder="Why the file is wrong" value={reason} onChange={(event) => setReason(event.target.value)} style={{ minWidth: 220 }} />
-            <button type="button" className="btn" disabled={busy !== null || !draft.trim()} onClick={() => act('edit', { valueId: item.valueId, value: draft, reason })}>
-              {busy === 'edit' ? 'Checking...' : 'Save and check again'}
-            </button>
-            <button type="button" className="btn" disabled={busy !== null} onClick={() => setEditing(null)}>Cancel</button>
-          </span>
-        )}
-      </li>
-    );
+  async function correct(valueId: string, value: string, reason: string) {
+    if (!batch) return;
+    setError(null);
+    try {
+      const data = await call<{ batch: BatchDetail }>(`/api/feeds/batches/${batch.id}`, { action: 'edit', valueId, value, reason });
+      setBatch(data.batch);
+    } catch (err: any) {
+      setError(err?.message || 'The correction could not be saved');
+      throw err;
+    }
   }
 
   return (
@@ -220,55 +186,7 @@ export function StagedBatch({
               <button type="button" className="btn" disabled={!ready || busy !== null} onClick={() => stage()}>Stage again</button>
             </p>
           )}
-          <p className="load-sub" style={{ margin: 0 }}>
-            Staged as of {batch.asOfDate}: <b>{count(batch.records.created, 'new record')}</b>, {count(batch.records.matched, 'matched record')}.
-            Values: <b>{batch.values.added.toLocaleString()}</b> to add, <b>{batch.values.changed.toLocaleString()}</b> to change, {batch.values.unchanged.toLocaleString()} already stored
-            {batch.values.edited > 0 && <>, <b>{batch.values.edited.toLocaleString()}</b> corrected here</>}.
-          </p>
-
-          {quality && (
-            <>
-              <p className="load-sub" style={{ margin: 0 }}>
-                {count(quality.ruleCount, 'rule')} run on {count(quality.recordCount, 'record')}:{' '}
-                <b style={quality.summary.newFailures ? { color: '#b42318' } : undefined}>{count(quality.summary.newFailures, 'new failure')}</b>
-                {blocking > 0 && <> ({blocking.toLocaleString()} critical)</>}, {quality.summary.existingFailures.toLocaleString()} already failing today,{' '}
-                {quality.summary.cleared.toLocaleString()} cleared by this batch, {count(quality.summary.missingRequired, 'required value')} missing.
-              </p>
-              {newFailures.length > 0 && (
-                <details open>
-                  <summary>Failures this batch brings ({newFailures.length})</summary>
-                  <ul style={{ margin: '4px 0 8px 18px' }}>{newFailures.slice(0, 50).map(failureRow)}</ul>
-                  {newFailures.length > 50 && <p className="load-sub">and {newFailures.length - 50} more</p>}
-                </details>
-              )}
-              {quality.missing.length > 0 && (
-                <details>
-                  <summary>Required values still missing ({quality.missing.length})</summary>
-                  <ul style={{ margin: '4px 0 8px 18px' }}>
-                    {quality.missing.slice(0, 50).map((item, index) => (
-                      <li key={`${item.recordId}-${item.attributeCode}-${index}`}><b>{item.entityName}</b>{item.state === 'NEW' ? ' (new)' : ''} · {item.attributeName}</li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-              {oldFailures.length > 0 && (
-                <details>
-                  <summary>Already failing before this batch ({oldFailures.length})</summary>
-                  <ul style={{ margin: '4px 0 8px 18px' }}>{oldFailures.slice(0, 50).map(failureRow)}</ul>
-                </details>
-              )}
-              {quality.outranked.length > 0 && (
-                <details>
-                  <summary>Values a higher-ranked source will keep overriding ({quality.outranked.length})</summary>
-                  <ul style={{ margin: '4px 0 8px 18px' }}>
-                    {quality.outranked.slice(0, 50).map((item) => (
-                      <li key={item.valueId}><b>{item.entityName}</b> · {item.attributeName}: file says {item.proposed ?? 'nothing'}, the record keeps {item.winning ?? 'nothing'}</li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </>
-          )}
+          <BatchChecks batch={batch} busy={busy !== null} onCorrect={correct} />
 
           {blocking > 0 && canPromote && (
             <label className="load-sub" style={{ display: 'grid', gap: 4, margin: 0 }}>

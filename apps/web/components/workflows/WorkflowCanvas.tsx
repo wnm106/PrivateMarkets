@@ -16,7 +16,7 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { nodeTypeDef, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
+import { nodeTypeDef, outcomesOf, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { KIND_STYLE, kindOf, statusOf } from '@/lib/workflows';
 
 /**
@@ -154,7 +154,7 @@ export function WorkflowCanvas({ graph, selection, onSelect, onChange, steps, cu
       if (graph.edges.some((edge) => edge.from === connection.source && edge.to === connection.target)) return;
       const source = graph.nodes.find((node) => node.id === connection.source);
       // A step with named outcomes gets the first outcome that has no path yet.
-      const outcomes = source ? nodeTypeDef(source.type)?.outcomes || [] : [];
+      const outcomes = outcomesOf(source);
       const used = new Set(graph.edges.filter((edge) => edge.from === connection.source).map((edge) => edge.when));
       const whenValue = outcomes.find((outcome) => !used.has(outcome));
       const ids = new Set(graph.edges.map((edge) => edge.id));

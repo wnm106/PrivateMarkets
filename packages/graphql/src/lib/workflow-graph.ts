@@ -7,10 +7,12 @@
  * Three kinds of step:
  *   fixed   the same thing every time: call a tool, test a condition, apply approved changes
  *   agent   a model works toward a goal with read-only tools, and proposes changes
- *   human   the run waits for a person to review what was proposed
+ *   human   the run waits for a person to review what was proposed, answer a form, or work through a screen
  */
 
-export type NodeType = 'start' | 'tool' | 'agent' | 'review' | 'apply' | 'branch' | 'parallel' | 'join' | 'http' | 'message' | 'form' | 'end';
+import { STAGE_SCREENS, stageScreen } from './workflow-screens';
+
+export type NodeType = 'start' | 'tool' | 'agent' | 'review' | 'apply' | 'branch' | 'parallel' | 'join' | 'http' | 'message' | 'form' | 'stage' | 'end';
 export type NodeKind = 'fixed' | 'agent' | 'human';
 
 export interface WorkflowNode {
@@ -111,6 +113,14 @@ export const NODE_TYPES: readonly NodeTypeDef[] = [
     defaultConfig: { title: 'Information needed', instructions: '', fields: [], people: [], roles: [], external: false, externalEmail: '', dueInHours: null },
   },
   {
+    type: 'stage',
+    label: 'Stage',
+    kind: 'human',
+    description: 'Puts one screen in front of a person and waits until they leave it. The screen decides the outcomes, and what must be true before the run goes on.',
+    outcomes: [],
+    defaultConfig: { screen: '', title: '', instructions: '', args: {}, people: [], roles: [], dueInHours: null },
+  },
+  {
     type: 'http',
     label: 'Call a connection',
     kind: 'fixed',
@@ -128,6 +138,13 @@ export const NODE_TYPES: readonly NodeTypeDef[] = [
   },
   { type: 'end', label: 'End', kind: 'fixed', description: 'The run finishes here.', outcomes: [], defaultConfig: {} },
 ];
+
+/** The outcomes a step can end with. A Stage step takes them from its screen; every other step from its type. */
+export function outcomesOf(node: WorkflowNode | null | undefined): string[] {
+  if (!node) return [];
+  if (node.type === 'stage') return stageScreen(node.config.screen)?.outcomes || [];
+  return nodeTypeDef(node.type)?.outcomes || [];
+}
 
 /** Whether `to` can be reached from `from` by following connections. */
 export function reaches(graph: WorkflowGraph, from: string, to: string): boolean {
@@ -289,14 +306,15 @@ export function validateGraph(graph: WorkflowGraph, toolNames?: ReadonlySet<stri
     }
     if (out.length === 0) problems.push({ nodeId: node.id, message: 'This step leads nowhere. Connect it to the next step or to End.' });
 
-    if (def.outcomes.length > 0) {
+    const outcomes = outcomesOf(node);
+    if (outcomes.length > 0) {
       for (const edge of out) {
-        if (edge.when && !def.outcomes.includes(edge.when)) {
-          problems.push({ nodeId: node.id, message: `"${edge.when}" is not an outcome of this step. Use ${def.outcomes.join(' or ')}.` });
+        if (edge.when && !outcomes.includes(edge.when)) {
+          problems.push({ nodeId: node.id, message: `"${edge.when}" is not an outcome of this step. Use ${outcomes.join(' or ')}.` });
         }
       }
       const any = out.some((edge) => !edge.when);
-      for (const outcome of def.outcomes) {
+      for (const outcome of outcomes) {
         const count = out.filter((edge) => edge.when === outcome).length;
         if (count > 1) problems.push({ nodeId: node.id, message: `More than one connection follows "${outcome}".` });
         if (count === 0 && !any) problems.push({ nodeId: node.id, message: `Nothing follows when the outcome is "${outcome}".` });
@@ -324,6 +342,17 @@ export function validateGraph(graph: WorkflowGraph, toolNames?: ReadonlySet<stri
       }
       if (!String(node.config.body || '').trim()) problems.push({ nodeId: node.id, message: 'Write the message.' });
       if (node.config.allowSend !== true) problems.push({ nodeId: node.id, message: 'This step sends a message outside the platform. Tick "This step sends data outside" to allow it.' });
+    }
+    if (node.type === 'stage') {
+      const screen = stageScreen(node.config.screen);
+      if (!screen) {
+        problems.push({ nodeId: node.id, message: `Choose the screen this stage shows: ${STAGE_SCREENS.map((item) => item.label).join(', ')}.` });
+      } else {
+        const args = node.config.args && typeof node.config.args === 'object' ? (node.config.args as Record<string, unknown>) : {};
+        for (const arg of screen.args) {
+          if (!String(args[arg.key] ?? '').trim()) problems.push({ nodeId: node.id, message: `"${screen.label}" needs ${arg.label.toLowerCase()}. ${arg.help}` });
+        }
+      }
     }
     if (node.type === 'form') {
       const fields = Array.isArray(node.config.fields) ? (node.config.fields as Array<Record<string, unknown>>) : [];

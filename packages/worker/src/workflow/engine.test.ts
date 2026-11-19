@@ -3,7 +3,7 @@ import { WORKFLOW_TEMPLATES } from '@tapestrai/graphql/src/lib/workflow-template
 import type { ReviewRouting } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { normalizeItems } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { runAgentStep, type AgentModel, type ModelTurn } from './agent';
-import { RunBusyError, advanceRun, message, type Actor, type AgentRequest, type EngineDeps, type FormRow, type LoadedRun, type ReviewRow, type StepRow, type WorkflowStore } from './engine';
+import { RunBusyError, advanceRun, message, type Actor, type AgentRequest, type EngineDeps, type FormRow, type LoadedRun, type ReviewRow, type StageRow, type StepRow, type WorkflowStore } from './engine';
 import { checkListValues } from './list-check';
 import { signReason, workflowTools } from './tools';
 
@@ -17,6 +17,7 @@ function memoryStore(graph: unknown, input: Record<string, unknown> = {}) {
   const routings: ReviewRouting[] = [];
   const spawned: Array<Record<string, unknown>> = [];
   const forms: Array<FormRow & { nodeId: string }> = [];
+  const stages: Array<StageRow & { nodeId: string; spec: Record<string, unknown>; returned: string[] }> = [];
   const events: Array<{ nodeId: string | null; type: string; actor: string; actorId: string | null; summary: string }> = [];
   const store: WorkflowStore = {
     async load(_runId, owner): Promise<LoadedRun | 'busy' | 'done' | null> {
@@ -60,6 +61,20 @@ function memoryStore(graph: unknown, input: Record<string, unknown> = {}) {
       forms.push(form);
       return { ...form };
     },
+    async openStage(_runId, nodeId, spec) {
+      const existing = stages.find((stage) => stage.nodeId === nodeId);
+      if (existing) return { ...existing };
+      const stage = { nodeId, spec, returned: [] as string[], id: `stage-${nodeId}`, status: 'OPEN', outcome: null, result: {}, args: (spec.args || {}) as Record<string, unknown>, completedBy: null };
+      stages.push(stage);
+      return { ...stage };
+    },
+    async returnStage(stageId, reason) {
+      const stage = stages.find((item) => item.id === stageId);
+      if (!stage) return;
+      stage.status = 'OPEN';
+      stage.outcome = null;
+      stage.returned.push(reason);
+    },
     async openReview(_runId, nodeId, _title, _instructions, _summary, proposal, routing) {
       routings.push(routing);
       const review: ReviewRow = { id: `review-${nodeId}`, nodeId, status: 'OPEN', proposal, decision: null, decidedBy: null };
@@ -67,7 +82,7 @@ function memoryStore(graph: unknown, input: Record<string, unknown> = {}) {
       return { ...review, assignees: routing.people.map((id) => `Person ${id}`), unassignable: [] };
     },
   };
-  return { store, run, steps, reviews, events, routings, spawned, forms };
+  return { store, run, steps, reviews, events, routings, spawned, forms, stages };
 }
 
 const EXCEPTION = { id: 'ex-1', entityCode: 'LOAN-7', ruleCode: 'MATURITY_REQUIRED', exceptionMessage: 'Maturity date is missing' };
@@ -764,5 +779,88 @@ describe('paths, splits, forms, and messages', () => {
 
     const refused = memoryStore(graph(false), { to: 'a@example.com', fund: 'X' });
     expect(await advanceRun('run-1', 'job-1', deps(refused.store, { outbound }).deps)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('sends') });
+  });
+});
+
+describe('stages', () => {
+  const graph = graphOf(
+    [
+      ['start', 'start'],
+      ['quality', 'stage', { screen: 'load.quality', title: 'Check the values', args: { batchId: '{{input.batchId}}' } }],
+      ['promote', 'tool', { tool: 'promote_load_batch', args: { batchId: '{{input.batchId}}', overrideReason: '{{steps.quality.result.overrideReason}}' }, allowWrite: true }],
+      ['discard', 'tool', { tool: 'discard_load_batch', args: { batchId: '{{input.batchId}}' }, allowWrite: true }],
+      ['end', 'end'],
+    ],
+    [['start', 'quality'], ['quality', 'promote', 'approved'], ['quality', 'discard', 'discarded'], ['promote', 'end'], ['discard', 'end']],
+  );
+
+  function stageDeps(store: WorkflowStore, batch: () => Record<string, unknown>) {
+    const calls: Array<{ name: string; args: Record<string, unknown>; permission: string }> = [];
+    const built = deps(store, {
+      tools: {
+        names: () => new Set(['get_load_batch', 'promote_load_batch', 'discard_load_batch']),
+        async run(name, args, _actor, permission) {
+          calls.push({ name, args, permission });
+          return name === 'get_load_batch' ? batch() : { ok: true };
+        },
+      },
+    });
+    return { engine: built.deps, calls };
+  }
+
+  it('opens the screen with what the run gives it, and waits', async () => {
+    const memory = memoryStore(graph, { batchId: 'batch-1' });
+    const { engine, calls } = stageDeps(memory.store, () => ({ status: 'STAGED' }));
+    expect(await advanceRun('run-1', 'job-1', engine)).toMatchObject({ status: 'WAITING', waitingOn: 'quality' });
+    expect(memory.stages[0].spec).toMatchObject({
+      screen: 'load.quality',
+      title: 'Check the values',
+      args: { batchId: 'batch-1' },
+      outcomes: ['approved', 'discarded'],
+      permissions: { approved: 'load.promote' },
+    });
+    // Nothing is read or written while the person is at the screen.
+    expect(calls).toEqual([]);
+  });
+
+  it('goes down the path of the outcome the person chose', async () => {
+    const memory = memoryStore(graph, { batchId: 'batch-1' });
+    const { engine, calls } = stageDeps(memory.store, () => ({ status: 'STAGED', quality: { summary: { blocking: 0 } } }));
+    await advanceRun('run-1', 'job-1', engine);
+    Object.assign(memory.stages[0], { status: 'DONE', outcome: 'approved', result: {}, completedBy: 'reviewer' });
+    expect(await advanceRun('run-1', 'job-2', engine)).toMatchObject({ status: 'SUCCEEDED' });
+    expect(calls.map((call) => `${call.name}:${call.permission}`)).toEqual(['get_load_batch:read', 'promote_load_batch:write']);
+    expect(memory.steps.get('quality')?.output).toMatchObject({ outcome: 'approved', completedBy: 'reviewer' });
+    expect(memory.steps.get('discard')).toBeUndefined();
+  });
+
+  it('hands the stage back when what it was left with does not hold up', async () => {
+    const memory = memoryStore(graph, { batchId: 'batch-1' });
+    const { engine, calls } = stageDeps(memory.store, () => ({ status: 'STAGED', quality: { summary: { blocking: 2 } } }));
+    await advanceRun('run-1', 'job-1', engine);
+    Object.assign(memory.stages[0], { status: 'DONE', outcome: 'approved', result: {} });
+    expect(await advanceRun('run-1', 'job-2', engine)).toMatchObject({ status: 'WAITING', waitingOn: 'quality' });
+    expect(memory.stages[0].returned).toEqual([expect.stringContaining('2 critical checks fail')]);
+    expect(calls.some((call) => call.name === 'promote_load_batch')).toBe(false);
+
+    // With a reason, the same batch is accepted, and the reason reaches the step that promotes.
+    Object.assign(memory.stages[0], { status: 'DONE', outcome: 'approved', result: { overrideReason: 'Confirmed with the administrator' } });
+    expect(await advanceRun('run-1', 'job-3', engine)).toMatchObject({ status: 'SUCCEEDED' });
+    expect(calls.find((call) => call.name === 'promote_load_batch')?.args).toMatchObject({ batchId: 'batch-1', overrideReason: 'Confirmed with the administrator' });
+  });
+
+  it('does not check an outcome the screen accepts as it is', async () => {
+    const memory = memoryStore(graph, { batchId: 'batch-1' });
+    const { engine, calls } = stageDeps(memory.store, () => ({ status: 'STAGED', quality: { summary: { blocking: 2 } } }));
+    await advanceRun('run-1', 'job-1', engine);
+    Object.assign(memory.stages[0], { status: 'DONE', outcome: 'discarded', result: {} });
+    expect(await advanceRun('run-1', 'job-2', engine)).toMatchObject({ status: 'SUCCEEDED' });
+    expect(calls.map((call) => call.name)).toEqual(['discard_load_batch']);
+  });
+
+  it('refuses a stage whose screen does not exist', async () => {
+    const bad = graphOf([['start', 'start'], ['x', 'stage', { screen: 'no.such', args: {} }], ['end', 'end']], [['start', 'x'], ['x', 'end']]);
+    const memory = memoryStore(bad);
+    expect(await advanceRun('run-1', 'job-1', deps(memory.store).deps)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('Choose the screen') });
   });
 });

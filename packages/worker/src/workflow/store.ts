@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { FormRow, LoadedRun, ReviewRow, StepRow, WorkflowStore } from './engine';
+import type { FormRow, LoadedRun, ReviewRow, StageRow, StepRow, WorkflowStore } from './engine';
 
 /**
  * The workflow store on Supabase. Every call is one of the workflow_worker_*
@@ -46,6 +46,17 @@ export function toForm(row: Row): FormRow {
     externalEmail: text(row.external_email),
     title: String(row.title || 'Information needed'),
     submittedBy: text(row.submitted_by),
+  };
+}
+
+export function toStage(row: Row): StageRow {
+  return {
+    id: String(row.id),
+    status: String(row.status),
+    outcome: text(row.outcome),
+    result: object(row.result),
+    args: object(row.args),
+    completedBy: text(row.completed_by),
   };
 }
 
@@ -121,6 +132,14 @@ export function supabaseWorkflowStore(supabase: SupabaseClient, leaseSeconds = 9
       const row = await call<Row | null>('workflow_worker_form', { p_run_id: runId, p_node_id: nodeId, p_spec: spec });
       if (!row) throw new Error('The form could not be opened.');
       return toForm(row);
+    },
+    async openStage(runId, nodeId, spec) {
+      const row = await call<Row | null>('workflow_worker_stage', { p_run_id: runId, p_node_id: nodeId, p_spec: spec });
+      if (!row) throw new Error('The stage could not be opened.');
+      return toStage(row);
+    },
+    async returnStage(stageId, reason) {
+      await call<Row | null>('workflow_worker_stage_return', { p_stage_id: stageId, p_reason: reason });
     },
   };
 }

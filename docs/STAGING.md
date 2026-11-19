@@ -92,7 +92,7 @@ The result counts what was reverted and what was left alone.
 
 ## Not built yet
 
-- Workflows do not stage. The tools exist and a Run a tool step can call them, but the Fund reconciliation template still loads with `load_position_file_table`.
+- The Fund reconciliation template still loads with `load_position_file_table`. The File intake workflow stages, checks and promotes as a guided run: see [WORKFLOWS.md](WORKFLOWS.md#stages).
 - A staged-values grid. The screen shows the checks and counts; `get_load_batch_values` returns the values.
 - Correcting a value that did not come from one cell, such as an as-of date read from a title.
 - Link changes are counted on a staged batch, not listed.

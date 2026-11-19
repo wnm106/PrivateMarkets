@@ -31,9 +31,19 @@ describe('selectedIds', () => {
 
 describe('templates and the records they run on', () => {
   const real = WORKFLOW_TEMPLATES.filter((template) => template.code !== 'BLANK');
+  // A run of these works on one stored file, not on records chosen by filters.
+  const onAFile = new Set(['FILE_INTAKE']);
+
+  it('start a template that works on a file with that file, and with no filters', () => {
+    for (const template of real.filter((candidate) => onAFile.has(candidate.code))) {
+      expect(template.inputExample).toEqual({ importInstanceId: '' });
+      expect(JSON.stringify(nextNode(template.graph, 'start', null)?.config)).toContain('{{input.importInstanceId}}');
+      expect(template.graph.nodes.some((node) => node.config.tool === 'find_records')).toBe(false);
+    }
+  });
 
   it('start every template by selecting records from the run\'s filters', () => {
-    for (const template of real) {
+    for (const template of real.filter((candidate) => !onAFile.has(candidate.code))) {
       const first = nextNode(template.graph, 'start', null);
       expect(first).toMatchObject({ id: 'select', type: 'tool', config: { tool: 'find_records' } });
       expect(template.inputExample.filters).toEqual(FILTERS_EXAMPLE);

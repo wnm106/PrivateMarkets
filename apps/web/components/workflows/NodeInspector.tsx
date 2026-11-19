@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { CONDITION_OPS, isReadTool, nodeTypeDef, upstreamOf, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
+import { CONDITION_OPS, isReadTool, nodeTypeDef, outcomesOf, upstreamOf, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { ReviewerPicker } from '@/components/workflows/ReviewerPicker';
+import { STAGE_SCREENS, stageScreen } from '@tapestrai/graphql/src/lib/workflow-screens';
 import { kindOf, parseObject, type ToolOption, type WorkflowProblem } from '@/lib/workflows';
 import { graphqlQuery } from '@/lib/graphql';
 import { RESPONSIBILITY_CHOICES_QUERY, type ResponsibilityChoices } from '@/lib/responsibilities';
@@ -292,6 +293,58 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, clientId
         </>
       )}
 
+      {node.type === 'stage' && (
+        <>
+          <Field name="Screen" help={stageScreen(config.screen)?.description || 'What the person sees and works through. The run waits until they leave it.'}>
+            <select
+              className="text-input"
+              style={full}
+              value={String(config.screen || '')}
+              onChange={(event) => {
+                const next = stageScreen(event.target.value);
+                // A new screen takes other values, so start its settings from its own list.
+                set({ screen: event.target.value, args: Object.fromEntries((next?.args || []).map((arg) => [arg.key, ''])) });
+              }}
+            >
+              <option value="">Choose a screen</option>
+              {STAGE_SCREENS.map((screen) => <option key={screen.code} value={screen.code}>{screen.label}</option>)}
+            </select>
+          </Field>
+          <Field name="Title">
+            <input className="text-input" style={full} value={String(config.title || '')} onChange={(event) => set({ title: event.target.value })} />
+          </Field>
+          <Field name="What to do" help="Shown above the screen. Placeholders are filled from the run.">
+            <textarea className="text-input" rows={3} style={{ ...full, fontSize: 12 }} value={String(config.instructions || '')} onChange={(event) => set({ instructions: event.target.value })} />
+          </Field>
+          {(stageScreen(config.screen)?.args || []).map((arg) => (
+            <Field key={arg.key} name={arg.label} help={arg.help}>
+              <input
+                className="text-input"
+                style={full}
+                value={String((config.args && typeof config.args === 'object' ? (config.args as Record<string, unknown>)[arg.key] : '') ?? '')}
+                onChange={(event) => set({ args: { ...(config.args && typeof config.args === 'object' ? (config.args as Record<string, unknown>) : {}), [arg.key]: event.target.value } })}
+              />
+            </Field>
+          ))}
+          <div style={{ display: 'grid', gap: 4 }}>
+            <span style={label}>Who works it</span>
+            <ReviewerPicker clientId={clientId} people={list(config.people)} roles={list(config.roles)} onChange={(next) => set({ people: next.people, roles: next.roles })} />
+            <span style={hint}>Tick nobody for anyone who holds the review permission.</span>
+          </div>
+          <Field name="Hours to finish" help="Shown as due, then overdue. Leave blank for no due date.">
+            <input className="text-input" style={full} inputMode="decimal" value={config.dueInHours === undefined || config.dueInHours === null ? '' : String(config.dueInHours)} onChange={(event) => {
+              const text = event.target.value.trim();
+              set({ dueInHours: text === '' ? null : Number.isFinite(Number(text)) ? Number(text) : text });
+            }} />
+          </Field>
+          {stageScreen(config.screen) && (
+            <div style={hint}>
+              Connect each outcome: {stageScreen(config.screen)!.outcomes.join(', ')}. Later steps read what the person left as {'{{steps.this.result.key}}'}.
+            </div>
+          )}
+        </>
+      )}
+
       {node.type === 'form' && (
         <>
           <Field name="Title">
@@ -511,7 +564,7 @@ interface EdgeProps {
 export function EdgeInspector({ graph, edge, readOnly, onChange, onDelete }: EdgeProps) {
   const from = graph.nodes.find((node) => node.id === edge.from);
   const to = graph.nodes.find((node) => node.id === edge.to);
-  const outcomes = from ? nodeTypeDef(from.type)?.outcomes || [] : [];
+  const outcomes = outcomesOf(from);
   return (
     <fieldset disabled={readOnly} style={{ border: 'none', padding: 0, margin: 0, display: 'grid', gap: 12 }}>
       <div>

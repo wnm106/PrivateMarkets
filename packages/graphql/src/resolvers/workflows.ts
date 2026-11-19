@@ -1,6 +1,7 @@
 import type { Context } from '../context';
 import { parseFilters, prepareRunInput, runSetupOf, type RunSetup } from '../lib/workflow-filters';
 import { NODE_TYPES, asGraph, validateGraph } from '../lib/workflow-graph';
+import { STAGE_SCREENS } from '../lib/workflow-screens';
 import { LIST_VALUE_TOOL, asDecision, asProposal, checkDecision, proposalCounts } from '../lib/workflow-proposal';
 import { WORKFLOW_TEMPLATES } from '../lib/workflow-templates';
 import { callerClientId } from './jobs';
@@ -142,6 +143,32 @@ export function mapForm(row: Row) {
     blocker: typeof row.blocker === 'string' ? row.blocker : null,
     submittedByName: row.submitted_by_name || row.submitted_by_external || null,
     submittedAt: row.submitted_at || null,
+    dueAt: row.due_at || null,
+    createdAt: row.created_at,
+  };
+}
+
+export function mapStage(row: Row) {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    nodeId: row.node_id,
+    workflowName: row.workflow_name || null,
+    screen: row.screen,
+    title: row.title,
+    instructions: row.instructions || null,
+    args: row.args && typeof row.args === 'object' ? row.args : {},
+    outcomes: Array.isArray(row.outcomes) ? row.outcomes : [],
+    allowedOutcomes: Array.isArray(row.allowed_outcomes) ? row.allowed_outcomes : [],
+    status: row.status,
+    outcome: row.outcome || null,
+    result: row.result ?? null,
+    returnedReason: row.returned_reason || null,
+    assignees: Array.isArray(row.assignees) ? row.assignees : [],
+    canAct: row.can_act === true,
+    blocker: typeof row.blocker === 'string' ? row.blocker : null,
+    completedByName: row.completed_by_name || null,
+    completedAt: row.completed_at || null,
     dueAt: row.due_at || null,
     createdAt: row.created_at,
   };
@@ -294,6 +321,17 @@ export const workflowResolvers = {
       if (error) throw error;
       return ((data as Row[] | null) || []).map(mapForm);
     },
+
+    workflowStages: async (_: unknown, args: { status?: string | null; runId?: string | null }, context: Context) => {
+      const { data, error } = await context.supabase.rpc('workflow_stages_list', {
+        p_status: args.status === undefined ? 'OPEN' : args.status,
+        p_run_id: args.runId || null,
+      });
+      if (error) throw error;
+      return ((data as Row[] | null) || []).map(mapStage);
+    },
+
+    workflowStageScreens: () => STAGE_SCREENS.map((screen) => ({ code: screen.code, label: screen.label, description: screen.description, outcomes: screen.outcomes, args: screen.args })),
 
     workflowRunChildren: async (_: unknown, args: { runId: string }, context: Context) => {
       const { data, error } = await context.supabase.rpc('workflow_run_children', { p_run_id: args.runId });
@@ -519,6 +557,20 @@ export const workflowResolvers = {
         return { trigger: mapTrigger(data as Row), errors: [] };
       } catch (error) {
         return { trigger: null, errors: [failure(error, 'TRIGGER_SAVE_FAILED')] };
+      }
+    },
+
+    completeWorkflowStage: async (_: unknown, args: { id: string; outcome: string; result?: unknown }, context: Context) => {
+      try {
+        const { data, error } = await context.supabase.rpc('workflow_stage_complete', {
+          p_stage_id: args.id,
+          p_outcome: String(args.outcome || ''),
+          p_result: args.result && typeof args.result === 'object' && !Array.isArray(args.result) ? args.result : {},
+        });
+        if (error) throw error;
+        return { stage: mapStage(data as Row), errors: [] };
+      } catch (error) {
+        return { stage: null, errors: [failure(error, 'STAGE_COMPLETE_FAILED')] };
       }
     },
 

@@ -2,9 +2,12 @@
 
 import type { ICellRendererParams } from 'ag-grid-community';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { LoadReview } from '@/components/feeds/LoadReview';
 import { usePublishViewContext } from '@/lib/view-context';
+import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
+import { RUNNABLE_WORKFLOWS_QUERY, START_RUN, type WorkflowSummary } from '@/lib/workflows';
 import type { ColumnAssignment, MappingTarget } from '@/lib/feeds/suggest';
 import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
@@ -95,6 +98,26 @@ export default function PositionFilePage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mappingRevision, setMappingRevision] = useState(0);
+  const router = useRouter();
+
+  /** Starts the File intake workflow on a stored file and opens the run, which steps through mapping, checks and promote. */
+  async function startGuided(instanceId: string) {
+    setBusy('guide');
+    setError(null);
+    try {
+      const found = await graphqlQuery<{ workflows: WorkflowSummary[] }>(RUNNABLE_WORKFLOWS_QUERY, {}, 'network-only');
+      if (found.error) throw new Error(found.error.message);
+      const intake = (found.data?.workflows || []).find((workflow) => workflow.code === 'FILE_INTAKE' && workflow.publishedVersion);
+      if (!intake) throw new Error('The File intake workflow is not published for this client. Create it from New workflow, File intake, and publish it.');
+      const started = await graphqlMutation<{ startWorkflowRun: { run: { id: string } | null; errors: Array<{ message: string }> } }>(START_RUN, { workflowId: intake.id, input: { importInstanceId: instanceId } });
+      const runId = started.data?.startWorkflowRun.run?.id;
+      if (!runId) throw new Error(started.error?.message || started.data?.startWorkflowRun.errors[0]?.message || 'The run could not be started');
+      router.push(`/workflows/runs/${runId}`);
+    } catch (err: any) {
+      setError(err.message);
+      setBusy(null);
+    }
+  }
 
   usePublishViewContext(
     detail
@@ -183,7 +206,7 @@ export default function PositionFilePage() {
     {
       colId: 'review',
       headerName: '',
-      width: 130,
+      width: 210,
       sortable: false,
       filter: false,
       cellRenderer: (params: ICellRendererParams<InstanceSummary>) => {
@@ -191,9 +214,14 @@ export default function PositionFilePage() {
         if (!row) return null;
         const opening = params.context?.busy != null;
         return (
-          <button type="button" className="btn" disabled={opening} onClick={() => params.context?.open(row.id)}>
-            {params.context?.busy === 'open' ? 'Opening…' : 'Review'}
-          </button>
+          <span style={{ display: 'flex', gap: 6 }}>
+            <button type="button" className="btn" disabled={opening} onClick={() => params.context?.open(row.id)}>
+              {params.context?.busy === 'open' ? 'Opening…' : 'Review'}
+            </button>
+            <button type="button" className="btn" disabled={opening} title="Step through mapping, checks and promote as one guided run" onClick={() => params.context?.guide(row.id)}>
+              {params.context?.busy === 'guide' ? 'Starting…' : 'Guided run'}
+            </button>
+          </span>
         );
       },
     },
@@ -369,6 +397,33 @@ export default function PositionFilePage() {
             <div className="page-meta">CSV, Excel, JSON, PDF, scans, and Word files · a confirmed map is saved for the next file with the same columns</div>
           </div>
         </div>
+        <label className="btn" title="Upload a file and step through mapping, checks and promote as one guided run">
+          {busy === 'guided-upload' ? 'Reading file…' : busy === 'guide' ? 'Starting…' : 'Guided intake'}
+          <input
+            type="file"
+            accept=".csv,.xlsx,.xls,.json,.txt,.html,.htm,.pdf,.png,.jpg,.jpeg,.tif,.tiff,.docx,.doc"
+            style={{ display: 'none' }}
+            disabled={busy !== null}
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (!file) return;
+              setBusy('guided-upload');
+              setError(null);
+              const form = new FormData();
+              form.set('file', file);
+              try {
+                const response = await fetch('/api/feeds/position-file', { method: 'POST', body: form });
+                const body = await response.json();
+                if (!response.ok) throw new Error(body.error || 'The file could not be stored');
+                await startGuided(body.id);
+              } catch (err: any) {
+                setError(err.message);
+                setBusy(null);
+              }
+            }}
+          />
+        </label>
         <label className="btn btn-primary">
           {busy === 'upload' ? 'Reading file…' : 'Upload file'}
           <input
@@ -418,7 +473,7 @@ export default function PositionFilePage() {
           loading={!queue}
           emptyMessage="No files stored yet. Upload a file to add an instance."
           onRowClicked={(row) => selectInstance(row.id)}
-          context={{ busy, open: selectInstance }}
+          context={{ busy, open: selectInstance, guide: startGuided }}
         />
       </div>
       </>

@@ -25,6 +25,7 @@ import {
   type FoundationAttribute,
   type ProposalItem,
 } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { exitCheckFor, stageScreen } from '@tapestrai/graphql/src/lib/workflow-screens';
 
 /**
  * Moves a workflow run forward.
@@ -110,6 +111,19 @@ export interface WorkflowStore {
   spawn(runId: string, inputs: Array<Record<string, unknown>>): Promise<string[]>;
   /** Opens the step's form, or returns the one already open. A new external form carries its link token, once. */
   openForm(runId: string, nodeId: string, spec: Record<string, unknown>): Promise<FormRow>;
+  /** Opens the step's stage, or returns the one already there. */
+  openStage(runId: string, nodeId: string, spec: Record<string, unknown>): Promise<StageRow>;
+  /** Hands a finished stage back to the person, with the reason. */
+  returnStage(stageId: string, reason: string): Promise<void>;
+}
+
+export interface StageRow {
+  id: string;
+  status: string;
+  outcome: string | null;
+  result: Record<string, unknown>;
+  args: Record<string, unknown>;
+  completedBy: string | null;
 }
 
 export interface FormRow {
@@ -546,6 +560,44 @@ async function runForm(node: WorkflowNode, ctx: StepContext): Promise<StepOutcom
   return { outcome, output: { outcome, answers: form.answers || {}, note: form.note, formId: form.id, answeredBy: form.submittedBy || form.externalEmail } };
 }
 
+/**
+ * A stage waits on a person at one screen. When they leave it, the screen may
+ * say what has to be true first. That is asked here, of a read-only tool, and
+ * not taken from the page: a stage left in a state that does not hold up is
+ * handed back with the reason, and the run waits on it again.
+ */
+async function runStage(node: WorkflowNode, ctx: StepContext): Promise<StepOutcome> {
+  const { store } = ctx.deps;
+  const config = record(resolveTemplates(node.config, ctx.scope));
+  const screen = stageScreen(config.screen);
+  if (!screen) throw new Error(`"${String(config.screen || '')}" is not a screen a stage can show.`);
+  const stage = await store.openStage(ctx.run.id, node.id, {
+    screen: screen.code,
+    title: config.title || node.label,
+    instructions: config.instructions || '',
+    args: record(config.args),
+    outcomes: screen.outcomes,
+    permissions: screen.permissions,
+    people: Array.isArray(config.people) ? config.people : [],
+    roles: Array.isArray(config.roles) ? config.roles : [],
+    dueInHours: config.dueInHours ?? null,
+  });
+  if (stage.status === 'OPEN') return { wait: true, reason: node.id };
+  if (stage.status === 'CANCELLED') throw new Error('The stage was cancelled.');
+
+  const exit = exitCheckFor(screen, stage.outcome);
+  if (exit) {
+    const actor: Actor = { userId: ctx.run.startedBy, clientId: ctx.run.clientId };
+    const found = await ctx.deps.tools.run(exit.tool, exit.args(stage.args, stage.result), actor, 'read');
+    const problem = exit.problem(found, stage.result);
+    if (problem) {
+      await store.returnStage(stage.id, problem);
+      return { wait: true, reason: node.id };
+    }
+  }
+  return { outcome: stage.outcome, output: { outcome: stage.outcome, result: stage.result, stageId: stage.id, completedBy: stage.completedBy } };
+}
+
 async function runHttp(node: WorkflowNode, ctx: StepContext): Promise<StepOutcome> {
   const outbound = ctx.deps.outbound;
   if (!outbound) throw new Error('This worker cannot call connections.');
@@ -604,6 +656,8 @@ async function runNode(node: WorkflowNode, ctx: StepContext): Promise<StepOutcom
       return { outcome: null, output: { joined: ctx.graph.edges.filter((edge) => edge.to === node.id).map((edge) => edge.from) } };
     case 'form':
       return runForm(node, ctx);
+    case 'stage':
+      return runStage(node, ctx);
     case 'http':
       return runHttp(node, ctx);
     case 'message':

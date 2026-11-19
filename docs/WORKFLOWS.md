@@ -8,7 +8,7 @@ Three kinds of step, drawn in three colours everywhere a workflow is shown:
 |---|---|---|
 | Fixed | Run a tool, Condition, Split, Join, Apply approved changes, Call a connection, Send a message, Start, End | The same thing every run |
 | Agent | Agent | A model reads with the tools the step lists and proposes changes. It has no tool that changes data |
-| Human | Human review, Ask for information | The run stops until a person approves what was proposed, or answers a form |
+| Human | Human review, Ask for information, Stage | The run stops until a person approves what was proposed, answers a form, or works through a screen |
 
 The rule the engine keeps: **an agent proposes, a person approves, a fixed step applies.** The only other way to change data is a Run a tool step whose author ticked "This step may change data". The only way to send data outside the platform is a Call a connection or Send a message step whose author ticked "This step sends data outside".
 
@@ -21,6 +21,7 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 | Who reviews | `supabase/migrations/20261117010000_workflow_review_routing.sql`, `apps/web/components/workflows/ReviewerPicker.tsx` | Who a review is for, keeping the starter apart, due dates, and reassigning |
 | Review notices | `supabase/migrations/20261117020000_workflow_review_notices.sql`, `packages/worker/src/assistant.ts` | Telling people a review is waiting or overdue |
 | Approvals, delivery | `supabase/migrations/20261117040000_workflow_review_approvals.sql`, `20261117050000_notification_delivery.sql`, `packages/worker/src/notify.ts` | More than one approval, handing an overdue review on, and sending notices by email and Slack |
+| Stages | `supabase/migrations/20261119120000_workflow_stages.sql`, `packages/graphql/src/lib/workflow-screens.ts`, `apps/web/components/workflows/GuidedRun.tsx`, `apps/web/components/workflows/stages` | A step that shows one screen and waits, the screens it can show, and the guided view of a run |
 | Forms, split runs, outbound | `supabase/migrations/20261117070000_workflow_forms_and_outbound.sql`, `packages/worker/src/workflow/outbound.ts`, `apps/web/app/portal` | Ask for information, the portal, one run per record, Call a connection, Send a message |
 | Analytics | `supabase/migrations/20261117080000_workflow_analytics.sql`, `apps/web/app/workflows/analytics` | How each workflow is doing |
 | Triggers | `supabase/migrations/20261117030000_workflow_triggers.sql`, `apps/web/components/workflows/WorkflowTriggers.tsx` | Starting a workflow when a feed event arrives or a data quality scan finds new failures |
@@ -128,6 +129,7 @@ The templates, all built this way:
 | Cash tie-out | Says what ties to the bank and what does not | No |
 | Closing readiness | Says whether each deal can close and what is open | No |
 | Overcollateralization test, Single-name check | Score one compliance rule and explain the result | Stores the rule's results |
+| File intake | Takes one stored file through mapping, staging, checks and promote as a guided run. See [Stages](#stages) | After a person approves the staged batch |
 
 A compliance template fixes which rule it scores. That is what it does, not which records it is for: the rule is scored for every record it applies to, and the filters decide which records the brief covers.
 
@@ -354,6 +356,49 @@ Approving records the decision and the run continues down its `approved` path. R
 
 The portal needs no sign-in: the link is the key. Its token is random, only its SHA-256 is stored, it expires in 14 days, and it stops working once the form is answered. It shows the form's title, instructions, fields, due date, and the client's name, and nothing else. Answers are checked against the fields in the page and again in the database. Cancelling the run closes its forms.
 
+## Stages
+
+A **Stage** step puts one screen in front of a person and waits until they leave it. A Human review always shows a table of proposed changes and a form always shows fields; a stage shows whatever the work needs: a file beside its mapping, a staged batch with its checks. A workflow that passes through several stages reads as one guided piece of work.
+
+| Setting | Effect |
+|---|---|
+| Screen | Which screen the person sees. The screen decides the step's outcomes |
+| Title, What to do | Shown above the screen. Placeholders are filled from the run |
+| The screen's own values | What the run gives the screen, such as the file or the batch, usually as a placeholder |
+| Who works it, Hours to finish | As on a form. Blank means anyone with `workflow.review` |
+
+Later steps read what the person left as `{{steps.<step>.result.<key>}}`, and each connection leaving the step follows one of the screen's outcomes.
+
+### The screens
+
+| Screen | Shows | Outcomes | Before the run goes on |
+|---|---|---|---|
+| Map a file (`load.map`) | A stored file beside where each column goes, the as-of date, and a dry run | `confirmed`, `abandoned` | Confirmed: the file has an as-of date and a column that identifies each record |
+| Check staged values (`load.quality`) | A staged batch with its data quality checks, and corrections | `approved`, `discarded` | Approved: the batch is still staged, and no critical check fails because of it unless a reason was given. Approving needs `load.promote` |
+
+**The engine checks, not the page.** When a person leaves a stage, the engine asks a read-only tool whether what the screen requires is true. If it is not, the stage is handed back to the person with the reason, and the run waits on it again. So a stage cannot be passed by calling the API directly.
+
+A permission a screen names for an outcome is held on the stage when it opens, and the database refuses that outcome from anyone who lacks it. This is how the person who approves a batch must hold `load.promote`, while the fixed step that then promotes it runs as the client's service account like any other step.
+
+### The guided view
+
+A run of a workflow with a stage in it opens as guided work: a ribbon of its steps, and the one screen that is waiting on you. Steps that only route the run (Start, End, Condition, Split, Join) are not on the ribbon, and a path a decision did not take drops off it. While the system's own steps run, the page says what it is doing and follows along. The steps and history are one click below.
+
+### File intake
+
+The File intake template runs on one stored file, given as `importInstanceId`. It is the one template that works on a file and not on records chosen by filters.
+
+| Step | Kind | What it does |
+|---|---|---|
+| Map the file | Human | The mapping screen. Confirming saves the mapping and the date on the file |
+| Stage the values | Fixed | `stage_position_file_import`: keeps what a load would do as a batch. Nothing is live |
+| Was it staged? | Fixed | Ends the run when nothing could be staged |
+| Check the values | Human | The quality screen. Correct, then approve or discard |
+| Promote to live records | Fixed | `promote_load_batch`, with the reason when a critical failure was approved |
+| Discard the batch | Fixed | `discard_load_batch`, when the person discarded it |
+
+Start it from Load data: **Guided intake** uploads a file and opens the run, and **Guided run** on a stored file's row does the same for a file already there. Both need the template published for the client under the code `FILE_INTAKE`. Staging, the checks and promote are described in [STAGING.md](STAGING.md).
+
 ## Sending outside the platform
 
 Two fixed steps send data out. Each needs its author to tick **This step sends data outside**. Put them after a review when what is sent needs approving.
@@ -457,7 +502,10 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 
 ## Not built yet
 
-- Loops. A graph runs each step once.
+- Loops. A graph runs each step once. A stage can be handed back to the person, but a run cannot go back to an earlier stage.
+- Stages for a document beside its extracted values, proposed new fields, and a drafted template. Two screens exist: mapping a file and checking staged values.
+- Starting a guided run when a file arrives by a feed. It is started by hand from Load data.
+- Stages on the home page's Needs you list and in review notices. An open stage shows on its run's page.
 - Steps on parallel paths running at the same moment. Paths do not wait on one another, but the worker runs one step at a time.
 - A deal setup template. The engine supports it.
 - Filtering by an attribute's value (every fund of one strategy). Filters are by type, code, id, and name.

@@ -3,11 +3,13 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { GuidedRun } from '@/components/workflows/GuidedRun';
 import { ReviewPanel } from '@/components/workflows/ReviewPanel';
 import { RunChildren, RunForms } from '@/components/workflows/RunForms';
 import { WorkflowCanvas, type CanvasSelection } from '@/components/workflows/WorkflowCanvas';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { usePublishViewContext } from '@/lib/view-context';
+import { isGuided } from '@/lib/workflow-stages';
 import { CANCEL_RUN, RETRY_RUN, WORKFLOW_RUN_QUERY, clock, kindOf, statusOf, when, type EventView, type MutationErrors, type RunDetail } from '@/lib/workflows';
 
 const ACTOR: Record<EventView['actorType'], { label: string; color: string; tint: string }> = {
@@ -35,6 +37,7 @@ export default function WorkflowRunPage() {
   const [selection, setSelection] = useState<CanvasSelection>(null);
   const [actorFilter, setActorFilter] = useState<'ALL' | EventView['actorType']>('ALL');
   const [openEvent, setOpenEvent] = useState<string | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
 
   usePublishViewContext({ activity: 'viewing', kind: 'workflow-run', label: run?.workflowName ? `${run.workflowName} run` : 'Workflow run', id, summary: run ? statusOf(run.status).label : undefined });
 
@@ -75,6 +78,8 @@ export default function WorkflowRunPage() {
   const openReviews = (run?.reviews || []).filter((review) => review.status === 'OPEN');
   const pastReviews = (run?.reviews || []).filter((review) => review.status !== 'OPEN');
   const status = run ? statusOf(run.status) : null;
+  // A workflow with stages is worked through one screen at a time. Its steps and history are a click away.
+  const guided = isGuided(run?.graph);
 
   return (
     <div className="view-fade">
@@ -127,8 +132,14 @@ export default function WorkflowRunPage() {
           ))}
           <RunForms runId={run.id} onAnswered={load} />
           <RunChildren runId={run.id} />
+          {guided && <GuidedRun run={run} onChanged={load} />}
+          {guided && (
+            <button type="button" className="btn btn-sm" aria-expanded={showDetail} onClick={() => setShowDetail((value) => !value)} style={{ marginBottom: 12 }}>
+              {showDetail ? 'Hide the steps and history' : 'Show the steps and history'}
+            </button>
+          )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: 12, alignItems: 'start' }}>
+          <div style={{ display: guided && !showDetail ? 'none' : 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: 12, alignItems: 'start' }}>
             <div style={{ minWidth: 0 }}>
               {run.graph && <WorkflowCanvas graph={run.graph} selection={selection} onSelect={setSelection} steps={marks} currentNode={moving || run.status === 'WAITING' ? run.currentNode : null} height={420} />}
 

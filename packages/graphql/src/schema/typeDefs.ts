@@ -3019,6 +3019,10 @@ type Query {
   agentCall(id: ID!): JSON
   """Forms workflow steps are waiting on. status defaults to OPEN; runId keeps one run's."""
   workflowForms(status: String, runId: ID): [WorkflowForm!]!
+  """Stages workflow steps are waiting on. status defaults to OPEN; pass null with a runId for every stage of one run."""
+  workflowStages(status: String, runId: ID): [WorkflowStage!]!
+  """The screens a Stage step can show."""
+  workflowStageScreens: [WorkflowStageScreen!]!
   """The runs a run was split into, one per record: [{ id, status, input, createdAt, finishedAt, openReviews }]."""
   workflowRunChildren(runId: ID!): JSON!
   """A form by its private link, for someone outside the firm. Null when the link is wrong, used, or expired. Needs no sign-in."""
@@ -3383,6 +3387,8 @@ type Mutation {
   saveNotificationSettings(emailEnabled: Boolean!, slackWebhookUrl: String): NotificationSettingsResult!
   """Answers a form, or declines it. The run goes on down the submitted or declined path."""
   submitWorkflowForm(id: ID!, outcome: String!, answers: JSON, note: String): WorkflowFormResult!
+  """Leaves a stage with one of its outcomes. The run goes on down that outcome's path, or hands the stage back when it does not hold up."""
+  completeWorkflowStage(id: ID!, outcome: String!, result: JSON): WorkflowStageResult!
   """Answers a form by its private link. Needs no sign-in. The link stops working once used."""
   submitWorkflowPortalForm(token: String!, outcome: String!, answers: JSON, note: String): MutationResult!
 
@@ -5118,6 +5124,50 @@ type WorkflowForm {
 type WorkflowFormResult {
   form: WorkflowForm
   errors: [MutationError!]!
+}
+
+"""A screen a workflow step is waiting on a person to work through."""
+type WorkflowStage {
+  id: ID!
+  runId: ID!
+  nodeId: String!
+  workflowName: String
+  """The screen's code, such as load.map or load.quality."""
+  screen: String!
+  title: String!
+  instructions: String
+  """What the run gives the screen."""
+  args: JSON!
+  outcomes: [String!]!
+  """The outcomes this person may choose."""
+  allowedOutcomes: [String!]!
+  """OPEN, DONE, or CANCELLED."""
+  status: String!
+  outcome: String
+  result: JSON
+  """Why the stage was handed back to the person, when it was."""
+  returnedReason: String
+  assignees: JSON!
+  canAct: Boolean!
+  blocker: String
+  completedByName: String
+  completedAt: DateTime
+  dueAt: DateTime
+  createdAt: DateTime!
+}
+
+type WorkflowStageResult {
+  stage: WorkflowStage
+  errors: [MutationError!]!
+}
+
+type WorkflowStageScreen {
+  code: String!
+  label: String!
+  description: String!
+  outcomes: [String!]!
+  """[{ key, label, help }]"""
+  args: JSON!
 }
 
 type NotificationSettings {

@@ -8560,6 +8560,22 @@ a.xp-admin-row:hover { background: var(--bg); }
   overflow: hidden;
 }
 
+/* Inside a guided run the review is one part of a longer page, so it takes its own height and the page scrolls. */
+.load-review-guided {
+  display: block;
+  overflow: visible;
+}
+
+.load-review-guided .load-review-body {
+  overflow: visible;
+}
+
+.load-review-guided .load-review-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+}
+
 .load-review .crumbs {
   display: flex;
 }
