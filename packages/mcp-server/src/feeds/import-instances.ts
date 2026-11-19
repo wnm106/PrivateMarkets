@@ -1,6 +1,7 @@
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { runAsFeedClient } from '../agent/harness';
-import { assertLocalSupabase, executeParsedFeed, localSupabase } from './feed-loader';
+import { assertLocalSupabase, executeParsedFeed, localSupabase, type LoadRecorder } from './feed-loader';
+import { applyCellEdits, dropBatch, finishDirectBatch, openDirectBatch, writeJournal, type CellEdit, type JournalEntry } from './load-batch-store';
 import { reviewColumns, type ReviewContext } from './semantic-review';
 import { intakeFile, type IntakeTable } from './intake-file';
 import { ensureSource, materialize } from './load-sessions';
@@ -488,7 +489,21 @@ export async function trackImportAttribute(
 /** A load still marked PROCESSING after this long is treated as abandoned. */
 const PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
 
-export async function processImportInstance(id: string, clientId: string, columnMappings?: ColumnAssignment[], asOfDate?: string, client?: SupabaseClient, decisions?: EntityResolutionDecision[]): Promise<ImportInstanceDetail> {
+/**
+ * Load a stored file into live records. `batch` is given when a staged batch is
+ * being promoted: its id is stamped on what is written and its corrections are
+ * laid over the file's rows. Any other load opens a batch of its own, so it can
+ * be reverted too.
+ */
+export async function processImportInstance(
+  id: string,
+  clientId: string,
+  columnMappings?: ColumnAssignment[],
+  asOfDate?: string,
+  client?: SupabaseClient,
+  decisions?: EntityResolutionDecision[],
+  batch?: { id: string; cellEdits?: CellEdit[]; userId?: string | null },
+): Promise<ImportInstanceDetail> {
   const db = client || useClient();
   assertLocalSupabase(db);
   const existing = await db.schema('entity_instances').from('import_instances').select('*').eq('id', id).eq('client_id', clientId).single();
@@ -544,17 +559,44 @@ export async function processImportInstance(id: string, clientId: string, column
     throw new Error('This file is already loading. Wait for it to finish before loading it again.');
   }
 
+  const directBatchId = batch ? null : await openDirectBatch(db, {
+    clientId,
+    importInstanceId: id,
+    fileName: existing.data.file_name,
+    mapCode: identity.mapCode,
+    sourceCode: fileSource || identity.sourceCode,
+    asOfDate: asOf,
+  });
+  const batchId = batch?.id || directBatchId;
+  const journal: JournalEntry[] = [];
+  const recorder: LoadRecorder | undefined = batchId ? { journal: (entry) => { journal.push(entry); } } : undefined;
+
   try {
     const located = activeStoredTable(existing.data);
-    const result = await executeParsedFeed(map, existing.data.file_name, {
-      headers: existing.data.headers || [],
-      rows: existing.data.parsed_rows || [],
-      locations: located?.locations,
-      pages: located?.pages,
-    }, asOf, db, clientId, cleanSource(existing.data.source_code) || undefined, { provenance: { instanceId: id, tableId: existing.data.table_id || null }, decisions });
+    let result;
+    try {
+      result = await executeParsedFeed(map, existing.data.file_name, {
+        headers: existing.data.headers || [],
+        rows: applyCellEdits(existing.data.parsed_rows || [], batch?.cellEdits),
+        locations: located?.locations,
+        pages: located?.pages,
+      }, asOf, db, clientId, cleanSource(existing.data.source_code) || undefined, {
+        provenance: { instanceId: id, tableId: existing.data.table_id || null },
+        decisions,
+        recorder,
+        batchId: batchId || undefined,
+      });
+    } finally {
+      // Whatever was changed in place is written down even when the load stops part way.
+      if (batchId && journal.length > 0) await writeJournal(db, batchId, journal);
+    }
     const summary = summarize(result);
     const needsResolution = result.resolutions.length > 0;
     const failed = !needsResolution && ((summary?.failed || 0) > 0 || result.errors.length > 0);
+    if (directBatchId) {
+      if (needsResolution) await dropBatch(db, directBatchId);
+      else await finishDirectBatch(db, directBatchId, { status: failed ? 'FAILED' : 'PROMOTED', result, errorMessage: failed ? result.errors.slice(0, 3).join(' ') : null });
+    }
     const completedAt = new Date().toISOString();
     const runs = Array.isArray(existing.data.runs) ? existing.data.runs : [];
     runs.push({
@@ -581,6 +623,7 @@ export async function processImportInstance(id: string, clientId: string, column
     const completedAt = new Date().toISOString();
     const runs = Array.isArray(existing.data.runs) ? existing.data.runs : [];
     runs.push({ startedAt, completedAt, asOfDate: asOf, status: 'FAILED', created: 0, matched: 0, failed: 1 });
+    if (directBatchId) await finishDirectBatch(db, directBatchId, { status: 'FAILED', result: null, errorMessage: error?.message || 'Process failed' });
     await db.schema('entity_instances').from('import_instances').update({
       status: 'FAILED',
       completed_at: completedAt,
@@ -602,6 +645,7 @@ export async function previewImportInstance(
   columnMappings?: ColumnAssignment[],
   asOfDate?: string,
   client?: SupabaseClient,
+  extra: { decisions?: EntityResolutionDecision[]; recorder?: LoadRecorder; cellEdits?: CellEdit[] } = {},
 ): Promise<FeedLoadResult> {
   const db = client || useClient();
   assertLocalSupabase(db);
@@ -631,12 +675,12 @@ export async function previewImportInstance(
   return executeParsedFeed(
     map,
     existing.data.file_name,
-    { headers: existing.data.headers || [], rows: existing.data.parsed_rows || [], locations: located?.locations, pages: located?.pages },
+    { headers: existing.data.headers || [], rows: applyCellEdits(existing.data.parsed_rows || [], extra.cellEdits), locations: located?.locations, pages: located?.pages },
     asOf,
     db,
     clientId,
     cleanSource(existing.data.source_code) || undefined,
-    { dryRun: true },
+    { dryRun: true, decisions: extra.decisions, recorder: extra.recorder },
   );
 }
 

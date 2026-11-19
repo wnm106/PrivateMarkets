@@ -336,6 +336,7 @@ export default function PositionFilePage() {
           onChange={updateAssignment}
           onLoad={() => processInstance(detail.id, detail.columnMappings)}
           onPreview={() => previewInstance(detail.id, detail.columnMappings)}
+          onPromoted={() => { void selectInstance(detail.id); void refreshQueue(); }}
           intake={detail.intake}
           tables={detail.tables}
           tableId={detail.tableId}

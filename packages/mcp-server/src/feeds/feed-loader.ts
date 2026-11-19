@@ -596,6 +596,53 @@ async function cleanseDuplicateIdentifiers(
   }
 }
 
+/**
+ * What a load does, told as it happens. A dry run tells the records and values it
+ * would write, which is how a batch is staged. A real load tells each live row it
+ * changes in place, which is what lets the batch be reverted.
+ */
+export interface LoadRecorder {
+  record?(event: {
+    domainCode: string;
+    fileCode: string;
+    name: string;
+    action: 'CREATE' | 'MATCH';
+    entityId: string | null;
+    templateId: string | null;
+    via?: string;
+  }): void;
+  value?(event: {
+    domainCode: string;
+    fileCode: string;
+    attributeCode: string;
+    attributeId: string;
+    sourceId: string | null;
+    precedenceRank: number;
+    validFrom: string;
+    action: 'INSERT' | 'UPDATE' | 'UNCHANGED';
+    raw: string;
+    proposed: string | null;
+    current: string | null;
+    row?: number;
+    column?: string;
+  }): void;
+  journal?(event: {
+    kind: 'VALUE_UPDATE' | 'VALUE_CLOSE' | 'LINK_CLOSE' | 'RECORD_RENAME';
+    targetId: string;
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+  }): void;
+}
+
+export interface LoadOptions {
+  dryRun?: boolean;
+  provenance?: { instanceId: string; tableId: string | null };
+  decisions?: EntityResolutionDecision[];
+  recorder?: LoadRecorder;
+  /** Stamped on every value, link and record a real load writes. */
+  batchId?: string;
+}
+
 export async function executeFeed(map: FeedMap, fileName: string, bytes: Buffer, asOfDate: string, client?: SupabaseClient, clientId?: string): Promise<FeedLoadResult> {
   const db = client || localSupabase();
   return executeParsedFeed(map, fileName, await tableFromFile(fileName, bytes), asOfDate, db, clientId || await defaultClientId(db));
@@ -609,10 +656,12 @@ export async function executeParsedFeed(
   client: SupabaseClient | undefined,
   clientId: string,
   fallbackSource?: string,
-  options: { dryRun?: boolean; provenance?: { instanceId: string; tableId: string | null }; decisions?: EntityResolutionDecision[] } = {},
+  options: LoadOptions = {},
 ): Promise<FeedLoadResult> {
   const dry = options.dryRun === true;
   const decisions = options.decisions;
+  const recorder = options.recorder;
+  const batchTag: Record<string, string> = !dry && options.batchId ? { load_batch_id: options.batchId } : {};
   if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
     throw new Error('As-of date must be YYYY-MM-DD');
   }
@@ -829,8 +878,20 @@ export async function executeParsedFeed(
             linkedTo.delete(entity.code);
             continue;
           }
+          if (!dry && rowName && rowName !== hit.entity.name) {
+            recorder?.journal?.({ kind: 'RECORD_RENAME', targetId: hit.entity.id, before: { entity_name: hit.entity.name }, after: { entity_name: rowName } });
+          }
           idByCode.set(entity.code, hit.entity.id);
         }
+        recorder?.record?.({
+          domainCode,
+          fileCode: entity.code,
+          name: entity.name,
+          action: hit.entity.provisional ? 'CREATE' : 'MATCH',
+          entityId: hit.entity.provisional ? null : hit.entity.id,
+          templateId,
+          via: hit.via,
+        });
         if (hit.via !== 'code' && !hit.entity.provisional) matchedByIdentity += 1;
         stats.matched += 1;
         continue;
@@ -853,6 +914,7 @@ export async function executeParsedFeed(
       });
       pending.set(provisionalId, entity);
       linkedTo.set(entity.code, provisionalId);
+      recorder?.record?.({ domainCode, fileCode: entity.code, name: entity.name, action: 'CREATE', entityId: null, templateId });
     }
     if (matchedByIdentity) {
       warnings.push(`${domainCode}: matched ${matchedByIdentity} existing ${matchedByIdentity === 1 ? 'record' : 'records'} by name or identifier`);
@@ -881,6 +943,7 @@ export async function executeParsedFeed(
         client_id: catalog.clientId,
         is_active: true,
         metadata: { feed_map: map.mapCode, source_code: map.sourceCode },
+        ...batchTag,
       }));
       const insert = await db.schema('entity_instances').from('master_entities').insert(payload).select('id, entity_code');
       if (insert.error || !insert.data) {
@@ -1011,6 +1074,21 @@ export async function executeParsedFeed(
         };
         const sliceKey = varying ? `${entityId}|${meta.id}|${valueSource.id}|${validFrom}` : `${entityId}|${meta.id}|${validFrom}`;
         if (queuedAttributes.has(sliceKey)) continue;
+        const tell = (action: 'INSERT' | 'UPDATE' | 'UNCHANGED', current: string | null) => recorder?.value?.({
+          domainCode,
+          fileCode: entity.code,
+          attributeCode,
+          attributeId: meta.id,
+          sourceId: valueSource.id.startsWith(DRY_PREFIX) ? null : valueSource.id,
+          precedenceRank: valueSource.rank,
+          validFrom,
+          action,
+          raw,
+          proposed: coerced.golden_value,
+          current,
+          row: origin?.row,
+          column: origin?.column,
+        });
         const slices = (slicesByKey.get(`${entityId}|${meta.id}`) || []).filter((row) => !varying || row.source_id === valueSource.id);
         const sameSlices = slices.filter((row) => String(row.valid_from).slice(0, 10) === validFrom);
         if (sameSlices.length > 0) {
@@ -1031,8 +1109,23 @@ export async function executeParsedFeed(
               metadata: valueMetadata,
             }).eq('id', slice.id);
             if (update.error) errors.push(update.error.message);
-            else changed = true;
+            else {
+              changed = true;
+              if (!dry) {
+                recorder?.journal?.({
+                  kind: 'VALUE_UPDATE',
+                  targetId: slice.id,
+                  before: {
+                    golden_value: slice.golden_value ?? null,
+                    golden_value_numeric: slice.golden_value_numeric ?? null,
+                    golden_value_date: slice.golden_value_date ?? null,
+                  },
+                  after: value,
+                });
+              }
+            }
           }
+          tell(changed ? 'UPDATE' : 'UNCHANGED', sameSlices[0]?.golden_value ?? null);
           if (changed) attributeStats.updated += 1;
           else attributeStats.unchanged += 1;
           queuedAttributes.add(sliceKey);
@@ -1048,9 +1141,12 @@ export async function executeParsedFeed(
           }
           attributeStats.unchanged += 1;
           queuedAttributes.add(sliceKey);
+          tell('UNCHANGED', alreadyTrue[0]?.golden_value ?? null);
           continue;
         }
 
+        const holding = slices.find((row) => String(row.valid_from).slice(0, 10) <= validFrom && String(row.valid_to).slice(0, 10) >= validFrom);
+        tell('INSERT', holding?.golden_value ?? holding?.queued?.golden_value ?? null);
         const planned = planPeriod(slices.map((row) => ({ id: row.id, validFrom: String(row.valid_from).slice(0, 10), validTo: String(row.valid_to).slice(0, 10) })), validFrom);
         const validTo = planned.validTo;
         if (planned.closeId) {
@@ -1061,7 +1157,17 @@ export async function executeParsedFeed(
             valid_to: planned.closeTo,
           }).eq('id', planned.closeId);
           if (close.error) errors.push(close.error.message);
-          else if (covering) covering.valid_to = planned.closeTo;
+          else if (covering) {
+            if (!dry && !queuedRow) {
+              recorder?.journal?.({
+                kind: 'VALUE_CLOSE',
+                targetId: planned.closeId,
+                before: { valid_to: String(covering.valid_to).slice(0, 10) },
+                after: { valid_to: planned.closeTo },
+              });
+            }
+            covering.valid_to = planned.closeTo;
+          }
         }
         queuedAttributes.add(sliceKey);
         const queuedValues: Record<string, unknown> = {
@@ -1075,6 +1181,7 @@ export async function executeParsedFeed(
           last_received_at: receivedAt,
           precedence_rank: valueSource.rank,
           metadata: valueMetadata,
+          ...batchTag,
         };
         const historyKey = `${entityId}|${meta.id}`;
         slicesByKey.set(historyKey, [...(slicesByKey.get(historyKey) || []), {
@@ -1129,6 +1236,7 @@ export async function executeParsedFeed(
           is_primary: true,
           valid_from: entity.asOf || asOfDate,
           metadata: { feed_map: map.mapCode },
+          ...batchTag,
         });
       }
     }
@@ -1154,7 +1262,7 @@ export async function executeParsedFeed(
     }
     const day = (value: unknown) => String(value).slice(0, 10);
     const relationshipInserts: Record<string, unknown>[] = [];
-    const replaced: { id: string; validTo: string }[] = [];
+    const replaced: { id: string; validTo: string; was: string }[] = [];
     for (const row of relationshipRows) {
       const date = day(row.valid_from);
       const links = storedLinks.get(`${row.child_entity_id}|${row.relationship_code}`) || [];
@@ -1166,7 +1274,7 @@ export async function executeParsedFeed(
       // The file now names a different parent. Close the link an earlier load made, so the child has one current parent.
       for (const link of covering) {
         if (link.metadata?.feed_map && day(link.valid_from) < date && day(link.valid_to) === OPEN_TO) {
-          replaced.push({ id: link.id, validTo: dayBefore(date) });
+          replaced.push({ id: link.id, validTo: dayBefore(date), was: day(link.valid_to) });
           link.valid_to = dayBefore(date);
         }
       }
@@ -1178,6 +1286,7 @@ export async function executeParsedFeed(
       for (const change of replaced) {
         const closed = await db.schema('entity_instances').from('entity_relationships').update({ valid_to: change.validTo }).eq('id', change.id);
         if (closed.error) errors.push(closed.error.message);
+        else recorder?.journal?.({ kind: 'LINK_CLOSE', targetId: change.id, before: { valid_to: change.was }, after: { valid_to: change.validTo } });
       }
     }
     if (replaced.length > 0) warnings.push(`${domainCode}: ${replaced.length} ${replaced.length === 1 ? 'link was' : 'links were'} moved to a new parent as of this load`);

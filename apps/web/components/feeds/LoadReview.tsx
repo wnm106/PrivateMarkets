@@ -8,6 +8,7 @@ import { SourceViewer, type SourceTarget } from '@/components/feeds/SourceViewer
 import { IntakePanel, SourcePicker, TrackAttribute, type IntakeInfo, type TableChoice } from '@/components/feeds/LoadIntake';
 import { IssueList, LoadPreview, LoadStepper, type LoadPreviewResult, type PreviewReject, type StepState } from '@/components/feeds/LoadPreview';
 import { EntityResolutionStep } from '@/components/feeds/EntityResolutionStep';
+import { StagedBatch, type StageState } from '@/components/feeds/StagedBatch';
 import {
   TRANSFORM_OPTIONS,
   applyTarget,
@@ -157,6 +158,7 @@ export function LoadReview({
   onChange,
   onLoad,
   onPreview,
+  onPromoted,
   onReload,
   onClose,
   resolutions = [],
@@ -191,6 +193,8 @@ export function LoadReview({
   onChange: (index: number, next: ColumnAssignment) => void;
   onLoad: () => void;
   onPreview: () => Promise<LoadPreviewResult>;
+  /** A staged batch was promoted or reverted, so the file and the queue have changed. */
+  onPromoted?: () => void;
   onReload: () => void;
   onClose: () => void;
   resolutions?: EntityResolution[];
@@ -210,6 +214,8 @@ export function LoadReview({
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewKey, setPreviewKey] = useState('');
+  const [stageState, setStageState] = useState<StageState>('none');
+  const [stageSignal, setStageSignal] = useState(0);
   const [editing, setEditing] = useState<string | null>(null);
   const [editKey, setEditKey] = useState('');
   const [drafts, setDrafts] = useState<Record<string, { choice: 'suggested' | 'other' | 'skip'; otherKey: string }>>({});
@@ -310,7 +316,12 @@ export function LoadReview({
       state: stepState(reviewed, stale, mappingReady),
       note: stale ? 'changed since review' : undefined,
     },
-    { label: 'Load', state: ready ? 'current' : 'waiting' },
+    {
+      label: 'Stage and check',
+      state: stepState(stageState === 'staged' || stageState === 'promoted', stageState === 'blocked', ready),
+      note: stageState === 'blocked' ? 'critical checks fail' : stageState === 'staged' ? 'checked' : undefined,
+    },
+    { label: 'Promote', state: stageState === 'promoted' ? 'done' : stageState === 'staged' ? 'current' : 'waiting' },
   ];
   async function runPreview() {
     setPreviewing(true);
@@ -433,7 +444,7 @@ export function LoadReview({
               {reloading ? 'Reading file…' : 'Reload file'}
             </button>
           </div>
-          <p className="load-sub">{rowCount.toLocaleString()} rows. Three steps: check what’s in the file, confirm where each column goes, then load. Reload file reads the stored copy again and replaces this mapping.</p>
+          <p className="load-sub">{rowCount.toLocaleString()} rows. Check what’s in the file, confirm where each column goes, then stage it: the values are checked against the data quality rules before anything is live. Reload file reads the stored copy again and replaces this mapping.</p>
           {mapNote && <p className="load-sub" style={{ marginTop: 8 }}>{mapNote}</p>}
           <IntakePanel intake={intake || null} tables={tables || []} tableId={tableId || null} disabled={loading || reloading} onSelectTable={(id) => onSelectTable?.(id)} onViewOriginal={hasDocument ? () => setViewing({}) : undefined} />
           <LoadStepper steps={steps} />
@@ -624,6 +635,18 @@ export function LoadReview({
           {mappingReady && (
             <LoadPreview preview={preview} running={previewing} error={previewError} stale={Boolean(preview) && !reviewed} onRun={runPreview} onShow={showInDocument} />
           )}
+          {mappingReady && (
+            <StagedBatch
+              fileId={fileId}
+              assignments={assignments}
+              asOfDate={chosenDate}
+              ready={ready}
+              mappingKey={currentKey}
+              stageSignal={stageSignal}
+              onState={setStageState}
+              onPromoted={() => onPromoted?.()}
+            />
+          )}
         </div>
       </div>
 
@@ -640,7 +663,7 @@ export function LoadReview({
               ) : !reviewed ? (
                 <><b>{assignments.length} of {assignments.length}</b> columns confirmed · review what will happen before loading</>
               ) : (
-                <><b>{assignments.length} of {assignments.length}</b> columns confirmed · reviewed · ready to load</>
+                <><b>{assignments.length} of {assignments.length}</b> columns confirmed · reviewed · {stageState === 'none' ? 'ready to stage' : stageState === 'blocked' ? 'staged, critical checks fail' : stageState === 'staged' ? 'staged, ready to promote' : 'promoted'}</>
               )}
             </p>
             <div className="load-pb"><i style={{ width: `${assignments.length === 0 ? 0 : (confident / assignments.length) * 100}%` }} /></div>
@@ -655,9 +678,14 @@ export function LoadReview({
                 {previewing ? 'Reviewing…' : 'Review before loading'}
               </button>
             ) : (
-              <button type="button" className={resolutions.length > 0 ? 'load-btn sec' : 'load-btn'} disabled={!ready || loading || reloading} onClick={onLoad}>
-                {loading ? 'Loading…' : `Load ${loadCount.toLocaleString()} records`}
-              </button>
+              <>
+                <button type="button" className="load-btn sec" disabled={!ready || loading || reloading} onClick={onLoad} title="Write straight to live records without staging. The load can still be reverted.">
+                  {loading ? 'Loading…' : `Load ${loadCount.toLocaleString()} records now`}
+                </button>
+                <button type="button" className="load-btn" disabled={!ready || loading || reloading} onClick={() => setStageSignal((value) => value + 1)}>
+                  {stageState === 'none' || stageState === 'promoted' ? 'Stage and check' : 'Stage again'}
+                </button>
+              </>
             )}
           </span>
         </div>

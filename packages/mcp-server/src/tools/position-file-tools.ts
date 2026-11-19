@@ -17,6 +17,18 @@ import {
   saveImportInstance,
 } from '../feeds/import-instances';
 import { getImportTables, loadImportTable, previewImportTable } from '../feeds/pack-tables';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { userIdOf } from '../agent/harness';
+import {
+  discardBatch,
+  editStagedValue,
+  getBatch,
+  listBatches,
+  listStagedValues,
+  promoteBatch,
+  revertBatch,
+  stageImportInstance,
+} from '../feeds/load-batches';
 import { mappingTargets } from '../feeds/suggest';
 import type { ColumnAssignment } from '../feeds/suggest';
 
@@ -213,7 +225,145 @@ const loadPositionFileTableTool: ToolDefinition = {
   execute: async (args, supabase) => loadImportTable(String(args.instanceId), await sessionClientId(supabase), args),
 };
 
+/** Promoting and reverting change live records, so the caller must hold load.promote in the client. */
+async function requirePromote(supabase: SupabaseClient, clientId: string): Promise<void> {
+  const { data, error } = await supabase.schema('tenancy').rpc('has_permission', { p_client_id: clientId, p_permission_code: 'load.promote' });
+  if (error || data !== true) throw new Error('Promoting or reverting a load needs the load.promote permission.');
+}
+
+const stageImportTool: ToolDefinition = {
+  name: 'stage_position_file_import',
+  description: 'Stage a stored file: run the load without writing to live records and keep what it would do as a batch. Returns the batch with its counts and its data quality checks, run on each record as it would stand once promoted. Nothing is live until promote_load_batch. Staging a file again replaces its earlier staged batch. If a record in the file matches more than one stored record, nothing is staged and the choices are returned: pass them back as resolutions.',
+  category: 'import',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      instanceId: { type: 'string', description: 'The stored file, from list_position_file_imports.' },
+      asOfDate: { type: 'string', description: 'YYYY-MM-DD. Omit to use the date stored on the instance.' },
+      columnMappings: { type: 'array', items: columnMappingSchema },
+      resolutions: { type: 'array', items: { type: 'object' }, description: 'One decision per ambiguous record: { domainCode, fileCode, action: map | create | ignore, entityId }.' },
+    },
+    required: ['instanceId'],
+  },
+  execute: async (args, supabase) => stageImportInstance(String(args.instanceId), await sessionClientId(supabase), {
+    columnMappings: Array.isArray(args.columnMappings) ? args.columnMappings as ColumnAssignment[] : undefined,
+    asOfDate: args.asOfDate ? String(args.asOfDate) : undefined,
+    decisions: Array.isArray(args.resolutions) ? args.resolutions : undefined,
+    userId: await userIdOf(supabase),
+  }),
+};
+
+const listLoadBatchesTool: ToolDefinition = {
+  name: 'list_load_batches',
+  description: 'Load batches, newest first: staged ones waiting to be promoted, promoted ones that can be reverted, and reverted ones. Pass instanceId for the batches of one stored file.',
+  category: 'import',
+  inputSchema: { type: 'object', properties: { instanceId: { type: 'string' } } },
+  execute: async (args, supabase) => listBatches(await sessionClientId(supabase), args.instanceId ? String(args.instanceId) : null),
+};
+
+const getLoadBatchTool: ToolDefinition = {
+  name: 'get_load_batch',
+  description: 'One load batch: what it would write or wrote, and for a staged batch its data quality checks. Each failing check says whether the batch brings it (NEW) or the record already fails it today (EXISTING), and names the staged value behind it (valueId) when that value can be corrected. blockedBy says why the batch cannot be promoted as it stands.',
+  category: 'import',
+  inputSchema: { type: 'object', properties: { batchId: { type: 'string' } }, required: ['batchId'] },
+  execute: async (args, supabase) => getBatch(String(args.batchId), await sessionClientId(supabase)),
+};
+
+const getLoadBatchValuesTool: ToolDefinition = {
+  name: 'get_load_batch_values',
+  description: 'The values a staged batch would write: the value in the file, the value as it would be stored, the value held today, and any correction. Pass recordId (from get_load_batch) for one record, editedOnly for corrections, changesOnly to leave out values that would not change.',
+  category: 'import',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      batchId: { type: 'string' },
+      recordId: { type: 'string' },
+      editedOnly: { type: 'boolean' },
+      changesOnly: { type: 'boolean' },
+      limit: { type: 'number', description: 'Default 200, at most 1000.' },
+    },
+    required: ['batchId'],
+  },
+  execute: async (args, supabase) => listStagedValues(String(args.batchId), await sessionClientId(supabase), {
+    recordId: args.recordId ? String(args.recordId) : undefined,
+    editedOnly: args.editedOnly === true,
+    changesOnly: args.changesOnly === true,
+    limit: Number(args.limit) || undefined,
+  }),
+};
+
+const editStagedValueTool: ToolDefinition = {
+  name: 'edit_staged_value',
+  description: 'Correct one value of a staged batch before it is promoted. The value must fit the type of its attribute. Live records are not changed. Returns the batch with its checks run again. A blank value takes the correction back.',
+  category: 'import',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      batchId: { type: 'string' },
+      valueId: { type: 'string', description: 'From a failing check in get_load_batch, or from get_load_batch_values.' },
+      value: { type: 'string' },
+      reason: { type: 'string', description: 'Why the value in the file is wrong.' },
+    },
+    required: ['batchId', 'valueId', 'value'],
+  },
+  execute: async (args, supabase) => editStagedValue(String(args.batchId), String(args.valueId), await sessionClientId(supabase), {
+    value: String(args.value ?? ''),
+    reason: args.reason ? String(args.reason) : null,
+    userId: await userIdOf(supabase),
+  }),
+};
+
+const promoteLoadBatchTool: ToolDefinition = {
+  name: 'promote_load_batch',
+  description: 'Write a staged batch to live records, with its corrections. Refused while a critical check fails because of the batch, unless overrideReason says why it should go ahead. Returns the batch, with any difference between what was staged and what was written.',
+  category: 'import',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      batchId: { type: 'string' },
+      overrideReason: { type: 'string', description: 'Only to promote despite a critical failing check.' },
+    },
+    required: ['batchId'],
+  },
+  execute: async (args, supabase) => {
+    const clientId = await sessionClientId(supabase);
+    await requirePromote(supabase, clientId);
+    return promoteBatch(String(args.batchId), clientId, {
+      userId: await userIdOf(supabase),
+      overrideReason: args.overrideReason ? String(args.overrideReason) : null,
+    });
+  },
+};
+
+const revertLoadBatchTool: ToolDefinition = {
+  name: 'revert_load_batch',
+  description: 'Take back what a promoted batch wrote, where it still stands: values it added are retired, rows it changed are put back, links it added are removed, and records it created are made inactive when nothing else has been added to them. Whatever has changed since is left alone and counted in the result.',
+  category: 'import',
+  inputSchema: { type: 'object', properties: { batchId: { type: 'string' } }, required: ['batchId'] },
+  execute: async (args, supabase) => {
+    const clientId = await sessionClientId(supabase);
+    await requirePromote(supabase, clientId);
+    return revertBatch(String(args.batchId), clientId, await userIdOf(supabase));
+  },
+};
+
+const discardLoadBatchTool: ToolDefinition = {
+  name: 'discard_load_batch',
+  description: 'Drop a staged batch. Nothing live was changed, so there is nothing to undo.',
+  category: 'import',
+  inputSchema: { type: 'object', properties: { batchId: { type: 'string' } }, required: ['batchId'] },
+  execute: async (args, supabase) => discardBatch(String(args.batchId), await sessionClientId(supabase)),
+};
+
 export function registerPositionFileTools(registry: ToolRegistry): void {
+  registry.registerTool(stageImportTool);
+  registry.registerTool(listLoadBatchesTool);
+  registry.registerTool(getLoadBatchTool);
+  registry.registerTool(getLoadBatchValuesTool);
+  registry.registerTool(editStagedValueTool);
+  registry.registerTool(promoteLoadBatchTool);
+  registry.registerTool(revertLoadBatchTool);
+  registry.registerTool(discardLoadBatchTool);
   registry.registerTool(getPositionFileTablesTool);
   registry.registerTool(previewPositionFileLoadTool);
   registry.registerTool(loadPositionFileTableTool);

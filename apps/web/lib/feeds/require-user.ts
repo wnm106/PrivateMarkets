@@ -21,6 +21,13 @@ export async function feedClientId(): Promise<string | null> {
   return null;
 }
 
+/** Whether this session may promote a staged load to live records, or revert one. */
+export async function canPromoteLoads(clientId: string): Promise<boolean> {
+  const supabase = await supabaseServerClient();
+  const { data, error } = await supabase.schema('tenancy').rpc('has_permission', { p_client_id: clientId, p_permission_code: 'load.promote' });
+  return !error && data === true;
+}
+
 /**
  * Whether this session may add fields or record types for the client. The
  * database decides, with the same rule its own schema policies use.
