@@ -79,6 +79,9 @@ export interface QualityFailure {
   valueId: string | null;
   editable: boolean;
   stagedValue: string | null;
+  /** Where the value sits in the file: the row and column it was read from. Absent when it came from no one cell. */
+  originRow?: number | null;
+  originColumn?: string | null;
 }
 
 export interface BatchQuality {
@@ -186,7 +189,19 @@ export async function batchQuality(id: string, clientId: string, client?: Supaba
   const db = useClient(client);
   const checked = await db.rpc('load_batch_quality', { p_batch_id: id, p_client_id: clientId });
   if (checked.error) fail(checked.error, 'The data quality checks could not be run');
-  return checked.data as BatchQuality;
+  const quality = checked.data as BatchQuality;
+  // Each failing value is tied back to its cell in the file, so the screen can show where it was read.
+  const ids = [...new Set(quality.failures.map((item) => item.valueId).filter((value): value is string => Boolean(value)))];
+  if (ids.length > 0) {
+    const origins = await db.schema('entity_instances').from('load_batch_values').select('id, origin_row, origin_column').in('id', ids.slice(0, 500));
+    const byId = new Map((origins.data || []).map((row: any) => [row.id, row]));
+    for (const failure of quality.failures) {
+      const origin = failure.valueId ? byId.get(failure.valueId) : null;
+      failure.originRow = origin?.origin_row ?? null;
+      failure.originColumn = origin?.origin_column ?? null;
+    }
+  }
+  return quality;
 }
 
 export async function getBatch(id: string, clientId: string, client?: SupabaseClient): Promise<BatchDetail> {

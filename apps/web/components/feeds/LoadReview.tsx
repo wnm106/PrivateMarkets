@@ -4,9 +4,11 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { dependencyLoadWaves } from '@/lib/feeds/load-order';
 import { describeOrphans, orphanColumns } from '@/lib/feeds/suggest';
-import { SourceViewer, type SourceTarget } from '@/components/feeds/SourceViewer';
+import { SourceViewer } from '@/components/feeds/SourceViewer';
+import type { SourceTarget } from '@/components/feeds/SourcePane';
 import { IntakePanel, SourcePicker, TrackAttribute, type IntakeInfo, type TableChoice } from '@/components/feeds/LoadIntake';
 import { IssueList, LoadPreview, LoadStepper, type LoadPreviewResult, type PreviewReject, type StepState } from '@/components/feeds/LoadPreview';
+import { ConfirmButton } from '@/components/feeds/ConfirmButton';
 import { EntityResolutionStep } from '@/components/feeds/EntityResolutionStep';
 import { StagedBatch, type StageState } from '@/components/feeds/StagedBatch';
 import {
@@ -203,6 +205,8 @@ export function LoadReview({
     confirming: boolean;
     onConfirm: (resolutions: EntityResolutionDecision[]) => void;
     onAbandon: () => void;
+    /** Points the pane beside this screen at where a column or a value sits in the file. */
+    onShowSource?: (target: SourceTarget) => void;
   };
   /** A staged batch was promoted or reverted, so the file and the queue have changed. */
   onPromoted?: () => void;
@@ -218,9 +222,9 @@ export function LoadReview({
   const [fundHint, setFundHint] = useState(false);
   const [viewing, setViewing] = useState<SourceTarget | null>(null);
   const hasDocument = /\.(pdf|png|jpe?g)$/i.test(fileName);
-  const showInDocument = hasDocument
-    ? (item: PreviewReject) => setViewing({ row: item.row, column: item.column, label: [item.entityCode, item.attributeCode, item.value].filter(Boolean).join(' - ') })
-    : undefined;
+  // Beside a guided run there is a pane to point; anywhere else the file opens in a drawer.
+  const showSource = (target: SourceTarget) => (guided?.onShowSource ? guided.onShowSource(target) : setViewing(target));
+  const showInDocument = (item: PreviewReject) => showSource({ row: item.row, column: item.column, label: [item.entityCode, item.attributeCode, item.value].filter(Boolean).join(' - ') });
   const [preview, setPreview] = useState<LoadPreviewResult | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -550,6 +554,7 @@ export function LoadReview({
                 return (
                   <DecisionCard
                     key={assignment.sourceColumn}
+                    onShow={() => showSource({ column: assignment.sourceColumn, label: assignment.sourceColumn })}
                     assignment={assignment}
                     targets={targets}
                     targetsByGroup={targetsByGroup}
@@ -591,6 +596,7 @@ export function LoadReview({
                 {group.rows.map(({ assignment, index }) => (
                   <ColumnRow
                     key={assignment.sourceColumn}
+                    onShow={() => showSource({ column: assignment.sourceColumn, label: assignment.sourceColumn })}
                     assignment={assignment}
                     targets={targets}
                     targetsByGroup={targetsByGroup}
@@ -698,7 +704,7 @@ export function LoadReview({
               {reloading ? 'Reading file…' : 'Reload file'}
             </button>
             {guided ? (
-              <button type="button" className="load-btn sec" disabled={loading || reloading || guided.confirming} onClick={() => window.confirm('Stop here? Nothing has been staged or loaded.') && guided.onAbandon()}>Stop this run</button>
+              <ConfirmButton className="load-btn sec" disabled={loading || reloading || guided.confirming} confirmLabel="Yes, stop the run" title="Nothing has been staged or loaded." onConfirm={guided.onAbandon}>Stop this run</ConfirmButton>
             ) : (
               <button type="button" className="load-btn sec" disabled={loading || reloading} onClick={onClose}>Cancel</button>
             )}
@@ -776,7 +782,9 @@ function DecisionCard({
   onChange,
   trackDomains,
   onTrack,
+  onShow,
 }: {
+  onShow?: () => void;
   trackDomains: { code: string; label: string }[];
   onTrack?: (input: { domainCode: string; attributeName: string; dataType: string; column: string }) => Promise<void>;
   assignment: ColumnAssignment;
@@ -797,7 +805,10 @@ function DecisionCard({
     <div className="load-attn">
       <span className="load-tag">Needs your decision</span>
       <h2 className="load-ask">Where should <em>{assignment.sourceColumn}</em> go?</h2>
-      <p className="load-sub">{assignment.suggestion.reason}</p>
+      <p className="load-sub">
+        {assignment.suggestion.reason}
+        {onShow && <>{' '}<button type="button" className="btn" onClick={onShow}>Show in file</button></>}
+      </p>
       <div className="load-opts">
         {assignment.role !== 'ignore' && (
           <label className="load-opt">
@@ -857,7 +868,9 @@ function ColumnRow({
   onEditKey,
   onDone,
   onChange,
+  onShow,
 }: {
+  onShow?: () => void;
   assignment: ColumnAssignment;
   targets: MappingTarget[];
   targetsByGroup: [string, MappingTarget[]][];
@@ -880,7 +893,13 @@ function ColumnRow({
     <div className="load-row-wrap">
       <div className="load-row">
         <div className="load-col">
-          <b>{assignment.sourceColumn}</b>
+          <b>
+            {onShow ? (
+              <button type="button" onClick={onShow} title="Show where this column is in the file" style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontWeight: 600, color: 'inherit', cursor: 'pointer', textDecoration: 'underline dotted', textUnderlineOffset: 3 }}>
+                {assignment.sourceColumn}
+              </button>
+            ) : assignment.sourceColumn}
+          </b>
           <small>
             {sample || '—'}
             {assignment.samples[0] && transformed && transformed !== assignment.samples[0] ? ` → ${transformed}` : ''}

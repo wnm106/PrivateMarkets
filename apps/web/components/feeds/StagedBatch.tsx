@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BatchChecks, countOf as count } from '@/components/feeds/BatchChecks';
+import { ConfirmButton } from '@/components/feeds/ConfirmButton';
 import { EntityResolutionStep } from '@/components/feeds/EntityResolutionStep';
 import type { ColumnAssignment } from '@/lib/feeds/suggest';
 import type { BatchDetail, BatchSummary } from '@tapestrai/mcp-server/src/feeds/load-batches';
@@ -223,7 +224,7 @@ export function StagedBatch({
           )}
           {last.drift.length > 0 && <> What was written differs from what was staged: {last.drift.join('; ')}.</>}
           {(last.status === 'PROMOTED' || last.status === 'FAILED') && canPromote && (
-            <>{' '}<button type="button" className="btn" disabled={busy !== null} onClick={() => { if (window.confirm('Take back what this batch wrote? Anything changed since is left alone.')) void act('revert', {}, last.id); }}>{busy === 'revert' ? 'Reverting...' : 'Revert this batch'}</button></>
+            <>{' '}<ConfirmButton disabled={busy !== null} confirmLabel="Yes, take it back" title="Takes back what this batch wrote. Anything changed since is left alone." onConfirm={() => void act('revert', {}, last.id)}>{busy === 'revert' ? 'Reverting...' : 'Revert this batch'}</ConfirmButton></>
           )}
         </p>
       )}

@@ -431,6 +431,31 @@ export async function getImportLocations(id: string, clientId: string, client: S
   return { tableId: table.id, headers: table.headers, pages: table.pages || [], locations: table.locations };
 }
 
+export interface ImportRows {
+  headers: string[];
+  /** The index of the first row returned, counted as the loader counts them. */
+  from: number;
+  rowCount: number;
+  rows: Record<string, string>[];
+}
+
+/** A window of the rows read from the selected table, so a screen can show a value where it sits. */
+export async function getImportRows(id: string, clientId: string, from = 0, count = 40, client: SupabaseClient = useClient()): Promise<ImportRows> {
+  assertLocalSupabase(client);
+  const row = await client.schema('entity_instances').from('import_instances').select('headers, parsed_rows').eq('id', id).eq('client_id', clientId).single();
+  if (row.error || !row.data) throw new Error(row.error?.message || 'Import instance not found');
+  const headers = (Array.isArray(row.data.headers) ? row.data.headers : []) as string[];
+  const all = (Array.isArray(row.data.parsed_rows) ? row.data.parsed_rows : []) as Record<string, string>[];
+  const size = Math.min(200, Math.max(1, Math.trunc(count) || 40));
+  const start = Math.min(Math.max(0, Math.trunc(from) || 0), Math.max(0, all.length - 1));
+  return {
+    headers,
+    from: start,
+    rowCount: all.length,
+    rows: all.slice(start, start + size).map((cells) => Object.fromEntries(headers.map((header) => [header, String(cells[header] ?? '').slice(0, 200)]))),
+  };
+}
+
 export interface SourceChoice {
   code: string;
   name: string;

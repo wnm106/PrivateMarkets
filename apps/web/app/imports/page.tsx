@@ -214,11 +214,11 @@ export default function PositionFilePage() {
         if (!row) return null;
         const opening = params.context?.busy != null;
         return (
-          <span style={{ display: 'flex', gap: 6 }}>
-            <button type="button" className="btn" disabled={opening} onClick={() => params.context?.open(row.id)}>
+          <span style={{ display: 'flex', gap: 6, alignItems: 'center', height: '100%' }}>
+            <button type="button" className="btn btn-sm" disabled={opening} onClick={() => params.context?.open(row.id)}>
               {params.context?.busy === 'open' ? 'Opening…' : 'Review'}
             </button>
-            <button type="button" className="btn" disabled={opening} title="Step through mapping, checks and promote as one guided run" onClick={() => params.context?.guide(row.id)}>
+            <button type="button" className="btn btn-sm" disabled={opening} title="Step through mapping, checks and promote as one guided run" onClick={() => params.context?.guide(row.id)}>
               {params.context?.busy === 'guide' ? 'Starting…' : 'Guided run'}
             </button>
           </span>

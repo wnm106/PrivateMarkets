@@ -373,12 +373,25 @@ Later steps read what the person left as `{{steps.<step>.result.<key>}}`, and ea
 
 | Screen | Shows | Outcomes | Before the run goes on |
 |---|---|---|---|
+| Understand a file (`intake.understand`) | A stored file beside what was found in it: the kind of file, its tables, the records it holds, the record it is about, and whether it is indexed for search | `confirmed`, `abandoned` | Confirmed: the selected table has rows |
 | Map a file (`load.map`) | A stored file beside where each column goes, the as-of date, and a dry run | `confirmed`, `abandoned` | Confirmed: the file has an as-of date and a column that identifies each record |
 | Check staged values (`load.quality`) | A staged batch with its data quality checks, and corrections | `approved`, `discarded` | Approved: the batch is still staged, and no critical check fails because of it unless a reason was given. Approving needs `load.promote` |
 
 **The engine checks, not the page.** When a person leaves a stage, the engine asks a read-only tool whether what the screen requires is true. If it is not, the stage is handed back to the person with the reason, and the run waits on it again. So a stage cannot be passed by calling the API directly.
 
 A permission a screen names for an outcome is held on the stage when it opens, and the database refuses that outcome from anyone who lacks it. This is how the person who approves a batch must hold `load.promote`, while the fixed step that then promotes it runs as the client's service account like any other step.
+
+### Where a value was read
+
+Each of the three screens has the file beside it (`apps/web/components/feeds/SourcePane.tsx`). Pointing at something marks where it sits:
+
+| On the screen | Marks |
+|---|---|
+| A column name on the Understand or Map screen, or Show in file on a column that needs a decision | The column |
+| Show in file on a failing check | The cell the failing value was read from |
+| Show in document on an issue from the dry run | The cell, or the row |
+
+A PDF or a picture is drawn as its page, with a box where the reader found the value; the box is as tight as the reader reported (the value, its row, or its table). Any other file is shown as the table that was read, with the cell, column or row highlighted. A page can be switched to its table. A file read without positions is shown as its table only.
 
 ### The guided view
 
@@ -390,6 +403,8 @@ The File intake template runs on one stored file, given as `importInstanceId`. I
 
 | Step | Kind | What it does |
 |---|---|---|
+| Index for search | Fixed | `index_position_file_import`: keeps the file as a searchable document. A file that cannot be indexed is noted and the run goes on |
+| Understand the file | Human | The person confirms what the file is, which table to load, and the record it is about. The document is filed under that type and linked to that record |
 | Map the file | Human | The mapping screen. Confirming saves the mapping and the date on the file |
 | Stage the values | Fixed | `stage_position_file_import`: keeps what a load would do as a batch. Nothing is live |
 | Was it staged? | Fixed | Ends the run when nothing could be staged |
@@ -503,7 +518,8 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 ## Not built yet
 
 - Loops. A graph runs each step once. A stage can be handed back to the person, but a run cannot go back to an earlier stage.
-- Stages for a document beside its extracted values, proposed new fields, and a drafted template. Two screens exist: mapping a file and checking staged values.
+- Stages for proposed new fields and a drafted template. Three screens exist: understanding a file, mapping it, and checking staged values.
+- Choosing the stored record a file's values load onto. The Understand screen links the document to a record; the loader still matches values by code, identifier and name.
 - Starting a guided run when a file arrives by a feed. It is started by hand from Load data.
 - Stages on the home page's Needs you list and in review notices. An open stage shows on its run's page.
 - Steps on parallel paths running at the same moment. Paths do not wait on one another, but the worker runs one step at a time.

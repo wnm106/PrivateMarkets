@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { LoadReview } from '@/components/feeds/LoadReview';
+import { SourcePane, type SourceTarget } from '@/components/feeds/SourcePane';
 import type { ColumnAssignment, MappingTarget } from '@/lib/feeds/suggest';
 import type { EntityResolutionDecision } from '@tapestrai/mcp-server/src/feeds/types';
 import type { StageScreenProps } from './index';
@@ -54,6 +55,7 @@ export function LoadMapStage({ stage, busy, onComplete }: StageScreenProps) {
   const [revision, setRevision] = useState(0);
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pointing, setPointing] = useState<SourceTarget | null>(null);
 
   const open = useCallback((file: FileDetail) => {
     setDetail(file);
@@ -118,7 +120,8 @@ export function LoadMapStage({ stage, busy, onComplete }: StageScreenProps) {
   if (!detail || !catalog) return <div style={{ color: 'var(--ink-3)' }}>Opening the file…</div>;
 
   return (
-    <div>
+    <div className="stage-split">
+      <div style={{ minWidth: 0 }}>
       {error && <div role="alert" style={{ color: 'var(--red)', marginBottom: 8 }}>{error}</div>}
       <LoadReview
         fileId={detail.id}
@@ -177,8 +180,14 @@ export function LoadMapStage({ stage, busy, onComplete }: StageScreenProps) {
           confirming: busy || working === 'confirm',
           onConfirm: confirm,
           onAbandon: () => void onComplete('abandoned', {}),
+          onShowSource: setPointing,
         }}
       />
+      </div>
+      <div className="stage-source">
+        <SourcePane instanceId={detail.id} fileName={detail.fileName} target={pointing} revision={revision} height="min(72vh, 660px)" />
+        <p className="load-sub" style={{ margin: '6px 2px 0' }}>Click a column name, or Show in file, to see where it is read from.</p>
+      </div>
     </div>
   );
 }

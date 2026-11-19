@@ -29,7 +29,7 @@ function outcomeLine(run: RunDetail): string {
     if (result.status === 'DISCARDED') return 'The batch was discarded. Nothing was made live.';
     if (result.status === 'FAILED' && typeof result.errorMessage === 'string') return `The batch stopped part way: ${result.errorMessage}`;
   }
-  if (output('map').outcome === 'abandoned') return 'The run was stopped at the mapping. Nothing was staged or loaded.';
+  if (output('understand').outcome === 'abandoned' || output('map').outcome === 'abandoned') return 'The run was stopped before anything was staged. Nothing was loaded.';
   return 'The run finished.';
 }
 

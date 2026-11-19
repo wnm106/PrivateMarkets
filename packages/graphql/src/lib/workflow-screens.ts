@@ -50,6 +50,24 @@ function text(value: unknown): string {
 
 export const STAGE_SCREENS: readonly StageScreen[] = [
   {
+    code: 'intake.understand',
+    label: 'Understand a file',
+    description: 'Shows a stored file beside what was found in it: what kind of file it is, its tables, the records it holds, and the stored record it is about. The person confirms before any column is mapped.',
+    outcomes: ['confirmed', 'abandoned'],
+    permissions: {},
+    args: [{ key: 'importInstanceId', label: 'Stored file', help: 'The file to look at, usually {{input.importInstanceId}}.' }],
+    exit: {
+      outcomes: ['confirmed'],
+      tool: 'get_position_file_understanding',
+      args: (stageArgs) => ({ instanceId: text(stageArgs.importInstanceId) }),
+      problem: (output) => {
+        const file = record(output);
+        if (!(Number(file.rowCount) > 0)) return 'Nothing was read from the table that is selected. Choose a table that has rows, or stop this run.';
+        return null;
+      },
+    },
+  },
+  {
     code: 'load.map',
     label: 'Map a file',
     description: 'Shows a stored file beside where each of its columns will go. The person confirms the mapping and the date the values are as of.',

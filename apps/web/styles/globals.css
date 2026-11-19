@@ -8560,6 +8560,36 @@ a.xp-admin-row:hover { background: var(--bg); }
   overflow: hidden;
 }
 
+/* A stage with the file beside it: the work on one side, the place a value was read from on the other. */
+.stage-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.stage-split-file-first {
+  grid-template-columns: minmax(300px, 1.2fr) minmax(0, 1fr);
+}
+
+.stage-split > .stage-source {
+  position: sticky;
+  top: 8px;
+  min-width: 0;
+}
+
+@media (max-width: 1180px) {
+  .stage-split,
+  .stage-split-file-first {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stage-split > .stage-source {
+    position: static;
+    order: -1;
+  }
+}
+
 /* Inside a guided run the review is one part of a longer page, so it takes its own height and the page scrolls. */
 .load-review-guided {
   display: block;

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { BatchChecks, countOf } from '@/components/feeds/BatchChecks';
+import { ConfirmButton } from '@/components/feeds/ConfirmButton';
+import { SourcePane, type SourceTarget } from '@/components/feeds/SourcePane';
 import type { BatchDetail } from '@tapestrai/mcp-server/src/feeds/load-batches';
 import type { StageScreenProps } from './index';
 
@@ -22,6 +24,7 @@ export function LoadQualityStage({ stage, busy, onComplete }: StageScreenProps) 
   const [batch, setBatch] = useState<BatchDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [override, setOverride] = useState('');
+  const [pointing, setPointing] = useState<SourceTarget | null>(null);
   const mayApprove = stage.allowedOutcomes.includes('approved');
 
   const load = useCallback(async () => {
@@ -57,7 +60,8 @@ export function LoadQualityStage({ stage, busy, onComplete }: StageScreenProps) 
   const gone = batch.status !== 'STAGED';
 
   return (
-    <section className="load-section" aria-live="polite" style={{ display: 'grid', gap: 10 }}>
+    <div className={batch.importInstanceId ? 'stage-split' : undefined}>
+    <section className="load-section" aria-live="polite" style={{ display: 'grid', gap: 10, minWidth: 0 }}>
       <p className="load-sub" style={{ margin: 0 }}>
         <b>{batch.fileName}</b> is staged. Each record was checked as it would stand once these values are live. Nothing is live yet.
       </p>
@@ -65,7 +69,16 @@ export function LoadQualityStage({ stage, busy, onComplete }: StageScreenProps) 
       {gone && <p className="load-sub" role="alert" style={{ color: '#b42318', margin: 0 }}>This batch is {batch.status.toLowerCase()}, so it can no longer be approved here.</p>}
 
       <div className="load-card" style={{ display: 'grid', gap: 8 }}>
-        <BatchChecks batch={batch} busy={busy} onCorrect={correct} />
+        <BatchChecks
+          batch={batch}
+          busy={busy}
+          onCorrect={correct}
+          onShowSource={batch.importInstanceId ? (failure) => setPointing({
+            row: failure.originRow ?? undefined,
+            column: failure.originColumn ?? undefined,
+            label: [failure.entityName, failure.attributeName || failure.attributeCode].filter(Boolean).join(' · '),
+          }) : undefined}
+        />
       </div>
 
       {blocking > 0 && mayApprove && (
@@ -84,16 +97,18 @@ export function LoadQualityStage({ stage, busy, onComplete }: StageScreenProps) 
         >
           {busy ? 'Working…' : 'Approve and make live'}
         </button>
-        <button
-          type="button"
-          className="load-btn sec"
-          disabled={busy}
-          onClick={() => window.confirm('Discard this batch? Nothing has been made live, so there is nothing to undo.') && onComplete('discarded', {})}
-        >
+        <ConfirmButton className="load-btn sec" disabled={busy} confirmLabel="Yes, discard it" title="Nothing has been made live, so there is nothing to undo." onConfirm={() => void onComplete('discarded', {})}>
           Discard
-        </button>
+        </ConfirmButton>
         {!mayApprove && <span className="load-sub">Approving needs the load.promote permission. Ask a client admin.</span>}
       </span>
     </section>
+    {batch.importInstanceId && (
+      <div className="stage-source">
+        <SourcePane instanceId={batch.importInstanceId} fileName={batch.fileName} target={pointing} height="min(64vh, 560px)" />
+        <p className="load-sub" style={{ margin: '6px 2px 0' }}>Show in file on a failing check marks the value where it was read.</p>
+      </div>
+    )}
+    </div>
   );
 }

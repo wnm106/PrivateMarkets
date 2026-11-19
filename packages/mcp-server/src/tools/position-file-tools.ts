@@ -19,6 +19,7 @@ import {
 import { getImportTables, loadImportTable, previewImportTable } from '../feeds/pack-tables';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { userIdOf } from '../agent/harness';
+import { indexImportFile, understandImportFile } from '../feeds/import-document';
 import {
   discardBatch,
   editStagedValue,
@@ -355,7 +356,32 @@ const discardLoadBatchTool: ToolDefinition = {
   execute: async (args, supabase) => discardBatch(String(args.batchId), await sessionClientId(supabase)),
 };
 
+const indexImportTool: ToolDefinition = {
+  name: 'index_position_file_import',
+  description: 'Keep a stored file as a searchable document: the file itself when its text can be read, otherwise a text rendering of the tables read from it. The document is paired with the file. Does not load records. A file that cannot be indexed is reported with the reason and does not fail the step. Calling it again returns the document already made.',
+  category: 'import',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      instanceId: { type: 'string', description: 'The stored file, from list_position_file_imports.' },
+      typeCode: { type: 'string', description: 'The document type to file it under. Leave out to use the kind the file was read as.' },
+    },
+    required: ['instanceId'],
+  },
+  execute: async (args, supabase) => indexImportFile(String(args.instanceId), await sessionClientId(supabase), { typeCode: args.typeCode ? String(args.typeCode) : null }),
+};
+
+const understandImportTool: ToolDefinition = {
+  name: 'get_position_file_understanding',
+  description: 'What a stored file is and what was found in it: the kind of file, how it was read, each table with its first rows, the types of record it holds, the one record it is about when it is about one (such as a borrower\'s statement) with the stored records that could be, and the searchable document it was indexed as. Reads only.',
+  category: 'import',
+  inputSchema: { type: 'object', properties: { instanceId: { type: 'string' } }, required: ['instanceId'] },
+  execute: async (args, supabase) => understandImportFile(String(args.instanceId), await sessionClientId(supabase)),
+};
+
 export function registerPositionFileTools(registry: ToolRegistry): void {
+  registry.registerTool(indexImportTool);
+  registry.registerTool(understandImportTool);
   registry.registerTool(stageImportTool);
   registry.registerTool(listLoadBatchesTool);
   registry.registerTool(getLoadBatchTool);

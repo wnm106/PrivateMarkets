@@ -16,15 +16,15 @@ describe('guided runs', () => {
 
   it('show the steps a person would recognise, in order, and leave out the routing', () => {
     const steps = guidedSteps(INTAKE, [], 'QUEUED', null);
-    expect(steps.map((step) => step.label)).toEqual(['Map the file', 'Stage the values', 'Check the values', 'Promote to live records', 'Discard the batch']);
-    expect(steps.filter((step) => step.human).map((step) => step.label)).toEqual(['Map the file', 'Check the values']);
+    expect(steps.map((step) => step.label)).toEqual(['Index for search', 'Understand the file', 'Map the file', 'Stage the values', 'Check the values', 'Promote to live records', 'Discard the batch']);
+    expect(steps.filter((step) => step.human).map((step) => step.label)).toEqual(['Understand the file', 'Map the file', 'Check the values']);
     expect(steps.every((step) => step.state === 'waiting')).toBe(true);
   });
 
   it('mark the stage that is waiting on a person', () => {
-    const steps = guidedSteps(INTAKE, [{ nodeId: 'start', status: 'SUCCEEDED', outcome: null }, { nodeId: 'map', status: 'WAITING', outcome: null }], 'WAITING', 'map');
-    expect(labels(steps).slice(0, 2)).toEqual(['Map the file:current', 'Stage the values:waiting']);
-    expect(steps[0].note).toBe('waiting for a person');
+    const steps = guidedSteps(INTAKE, [{ nodeId: 'start', status: 'SUCCEEDED', outcome: null }, { nodeId: 'receive', status: 'SUCCEEDED', outcome: null }, { nodeId: 'understand', status: 'WAITING', outcome: null }], 'WAITING', 'understand');
+    expect(labels(steps).slice(0, 3)).toEqual(['Index for search:done', 'Understand the file:current', 'Map the file:waiting']);
+    expect(steps[1].note).toBe('waiting for a person');
   });
 
   it('drop the path a decision did not take', () => {
@@ -32,6 +32,8 @@ describe('guided runs', () => {
       INTAKE,
       [
         { nodeId: 'start', status: 'SUCCEEDED', outcome: null },
+        { nodeId: 'receive', status: 'SUCCEEDED', outcome: null },
+        { nodeId: 'understand', status: 'SUCCEEDED', outcome: 'confirmed' },
         { nodeId: 'map', status: 'SUCCEEDED', outcome: 'confirmed' },
         { nodeId: 'stage', status: 'SUCCEEDED', outcome: null },
         { nodeId: 'staged', status: 'SUCCEEDED', outcome: 'true' },
@@ -41,22 +43,22 @@ describe('guided runs', () => {
       'RUNNING',
       'promote',
     );
-    expect(labels(steps)).toEqual(['Map the file:done', 'Stage the values:done', 'Check the values:done', 'Promote to live records:current']);
-    expect(steps[3].note).toBe('working');
+    expect(labels(steps)).toEqual(['Index for search:done', 'Understand the file:done', 'Map the file:done', 'Stage the values:done', 'Check the values:done', 'Promote to live records:current']);
+    expect(steps[5].note).toBe('working');
   });
 
-  it('end at the mapping when the person abandons it', () => {
-    const steps = guidedSteps(INTAKE, [{ nodeId: 'start', status: 'SUCCEEDED', outcome: null }, { nodeId: 'map', status: 'SUCCEEDED', outcome: 'abandoned' }], 'SUCCEEDED', null);
-    expect(labels(steps)).toEqual(['Map the file:done']);
+  it('end where the person stops the run', () => {
+    const steps = guidedSteps(INTAKE, [{ nodeId: 'start', status: 'SUCCEEDED', outcome: null }, { nodeId: 'receive', status: 'SUCCEEDED', outcome: null }, { nodeId: 'understand', status: 'SUCCEEDED', outcome: 'abandoned' }], 'SUCCEEDED', null);
+    expect(labels(steps)).toEqual(['Index for search:done', 'Understand the file:done']);
   });
 
   it('mark the step a run failed at', () => {
     const steps = guidedSteps(
       INTAKE,
-      [{ nodeId: 'start', status: 'SUCCEEDED', outcome: null }, { nodeId: 'map', status: 'SUCCEEDED', outcome: 'confirmed' }, { nodeId: 'stage', status: 'FAILED', outcome: null }],
+      [{ nodeId: 'start', status: 'SUCCEEDED', outcome: null }, { nodeId: 'receive', status: 'SUCCEEDED', outcome: null }, { nodeId: 'understand', status: 'SUCCEEDED', outcome: 'confirmed' }, { nodeId: 'map', status: 'SUCCEEDED', outcome: 'confirmed' }, { nodeId: 'stage', status: 'FAILED', outcome: null }],
       'FAILED',
       'stage',
     );
-    expect(labels(steps).slice(0, 2)).toEqual(['Map the file:done', 'Stage the values:attention']);
+    expect(labels(steps).slice(2, 4)).toEqual(['Map the file:done', 'Stage the values:attention']);
   });
 });

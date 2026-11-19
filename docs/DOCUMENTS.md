@@ -143,6 +143,15 @@ Each record's page has a Documents tab. It lists the documents linked to that re
 
 Links are per document, not per passage: every passage counts as being about all the document's records.
 
+## Files from Load data
+
+A file loaded through Load data can be kept as a document too, so it is searchable and shows on a record's Documents tab. The File intake workflow does this as its first step (`index_position_file_import`, in `packages/mcp-server/src/feeds/import-document.ts`):
+
+- A PDF with a text layer, an HTML file or a text file is indexed as it is.
+- Anything else (a spreadsheet, a CSV, a scan or Word file read by an outside reader) is indexed as a text rendering of the tables read from it: a heading per table, then its rows, or for a statement each label with its value. A very long table is cut at 3,000 rows.
+
+The document is filed as a Financial statement, a NAV statement or a Data file, tagged `source:load-data`, and kept on the file (`import_instances.document_id`). The same content is held once: a second file with the same content uses the document already there. A file that cannot be indexed still loads; the reason is kept on the file.
+
 ## Permissions
 
 Any member of a client can read and search that client's documents. `document.manage` lets a person add and remove documents, link them to records, tag sections by hand and change templates. Client admins have it. A document type or template with no client is shared; only a tenant admin changes those.
@@ -152,4 +161,4 @@ Any member of a client can read and search that client's documents. `document.ma
 - Scans and Word files. They need LlamaParse or Azure, as Load data uses, and a decision on sending document text there.
 - Highlighting a passage on the page image of a PDF. The locator keeps the page; the screen shows the text.
 - Tying a value loaded from a document to the chunk it came from.
-- Feeds do not deliver documents; they are added by hand or from the command line.
+- Feeds do not deliver documents; they are added by hand, from the command line, or by the File intake workflow from a file in Load data.

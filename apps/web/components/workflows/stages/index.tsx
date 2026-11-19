@@ -4,6 +4,7 @@ import type { ComponentType } from 'react';
 import type { StageView } from '@/lib/workflow-stages';
 import { LoadMapStage } from './LoadMapStage';
 import { LoadQualityStage } from './LoadQualityStage';
+import { UnderstandStage } from './UnderstandStage';
 
 export interface StageScreenProps {
   stage: StageView;
@@ -19,6 +20,7 @@ export interface StageScreenProps {
  * packages/graphql/src/lib/workflow-screens.ts.
  */
 export const STAGE_COMPONENTS: Record<string, ComponentType<StageScreenProps>> = {
+  'intake.understand': UnderstandStage,
   'load.map': LoadMapStage,
   'load.quality': LoadQualityStage,
 };

@@ -18,11 +18,14 @@ export function BatchChecks({
   batch,
   busy,
   onCorrect,
+  onShowSource,
 }: {
   batch: BatchDetail;
   busy: boolean;
   /** Saves a correction and runs the checks again. Rejects with the reason when the value does not fit. */
   onCorrect: (valueId: string, value: string, reason: string) => Promise<void>;
+  /** Shows where a failing value sits in the file. Left out where there is nowhere to show it. */
+  onShowSource?: (failure: QualityFailure) => void;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -57,6 +60,9 @@ export function BatchChecks({
         {item.attributeName ? ` · ${item.attributeName}` : ''}
         {item.actualValue ? `: ${item.actualValue}` : ''}
         {item.message ? ` · ${item.message}` : ''}
+        {onShowSource && item.originColumn && item.originRow !== null && item.originRow !== undefined && (
+          <>{' '}<button type="button" className="btn" onClick={() => onShowSource(item)}>Show in file</button></>
+        )}
         {item.editable && item.valueId && !open && (
           <>{' '}<button type="button" className="btn" disabled={busy || saving} onClick={() => { setEditing(key); setDraft(item.stagedValue || ''); setReason(''); }}>Correct</button></>
         )}
