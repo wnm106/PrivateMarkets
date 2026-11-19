@@ -142,6 +142,15 @@ export const JOB_TYPES: readonly JobTypeDef[] = [
     schedulable: false,
   },
   {
+    code: 'email.screen',
+    label: 'Screen an email',
+    description:
+      'Checks one email sent to an email connection: the sender is allowed, DKIM passes for the sender\'s domain, and the attachments are types the connection takes. Accepted attachments are polled by the connection\'s feeds. Queued when an email arrives or is released. See docs/FEEDS.md.',
+    scope: 'CLIENT',
+    payloadExample: { messageId: '' },
+    schedulable: false,
+  },
+  {
     code: 'document.process',
     label: 'Read a document',
     description:

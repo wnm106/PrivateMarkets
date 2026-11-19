@@ -3144,6 +3144,8 @@ type Query {
   receivedFiles(feedId: ID, first: Int): [ReceivedFile!]!
   """Saved maps a feed can load through."""
   feedMaps: [FeedMapOption!]!
+  """Emails sent to EMAIL connections, newest first."""
+  inboundMessages(connectionId: ID, first: Int): [InboundMessage!]!
   # Document content: types, templates, documents and search (see docs/DOCUMENTS.md)
   documentTypes: [DocumentType!]!
   documentTemplates(typeId: ID): [DocumentTemplate!]!
@@ -3516,6 +3518,12 @@ type Mutation {
   deleteFeed(id: ID!): MutationResult!
   """Queues a poll of the feed now."""
   pollFeedNow(id: ID!): JobRunResult!
+  """Gives an EMAIL connection a new address. Mail to the old one is refused from then on."""
+  rotateFeedConnectionAddress(id: ID!): FeedConnectionResult!
+  """Screens a quarantined email again without the sender and authentication checks. File type and malware checks still apply."""
+  releaseInboundMessage(id: ID!): MutationResult!
+  """Sets a quarantined email aside for good."""
+  discardInboundMessage(id: ID!): MutationResult!
   # Document content
   saveDocumentType(input: SaveDocumentTypeInput!): DocumentTypeResult!
   saveDocumentTemplate(input: SaveDocumentTemplateInput!): DocumentTemplateResult!
@@ -5567,7 +5575,7 @@ type FeedConnection {
   clientId: ID!
   connectionCode: String!
   connectionName: String!
-  """STORAGE (a folder in the feed inbox), HTTP (an https address), or SFTP (a folder on an SFTP server)."""
+  """STORAGE (a folder in the feed inbox), HTTP (an https address), SFTP (a folder on an SFTP server), or EMAIL (attachments sent to the connection's own address)."""
   kind: String!
   """Settings that are safe to show. Never a credential."""
   config: JSON!
@@ -5578,6 +5586,31 @@ type FeedConnection {
   lastCheckMessage: String
   """STORAGE only: where to put files, as bucket/folder."""
   inboxPath: String
+  """EMAIL only, and only for people who manage feeds: the address to send files to. Null when INBOUND_EMAIL_DOMAIN is not set, or for anyone else."""
+  inboundAddress: String
+}
+
+"""An email sent to an EMAIL connection, and what screening decided."""
+type InboundMessage {
+  id: ID!
+  connectionId: ID!
+  connectionName: String
+  envelopeFrom: String
+  headerFrom: String
+  subject: String
+  sizeBytes: Float
+  """RECEIVING, RECEIVED (waiting to be screened), ACCEPTED, QUARANTINED (a person can release or discard it), REJECTED, or DISCARDED."""
+  status: String!
+  """Why it was quarantined or rejected, or what was set aside."""
+  reason: String
+  """What the authentication check found: { dkim, dkimAligned, dmarc, spf }."""
+  auth: JSON
+  """One entry per attachment: { name, size, mediaType, taken, reason }."""
+  attachments: JSON!
+  receivedAt: DateTime!
+  screenedAt: DateTime
+  releasedAt: DateTime
+  discardedAt: DateTime
 }
 
 type Feed {
