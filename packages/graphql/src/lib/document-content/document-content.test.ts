@@ -127,6 +127,52 @@ describe('finding headings', () => {
     expect(guessTitle(document, outline)).toBe('Senior Secured Credit Facilities Credit Agreement');
   });
 
+  it('reads the headings of a scanned agreement, misread numbers and all', () => {
+    const page = (lines: string[]) => lines.join('\n');
+    const contents = [
+      'ARTICLE 1. DEFINITIONS I', 'ARTICLE II. ORGANIZATION 9', 'SECTION 2.1 Formation of Limited Partnership 9', 'SECTION 2.2 Firm Name 10',
+      'ARTICLE III. GENERAL PARTNER II', 'SECTION 3.1 Name, Address and Subscription II', 'SECTION 3.6 Salaries; Special Income 12',
+      'SECTION 3. I 7 Media and Common Carrier Companies 21', 'ARTICLE IX. ACCOUNTS 31', 'SECTION 9.1 Contributions Accounts 31',
+    ];
+    const scanned = readPdfPages([
+      page(contents),
+      page([
+        'ARTICLE r. DEFINITIONS Capitalized terms used herein shall have the meanings ascribed to them below.',
+        '"Affiliate" shall mean any Person controlling or controlled by another Person.',
+        'ARTICLEll. ORGANIZATION',
+        'SECTION 2.1 Formation of Limited Partnership. The Partners agree to form and carry on the Partnership under the Delaware Act and on the terms set out in this Agreement.',
+        'SECTION 2.2 Firm Name. The name of the Partnership is',
+        '"SCP Private Equity Partners II, L.P." and its office is in Wayne.',
+        'ARTICLE III. GENERAL PARTNER',
+        'SECTION 3.1 Name, Address and Subscription. The name of the General Partner is set forth on Schedule A hereto.',
+        'SECTION 3.6 Salaries; Special Income.',
+        '(a) For so long as the Management Fee is being paid, none of the members shall receive a salary.',
+        'Section 3.6 shall be construed to limit the fiduciary duty owing to the Partnership.',
+        'SECTION 3. I 7 Media and Common Carrier Companies. If the Partnership acquires an interest in a Media Company, the following applies.',
+        'Article XII; provided that the Liquidation Amount will be the net amount.',
+        'ARTICLE IX. ACCOUNTS',
+        'SECTION 9. I Contributions Accounts. There shall be established on the books a contributions account.',
+        '8.2. Except as provided in the preceding sentence, a Contributions Account shall not be adjusted.',
+        'SECTION 4,2 Liability.',
+      ]),
+    ]);
+    const sections = buildOutline(scanned).sections;
+    expect(sections.map((section) => `${section.level}:${section.heading}`)).toEqual([
+      '1:ARTICLE I DEFINITIONS',
+      '1:ARTICLE II ORGANIZATION',
+      '2:2.1 Formation of Limited Partnership',
+      '2:2.2 Firm Name',
+      '1:ARTICLE III GENERAL PARTNER',
+      '2:3.1 Name, Address and Subscription',
+      '2:3.6 Salaries; Special Income',
+      '2:3.17 Media and Common Carrier Companies',
+      '1:ARTICLE IX ACCOUNTS',
+      '2:9.1 Contributions Accounts',
+    ]);
+    // Roman or arabic, an article is known by its number, so a section of another article is turned away.
+    expect(sections.find((section) => section.heading.startsWith('ARTICLE IX'))!.number).toBe('ARTICLE 9');
+  });
+
   it('uses heading marks where a file has them', () => {
     const marked = readPlainText('# Fund Terms\n\nIntro text.\n\n## Management Fee\n\nThe fee is 2%.\n\n## Carried Interest\n\nCarry is 20%.', true);
     const sections = buildOutline(marked).sections;
@@ -229,6 +275,23 @@ describe('templates', () => {
     // Children follow their parent.
     const codes = template.map((section) => section.code);
     expect(codes.indexOf('DEFINED_TERMS')).toBe(codes.indexOf('DEFINITIONS') + 1);
+  });
+
+  it('keeps two alike headings of one document apart', () => {
+    const template = generateTemplate([{
+      documentId: 'lpa',
+      sections: [
+        { seq: 1, parentSeq: null, level: 1, heading: 'ARTICLE IV LIMITED PARTNERS' },
+        { seq: 2, parentSeq: null, level: 1, heading: 'ARTICLE VII ADDITIONAL LIMITED PARTNERS' },
+        { seq: 3, parentSeq: 2, level: 2, heading: '7.1 Additional Subscriptions After Initial Closing' },
+      ],
+    }]);
+    expect(template.map((section) => `${section.code}<${section.parentCode}`)).toEqual([
+      'LIMITED_PARTNERS<null',
+      'ADDITIONAL_LIMITED_PARTNERS<null',
+      'ADDITIONAL_SUBSCRIPTIONS_AFTER_INITIAL_CLOSING<ADDITIONAL_LIMITED_PARTNERS',
+    ]);
+    expect(template[0].aliases).toEqual([]);
   });
 
   it('adds to a refined template without undoing what a person set', () => {

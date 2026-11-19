@@ -189,8 +189,15 @@ export default function DocumentTemplatesPage() {
   const save = async (): Promise<boolean> => {
     if (!template) return false;
     setWorking(true);
+    // A renamed section keeps its old name as another wording, so headings written the old way still land on it.
+    const before = new Map(template.sections.map((section) => [section.code, section.title]));
+    const renamed = sections.map((section) => {
+      const old = before.get(section.code);
+      const known = [section.title, ...section.aliases].map((label) => label.trim().toLowerCase());
+      return old && old.trim() && !known.includes(old.trim().toLowerCase()) ? { ...section, aliases: [...section.aliases, old] } : section;
+    });
     const { data, error } = await graphqlMutation<{ saveDocumentTemplate: TemplateResult }>(SAVE_TEMPLATE, {
-      input: { id: template.id, sections: sections.map(sectionInput), topics: topics.filter((topic) => topic.title.trim()).map(topicInput), notes: template.notes },
+      input: { id: template.id, sections: renamed.map(sectionInput), topics: topics.filter((topic) => topic.title.trim()).map(topicInput), notes: template.notes },
     });
     setWorking(false);
     const saved = finish(data?.saveDocumentTemplate, error, 'Draft saved.');
@@ -230,7 +237,7 @@ export default function DocumentTemplatesPage() {
     const { data, error } = await graphqlMutation<{ publishDocumentTemplate: TemplateResult & { tagged: number; failed: number } }>(PUBLISH_TEMPLATE, { id: template.id });
     setWorking(false);
     const result = data?.publishDocumentTemplate;
-    const published = finish(result, error, result ? `Published. ${result.tagged} documents tagged${result.failed ? `, ${result.failed} could not be` : ''}.` : '');
+    const published = finish(result, error, result ? `Published. ${result.tagged} ${result.tagged === 1 ? 'document' : 'documents'} tagged${result.failed ? `, ${result.failed} could not be` : ''}. Tables and lists are being filed under the topics.` : '');
     if (published) {
       await loadType(published.id);
       loadTypes();
@@ -346,7 +353,7 @@ export default function DocumentTemplatesPage() {
         <div style={{ display: 'grid', gap: 4 }}>
           {readDocuments.map((document) => (
             <label key={document.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
-              <input type="checkbox" checked={picked.includes(document.id)}
+              <input type="checkbox" checked={picked.includes(document.id)} aria-label={`Use ${document.title} as a source`}
                 onChange={(event) => setPicked(event.target.checked ? [...picked, document.id] : picked.filter((id) => id !== document.id))} />
               <Link href={`/documents/${document.id}`} className="crumb-link">{document.title}</Link>
               <span style={hint}>
@@ -452,7 +459,7 @@ export default function DocumentTemplatesPage() {
                         <tr style={bodyRow}>
                           <td style={{ ...cell, paddingLeft: child ? 28 : 8, minWidth: 260 }}>
                             {editable
-                              ? <input className="text-input" style={{ fontWeight: child ? 400 : 600 }} value={section.title} aria-label="Section title"
+                              ? <input className="text-input" style={{ fontWeight: child ? 400 : 600 }} value={section.title} aria-label={`Title of section ${section.code}`}
                                   onChange={(event) => change(section.code, { title: event.target.value })} />
                               : <span style={{ fontWeight: child ? 400 : 600 }}>{section.title}</span>}
                             <div style={{ ...hint, ...mono, fontSize: 11 }}>{section.code}</div>

@@ -177,7 +177,8 @@ export async function processDocument(supabase: SupabaseClient, documentId: stri
       p_body: read.body,
       p_format: read.format,
       p_page_count: read.pageCount,
-      p_title: guessTitle(read, outline),
+      // A file with no title of its own is called by its name, without the extension.
+      p_title: guessTitle(read, outline) || String(context.file_name).replace(/\.[A-Za-z0-9]{1,5}$/, ''),
       p_sections: outline.sections,
       p_chunks: chunks,
     });

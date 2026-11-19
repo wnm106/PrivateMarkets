@@ -207,6 +207,8 @@ async function retagType(context: Context, typeId: string): Promise<{ tagged: nu
     try {
       await tagDocument(context.supabase, document.id, embed, { budgetMs: 15000 });
       tagged += 1;
+      // The template's topics may be new or changed, so its tables and lists are filed again by the worker.
+      await context.supabase.rpc('document_refile', { p_id: document.id });
     } catch {
       failed += 1;
     }

@@ -16,11 +16,16 @@ interface Candidate {
   level: number;
   number: string;
   heading: string;
+  /** How a numbered heading opens: "SECTION", "Section", or nothing. A document uses one form for its headings. */
+  prefix: string;
 }
 
-const TOP_HEADING = /^(SECTION|ARTICLE|PART|Section|Article|Part)\s+([IVXLC]+|\d+)\b\s*[.:\u2013\u2014-]?\s*(.*)$/;
 const ANNEX_HEADING = /^(EXHIBIT|SCHEDULE|ANNEX|APPENDIX|Exhibit|Schedule|Annex|Appendix)\s+([A-Z0-9][A-Z0-9.()-]*)\b\s*[.:\u2013\u2014-]?\s*(.*)$/;
-const NUMBERED_HEADING = /^(?:Section\s+|SECTION\s+)?(\d{1,2}\.\d{1,3})\.?\s+(\S.*)$/;
+const TOP_KEYWORD = /^(SECTION|ARTICLE|PART|Section|Article|Part)\s*([IVXLCl1r]{1,7}|\d{1,2})(?![A-Za-z0-9])\s*([.:,\u2013\u2014-]?)(\s*)(.*)$/;
+const PLAIN_NUMBERED = /^(\d{1,2})\.(\d{1,3})\.?\s+(\S.*)$/;
+// After SECTION, a scan may read 1 as I or l, 0 as O, a full stop as a comma, and put a space inside the number.
+const DIGIT = '(?:\\d|[IlO](?=[\\s\\d.,]|$))';
+const SCANNED_NUMBERED = new RegExp(`^SECTION\\s*(\\d{1,2}|[Il])\\s*[.,]\\s*(${DIGIT}(?:\\s?${DIGIT}){0,2})\\.?(?:\\s+|$)(.*)$`);
 const TRAILING_PAGE = /(\s*\|\s*|\s*\.{3,}\s*|\s{2,})(\d{1,4}|[ivxlc]{1,7})$/i;
 
 function stripTrailingPage(text: string): string {
@@ -38,59 +43,132 @@ function looksLikeTitle(text: string): boolean {
   return /^[\[A-Z\u201C"(]/.test(text);
 }
 
+const ROMAN: Record<string, number> = { I: 1, V: 5, X: 10, L: 50, C: 100 };
+
+/** "XVIII" or "18" as a number. A scan's l, 1 and r inside a roman numeral are read as I. Null when it is neither. */
+function numeralValue(raw: string): number | null {
+  if (/^\d+$/.test(raw)) return Number(raw);
+  const roman = raw.replace(/[l1r]/g, 'I');
+  if (!/^[IVXLC]+$/.test(roman)) return null;
+  let total = 0;
+  for (let i = 0; i < roman.length; i += 1) {
+    const value = ROMAN[roman[i]];
+    total += value < (ROMAN[roman[i + 1]] || 0) ? -value : value;
+  }
+  return total > 0 && total < 200 ? total : null;
+}
+
+function digitsOf(raw: string): string {
+  return raw.replace(/\s/g, '').replace(/[Il]/g, '1').replace(/O/g, '0');
+}
+
+/** "ARTICLE VII. ADDITIONAL LIMITED PARTNERS", "SECTION 7", "ARTICLEll. ORGANIZATION" from a scan. */
+function topCandidate(block: Block, index: number, text: string, anyBold: boolean): Candidate | null {
+  const match = TOP_KEYWORD.exec(text);
+  if (!match) return null;
+  const [, keyword, numeral, mark, gap, rest] = match;
+  // "SECTION 2.1 Formation": the mark runs straight into more of the number, so this is a numbered heading.
+  if (mark && !gap && rest) return null;
+  if (/^\d/.test(rest)) return null;
+  const shouting = keyword === keyword.toUpperCase();
+  // Only a heading in capitals is trusted to have been misread by a scan.
+  if (!shouting && !/^([IVXLC]+|\d+)$/.test(numeral)) return null;
+  const value = numeralValue(numeral);
+  if (value === null) return null;
+
+  let title = rest.trim();
+  if (shouting) {
+    // "ARTICLE I. DEFINITIONS Capitalized terms used herein...": the capitals are the title.
+    const capitals = /^([A-Z][A-Z0-9 ;,&'()\/-]*[A-Z)])(?=\s+[A-Z\u201C"(]?[a-z])/.exec(title);
+    if (capitals) title = capitals[1];
+    else if (text.length > 160) return null;
+  } else if (!block.bold && (text.length > 80 || /[.;,)]$/.test(text))) {
+    // "Article X of Profit or Loss ...", "Article XIX.": the end or middle of a sentence.
+    return null;
+  } else if (text.length > 160) {
+    return null;
+  }
+  if (!(block.bold || !anyBold || shouting)) return null;
+  const shown = /^\d+$/.test(numeral) ? numeral : numeral.replace(/[l1r]/g, 'I');
+  return { index, level: 1, number: `${keyword.toUpperCase()} ${value}`, heading: [keyword, shown, title.replace(/\.$/, '')].filter(Boolean).join(' '), prefix: '' };
+}
+
+/** "7.1 Financial Condition Covenants", "SECTION 3.6 Salaries; Special Income.", "SECTION 3. I 7 Media ..." from a scan. */
+function numberedCandidate(block: Block, index: number, text: string, anyBold: boolean): Candidate | null {
+  let number: string;
+  let rest: string;
+  let prefix = '';
+  const scanned = SCANNED_NUMBERED.exec(text);
+  if (scanned) {
+    number = `${digitsOf(scanned[1])}.${digitsOf(scanned[2])}`;
+    rest = scanned[3];
+    prefix = 'SECTION';
+  } else {
+    const mixed = /^Section\s+/.exec(text);
+    const plain = PLAIN_NUMBERED.exec(mixed ? text.slice(mixed[0].length) : text);
+    if (!plain) return null;
+    number = `${plain[1]}.${plain[2]}`;
+    rest = plain[3];
+    prefix = mixed ? 'Section' : '';
+  }
+  if (!rest) return null;
+
+  let title: string;
+  if (block.bold) {
+    title = rest.replace(/\.$/, '').trim();
+  } else if (block.lead > text.length - rest.length + 1) {
+    // The heading runs into its first sentence: only the bold opening is the heading.
+    title = text.slice(text.length - rest.length, block.lead).replace(/\.$/, '').trim();
+  } else if (!anyBold || block.table !== null) {
+    title = leadingTitle(rest);
+  } else {
+    // The file marks bold and this line has none: a sentence that happens to open with a number.
+    return null;
+  }
+  if (!looksLikeTitle(title)) return null;
+  return { index, level: 2, number, heading: `${number} ${title}`, prefix };
+}
+
 function candidateOf(block: Block, index: number, anyBold: boolean): Candidate | null {
   const text = stripTrailingPage(block.text);
   if (!text) return null;
 
   if (block.headingLevel !== null && block.headingLevel <= 3) {
-    const numbered = NUMBERED_HEADING.exec(text);
-    return { index, level: Math.min(block.headingLevel, 2), number: numbered ? numbered[1] : '', heading: text };
+    const numbered = PLAIN_NUMBERED.exec(text);
+    return { index, level: Math.min(block.headingLevel, 2), number: numbered ? `${numbered[1]}.${numbered[2]}` : '', heading: text, prefix: '' };
   }
-  const top = TOP_HEADING.exec(text);
-  if (top && text.length <= 160 && (block.bold || !anyBold || text === text.toUpperCase())) {
-    // "Section 7.1 of the Agreement shall..." is a sentence, not a heading.
-    if (/^\d/.test(top[3]) || /^\.\d/.test(top[3])) return null;
-    return { index, level: 1, number: `${top[1].toUpperCase()} ${top[2]}`, heading: text };
-  }
+  // "SECTION 3. I 7 Media ...": a numbered heading a scan put a space in, not a top heading called "SECTION 3".
+  if (SCANNED_NUMBERED.test(text)) return numberedCandidate(block, index, text, anyBold);
+  const top = topCandidate(block, index, text, anyBold);
+  if (top) return top;
   const annex = ANNEX_HEADING.exec(text);
   if (annex && text.length <= 160 && (block.bold || text === text.toUpperCase())) {
-    return { index, level: 1, number: `${annex[1].toUpperCase()} ${annex[2]}`, heading: text };
+    return { index, level: 1, number: `${annex[1].toUpperCase()} ${annex[2]}`, heading: text, prefix: '' };
   }
-  if (/^in witness whereof\b/i.test(text)) return { index, level: 1, number: '', heading: 'Signatures' };
-  const numbered = NUMBERED_HEADING.exec(text);
-  if (numbered) {
-    let title: string;
-    if (block.bold) {
-      title = numbered[2].replace(/\.$/, '').trim();
-    } else if (block.lead > numbered[1].length + 2) {
-      // The heading runs into its first sentence: only the bold opening is the heading.
-      title = NUMBERED_HEADING.exec(text.slice(0, block.lead))?.[2].replace(/\.$/, '').trim() || '';
-    } else if (!anyBold || block.table !== null) {
-      title = leadingTitle(numbered[2]);
-    } else {
-      // The file marks bold and this line has none: a sentence that happens to open with a number.
-      return null;
-    }
-    if (!looksLikeTitle(title)) return null;
-    return { index, level: 2, number: numbered[1], heading: `${numbered[1]} ${title}` };
-  }
-  return null;
+  if (/^in witness whereof\b/i.test(text)) return { index, level: 1, number: '', heading: 'Signatures', prefix: '' };
+  return numberedCandidate(block, index, text, anyBold);
 }
 
 /** A candidate whose block is only the heading, as a contents entry is. */
 function isBare(candidate: Candidate, block: Block): boolean {
-  return stripTrailingPage(block.text).replace(/\.$/, '').length <= candidate.heading.length + 2;
+  const core = stripTrailingPage(block.text).replace(/^(SECTION|Section)\s*/, '').replace(/\.$/, '');
+  return core.length <= candidate.heading.length + 3;
 }
 
 /**
  * Runs of bare headings with nothing between them: a table of contents. In the
  * body a heading is followed by its text, or is one of a few reserved sections.
+ * One short line between two entries is allowed for: a scan garbles the odd one.
  */
 function contentsRuns(candidates: Candidate[], blocks: Block[], skip: Set<number>): Array<[number, number]> {
   const bare = candidates.filter((candidate) => isBare(candidate, blocks[candidate.index]));
   const adjacent = (left: number, right: number) => {
+    let strays = 0;
     for (let index = left + 1; index < right; index += 1) {
-      if (!skip.has(index)) return false;
+      if (skip.has(index)) continue;
+      strays += 1;
+      // Only a line that opens like a heading: a paragraph between two headings means this is the body.
+      if (strays > 1 || blocks[index].text.length > 160 || !/^(SECTION|ARTICLE|Section|Article|\d)/.test(blocks[index].text)) return false;
     }
     return true;
   };
@@ -102,6 +180,16 @@ function contentsRuns(candidates: Candidate[], blocks: Block[], skip: Set<number
     from = i;
   }
   return runs;
+}
+
+/** A document writes its numbered headings one way. Lines that open another way are references to them. */
+function keepHouseStyle(candidates: Candidate[]): Candidate[] {
+  const counts = new Map<string, number>();
+  const numbered = candidates.filter((candidate) => candidate.level === 2 && candidate.number);
+  for (const candidate of numbered) counts.set(candidate.prefix, (counts.get(candidate.prefix) || 0) + 1);
+  const [style, count] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0] || ['', 0];
+  if (count < 5 || count < numbered.length * 0.6) return candidates;
+  return candidates.filter((candidate) => candidate.level !== 2 || !candidate.number || candidate.prefix === style);
 }
 
 export function buildOutline(document: ReadDocument): Outline {
@@ -125,6 +213,7 @@ export function buildOutline(document: ReadDocument): Outline {
   let candidates = blocks
     .map((block, index) => (skip.has(index) ? null : candidateOf(block, index, anyBold)))
     .filter((candidate): candidate is Candidate => candidate !== null);
+  candidates = keepHouseStyle(candidates);
 
   for (const [first, last] of contentsRuns(candidates, blocks, skip)) {
     for (let index = first; index <= last; index += 1) skip.add(index);
@@ -153,7 +242,7 @@ export function buildOutline(document: ReadDocument): Outline {
   });
 
   // "Exhibit 10.1" on a cover page is a filing label, not an exhibit of this document.
-  const firstTop = candidates.find((candidate) => TOP_HEADING.test(candidate.heading));
+  const firstTop = candidates.find((candidate) => candidate.level === 1 && /^(SECTION|ARTICLE|PART) /.test(candidate.number));
   if (firstTop) {
     candidates = candidates.filter((candidate) => candidate.index >= firstTop.index || !ANNEX_HEADING.test(candidate.heading));
   }
@@ -354,14 +443,35 @@ export function guessTitle(document: ReadDocument, outline: Outline): string | n
   if (document.title) return document.title;
   const limit = outline.sections.length > 0 ? outline.sections[0].charStart : Number.MAX_SAFE_INTEGER;
   const lines: string[] = [];
-  for (const block of document.blocks.slice(0, 40)) {
-    if (block.start >= limit || lines.length >= 2) break;
-    const text = block.text;
-    if (block.table !== null || text.length < 6 || text.length > 90) continue;
-    if (/^(exhibit|execution version|confidential|table of contents)\b/i.test(text)) continue;
-    if (text === text.toUpperCase() && /[A-Z]{3}/.test(text)) lines.push(text);
-    else if (lines.length > 0) break;
+  // A scanned cover page comes out as one line: "LIMITED PARTNERSHIP AGREEMENT OF X, L.P. (A Delaware Limited Partnership)".
+  const cover = document.blocks[0];
+  if (cover && !outline.skip.has(0) && cover.table === null && cover.text.length > 90 && cover.text.length <= 220) {
+    const lead = cover.text.split(' (')[0].trim();
+    const letters = lead.replace(/[^A-Za-z]/g, '');
+    if (lead.length >= 12 && lead.length <= 140 && letters.length > 0 && letters.replace(/[^A-Z]/g, '').length / letters.length > 0.8) return titleCase(lead);
   }
+  document.blocks.slice(0, 40).some((block, index) => {
+    if (block.start >= limit || lines.length >= 2) return true;
+    if (outline.skip.has(index)) return false;
+    const text = block.text;
+    if (block.table !== null || text.length < 6 || text.length > 90) return false;
+    if (/^(exhibit|execution version|confidential|table of contents)\b/i.test(text)) return false;
+    if (text === text.toUpperCase() && /[A-Z]{3}/.test(text)) lines.push(text);
+    else if (lines.length > 0) return true;
+    return false;
+  });
   if (lines.length === 0) return null;
-  return lines.join(' ').toLowerCase().replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+  return titleCase(lines.join(' '));
+}
+
+const SMALL_WORDS = new Set(['OF', 'THE', 'AND', 'TO', 'IN', 'ON', 'OR', 'FOR', 'BY', 'WITH', 'A', 'AN', 'AS', 'AT']);
+
+/** Capitals to title case. Initials and numerals (L.P., II, SCP) stay as they are; small words go lower. */
+function titleCase(value: string): string {
+  return value.split(' ').map((word, index) => {
+    const bare = word.replace(/[^A-Za-z.]/g, '');
+    if (index > 0 && SMALL_WORDS.has(bare)) return word.toLowerCase();
+    if (bare.includes('.') || /^[IVX]+$/.test(bare) || (bare.length <= 3 && !SMALL_WORDS.has(bare) && !/[AEIOU]/.test(bare))) return word;
+    return word.charAt(0) + word.slice(1).toLowerCase();
+  }).join(' ');
 }

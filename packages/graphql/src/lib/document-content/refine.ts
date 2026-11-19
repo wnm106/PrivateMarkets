@@ -59,6 +59,23 @@ const CREDIT_AGREEMENT_TOPICS: Array<[string, string, string]> = [
   ['SIGNATURES', 'Signatures', 'Who signed for each party, and in what capacity.'],
 ];
 
+const FUND_AGREEMENT_TOPICS: Array<[string, string, string]> = [
+  ['PARTIES', 'Parties', 'Who the general partner, the limited partners and the management company are, with their addresses.'],
+  ['COMMITMENTS', 'Commitments and capital calls', 'What each partner has subscribed, when capital is called, and what happens to a partner who does not pay.'],
+  ['FEES_AND_EXPENSES', 'Management fee and expenses', 'The management fee, how it steps down or is offset, and which expenses the fund bears.'],
+  ['CARRY_AND_DISTRIBUTIONS', 'Carried interest and distributions', 'The order in which proceeds are distributed, the preferred return, carried interest and clawback.'],
+  ['ALLOCATIONS', 'Allocations and tax', 'How profits, losses and tax items are allocated among the partners, and tax distributions and withholding.'],
+  ['TERM', 'Term and dissolution', 'How long the fund runs, extensions, the commitment period, and how it is wound up.'],
+  ['INVESTMENT_LIMITS', 'Investment limits', 'What the fund may invest in, concentration limits, and co-investment with parallel funds.'],
+  ['GOVERNANCE', 'Governance', 'The advisory and investment committees, key persons, conflicts of interest, and removal of the general partner.'],
+  ['TRANSFERS_AND_WITHDRAWALS', 'Transfers and withdrawals', 'When a partner may transfer or withdraw its interest, and the consents needed.'],
+  ['REPORTING_AND_VALUATION', 'Reporting and valuation', 'Financial statements and reports sent to partners, annual meetings, and how assets are valued.'],
+  ['INDEMNIFICATION', 'Indemnification and liability', 'Who is indemnified by the fund, the standard of care, and limits on the partners\' liability.'],
+  ['REGULATORY', 'ERISA and regulatory', 'ERISA partners, unrelated business taxable income, and other regulatory terms.'],
+  ['NOTICES_AND_CONTACTS', 'Notices and contacts', 'Addresses and contacts for notices to each party.'],
+  ['SIGNATURES', 'Signatures', 'Who signed for each party, and in what capacity.'],
+];
+
 const GENERAL_TOPICS: Array<[string, string, string]> = [
   ['PARTIES', 'Parties', 'Who the parties to the document are, and the capacity each acts in.'],
   ['AMOUNTS', 'Amounts and commitments', 'Sums committed, invested, owed or allocated, and who each belongs to.'],
@@ -70,7 +87,9 @@ const GENERAL_TOPICS: Array<[string, string, string]> = [
 
 /** The topics a new template for this type starts with. A person changes them from there. */
 export function defaultTopics(typeCode: string | null | undefined): TemplateTopic[] {
-  const rows = typeCode === 'CREDIT_AGREEMENT' ? CREDIT_AGREEMENT_TOPICS : GENERAL_TOPICS;
+  const rows = typeCode === 'CREDIT_AGREEMENT' ? CREDIT_AGREEMENT_TOPICS
+    : typeCode === 'LIMITED_PARTNERSHIP_AGREEMENT' ? FUND_AGREEMENT_TOPICS
+    : GENERAL_TOPICS;
   return rows.map(([code, title, description]) => ({ code, title, description }));
 }
 

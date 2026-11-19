@@ -232,7 +232,7 @@ export default function DocumentsPage() {
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
             <span style={hint}>Only passages tagged</span>
             {filterTags.map((row) => (
-              <Chip key={row.tag} active={chosenTags.includes(row.tag)} title={`${row.chunks} passages`}
+              <Chip key={row.tag} active={chosenTags.includes(row.tag)} title={`${tagLabel(row.tag)}: ${row.chunks} passages`}
                 onClick={() => setChosenTags(chosenTags.includes(row.tag) ? chosenTags.filter((tag) => tag !== row.tag) : [...chosenTags, row.tag])}>
                 {tagLabel(row.tag)}
               </Chip>

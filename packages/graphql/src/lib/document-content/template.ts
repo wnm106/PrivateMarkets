@@ -226,6 +226,7 @@ export function extendTemplate(base: TemplateSection[], outlines: DocumentOutlin
 
   for (const outline of outlines) {
     const placed = new Map<number, TemplateSection>();
+    const claimed = new Set<string>();
     const total = Math.max(outline.sections.length, 1);
     outline.sections.forEach((section, index) => {
       if (isPlaceholder(section.heading)) return;
@@ -235,7 +236,10 @@ export function extendTemplate(base: TemplateSection[], outlines: DocumentOutlin
       // A heading below a top heading that was itself left out has nowhere to go.
       if (section.parentSeq !== null && !parent) return;
       const pool = parent ? result.filter((candidate) => candidate.parentCode === parent.code) : result.filter((candidate) => !candidate.parentCode);
-      let target = matchByWords(section.heading, pool)?.section || null;
+      // Two headings of one document are two sections, however alike their wording: "Limited Partners" and
+      // "Additional Limited Partners" are different articles. Only the same wording may land on a section twice.
+      const found = matchByWords(section.heading, pool);
+      let target = found && !(found.method === 'SIMILAR' && claimed.has(found.section.code)) ? found.section : null;
       if (!target) {
         target = {
           code: uniqueCode(label, parent ? parent.code : null),
@@ -251,6 +255,7 @@ export function extendTemplate(base: TemplateSection[], outlines: DocumentOutlin
         result.push(target);
       }
       placed.set(section.seq, target);
+      claimed.add(target.code);
       note(target, outline.documentId, section.heading, index / total);
     });
   }

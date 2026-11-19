@@ -34,7 +34,9 @@ npm run documents --workspace @tapestrai/worker -- search "what are the financia
 
 ## Headings and chunks
 
-Headings come from how agreements number themselves (`SECTION 7`, `ARTICLE VI`, `7.1`, `EXHIBIT A`, `SCHEDULE 1.1A`), from bold run-in headings (`7.2 Indebtedness. Create, ...`), and from heading marks in HTML and markdown. A table of contents lists the same headings with nothing between them, which is how it is told apart from the body and left out. Two levels are kept.
+Headings come from how agreements number themselves (`SECTION 7`, `ARTICLE VI`, `7.1`, `SECTION 3.6`, `EXHIBIT A`, `SCHEDULE 1.1A`), from bold run-in headings (`7.2 Indebtedness. Create, ...`), and from heading marks in HTML and markdown.
+
+A scanned PDF with a text layer is read too, and its headings allow for what a scan gets wrong: `SECTION 3. I 7` is 3.17, `SECTION 4,2` is 4.2, `ARTICLEll.` is Article II. Only a heading in capitals is given that benefit. An article is known by its number whether roman or arabic, so a line that opens "8.2. Except as provided" under Article IX is a reference, not a heading. A document writes its numbered headings one way (`SECTION 3.6`, or bare `3.6`); lines that open another way are references too. A table of contents lists the same headings with nothing between them, which is how it is told apart from the body and left out. Two levels are kept.
 
 A chunk never crosses a heading. Within a section:
 
@@ -76,7 +78,11 @@ A template lists the sections a kind of document is expected to have: a title, o
 
 - **Draw.** Tick one or more read documents and draw a draft. Headings are grouped across the documents by their words, ignoring numbers, so `7.1 Financial Condition Covenants` and `6.12 Financial Covenants` become one section with the second as another wording. Each section records how many of the documents had it.
 - **Refine.** Rename, reorder, merge, remove and add sections; add other wordings and tags. Ticking more documents adds only what the draft lacks and changes nothing a person set.
-- **Publish.** Publishing retires the version it replaces and tags every document of the type against the new one. A published template is never changed; start a new draft from it.
+- **Publish.** Publishing retires the version it replaces and tags every document of the type against the new one. Its tables and lists are then described again by the worker, so they are filed under the new version's topics; what a person wrote is kept. A published template is never changed; start a new draft from it.
+
+Renaming a section keeps its old name as another wording, so a heading written the old way still lands on it. That matters for scans: the template can say "Formation of Limited Partnership" while the document's own heading reads "Formation of Limited Pm1nership".
+
+Two headings of one document never become one section, however alike their wording. "Limited Partners" and "Additional Limited Partners" are two articles. Alike headings are joined only across documents.
 
 A heading is placed on a section by the same words, then a known other wording, then similar words, then (with an embedding key) similar meaning. A section a person chose on a document is kept when the document is tagged again. A client's own published template is used before the shared one.
 
