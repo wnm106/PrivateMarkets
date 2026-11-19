@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assembleAttributeSearch,
   classifyHeader,
+  resolveStoredAlias,
   takeIdentityTargets,
   type AttributeAlias,
   type DomainAlias,
@@ -72,6 +73,18 @@ describe('assembleAttributeSearch', () => {
     expect(project.entityNames).toEqual([
       expect.objectContaining({ attribute_code: 'entity_name', domain_code: 'ISSUER', matched_alias: 'Project name' }),
     ]);
+  });
+});
+
+describe('resolveStoredAlias', () => {
+  it('keeps a catalog name such as project name and otherwise uses the words', () => {
+    expect(resolveStoredAlias('Project Falcon', 'PROJECT_NAME', ['PROJECT_NAME', 'BORROWER_NAME'])).toEqual({
+      aliasLabel: 'Project Falcon',
+      aliasCode: 'PROJECT_NAME',
+      aliasKind: 'project',
+    });
+    expect(resolveStoredAlias('  Former name  ', null, [])).toMatchObject({ aliasCode: 'FORMER_NAME', aliasKind: 'name' });
+    expect(resolveStoredAlias('   ', 'PROJECT_NAME', ['PROJECT_NAME'])).toEqual({ error: 'A name is required' });
   });
 });
 

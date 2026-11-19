@@ -1,4 +1,5 @@
 import { entityResolvers } from './entity';
+import { entityAliasResolvers } from './entity-aliases';
 import { dataQualityResolvers } from './dataquality';
 import { lineageResolvers } from './lineage';
 import { metadataResolvers } from './metadata';
@@ -37,6 +38,7 @@ import { covenantResolvers } from './covenants';
 export const resolvers = {
   Query: {
     ...entityResolvers.Query,
+    ...entityAliasResolvers.Query,
     ...dataQualityResolvers.Query,
     ...lineageResolvers.Query,
     ...intersectionResolvers.Query,
@@ -86,6 +88,7 @@ export const resolvers = {
   
   Mutation: {
     ...entityResolvers.Mutation,
+    ...entityAliasResolvers.Mutation,
     ...dataQualityResolvers.Mutation,
     ...lineageResolvers.Mutation,
     ...intersectionResolvers.Mutation,

@@ -273,6 +273,33 @@ export function takeIdentityTargets(attributes: Record<string, unknown>): {
   return { attributes: rest, entityName, aliases };
 }
 
+/** A code that can be stored on one record. Letters, digits, and underscores. */
+export function aliasCodeFromLabel(label: string): string {
+  const code = label.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').replace(/_+/g, '_').slice(0, 100);
+  return code || 'ALIAS';
+}
+
+export function entityAliasKind(aliasCode: string): string {
+  return aliasCode.includes('PROJECT') ? 'project' : 'name';
+}
+
+/**
+ * The code stored for one other name. A catalog code such as PROJECT_NAME is kept
+ * when it is one of this entity type's name aliases. Anything else is taken from the words.
+ */
+export function resolveStoredAlias(
+  label: string,
+  requestedCode: string | null | undefined,
+  allowedCodes: readonly string[],
+): { aliasLabel: string; aliasCode: string; aliasKind: string } | { error: string } {
+  const aliasLabel = label.trim().slice(0, 500);
+  if (!aliasLabel) return { error: 'A name is required' };
+  const requested = (requestedCode || '').trim().toUpperCase();
+  const aliasCode = requested && allowedCodes.includes(requested) ? requested : aliasCodeFromLabel(aliasLabel);
+  if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(aliasCode)) return { error: 'That name cannot be stored' };
+  return { aliasLabel, aliasCode, aliasKind: entityAliasKind(aliasCode) };
+}
+
 type AliasWriter = {
   from: (table: string) => {
     upsert: (rows: unknown[], options: { onConflict: string }) => PromiseLike<{ error: { message: string } | null }>;

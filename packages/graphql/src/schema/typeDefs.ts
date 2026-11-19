@@ -1442,6 +1442,33 @@ type EntitySearchHit {
   matchedDomainName: String
 }
 
+"""Another name of one record."""
+type EntityAlias {
+  id: ID!
+  aliasLabel: String!
+  aliasCode: String!
+  aliasKind: String!
+}
+
+"""A word this entity type uses for the record name."""
+type EntityNameAlias {
+  aliasLabel: String!
+  aliasCode: String!
+}
+
+input SaveEntityAliasInput {
+  id: ID
+  entityId: ID!
+  aliasLabel: String!
+  """A catalog code such as PROJECT_NAME. Omitted when the words themselves are the name."""
+  aliasCode: String
+}
+
+type SaveEntityAliasResult {
+  alias: EntityAlias
+  errors: [MutationError!]!
+}
+
 input EntityFilter {
   domainCode: String
   templateCode: String
@@ -3038,6 +3065,11 @@ type Query {
 
   """Match a record by its name, another stored name, a related name, or a parent name. ALIAS means the other name matched. Parent domains rank before child domains."""
   searchEntities(query: String!, limit: Int): [EntitySearchHit!]!
+
+  """Other names stored for one record, such as a project name for a borrower."""
+  entityAliases(entityId: ID!): [EntityAlias!]!
+  """Words this entity type uses for a record's name, such as Project name for an issuer."""
+  entityNameAliases(domainCode: String!): [EntityNameAlias!]!
   
   # Domain-specific queries (for convenience, but use generic entity under the hood)
   funds(filter: EntityFilter, pagination: PaginationInput, asOfDate: Date): EntityConnection!
@@ -3305,6 +3337,8 @@ type Mutation {
   # Generic entity mutations
   createEntity(input: CreateEntityInput!): CreateEntityResult!
   updateEntity(input: UpdateEntityInput!): UpdateEntityResult!
+  saveEntityAlias(input: SaveEntityAliasInput!): SaveEntityAliasResult!
+  deleteEntityAlias(id: ID!): MutationResult!
   
   # Relationship mutations
   createRelationship(input: EntityRelationshipInput!): CreateRelationshipResult!

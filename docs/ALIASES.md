@@ -32,6 +32,8 @@ The deal tranche type's own name is also Tranche. A column that is only the word
 
 `entity_aliases` is the other name of a specific record. Search matches it. An import that has already matched the record by its legal name still matches a later file that only has the project name. Loading a project-name column writes or replaces that alias.
 
+The record page has an Aliases tab. It lists those names, and a name added there is the same row search and import use. The kind list is the entity type's name aliases, such as Project name for an issuer.
+
 ## Fields
 
 `attribute_aliases` maps statement and file wording onto one attribute inside a domain. "Ending NAV" and "Net Assets" are `NAV`. Statement templates add a row when a line's label differs from the attribute's name. Import mapping treats an exact alias as a semantic match.
