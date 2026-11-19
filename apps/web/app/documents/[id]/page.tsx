@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePublishViewContext } from '@/lib/view-context';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
+import { AnswerView, askDocuments, type DocumentAnswer } from '@/components/documents/AnswerView';
 import {
   Chip, DOCUMENT_FIELDS, DocumentStatus, RecordName, Tabs, EntityLinksEditor, SECTION_FIELDS, TEMPLATE_FIELDS, TYPE_FIELDS, danger, field, fieldLabel,
   formBox, formRow, hint, sectionHead, sectionTitle, shortDate, splitList, tagLabel,
@@ -58,17 +59,29 @@ interface Draft {
   entities: EntityLink[];
 }
 
+/** A heading without its number or label, lower-cased: what is compared with a template section's name. */
+function bareHeading(heading: string): string {
+  return heading
+    .replace(/^(section|article|part|exhibit|schedule|annex|appendix)\s+[a-z0-9][a-z0-9.()-]*\s*[.:-]?\s*/i, '')
+    .replace(/^\d+(\.\d+)*\.?\s+/, '')
+    .replace(/[^a-z0-9]+/gi, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function sameHeading(heading: string, templateTitle: string): boolean {
+  return bareHeading(heading) === bareHeading(templateTitle);
+}
+
 const PAGE_SIZE = 60;
-const MATCH_TEXT: Record<string, string> = {
-  EXACT: 'Same heading', ALIAS: 'Known other wording', SIMILAR: 'Similar wording', EMBEDDING: 'Similar meaning', MANUAL: 'Chosen by a person',
-};
 
 export default function DocumentPage() {
   const params = useParams();
   const search = useSearchParams();
   const id = String(params?.id || '');
   const at = search?.get('at');
-  const target = at !== null && at !== undefined && at !== '' ? Number(at) : null;
+  // The passage to show: the one a search result elsewhere pointed at, then whichever is picked from a search on this page.
+  const [target, setTarget] = useState<number | null>(at !== null && at !== undefined && at !== '' ? Number(at) : null);
 
   const [document, setDocument] = useState<DocumentRow | null>(null);
   const [types, setTypes] = useState<DocumentTypeRow[]>([]);
@@ -88,6 +101,13 @@ export default function DocumentPage() {
   const jumped = useRef(false);
   const [jumpDone, setJumpDone] = useState(false);
   const targetRef = useRef<HTMLDivElement | null>(null);
+  // A question about this document, and the summary plus the sections that answer it.
+  const [find, setFind] = useState('');
+  const [finding, setFinding] = useState(false);
+  const [answer, setAnswer] = useState<{ query: string } & DocumentAnswer | null>(null);
+  const askTicket = useRef(0);
+  // The dropdowns that change which template section a heading maps to. Hidden until asked for.
+  const [mapping, setMapping] = useState(false);
 
   usePublishViewContext({
     activity: 'viewing',
@@ -158,6 +178,8 @@ export default function DocumentPage() {
 
   // Each load is numbered so that an answer for a section the page has left is dropped.
   const loadNumber = useRef(0);
+  // The section the passages on screen were loaded for. Undefined before the first load.
+  const [chunksFor, setChunksFor] = useState<string | null | undefined>(undefined);
   const loadChunks = useCallback(async (offset: number) => {
     if (!id) return;
     loadNumber.current += 1;
@@ -169,6 +191,7 @@ export default function DocumentPage() {
     const rows = response.data.documentChunks;
     setMore(rows.length > PAGE_SIZE);
     setChunks((current) => (offset === 0 ? rows.slice(0, PAGE_SIZE) : [...current, ...rows.slice(0, PAGE_SIZE)]));
+    setChunksFor(sectionId);
   }, [id, sectionId]);
 
   const chunkCount = document?.chunkCount || 0;
@@ -192,10 +215,39 @@ export default function DocumentPage() {
     if (targetRef.current) {
       targetRef.current.scrollIntoView({ block: 'center' });
       scrolled.current = true;
-    } else if (more && chunks.length > 0 && chunks.length < 900 && chunks[chunks.length - 1].charEnd <= target) {
+    } else if (chunksFor === sectionId && more && chunks.length > 0 && chunks.length < 900 && chunks[chunks.length - 1].charEnd <= target) {
+      // Only read further into the section on screen. Just after a jump the old section's passages are still showing.
       loadChunks(chunks.length);
     }
-  }, [chunks, more, target, loadChunks]);
+  }, [chunks, chunksFor, sectionId, more, target, loadChunks]);
+
+  /** Shows the passage at this place in the document, in the section that holds it. */
+  const jumpTo = (charStart: number) => {
+    const holding = sections.filter((section) => section.charStart <= charStart && charStart < section.charEnd);
+    const deepest = holding[holding.length - 1];
+    jumped.current = true;
+    scrolled.current = false;
+    setTarget(charStart);
+    setSectionId(deepest ? deepest.id : null);
+    setJumpDone(true);
+    setAnswer(null);
+  };
+
+  const ask = async () => {
+    const query = find.trim();
+    if (!query) return;
+    const ticket = ++askTicket.current;
+    setFinding(true);
+    const response = await askDocuments({ query, documentIds: [id] });
+    if (ticket !== askTicket.current) return;
+    setFinding(false);
+    if (response.error) {
+      setMessage(response.error);
+      return;
+    }
+    setMessage('');
+    setAnswer(response.answer ? { query, ...response.answer } : null);
+  };
 
   const run = async (mutation: string, name: string, variables: Record<string, unknown>, done: string) => {
     setWorking(true);
@@ -256,6 +308,17 @@ export default function DocumentPage() {
 
   const templateTitle = (code: string | null) => (code ? template?.sections.find((section) => section.code === code)?.title || code : null);
   const selected = sections.find((section) => section.id === sectionId) || null;
+
+  // Sections whose name, or whose template section's name, contains what was typed. A top heading stays when one under it matches.
+  const needle = find.trim().toLowerCase();
+  const nameMatches = (section: DocumentSectionRow) =>
+    section.heading.toLowerCase().includes(needle) || (templateTitle(section.templateSectionCode) || '').toLowerCase().includes(needle);
+  const shownSections = !needle ? sections : sections.filter((section) =>
+    nameMatches(section) || sections.some((child) => child.parentSeq === section.seq && nameMatches(child)));
+  const unmatched = template ? sections.filter((section) => !section.templateSectionCode) : [];
+  const differing = template
+    ? sections.filter((section) => section.templateSectionCode && !sameHeading(section.heading, templateTitle(section.templateSectionCode) || '')).length
+    : 0;
   const tops = template ? template.sections.filter((section) => !section.parentCode) : [];
 
   const optionsFor = (section: DocumentSectionRow) => {
@@ -376,37 +439,79 @@ export default function DocumentPage() {
           )}
 
           {tab === 'passages' && document.chunkCount > 0 && (
+            <form onSubmit={(event) => { event.preventDefault(); ask(); }} style={{ display: 'grid', gap: 4, margin: '4px 0 0' }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <input className="text-input" style={{ flex: '1 1 360px' }} value={find} aria-label="Search this document"
+                  placeholder="Search this document: a section name, or a question about its text"
+                  onChange={(event) => setFind(event.target.value)} />
+                <button type="submit" className="btn btn-primary" disabled={finding || !find.trim()}>{finding ? 'Reading…' : 'Ask'}</button>
+                {(find || answer !== null) && <button type="button" className="btn" onClick={() => { askTicket.current += 1; setFind(''); setAnswer(null); setFinding(false); }}>Clear</button>}
+              </div>
+              <div style={hint}>
+                {find.trim()
+                  ? `${shownSections.length} of ${sections.length} section names match as you type. Ask to have the question answered from the text.`
+                  : 'Typing narrows the list of sections by name. Ask answers the question, then shows the sections it used.'}
+              </div>
+            </form>
+          )}
+
+          {tab === 'passages' && document.chunkCount > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 380px) minmax(0, 1fr)', gap: 24, marginTop: 8 }}>
               <div>
                 <div style={sectionHead}>
                   <h2 style={sectionTitle}>Sections</h2>
-                  {sectionId && <button type="button" className="btn btn-sm" onClick={() => setSectionId(null)}>Show all</button>}
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {sectionId && <button type="button" className="btn btn-sm" onClick={() => setSectionId(null)}>Show all</button>}
+                    {template && (
+                      <button type="button" className="btn btn-sm" aria-pressed={mapping} onClick={() => setMapping(!mapping)}>
+                        {mapping ? 'Done' : 'Change mapping'}
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {sections.length === 0 && <div style={hint}>No headings were found in this document. Its passages are still searchable.</div>}
+                {template && sections.length > 0 && (
+                  <div style={{ ...hint, marginBottom: 8 }}>
+                    {unmatched.length === 0
+                      ? `All ${sections.length} headings are matched to template version ${template.version}.`
+                      : `${sections.length - unmatched.length} of ${sections.length} headings are matched to template version ${template.version}. ${unmatched.length} ${unmatched.length === 1 ? 'is' : 'are'} not, and ${unmatched.length === 1 ? 'is' : 'are'} marked below.`}
+                    {differing > 0 && !mapping ? ` ${differing} matched under a different name, shown beneath the heading.` : ''}
+                  </div>
+                )}
+                {find.trim() && shownSections.length === 0 && <div style={hint}>No section name contains &quot;{find.trim()}&quot;.</div>}
                 <div style={{ maxHeight: '70vh', overflowY: 'auto', borderTop: '1px solid var(--line, #e5e5e5)' }}>
-                  {sections.map((section) => {
+                  {shownSections.map((section) => {
                     const active = section.id === sectionId;
+                    const mappedTitle = templateTitle(section.templateSectionCode);
+                    // Worth saying only when the template calls the section something else, or does not have it.
+                    const sameName = mappedTitle !== null && sameHeading(section.heading, mappedTitle);
                     return (
                       <div key={section.id} style={{ padding: '6px 6px 6px 0', paddingLeft: section.level > 1 ? 16 : 0, borderBottom: '1px solid var(--line, #e5e5e5)', background: active ? 'var(--surface-2, rgba(0,0,0,0.03))' : undefined }}>
-                        <button type="button" onClick={() => setSectionId(section.id)} aria-current={active} ref={active ? activeSection : undefined}
-                          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 0, padding: 0, cursor: 'pointer', fontSize: 13, fontWeight: section.level === 1 ? 600 : 400, color: active ? 'var(--accent)' : 'inherit' }}>
-                          {section.heading} <span style={hint}>{section.chunkCount || ''}</span>
+                        <button type="button" onClick={() => { setSectionId(section.id); setAnswer(null); }} aria-current={active} ref={active ? activeSection : undefined}
+                          style={{ display: 'flex', justifyContent: 'space-between', gap: 8, width: '100%', textAlign: 'left', background: 'transparent', border: 0, padding: 0, cursor: 'pointer', fontSize: 13, fontWeight: section.level === 1 ? 600 : 400, color: active ? 'var(--accent)' : 'inherit' }}>
+                          <span>{section.heading}</span>
+                          <span style={{ ...hint, fontWeight: 400, whiteSpace: 'nowrap' }} title={`${section.chunkCount} passages`}>{section.chunkCount || ''}</span>
                         </button>
-                        {template && (
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
-                            <select className="text-input" style={{ fontSize: 12, padding: '2px 6px', maxWidth: 230 }} value={section.templateSectionCode || ''}
-                              aria-label={`Template section for ${section.heading}`} disabled={working}
-                              onChange={async (event) => {
-                                if (await run(ASSIGN_SECTION, 'assignDocumentSection', { sectionId: section.id, code: event.target.value || null }, 'Section saved.')) loadChunks(0);
-                              }}>
-                              <option value="">Not in the template</option>
-                              {optionsFor(section).map((option) => <option key={option.code} value={option.code}>{option.title}</option>)}
-                              {section.templateSectionCode && !optionsFor(section).some((option) => option.code === section.templateSectionCode) && (
-                                <option value={section.templateSectionCode}>{templateTitle(section.templateSectionCode)}</option>
-                              )}
-                            </select>
-                            {section.matchMethod && <span style={hint}>{MATCH_TEXT[section.matchMethod] || section.matchMethod}</span>}
+                        {template && !mapping && mappedTitle === null && (
+                          <div style={{ fontSize: 12, color: 'var(--amber, #9a6700)', marginTop: 2 }}>Not in the template</div>
+                        )}
+                        {template && !mapping && mappedTitle !== null && !sameName && (
+                          <div style={{ ...hint, marginTop: 2 }}>
+                            Template: {mappedTitle}{section.matchMethod === 'MANUAL' ? ' (chosen by a person)' : ''}
                           </div>
+                        )}
+                        {template && mapping && (
+                          <select className="text-input" style={{ fontSize: 12, padding: '2px 6px', maxWidth: 300, marginTop: 4 }} value={section.templateSectionCode || ''}
+                            aria-label={`Template section for ${section.heading}`} disabled={working}
+                            onChange={async (event) => {
+                              if (await run(ASSIGN_SECTION, 'assignDocumentSection', { sectionId: section.id, code: event.target.value || null }, 'Section saved.')) loadChunks(0);
+                            }}>
+                            <option value="">Not in the template</option>
+                            {optionsFor(section).map((option) => <option key={option.code} value={option.code}>{option.title}</option>)}
+                            {section.templateSectionCode && !optionsFor(section).some((option) => option.code === section.templateSectionCode) && (
+                              <option value={section.templateSectionCode}>{mappedTitle}</option>
+                            )}
+                          </select>
                         )}
                       </div>
                     );
@@ -415,6 +520,18 @@ export default function DocumentPage() {
               </div>
 
               <div>
+                {answer !== null ? (
+                  <>
+                    <div style={sectionHead}>
+                      <h2 style={sectionTitle}>
+                        {answer.summary ? 'Answer' : answer.sections.length === 0 ? 'Nothing in the text answered that' : 'Sections'}
+                      </h2>
+                      <button type="button" className="btn btn-sm" onClick={() => setAnswer(null)}>Back to the passages</button>
+                    </div>
+                    <AnswerView query={answer.query} answer={answer} titled={false} onOpen={jumpTo} />
+                  </>
+                ) : (
+                  <>
                 <div style={sectionHead}>
                   <h2 style={sectionTitle}>{selected ? selected.heading : 'Every passage'}</h2>
                 </div>
@@ -470,6 +587,8 @@ export default function DocumentPage() {
                   );
                 })}
                 {more && <button type="button" className="btn" onClick={() => loadChunks(chunks.length)}>Show more</button>}
+                  </>
+                )}
               </div>
             </div>
           )}

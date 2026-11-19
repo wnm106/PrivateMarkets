@@ -96,6 +96,12 @@ export class ToolRegistry {
     return tool.execute(args, supabaseOverride || this.supabase);
   }
 
+  /** Names of the arguments a tool declares, or an empty set for an unknown tool. */
+  argumentNames(name: string): Set<string> {
+    const properties = this.tools.get(name)?.inputSchema?.properties;
+    return new Set(properties && typeof properties === 'object' ? Object.keys(properties) : []);
+  }
+
   getSupabase(): SupabaseClient {
     return this.supabase;
   }

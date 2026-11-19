@@ -7,6 +7,7 @@ import { attributeText } from '@/lib/experience';
 import { domainHref } from '@/lib/domain-routes';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useTemporalStore } from '@/lib/store';
+import { usePublishPageData } from '@/lib/view-context';
 
 const WORKSTREAM: Record<string, string> = {
   LEGAL: 'Legal and documentation',
@@ -285,6 +286,35 @@ export function DealClosing({
         : away === 0 ? 'Today'
           : away === -1 ? '1 day past'
             : `${Math.abs(away)} days past`;
+
+  usePublishPageData({
+    closeDate: closeDate || null,
+    timing: awayLabel || null,
+    onTrack,
+    overdue,
+    blocked,
+    funded,
+    conditions: conditions.map((row) => ({
+      title: row.title,
+      workstream: row.workstream,
+      owner: row.owner,
+      due: row.due,
+      status: row.status,
+    })),
+    documents: documents.map((row) => ({
+      title: row.title,
+      status: row.status,
+      received: row.received,
+      required: row.required,
+    })),
+    funding: flows.map((row) => ({
+      fund: row.fundName,
+      cash: row.cash,
+      line: row.line,
+      call: row.call,
+      status: row.status,
+    })),
+  });
 
   return (
     <div className="da">

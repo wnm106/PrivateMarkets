@@ -4063,12 +4063,13 @@
     align-self: stretch;
     position: sticky;
     top: 0;
+    z-index: 20;
     min-height: 0;
     max-height: 100vh;
     width: 0;
     max-width: 100vw;
     background: var(--surface);
-    border-left: 0 solid var(--line);
+    border-left: 0 solid var(--brand-cyan);
     box-shadow: -12px 0 40px rgba(10, 22, 40, 0);
     display: flex;
     flex-direction: column;
@@ -4077,16 +4078,19 @@
   }
 
   .chat-popout.open {
-    width: clamp(316px, 30vw, 640px);
-    border-left-width: 1px;
+    width: clamp(320px, 30vw, 640px);
+    /* Stay on screen beside the sidebar, so the right side of the chat is not clipped. */
+    max-width: calc(100vw - 268px);
+    border-left-width: 4px;
     box-shadow: -12px 0 40px rgba(10, 22, 40, 0.08);
   }
 
-  /* Pin the conversation at a usable width while the dock animates,
-     so the thread does not reflow as the page is squeezed. */
+  /* Fill the dock. A fixed minimum here used to be wider than the dock and
+     overflow:hidden sliced off the right side of the voice row. */
   .chat-pane {
     flex: 1 1 auto;
-    min-width: 316px;
+    width: 100%;
+    min-width: 0;
     max-width: 100%;
     min-height: 0;
     display: flex;
@@ -4222,16 +4226,6 @@
     padding: 11px 13px;
     font-size: 13px;
     color: var(--ink-3);
-  }
-
-  .chat-popout::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 3px;
-    height: 100%;
-    background: var(--brand-gradient);
   }
 
   .chat-header {
@@ -4544,6 +4538,64 @@
   .chat-answer-table th:not(:first-child) {
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+
+  .chat-answer-table td.tone-up,
+  .md-table-scroll td.tone-up {
+    color: var(--green);
+    font-weight: 600;
+  }
+
+  .chat-answer-table td.tone-down,
+  .md-table-scroll td.tone-down {
+    color: var(--red);
+    font-weight: 600;
+  }
+
+  .chat-answer-table td.tone-up::before,
+  .md-table-scroll td.tone-up::before {
+    content: '▲ ';
+    font-size: 9px;
+  }
+
+  .chat-answer-table td.tone-down::before,
+  .md-table-scroll td.tone-down::before {
+    content: '▼ ';
+    font-size: 9px;
+  }
+
+  .chat-chart {
+    margin: 2px 0 8px;
+  }
+
+  .chat-chart figcaption {
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .chat-chart svg {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  .chat-chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--ink-2);
+  }
+
+  .chat-chart-legend i {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 4px;
+    border-radius: 2px;
+    vertical-align: -1px;
   }
 
   .chat-bubble .markdown-content > *:first-child { margin-top: 0; }
@@ -4987,6 +5039,7 @@
       bottom: 0;
       z-index: 1200;
       width: 100%;
+      max-width: none;
       box-shadow: -12px 0 40px rgba(10, 22, 40, 0.16);
     }
 
@@ -7962,10 +8015,60 @@ button.sidebar-logo:hover {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 8px 8px;
+  padding: 10px 12px 10px 12px;
   background: var(--bg);
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
+}
+
+.chat-page-json {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.chat-page-json[open] {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 42%;
+}
+
+.chat-page-json summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  list-style: none;
+}
+
+.chat-page-json summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-page-json summary small {
+  font-weight: 400;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-page-json pre {
+  margin: 0;
+  padding: 0 12px 10px;
+  overflow: auto;
+  max-height: 280px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chat-voice-kicker {
@@ -7980,6 +8083,8 @@ button.sidebar-logo:hover {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 3px;
+  width: 100%;
+  min-width: 0;
   padding: 3px;
   background: var(--bg-alt);
   border: 1px solid var(--line-strong);
@@ -8002,7 +8107,10 @@ button.sidebar-logo:hover {
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
+  min-width: 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 

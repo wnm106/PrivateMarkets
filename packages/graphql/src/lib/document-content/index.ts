@@ -1,4 +1,15 @@
 export { EMBEDDING_DIMENSIONS, EmbedRateLimited, batchesOf, embedBatch, embedConfigFromEnv, embedPatiently, rerank, vectorLiteral, type EmbedConfig, type EmbedPacing } from './embed';
+export {
+  answerDocuments,
+  type AnswerModel,
+  type AnswerPassage,
+  type AnswerSection,
+  type AnswerToolCall,
+  type AnswerToolResult,
+  type AnswerToolSpec,
+  type AnswerTurn,
+  type DocumentAnswer,
+} from './answer';
 export { buildChunks, buildOutline, guessTitle, type ChunkOptions } from './outline';
 export {
   DOCUMENT_BUCKET,

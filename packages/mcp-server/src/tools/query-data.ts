@@ -87,7 +87,7 @@ export function queryGrain(query: any): 'entity' | 'value' {
 }
 
 /** Pulls domain and attribute equality into the scan, and checks the value-query shape. */
-export function valueRequest(query: any, asOfDate?: string): Record<string, unknown> {
+export function valueRequest(query: any, asOfDate?: string, knowledgeDate?: string): Record<string, unknown> {
   const filters: any[] = [];
   let domainCode = query.domainCode ? String(query.domainCode) : undefined;
   const attributeCodes = new Set<string>(
@@ -132,6 +132,7 @@ export function valueRequest(query: any, asOfDate?: string): Record<string, unkn
     domainCode: domainCode || null,
     attributeCodes: attributeCodes.size ? [...attributeCodes] : null,
     asOfDate: query.asOfDate || asOfDate || null,
+    knowledgeDate: query.knowledgeDate || knowledgeDate || null,
     filters,
     groupBy: query.groupBy || [],
     metrics: query.metrics || [],
@@ -164,7 +165,8 @@ const queryData: ToolDefinition = {
         type: 'string',
         description: 'JSON object, or an array of up to five. grain is "value" or "entity". The tool description has the fields, operators, and examples.',
       },
-      asOfDate: { type: 'string', description: 'Valid-time date YYYY-MM-DD. Defaults to today.' },
+      asOfDate: { type: 'string', description: 'Valid-time date YYYY-MM-DD. Defaults to the date set in the app, else today.' },
+      knowledgeDate: { type: 'string', description: 'Knowledge time, an ISO timestamp: only what was known by then. Defaults to the date set in the app, else now.' },
       entityId: { type: 'string', description: 'Context record for grain "entity" and start CONTEXT.' },
       entityCode: { type: 'string', description: 'Context record code, instead of entityId.' },
     },
@@ -187,7 +189,7 @@ const queryData: ToolDefinition = {
       try {
         const grain = queryGrain(query);
         if (grain === 'value') {
-          const request = valueRequest(query, args.asOfDate);
+          const request = valueRequest(query, args.asOfDate, args.knowledgeDate);
           const { data, error } = await supabase.rpc('query_values', { p_request: request });
           if (error) throw new Error(error.message);
           results.push(data);
@@ -197,6 +199,7 @@ const queryData: ToolDefinition = {
             entityId: args.entityId || query.entityId,
             entityCode: args.entityCode || query.entityCode,
             asOfDate: args.asOfDate || query.asOfDate,
+            knowledgeDate: args.knowledgeDate || query.knowledgeDate,
             params: query.params,
           });
           results.push({

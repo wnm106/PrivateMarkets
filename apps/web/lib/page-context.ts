@@ -71,6 +71,7 @@ export function routeChatContext(pathname: string): RouteChatContext {
     if (parts[2] === 'lineage' && parts[3]) {
       return { page: `${parts[3]} lineage`, domainCode, entityId, attributeCode: decodeURIComponent(parts[3]) };
     }
+    if (parts[2]) return { page: `${label.replace(/s$/, '')} · ${pretty(parts[2])}`, domainCode, entityId };
     return { page: label, domainCode, entityId };
   }
 
@@ -104,6 +105,9 @@ export function routeChatContext(pathname: string): RouteChatContext {
   }
   if (parts[0] === 'reconcile' && parts[1]) {
     return { page: 'Reconciliation run' };
+  }
+  if (parts[0] === 's' && parts[1]) {
+    return { page: pretty(parts[1]) };
   }
 
   return { page: parts.map((segment) => pretty(decodeURIComponent(segment))).join(' / ') || 'Master data' };

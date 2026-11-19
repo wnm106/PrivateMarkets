@@ -382,6 +382,31 @@ describe('allocation engine', () => {
     expect(cell(result, 'b', 'tl').amount).toBeCloseTo(80, 2);
   });
 
+  it('shows saved sleeve amounts as they were saved, not as manual overrides', () => {
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [{
+        id: 'p', name: 'Parent', nav: 1000,
+        issuerLimit: 1, sponsorLimit: 1, unfundedLimit: 1, sponsorExposure: 0, unfundedExposure: 0,
+        allowed: ['LOAN'], denyNote: '',
+        sleeves: [
+          { id: 'a', name: 'A', nav: 500, cash: 200, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '' },
+          { id: 'b', name: 'B', nav: 500, cash: 200, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '' },
+        ],
+      }],
+      adjustments: [
+        { fundId: 'p', trancheId: 'tl', type: 'override', amount: 101, saved: true },
+        { fundId: 'a', trancheId: 'tl', type: 'override', amount: 61, saved: true },
+        { fundId: 'b', trancheId: 'tl', type: 'override', amount: 40, saved: true },
+      ],
+    });
+    expect(cell(result, 'a', 'tl').amount).toBeCloseTo(61, 2);
+    expect(cell(result, 'b', 'tl').amount).toBeCloseTo(40, 2);
+    expect(cell(result, 'p', 'tl').amount).toBeCloseTo(101, 2);
+    expect(cell(result, 'p', 'tl').imbalance).toBe(false);
+    expect(cell(result, 'a', 'tl').overridden).toBe(false);
+  });
+
   it('removes an excluded portfolio and leaves the warrant off a fund that cannot hold it', () => {
     const result = allocate(halyard([
       { fundId: 'poc', trancheId: '*', type: 'exclude', reason: 'MAND' },

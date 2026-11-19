@@ -116,6 +116,10 @@ The pass sends the question and those candidates to the same service that embeds
 
 The agent tools return `quote` and `citation` for each passage and tell the model to quote the words rather than restate them.
 
+### Answering a question
+
+On a document, on the documents page, and on a record's Documents tab, a question does more than list passages. The same search runs first. A model may search once more and read a section in full, then writes a short summary and names the sections it used. The screen shows that summary, then those sections in the document's own words. `POST /api/documents/ask` does this. The model is `DOCUMENT_ANSWER_MODEL`, or the describer's model, and each turn is recorded as `document.answer`. With no Anthropic key the passages are still shown, grouped under their headings, and the result says no summary was written. The command line search stays a list of passages.
+
 ## Embedding
 
 Anthropic has no embedding model. The default is Voyage AI's `voyage-4` at 1,024 dimensions. The heading path is embedded along with the chunk's words, so a clause is embedded knowing where it sits.
@@ -126,7 +130,7 @@ Anthropic has no embedding model. The default is Voyage AI's `voyage-4` at 1,024
 | `DOCUMENT_EMBEDDING_MODEL` | Default `voyage-4`. A different model needs every chunk embedded again. |
 | `DOCUMENT_RERANK_MODEL` | Default `rerank-3`. `off` turns the second pass off. |
 | `VOYAGE_API_BASE` | Default tries `https://ai.mongodb.com/v1` (a key from MongoDB Atlas), then `https://api.voyageai.com/v1`. |
-| `ANTHROPIC_API_KEY` | Turns on refinement. Needed by the worker only. |
+| `ANTHROPIC_API_KEY` | Turns on refinement, and the summary when someone asks a question on a document screen. The worker reads the repository `.env`. The web app uses its own environment, then that same file. |
 | `DOCUMENT_REFINE_MODEL` | Default `claude-opus-5-5`, at low effort. Each call is recorded in agent usage as `document.refine`. |
 
 The model is recorded on each chunk. The column holds 1,024 dimensions; a model of another size needs a migration.

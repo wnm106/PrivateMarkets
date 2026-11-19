@@ -10,6 +10,7 @@ import {
   graphqlQuery,
 } from '@/lib/graphql';
 import { domainHref } from '@/lib/domain-routes';
+import { usePublishPageData } from '@/lib/view-context';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 import { AttributeValueInput, listDisplayLabel, useAttributeListOptions } from '@/components/forms/AttributeValueInput';
 import {
@@ -348,6 +349,28 @@ export function IcMemo({
     setActive(id);
     document.getElementById(`icm-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+
+  usePublishPageData(memo ? {
+    section: active,
+    status: memo.memoStatus,
+    team: memo.team,
+    icDate: memo.icDate,
+    recommendation: memo.recommendation,
+    baseRate: memo.baseRate,
+    holdYears: memo.holdYears,
+    expectedMoic: memo.expectedMoic,
+    blendedIrr: memo.blendedIrr,
+    points: memo.points.map((point) => ({ kind: point.kind, title: point.title })),
+    capital: memo.capitalItems.map((item) => ({ side: item.side, label: item.label, amount: item.amount })),
+    periods: memo.periods.map((period) => ({
+      label: period.label,
+      revenue: period.revenue,
+      ebitda: period.ebitda,
+      margin: period.ebitdaMargin,
+    })),
+    approvals: memo.approvals.map((row) => ({ member: row.member, role: row.role, decision: row.decision })),
+    openItems: memo.openItems.map((item) => ({ title: item.title, status: item.status })),
+  } : null);
 
   return (
     <div className="icm">

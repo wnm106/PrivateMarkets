@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { usePublishViewContext } from '@/lib/view-context';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
+import { AnswerView, askDocuments, type DocumentAnswer } from '@/components/documents/AnswerView';
 import {
   Chip, DOCUMENT_FIELDS, DocumentStatus, EntityLinksEditor, RecordName, TYPE_FIELDS, bodyRow, cell, danger, field, fieldLabel, formBox, formRow,
   headRow, hint, sectionHead, sectionTitle, shortDate, table, tagLabel,
@@ -81,6 +82,7 @@ export default function DocumentsPage() {
   const [chosenTags, setChosenTags] = useState<string[]>([]);
   const [searching, setSearching] = useState(false);
   const [result, setResult] = useState<SearchResult | null>(null);
+  const [answer, setAnswer] = useState<{ query: string } & DocumentAnswer | null>(null);
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [draftError, setDraftError] = useState('');
@@ -115,11 +117,28 @@ export default function DocumentsPage() {
   }, [busy, load]);
 
   const search = async () => {
-    if (!question.trim() && chosenTags.length === 0) return;
+    const asked = question.trim();
+    if (!asked && chosenTags.length === 0) return;
     setSearching(true);
+    if (asked) {
+      const response = await askDocuments({
+        query: asked,
+        tags: chosenTags.length > 0 ? chosenTags : undefined,
+        typeCodes: typeCode ? [typeCode] : undefined,
+      });
+      setSearching(false);
+      if (response.error) {
+        setMessage(response.error);
+        return;
+      }
+      setMessage('');
+      setResult(null);
+      setAnswer(response.answer ? { query: asked, ...response.answer } : null);
+      return;
+    }
     const response = await graphqlQuery<{ searchDocuments: SearchResult }, { query: string; tags: string[] | null; typeCodes: string[] | null }>(
       SEARCH_QUERY,
-      { query: question.trim(), tags: chosenTags.length > 0 ? chosenTags : null, typeCodes: typeCode ? [typeCode] : null },
+      { query: '', tags: chosenTags.length > 0 ? chosenTags : null, typeCodes: typeCode ? [typeCode] : null },
       'network-only',
     );
     setSearching(false);
@@ -129,6 +148,7 @@ export default function DocumentsPage() {
       return;
     }
     setMessage('');
+    setAnswer(null);
     setResult(response.data?.searchDocuments || null);
   };
 
@@ -227,7 +247,7 @@ export default function DocumentsPage() {
           <div>
             <div className="page-title">Documents</div>
             <div className="page-meta">
-              Agreements and other documents, kept as tagged sections you can search by meaning. Every result is the document&apos;s own words, with where they sit.
+              Agreements and other documents, kept as tagged sections you can search by meaning. A question is answered in a short summary, then the sections it rests on.
             </div>
           </div>
         </div>
@@ -251,7 +271,7 @@ export default function DocumentsPage() {
             <option value="">Every document type</option>
             {types.map((type) => <option key={type.id} value={type.typeCode}>{type.typeName}</option>)}
           </select>
-          <button type="submit" className="btn btn-primary" disabled={searching}>{searching ? 'Searching…' : 'Search'}</button>
+          <button type="submit" className="btn btn-primary" disabled={searching}>{searching ? (question.trim() ? 'Reading…' : 'Searching…') : (question.trim() ? 'Ask' : 'Search')}</button>
         </div>
         {filterTags.length > 0 && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -265,6 +285,15 @@ export default function DocumentsPage() {
           </div>
         )}
       </form>
+
+      {answer && (
+        <div style={{ maxWidth: 980, marginBottom: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '8px 0' }}>
+            <button type="button" className="btn btn-sm" onClick={() => setAnswer(null)}>Clear</button>
+          </div>
+          <AnswerView query={answer.query} answer={answer} showTitle href={(documentId, charStart) => `/documents/${documentId}?at=${charStart}`} />
+        </div>
+      )}
 
       {result && (
         <div style={{ maxWidth: 980, marginBottom: 24 }}>

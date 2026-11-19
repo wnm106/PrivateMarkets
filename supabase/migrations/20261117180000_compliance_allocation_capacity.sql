@@ -39,6 +39,114 @@ $$;
 COMMENT ON FUNCTION compliance.capacity_amount IS
     'Remaining numerator room under a MAX compliance limit. Percentage and ratio limits scale the denominator; other units subtract the numerator from the limit. This is the capacity calculation the allocation engine must use.';
 
+-- A proposed allocation has no position yet. LINE and BASE filters that read
+-- the security (directly, or one hop out from the position) decide whether
+-- that security would enter the rule. Filters on the position itself, such as
+-- "market value is present", describe the position the allocation will write.
+CREATE OR REPLACE FUNCTION compliance.proposed_security_matches(
+    p_security_id UUID,
+    p_rule_version_id UUID,
+    p_as_of_date DATE,
+    p_knowledge_date TIMESTAMPTZ
+) RETURNS BOOLEAN
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_applies TEXT;
+    v_group RECORD;
+    v_cond RECORD;
+    v_group_match BOOLEAN;
+    v_any BOOLEAN;
+    v_has BOOLEAN;
+    v_path JSONB;
+    v_actual TEXT;
+    v_result BOOLEAN;
+    v_targets UUID[];
+BEGIN
+    FOREACH v_applies IN ARRAY ARRAY['LINE', 'BASE'] LOOP
+        v_any := FALSE;
+        v_has := FALSE;
+        FOR v_group IN
+            SELECT DISTINCT c.condition_group
+            FROM compliance.rule_conditions c
+            WHERE c.rule_version_id = p_rule_version_id
+              AND c.applies_to = v_applies
+              AND (
+                    COALESCE(c.attribute_dimension->'relationship_path'->0->>'relationship_code', '') IN ('POSITION_SECURITY', 'POSITION_TRANCHE')
+                    OR (
+                        COALESCE(jsonb_array_length(c.attribute_dimension->'relationship_path'), 0) = 0
+                        AND c.attribute_code NOT IN (
+                            'MARKET_VALUE', 'FUNDED_PAR_AMOUNT', 'UNFUNDED_COMMITMENT_AMOUNT', 'CURRENT_VALUE',
+                            'POSITION_IS_HYPOTHETICAL', 'POSITION_SCENARIO_CODE'
+                        )
+                    )
+                  )
+        LOOP
+            v_has := TRUE;
+            v_group_match := NULL;
+            FOR v_cond IN
+                SELECT c.*
+                FROM compliance.rule_conditions c
+                WHERE c.rule_version_id = p_rule_version_id
+                  AND c.applies_to = v_applies
+                  AND c.condition_group = v_group.condition_group
+                  AND (
+                        COALESCE(c.attribute_dimension->'relationship_path'->0->>'relationship_code', '') IN ('POSITION_SECURITY', 'POSITION_TRANCHE')
+                        OR (
+                            COALESCE(jsonb_array_length(c.attribute_dimension->'relationship_path'), 0) = 0
+                            AND c.attribute_code NOT IN (
+                                'MARKET_VALUE', 'FUNDED_PAR_AMOUNT', 'UNFUNDED_COMMITMENT_AMOUNT', 'CURRENT_VALUE',
+                                'POSITION_IS_HYPOTHETICAL', 'POSITION_SCENARIO_CODE'
+                            )
+                        )
+                      )
+                ORDER BY c.condition_order
+            LOOP
+                v_path := COALESCE(v_cond.attribute_dimension->'relationship_path', '[]'::JSONB);
+                IF jsonb_array_length(v_path) > 0
+                   AND v_path->0->>'relationship_code' IN ('POSITION_SECURITY', 'POSITION_TRANCHE') THEN
+                    v_path := (
+                        SELECT COALESCE(jsonb_agg(hops.hop ORDER BY hops.ord), '[]'::JSONB)
+                        FROM jsonb_array_elements(v_path) WITH ORDINALITY AS hops(hop, ord)
+                        WHERE hops.ord > 1
+                    );
+                END IF;
+                IF v_path IS NULL OR jsonb_typeof(v_path) IS DISTINCT FROM 'array' OR jsonb_array_length(v_path) = 0 THEN
+                    v_actual := compliance.get_text_value(p_security_id, v_cond.attribute_code, p_as_of_date, p_knowledge_date, 'GOLDEN');
+                ELSE
+                    v_targets := compliance.walk_path(ARRAY[p_security_id], v_path, p_as_of_date, p_knowledge_date);
+                    v_actual := CASE
+                        WHEN v_targets IS NULL OR array_length(v_targets, 1) IS NULL THEN NULL
+                        ELSE compliance.get_text_value(v_targets[1], v_cond.attribute_code, p_as_of_date, p_knowledge_date, 'GOLDEN')
+                    END;
+                END IF;
+                v_result := compliance.evaluate_operator(
+                    v_actual, v_cond.operator, compliance.resolve_rhs(v_cond.value, NULL, p_as_of_date)
+                );
+                IF v_group_match IS NULL THEN
+                    v_group_match := COALESCE(v_result, FALSE);
+                ELSIF v_cond.logic_operator = 'OR' THEN
+                    v_group_match := v_group_match OR COALESCE(v_result, FALSE);
+                ELSE
+                    v_group_match := v_group_match AND COALESCE(v_result, FALSE);
+                END IF;
+            END LOOP;
+            IF v_group_match THEN
+                v_any := TRUE;
+            END IF;
+        END LOOP;
+        IF v_has AND NOT v_any THEN
+            RETURN FALSE;
+        END IF;
+    END LOOP;
+    RETURN TRUE;
+END;
+$$;
+
+COMMENT ON FUNCTION compliance.proposed_security_matches IS
+    'True when allocating this security would enter the rule. Security filters are read on the security. A filter on the position amount does not keep the security out.';
+
 -- Group key a security would join. Paths that start at a position are walked
 -- from the security once the position-to-security hop is removed.
 CREATE OR REPLACE FUNCTION compliance.security_group_value(
@@ -280,6 +388,9 @@ BEGIN
                 ) THEN
                     CONTINUE;
                 END IF;
+                IF NOT compliance.entity_matches_conditions(v_fund, v_version.id, 'ANCHOR', p_as_of_date, p_knowledge_date, 'GOLDEN') THEN
+                    CONTINUE;
+                END IF;
                 v_limit := NULL;
                 IF v_version.hard_limit_attribute_code IS NOT NULL THEN
                     SELECT g.val INTO v_limit
@@ -291,6 +402,9 @@ BEGIN
                     v_limit := v_version.hard_limit_value;
                 END IF;
                 FOREACH v_security IN ARRAY p_security_ids LOOP
+                    IF NOT compliance.proposed_security_matches(v_security, v_version.id, p_as_of_date, p_knowledge_date) THEN
+                        CONTINUE;
+                    END IF;
                     v_capacity := compliance.composite_rule_capacity(
                         v_fund, v_security, v_version, v_limit, p_as_of_date, p_knowledge_date
                     );
@@ -320,6 +434,9 @@ BEGIN
                 SELECT 1 FROM compliance.get_anchor_entities(v_rule.id, p_as_of_date, p_knowledge_date) a
                 WHERE a.entity_id = v_fund
             ) THEN
+                CONTINUE;
+            END IF;
+            IF NOT compliance.entity_matches_conditions(v_fund, v_version.id, 'ANCHOR', p_as_of_date, p_knowledge_date, 'GOLDEN') THEN
                 CONTINUE;
             END IF;
 
@@ -373,6 +490,9 @@ BEGIN
             END IF;
 
             FOREACH v_security IN ARRAY p_security_ids LOOP
+                IF NOT compliance.proposed_security_matches(v_security, v_version.id, p_as_of_date, p_knowledge_date) THEN
+                    CONTINUE;
+                END IF;
                 SELECT COALESCE(bool_or(lower(COALESCE(compliance.get_text_value(er.parent_entity_id, 'TRANCHE_IS_UNFUNDED', p_as_of_date, p_knowledge_date, 'GOLDEN'), '')) IN ('true', 't', '1')), FALSE)
                 INTO v_unfunded
                 FROM entity_instances.entity_relationships er
@@ -464,6 +584,7 @@ $$;
 COMMENT ON FUNCTION compliance.fund_security_capacities IS
     'For each fund and security, the remaining capacity of every active MAX position rule that adding the security would worsen. Capacity is compliance.capacity_amount, not a limit recomputed by the allocation engine. Securities in one group share that group''s capacity.';
 
+GRANT EXECUTE ON FUNCTION compliance.proposed_security_matches(UUID, UUID, DATE, TIMESTAMPTZ) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION compliance.capacity_amount(NUMERIC, NUMERIC, NUMERIC, TEXT, TEXT) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION compliance.security_group_value(UUID, JSONB, VARCHAR, DATE, TIMESTAMPTZ) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION compliance.security_matches_filters(UUID, JSONB, DATE, TIMESTAMPTZ) TO authenticated, service_role;

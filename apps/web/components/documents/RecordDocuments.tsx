@@ -3,40 +3,19 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
+import { AnswerView, askDocuments, type DocumentAnswer } from './AnswerView';
 import {
   DOCUMENT_FIELDS, DocumentStatus, bodyRow, cell, danger, headRow, hint, shortDate, table, type DocumentRow,
 } from './shared';
 
 /**
  * The documents linked to one record, shown as a tab on the record's page:
- * what they are, what the record is to each, and a search across just these
+ * what they are, what the record is to each, and a question across just these
  * documents. Adding one here opens the Add a document form with this record
  * already linked.
  */
 
 const DOCUMENTS_QUERY = `query($entityId: ID) { documents(entityId: $entityId, first: 100) { ${DOCUMENT_FIELDS} } }`;
-const SEARCH_QUERY = `
-  query($query: String!, $entityIds: [ID!]) {
-    searchDocuments(query: $query, entityIds: $entityIds, first: 8) {
-      note
-      hits { chunkId documentId documentTitle sectionHeading parentHeading text summary charStart page clause }
-    }
-  }
-`;
-
-interface Hit {
-  chunkId: string;
-  documentId: string;
-  documentTitle: string;
-  sectionHeading: string | null;
-  parentHeading: string | null;
-  text: string;
-  summary: string | null;
-  charStart: number;
-  page: number | null;
-  clause: string | null;
-}
-
 function roleText(role: string): string {
   const words = role.replace(/_/g, ' ').toLowerCase();
   return words.charAt(0).toUpperCase() + words.slice(1);
@@ -47,8 +26,7 @@ export function RecordDocuments({ entityId, entityName }: { entityId: string; en
   const [message, setMessage] = useState('');
   const [question, setQuestion] = useState('');
   const [searching, setSearching] = useState(false);
-  const [hits, setHits] = useState<Hit[] | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [answer, setAnswer] = useState<{ query: string } & DocumentAnswer | null>(null);
 
   const load = useCallback(async () => {
     const response = await graphqlQuery<{ documents: DocumentRow[] }, { entityId: string }>(DOCUMENTS_QUERY, { entityId }, 'network-only');
@@ -59,25 +37,22 @@ export function RecordDocuments({ entityId, entityName }: { entityId: string; en
 
   useEffect(() => {
     setDocuments(null);
-    setHits(null);
+    setAnswer(null);
     load();
   }, [load]);
 
   const search = async () => {
-    if (!question.trim()) return;
+    const asked = question.trim();
+    if (!asked) return;
     setSearching(true);
-    const response = await graphqlQuery<{ searchDocuments: { note: string | null; hits: Hit[] } }, { query: string; entityIds: string[] }>(
-      SEARCH_QUERY, { query: question.trim(), entityIds: [entityId] }, 'network-only',
-    );
+    const response = await askDocuments({ query: asked, entityIds: [entityId] });
     setSearching(false);
-    if (response.aborted) return;
     if (response.error) {
-      setMessage(response.error.message);
+      setMessage(response.error);
       return;
     }
     setMessage('');
-    setHits(response.data?.searchDocuments.hits || []);
-    setNote(response.data?.searchDocuments.note || null);
+    setAnswer(response.answer ? { query: asked, ...response.answer } : null);
   };
 
   const addHref = `/documents?link=${encodeURIComponent(entityId)}`;
@@ -137,24 +112,12 @@ export function RecordDocuments({ entityId, entityName }: { entityId: string; en
             <input className="text-input" style={{ flex: '1 1 320px' }} value={question} aria-label={`Search the documents linked to ${entityName}`}
               placeholder={`Ask about ${documents.length === 1 ? 'this document' : 'these documents'}: what is the management fee?`}
               onChange={(event) => setQuestion(event.target.value)} />
-            <button type="submit" className="btn" disabled={searching}>{searching ? 'Searching…' : 'Search'}</button>
+            <button type="submit" className="btn" disabled={searching}>{searching ? 'Reading…' : 'Ask'}</button>
           </form>
 
-          {hits !== null && (
-            <div style={{ marginTop: 8 }}>
-              <div style={hint}>{hits.length === 0 ? 'Nothing matched.' : `${hits.length} passages.`} {note}</div>
-              {hits.map((hit) => (
-                <div key={hit.chunkId} style={{ borderTop: '1px solid var(--line, #e5e5e5)', padding: '10px 0' }}>
-                  <Link href={`/documents/${hit.documentId}?at=${hit.charStart}`} className="crumb-link" style={{ fontWeight: 600 }}>
-                    {[hit.sectionHeading || hit.parentHeading || hit.documentTitle, hit.clause].filter(Boolean).join(' ')}
-                  </Link>{' '}
-                  <span style={hint}>{hit.documentTitle}{hit.page ? `, page ${hit.page}` : ''}</span>
-                  <blockquote style={{ margin: '6px 0 0', padding: '0 0 0 12px', borderLeft: '3px solid var(--line, #e5e5e5)', whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.5 }}>
-                    {hit.text.length > 600 ? `${hit.text.slice(0, 600)}…` : hit.text}
-                  </blockquote>
-                  {hit.summary && <div style={{ ...hint, marginTop: 4 }}>Described as: {hit.summary}</div>}
-                </div>
-              ))}
+          {answer !== null && (
+            <div style={{ marginTop: 12 }}>
+              <AnswerView query={answer.query} answer={answer} showTitle href={(documentId, charStart) => `/documents/${documentId}?at=${charStart}`} />
             </div>
           )}
         </>

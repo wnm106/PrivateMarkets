@@ -24,6 +24,8 @@ interface StackEntry {
 
 interface ViewContextState {
   focus: ViewFocus | null;
+  /** Live data from the active page, or from the panel open on that page. */
+  pageData: Record<string, unknown> | null;
   version: number;
 }
 
@@ -31,12 +33,14 @@ type Listener = (state: ViewContextState) => void;
 
 let nextId = 1;
 let stack: StackEntry[] = [];
-let state: ViewContextState = { focus: null, version: 0 };
+let pageStack: Array<{ id: number; data: Record<string, unknown> | null }> = [];
+let state: ViewContextState = { focus: null, pageData: null, version: 0 };
 const listeners = new Set<Listener>();
 
 function emit() {
   const focus = [...stack].reverse().find((entry) => entry.focus)?.focus ?? null;
-  state = { focus, version: state.version + 1 };
+  const pageData = [...pageStack].reverse().find((entry) => entry.data)?.data ?? null;
+  state = { focus, pageData, version: state.version + 1 };
   for (const listener of listeners) listener(state);
 }
 
@@ -80,6 +84,38 @@ export function usePublishViewContext(focus: ViewFocus | null) {
 
   useEffect(() => () => {
     if (idRef.current) remove(idRef.current);
+  }, []);
+}
+
+function publishPage(id: number, data: Record<string, unknown> | null) {
+  const existing = pageStack.find((entry) => entry.id === id);
+  if (existing) existing.data = data;
+  else pageStack.push({ id, data });
+  emit();
+}
+
+function removePage(id: number) {
+  pageStack = pageStack.filter((entry) => entry.id !== id);
+  emit();
+}
+
+/**
+ * Publishes the JSON the active page is showing. A tab or panel mounted on
+ * the page replaces the page's own data while it is open.
+ */
+export function usePublishPageData(data: Record<string, unknown> | null) {
+  const idRef = useRef(0);
+  const serialized = JSON.stringify(data ?? null);
+  const dataRef = useRef(data);
+  dataRef.current = data;
+
+  useEffect(() => {
+    if (!idRef.current) idRef.current = nextId++;
+    publishPage(idRef.current, dataRef.current);
+  }, [serialized]);
+
+  useEffect(() => () => {
+    if (idRef.current) removePage(idRef.current);
   }, []);
 }
 

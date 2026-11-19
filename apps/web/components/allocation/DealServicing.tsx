@@ -7,6 +7,7 @@ import { attributeText } from '@/lib/experience';
 import { domainHref } from '@/lib/domain-routes';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useTemporalStore } from '@/lib/store';
+import { usePublishPageData } from '@/lib/view-context';
 import { addMonths, heldShare, monthKey, projectSchedule, spreadFromPricing, type ScheduleDraw, type ScheduleMonth } from '@/lib/servicing-schedule';
 
 const RATING: Record<string, string> = {
@@ -333,6 +334,29 @@ export function DealServicing({
       return { id: row.fundId, name: row.fundName, funded, unfunded, upcoming, remaining: Math.max(0, unfunded - upcoming) };
     })
     .filter((row) => row.funded > 0 || row.unfunded > 0);
+
+  usePublishPageData({
+    terms,
+    coupon,
+    drawnToDate,
+    nextPayment: nextPayment ? { date: nextPayment.date, total: nextPayment.total, interest: nextPayment.interest } : null,
+    funds: usage,
+    draws: sizedDraws.slice(0, 24).map((draw) => ({
+      date: draw.date,
+      purpose: draw.purpose,
+      amount: draw.amount,
+      status: draw.status,
+      tranche: draw.trancheName,
+    })),
+    covenants: covenants.map((row) => ({
+      name: row.name,
+      direction: row.direction,
+      level: row.level,
+      current: row.current,
+      unit: row.unit,
+    })),
+    reports: reports.map((row) => ({ name: row.name, due: row.due })),
+  });
 
   return (
     <div className="da">

@@ -2479,6 +2479,7 @@ input AllocationAdjustmentInput {
   amount: Float
   reasonCode: String
   note: String
+  saved: Boolean
 }
 
 input AllocationHoldInput {
@@ -2589,6 +2590,7 @@ type AllocationAdjustmentView {
   amount: Float
   reason: String
   note: String
+  saved: Boolean
 }
 
 type IcMemoPoint {

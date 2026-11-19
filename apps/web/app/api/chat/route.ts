@@ -15,7 +15,6 @@ import { QUERY_DATA_GUIDE, registerQueryTools } from '@tapestrai/mcp-server/src/
 import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrative-tools';
 import { NARRATIVE_COMPOSE_GUIDE } from '@tapestrai/mcp-server/src/lib/narrative-guide';
 import { formatLessons, lessonFromRow, matchLessons } from '@tapestrai/mcp-server/src/lib/chat-lessons';
-import { presentAnswer } from '@tapestrai/mcp-server/src/lib/chat-answer';
 import { getContextProfile } from '@tapestrai/mcp-server/src/lib/context-profiles';
 import {
   coerceSkillState,
@@ -186,6 +185,33 @@ async function loadAttachments(
   return resolved;
 }
 
+/** House vocabulary. It applies on every page, with or without the screen data. */
+const DOMAIN_GLOSSARY = `\n\n## House terms\n- A portfolio is a top-level fund. A sub-portfolio is a sleeve of a portfolio, linked to it by FUND_PARENT, and its sub-portfolios sum to it. A fund with no children is its own portfolio.\n- Report allocations, positions, exposure and holdings by portfolio unless the user asks for sub-portfolios or a breakdown. Positions and proposed allocations are stored at the sub-portfolio level, so roll them up to the parent through FUND_PARENT before reporting, and never list a sub-portfolio as if it were a portfolio or add it to its parent's total.\n- When you roll up, you may name the sub-portfolios under each portfolio in a short parenthetical if it helps.`;
+
+const TODAY = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * The As Of and Knowledge dates the user set in the app apply to every tool that accepts
+ * them, unless the model passed its own because the user asked for a different date.
+ * A Knowledge date of today means "now", and an earlier one means the end of that day.
+ */
+function withGlobalDates(
+  toolName: string,
+  args: Record<string, any> | undefined,
+  context: Record<string, any> | null | undefined,
+): Record<string, any> {
+  const next = { ...(args || {}) };
+  if (!context || typeof context !== 'object') return next;
+  const accepted = toolRegistry.argumentNames(toolName);
+  const asOf = typeof context.asOfDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(context.asOfDate) ? context.asOfDate.slice(0, 10) : '';
+  if (asOf && accepted.has('asOfDate') && !next.asOfDate) next.asOfDate = asOf;
+  const known = typeof context.knowledgeDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(context.knowledgeDate) ? context.knowledgeDate.slice(0, 10) : '';
+  if (known && known < TODAY() && accepted.has('knowledgeDate') && !next.knowledgeDate) {
+    next.knowledgeDate = `${known}T23:59:59.999Z`;
+  }
+  return next;
+}
+
 const MAX_SCREEN_JSON = 12000;
 
 /** Hint about the open page. It does not change which tools are available. */
@@ -197,7 +223,10 @@ function screenContextBlock(context: Record<string, any> | null | undefined): st
   if (context.entityCode) lines.push(`Entity code: ${context.entityCode}`);
   if (context.entityId) lines.push(`Entity id: ${context.entityId}`);
   if (context.attributeCode) lines.push(`Attribute: ${context.attributeCode}`);
-  if (context.asOfDate) lines.push(`As-of date: ${context.asOfDate}`);
+  if (context.asOfDate) lines.push(`As-of date: ${context.asOfDate} (applied to your tool calls unless you pass another)`);
+  if (context.knowledgeDate && String(context.knowledgeDate).slice(0, 10) < TODAY()) {
+    lines.push(`Knowledge date: ${context.knowledgeDate}. Data is limited to what was known by the end of that day, and your tool calls apply it. Say so when it matters to the answer.`);
+  }
 
   const view = context.view;
   if (view && typeof view === 'object') {
@@ -213,7 +242,7 @@ function screenContextBlock(context: Record<string, any> | null | undefined): st
   }
 
   if (!lines.length) return '';
-  return `\n\n## Current screen\nThe user is working in the app as described below. Use this when their question is about this page, record, or configuration, and use these identifiers (entity id, domain, attribute, as-of date) when you call tools. If the question is about something else, do not assume they mean this screen.\n${lines.join('\n')}`;
+  return `\n\n## Current screen\nThe user is working in the app as described below. When their question is about this page, record, or configuration, answer from the Details below first, and quote its figures as shown. Those are the numbers on their screen, and they can differ from what is saved in the database. Call a tool only when Details does not contain what you need, or is marked truncated, and then say that the answer comes from saved data and not from the screen. Use these identifiers (entity id, domain, attribute, as-of date) when you call tools. If the question is about something else, do not assume they mean this screen.\n${lines.join('\n')}`;
 }
 
 export async function POST(request: NextRequest) {
@@ -326,7 +355,7 @@ export async function POST(request: NextRequest) {
       : null;
 
     const profile = getContextProfile(skill?.toolContext ?? toolContext);
-    let systemInstruction = profile.systemInstruction + chatVoiceInstruction(voice) + screenContextBlock(context);
+    let systemInstruction = profile.systemInstruction + chatVoiceInstruction(voice) + DOMAIN_GLOSSARY + screenContextBlock(context);
 
     // Report designer: give the model the current draft and the query format up front.
     if (profile.name === 'report-designer') {
@@ -457,7 +486,8 @@ export async function POST(request: NextRequest) {
       if (functionCalls.length === 0) {
         const raw = geminiAnswerText(data) || 'No response generated.';
         const finished = finish(raw);
-        const text = presentAnswer(finished.text);
+        // Keep the answer block. The panel turns it into cards, colored changes, and a chart.
+        const text = finished.text;
         const turnConversationId = await persistAssistantTurn(text);
         return withUsage({
           text,
@@ -472,7 +502,8 @@ export async function POST(request: NextRequest) {
       // Execute requested tools and feed results back.
       const results = new Map<any, { ok: boolean; value?: any; error?: string }>();
       for (const call of functionCalls) {
-        const { name, args } = call.functionCall;
+        const { name } = call.functionCall;
+        const args = withGlobalDates(name, call.functionCall.args, context);
         executedCalls.push({ name, args: args || {} });
 
         // A model that re-requests an identical call gains nothing, so serve the
@@ -577,7 +608,7 @@ export async function POST(request: NextRequest) {
       finalText ||
       'I gathered data but did not finish within the allotted steps. Please ask a narrower question or try again.';
     const finished = finish(exhausted);
-    const text = presentAnswer(finished.text);
+    const text = finished.text;
     const exhaustedConversationId = await persistAssistantTurn(text);
     return withUsage({
       text,

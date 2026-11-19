@@ -71,4 +71,30 @@ describe('parseChatAnswer', () => {
   it('leaves a broken block in the prose', () => {
     expect(parseChatAnswer('```answer\n{not json}\n```')).toBeNull();
   });
+
+  it('renders a block the model cut off before the closing fence', () => {
+    const cut = `\`\`\`answer
+{
+  "lead": "Revenue expanded from $40.68M to $51.53M.",
+  "kpis": [
+    { "label": "LTM Revenue", "value": "$197.28M", "detail": "Latest quarter at $51.53M" },
+    { "label": "Cash & Equivalents", "value": "$74.49M", "detail": "+$42`;
+    const answer = parseChatAnswer(cut);
+    expect(answer?.lead).toContain('$40.68M');
+    expect(answer?.kpis.map((kpi) => kpi.label)).toEqual(['LTM Revenue', 'Cash & Equivalents']);
+    expect(answer?.kpis[1].detail).toBeUndefined();
+    const shown = presentAnswer(cut);
+    expect(shown).not.toContain('```');
+    expect(shown).toContain('LTM Revenue');
+    expect(shown).not.toContain('"$197.28M"');
+  });
+
+  it('colors a change by the story, and keeps a quarter trend as a chart', () => {
+    const answer = parseChatAnswer(`\`\`\`answer
+{"lead":"Revenue rose and net debt fell.","tables":[{"columns":["Line","Change (%)"],"rows":[["Revenue",{"text":"+3.0%","tone":"up"}],["Net debt",{"text":"-4.4%","tone":"up"}]]}],"chart":{"title":"Revenue by quarter","chartType":"line","labels":["Q1","Q2"],"series":[{"name":"Revenue","values":[40,51]}]}}
+\`\`\``);
+    expect(answer?.tables[0].rows[1][1]).toEqual({ text: '-4.4%', tone: 'up' });
+    expect(answer?.chart?.chartType).toBe('line');
+    expect(answer?.chart?.series[0].values).toEqual([40, 51]);
+  });
 });

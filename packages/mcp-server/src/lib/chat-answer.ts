@@ -59,7 +59,8 @@ export interface ChatAnswer {
   tables: ChatTable[];
 }
 
-const FENCE = /```answer\s*([\s\S]*?)```/i;
+const CLOSED_FENCE = /```answer\s*([\s\S]*?)```/i;
+const OPEN_FENCE = /```answer\s*([\s\S]*)$/i;
 const MAX_KPIS = 4;
 const MAX_METERS = 8;
 const MAX_CHART = 8;
@@ -83,6 +84,69 @@ function cell(value: unknown): string | number | null {
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (typeof value === 'string') return value.trim().slice(0, 200);
   return null;
+}
+
+export type ChatTone = 'up' | 'down' | 'flat';
+
+/** A cell the model marked, when the sign and the story do not agree. */
+export interface TonedCell {
+  text: string | number | null;
+  tone: ChatTone;
+}
+
+export function isTonedCell(value: unknown): value is TonedCell {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && 'tone' in value && 'text' in value;
+}
+
+/** Change, variance, and growth columns carry the direction of a move. */
+export function columnCarriesTone(header: string): boolean {
+  return /change|variance|\bvar\b|delta|growth|trend|diff/i.test(header);
+}
+
+function toneName(value: unknown): ChatTone | null {
+  return value === 'up' || value === 'down' || value === 'flat' ? value : null;
+}
+
+function signedTone(value: string | number | null): ChatTone | null {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number') {
+    if (value < 0) return 'down';
+    if (value > 0) return 'up';
+    return 'flat';
+  }
+  const shown = value.trim();
+  if (/^\+/.test(shown)) return 'up';
+  if (/^[−-]/.test(shown) || /^\(.*\)$/.test(shown)) return 'down';
+  return null;
+}
+
+/**
+ * Green, red, or neutral for one cell. An explicit tone wins. Otherwise a
+ * signed figure, or any figure in a Change column, supplies the direction.
+ */
+export function toneFor(header: string, value: unknown): ChatTone | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const marked = toneName((value as { tone?: unknown }).tone);
+    if (marked) return marked;
+  }
+  const shown = isTonedCell(value) ? value.text : value;
+  const text = typeof shown === 'string' || typeof shown === 'number' ? shown : cell(shown);
+  const signed = signedTone(text);
+  if (typeof text === 'string' && /^[+\-−(]/.test(text.trim())) return signed;
+  if (columnCarriesTone(header)) return signed;
+  return null;
+}
+
+function storedCell(value: unknown): string | number | null | TonedCell {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const bag = value as { text?: unknown; value?: unknown; v?: unknown; tone?: unknown };
+    const tone = toneName(bag.tone);
+    const inner = bag.text ?? bag.value ?? bag.v;
+    const text = cell(inner);
+    if (tone) return { text, tone };
+    return text;
+  }
+  return cell(value);
 }
 
 function kpis(value: unknown): ChatKpi[] {
@@ -141,7 +205,7 @@ function oneTable(value: unknown): ChatTable | null {
     : [];
   const rows = Array.isArray((value as any).rows) ? (value as any).rows.slice(0, MAX_ROWS).flatMap((row: unknown) => {
     if (!Array.isArray(row)) return [];
-    return [columns.map((_column: string, index: number) => cell(row[index]))];
+    return [columns.map((_column: string, index: number) => storedCell(row[index]))];
   }) : [];
   if (!columns.length || !rows.length) return null;
   const title = text((value as any).title, 80);
@@ -202,12 +266,17 @@ function fmtMoney(value: number): string {
   return `${sign}$${abs.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 }
 
+function shownValue(value: unknown): unknown {
+  return isTonedCell(value) ? value.text : value;
+}
+
 function fmtCell(value: unknown, header: string): string {
-  if (value == null || value === '') return '';
-  if (typeof value !== 'number') return String(value).replace(/\|/g, '/');
-  if (/share|weight|percent|pct/i.test(header)) return `${(Math.abs(value) <= 1 ? value * 100 : value).toFixed(1)}%`;
-  if (/exposure|value|amount|nav|market/i.test(header)) return fmtMoney(value);
-  return value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const shown = shownValue(value);
+  if (shown == null || shown === '') return '';
+  if (typeof shown !== 'number') return String(shown).replace(/\|/g, '/');
+  if (/share|weight|percent|pct/i.test(header)) return `${(Math.abs(shown) <= 1 ? shown * 100 : shown).toFixed(1)}%`;
+  if (/exposure|value|amount|nav|market/i.test(header)) return fmtMoney(shown);
+  return shown.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
 function markdownTable(headers: string[], rows: unknown[][]): string {
@@ -266,25 +335,106 @@ export function presentAnswer(source: string): string {
   return lines.join('\n').trim();
 }
 
+/** Reads a JSON value, closing a block the model cut off mid-object. */
+function parseJsonValue(raw: string): unknown | null {
+  const body = raw.trim().replace(/```[\s]*$/, '').trim();
+  try {
+    return JSON.parse(body);
+  } catch {
+    const repaired = repairJson(body);
+    if (!repaired) return null;
+    try {
+      return JSON.parse(repaired);
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
+ * Drops a dangling key or an unclosed string, then closes the arrays and
+ * objects that were still open. A finished lead and the complete cards survive.
+ */
+function repairJson(source: string): string | null {
+  const start = source.indexOf('{');
+  const list = source.indexOf('[');
+  const openAt = start < 0 ? list : list < 0 ? start : Math.min(start, list);
+  if (openAt < 0) return null;
+  let text = source.slice(openAt);
+  let inString = false;
+  let escaped = false;
+  let lastSafe = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+        lastSafe = i + 1;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{' || ch === '[' || ch === '}' || ch === ']' || ch === ',' || ch === ':') lastSafe = i + 1;
+  }
+  if (inString) text = text.slice(0, lastSafe);
+  text = text.replace(/:\s*$/, '');
+  text = text.replace(/,?\s*"[^"]*"\s*$/, '');
+  text = text.replace(/,\s*$/, '');
+
+  inString = false;
+  escaped = false;
+  const open: string[] = [];
+  for (const ch of text) {
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{' || ch === '[') open.push(ch);
+    else if ((ch === '}' || ch === ']') && open.length) open.pop();
+  }
+  if (inString) return null;
+  while (open.length) text += open.pop() === '{' ? '}' : ']';
+  return text;
+}
+
 /** Pulls one answer block out of an assistant message. The prose is what remains. */
 export function parseChatAnswer(source: string): ChatAnswer | null {
-  const match = source.match(FENCE);
+  const match = source.match(CLOSED_FENCE) || source.match(OPEN_FENCE);
   if (!match) return null;
-  let parsed: any;
-  try {
-    parsed = JSON.parse(match[1]);
-  } catch {
-    return null;
-  }
+  const parsed = parseJsonValue(match[1]);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  const lead = text(parsed.lead, 500);
-  const parsedKpis = kpis(parsed.kpis);
-  const parsedMeters = meterGroups(parsed.meters);
-  const parsedChart = chart(parsed.chart);
+  const lead = text((parsed as any).lead, 1200);
+  const parsedKpis = kpis((parsed as any).kpis);
+  const parsedMeters = meterGroups((parsed as any).meters);
+  const parsedChart = chart((parsed as any).chart);
   const parsedTables = tablesOf(parsed);
   if (!lead && !parsedKpis.length && !parsedMeters.length && !parsedChart && !parsedTables.length) return null;
+  const fence = source.match(CLOSED_FENCE) ? CLOSED_FENCE : OPEN_FENCE;
   return {
-    prose: source.replace(FENCE, '').trim(),
+    prose: source.replace(fence, '').trim(),
     lead,
     kpis: parsedKpis,
     meters: parsedMeters,
@@ -295,7 +445,11 @@ export function parseChatAnswer(source: string): ChatAnswer | null {
 
 export const CHAT_ANSWER_GUIDE = `
 ## How to present the answer
-The answer block is the entire reply. Do not write a heading, paragraph, or bullet list after it. A single number is one or two sentences and does not need a block. kpis are the headline cards, already formatted. "By A and B" is one metric crossed by both dimensions, not a total for A plus a count for B. Exposure by fund and industry is one table with groupBy "Fund": each fund is a total, and the rows under it are that fund's industry exposures. Share of fund is the industry exposure divided by the fund total. A blank industry is Unclassified and still has an exposure. Do not add a second table that only counts positions by industry. meters, when used, rank the fund totals. A chart is a trend, or at most eight slices. When the question asks what each allocation or exposure is, every row carries that row's amount. Names and codes alone do not answer it. Show the booked amount and the proposed amount as separate columns or groups when both were returned.
+The answer block is the entire reply. Do not write a heading, paragraph, or bullet list after it. A single number is one or two sentences and does not need a block. kpis are the headline cards, already formatted. "By A and B" is one metric crossed by both dimensions, not a total for A plus a count for B. Exposure by fund and industry is one table with groupBy "Fund": each fund is a total, and the rows under it are that fund's industry exposures. Share of fund is the industry exposure divided by the fund total. A blank industry is Unclassified and still has an exposure. Do not add a second table that only counts positions by industry. meters, when used, rank the fund totals. A chart is a trend across time, or at most eight slices. When the question asks what each allocation or exposure is, every row carries that row's amount. Names and codes alone do not answer it. Show the booked amount and the proposed amount as separate columns or groups when both were returned.
+
+Visuals. Color the direction of a move. On a Change, variance, or growth column, write the signed figure ("+3.0%", "-$6.5M"). The screen paints an increase green and a decrease red. When a lower number is the good outcome, such as debt, leverage, or a cost, set the cell to { "text": "-4.4%", "tone": "up" } or "down" so the color follows the story rather than the sign. tone is "up", "down", or "flat".
+
+A plot is a chart, not a second copy of the same points. When the user asks to plot, chart, graph, or show a metric over quarters or time, set chart. Use chartType "line" for a trend and "bar" for a few periods side by side. labels are the periods in order. Each series is one metric, with one value per label. At most eight points and three series. Do not repeat the plotted points as bullets or as another table.
 
 \`\`\`answer
 {
@@ -318,7 +472,13 @@ The answer block is the entire reply. Do not write a heading, paragraph, or bull
       ["Bench Fund 4", "Unclassified", 764561113, 0.657],
       ["Bench Fund 20", "Energy", 500000000, 0.482]
     ]
-  }]
+  }],
+  "chart": {
+    "title": "Revenue by quarter",
+    "chartType": "line",
+    "labels": ["Q1", "Q2", "Q3", "Q4"],
+    "series": [{ "name": "Revenue", "values": [40.7, 43.1, 46.4, 51.5] }]
+  }
 }
 \`\`\`
 `;

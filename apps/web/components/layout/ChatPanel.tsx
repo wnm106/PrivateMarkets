@@ -98,6 +98,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const inspect = useDetailDrawer();
   const inspectOpen = inspect.view != null;
   const asOfDate = useTemporalStore((state) => state.asOfDate);
+  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const chatVoice = useTemporalStore((state) => state.chatVoice);
   const setChatVoice = useTemporalStore((state) => state.setChatVoice);
 
@@ -115,6 +116,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const [dragActive, setDragActive] = useState(false);
   const [designer, setDesigner] = useState<DesignerBridgeState>(() => getDesignerState());
   const [viewFocus, setViewFocus] = useState<ViewFocus | null>(() => getViewContext().focus);
+  const [pageData, setPageData] = useState<Record<string, unknown> | null>(() => getViewContext().pageData);
   const [appliedProposals, setAppliedProposals] = useState<Record<string, boolean>>({});
   const [skillView, setSkillView] = useState<SkillView | null>(null);
   const skillStateRef = useRef<SkillState | null>(null);
@@ -135,7 +137,10 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = subscribeViewContext((next) => setViewFocus(next.focus));
+    const unsubscribe = subscribeViewContext((next) => {
+      setViewFocus(next.focus);
+      setPageData(next.pageData);
+    });
     return () => {
       unsubscribe();
     };
@@ -169,13 +174,28 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const screenLabel = activeDesigner
     ? `Designing a ${activeDesigner.kind}`
     : viewFocus
-      ? `${viewFocus.activity === 'editing' ? 'Editing' : viewFocus.activity === 'creating' ? 'Creating' : 'Viewing'} ${viewFocus.label}`
+      ? `${viewFocus.activity === 'editing' ? 'Editing' : viewFocus.activity === 'creating' ? 'Creating' : 'Viewing'} ${viewFocus.label}${viewFocus.summary ? ` · ${viewFocus.summary}` : ''}`
       : context?.page || 'Contextual MDM copilot';
+  const livePage = useMemo(() => {
+    if (!viewFocus && !pageData) return null;
+    const deal = viewFocus?.snapshot && typeof viewFocus.snapshot === 'object' ? viewFocus.snapshot : {};
+    return {
+      ...(viewFocus ? {
+        page: viewFocus.label,
+        section: viewFocus.summary,
+        kind: viewFocus.kind,
+        activity: viewFocus.activity || 'viewing',
+      } : {}),
+      ...deal,
+      ...(pageData || {}),
+    };
+  }, [pageData, viewFocus]);
 
   const requestContext: ChatContext = useMemo(
     () => ({
       ...context,
       asOfDate,
+      knowledgeDate,
       toolContext: effectiveToolContext,
       skill: designerSkill,
       ...(viewFocus
@@ -189,21 +209,29 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
               label: viewFocus.label,
               summary: viewFocus.summary,
               id: viewFocus.id,
-              snapshot: viewFocus.snapshot,
+              snapshot: livePage || viewFocus.snapshot,
             },
           }
-        : {}),
+        : livePage
+          ? {
+              view: {
+                kind: 'page',
+                label: context?.page || 'Page',
+                snapshot: livePage,
+              },
+            }
+          : {}),
       ...(activeDesigner
         ? {
             page: context?.page ?? `${activeDesigner.kind} designer`,
             domainCode: activeDesigner.domainCode,
             entityCode: activeDesigner.sampleEntityCode,
           }
-        : viewFocus?.label && context?.page && !context.page.includes(viewFocus.label)
-          ? { page: `${context.page} · ${viewFocus.label}` }
+        : viewFocus
+          ? { page: [viewFocus.label, viewFocus.summary].filter(Boolean).join(' · ') }
           : {}),
     }),
-    [context, effectiveToolContext, activeDesigner, viewFocus, asOfDate, designerSkill]
+    [context, effectiveToolContext, activeDesigner, viewFocus, livePage, asOfDate, knowledgeDate, designerSkill]
   );
 
   /** Draft the assistant should iterate on, when a designer is open. */
@@ -592,6 +620,16 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
         <p className="chat-voice-hint">{CHAT_VOICES.find((voice) => voice.id === chatVoice)?.hint}</p>
       </div>
 
+      {livePage && (
+        <details className="chat-page-json">
+          <summary>
+            <span>Page data</span>
+            <small>{[viewFocus?.label, viewFocus?.summary].filter(Boolean).join(' · ') || context?.page}</small>
+          </summary>
+          <pre>{JSON.stringify(livePage, null, 2)}</pre>
+        </details>
+      )}
+
       {skillView && (
         <div className="chat-skill" aria-live="polite">
           <div className="chat-skill-kicker">
@@ -713,7 +751,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
                 <>
                   You&apos;re {viewFocus.activity === 'editing' ? 'editing' : viewFocus.activity === 'creating' ? 'creating' : 'viewing'}{' '}
                   {viewFocus.label}
-                  {context?.page ? ` on ${context.page}` : ''}. Ask about it, or anything else in the system.
+                  {viewFocus.summary ? `, ${viewFocus.summary}` : ''}. The data on this page is under Page data, and I can use it when you ask.
                 </>
               ) : (
                 <>

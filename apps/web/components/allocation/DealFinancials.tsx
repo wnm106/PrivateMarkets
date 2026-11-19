@@ -5,6 +5,7 @@ import { graphqlQuery } from '@/lib/graphql';
 import { attributeText } from '@/lib/experience';
 import { useTemporalStore } from '@/lib/store';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
+import { usePublishPageData } from '@/lib/view-context';
 import {
   applyStatementLayout,
   gridSections,
@@ -283,6 +284,30 @@ export function DealFinancials({
     : [...(book.pinned ? [book.pinned] : []), ...book.columns];
   const pinned = book.pinned;
   const labelColumn = pinned || [...columns].reverse().find((column) => column.entityId) || null;
+
+  const visibleLines = shownSections
+    .filter((name) => openSection === 'all' || name === openSection)
+    .flatMap((name) => linesForSection(attributes, name, grain))
+    .filter((line) => line.role !== 'section');
+  usePublishPageData(loading ? null : {
+    borrower: borrowerName || null,
+    grain,
+    section: openSection,
+    layout: layoutName,
+    from: book.firstEnd,
+    through: book.lastEnd,
+    actualThrough: pinned?.end || null,
+    headlines: headlines.map((attr) => ({
+      name: attr.name,
+      value: pinned ? pinned.values[attr.code] ?? null : null,
+    })),
+    columns: columns.slice(0, 16).map((column) => ({
+      label: column.label,
+      end: column.end,
+      actual: column.actual,
+      values: Object.fromEntries(visibleLines.map((line) => [line.name, column.values[line.code] ?? null])),
+    })),
+  });
 
   const openAttribute = (event: MouseEvent, attr: StatementAttribute, column: StatementColumn | null, display: string) => {
     event.preventDefault();

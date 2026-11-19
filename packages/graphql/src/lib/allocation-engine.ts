@@ -80,6 +80,8 @@ export interface AllocationAdjustment {
   amount?: number;
   reason?: string;
   note?: string;
+  /** Holds a position that was already saved. It is shown as saved, not as a manual override. */
+  saved?: boolean;
 }
 
 export interface AllocationRequest {
@@ -692,7 +694,7 @@ function cellFrom(
     exclusionKind: why ? why.kind : null,
     exclusionCode: why?.code || null,
     exclusionText: why ? why.text : null,
-    overridden: Boolean(cellOverride),
+    overridden: Boolean(cellOverride && !cellOverride.saved),
     reasonCode: cellOverride?.reason || why?.code || null,
   };
 }

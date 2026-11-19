@@ -15,6 +15,7 @@ import { DealPerformance } from './DealPerformance';
 import { DEAL_PANEL_KEYS, mountedPanel, tabReason, useLiveSurface } from '@/components/surfaces/useLiveSurface';
 import { useSurfaceNav } from '@/lib/surface-nav';
 import { attrBind, InspectValue, useInspectBind, type AttrBind } from '@/components/detail/InspectValue';
+import { usePublishPageData, usePublishViewContext } from '@/lib/view-context';
 
 const REASONS = [
   ['LIQ', 'Liquidity or reserve constraint'],
@@ -113,6 +114,8 @@ interface Adjustment {
   note?: string | null;
   /** Set by a parent or sibling edit. The user did not type this cell. */
   derived?: boolean;
+  /** A saved position shown as it was saved. Clearing the allocation recomputes it. */
+  saved?: boolean;
 }
 
 interface Preview {
@@ -149,7 +152,7 @@ const PREVIEW = `
         fundId fundName parentFundId level availableCapital nav total cash undrawn line reserve issuerLimit sponsorLimit unfundedLimit
         cells { trancheId eligible amount systemAmount capReason imbalance exclusionKind exclusionText overridden reasonCode }
       }
-      adjustments { fundId trancheId type amount reason note }
+      adjustments { fundId trancheId type amount reason note saved }
       errors { message }
     }
   }
@@ -301,6 +304,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
         amount: item.amount,
         reasonCode: item.reason,
         note: item.note,
+        saved: item.saved,
       }));
     }
     const result = await graphqlQuery<{ previewAllocation: Preview }>(PREVIEW, variables, 'network-only');
@@ -319,7 +323,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       for (const tranche of data.tranches) nextHolds[tranche.id] = tranche.holdPct;
       setHolds(nextHolds);
       setBaselineHolds(nextHolds);
-      setAdjustments(data.adjustments || []);
+      setAdjustments((data.adjustments || []).map((item) => (item.saved ? { ...item, derived: true } : item)));
       setExpanded(new Set(data.rows.filter((row) => row.level === 'PORTFOLIO').map((row) => row.fundId)));
       setSelected(data.rows[0]?.fundId || null);
       setSeeded(true);
@@ -349,6 +353,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
         amount: item.amount,
         reasonCode: item.reason,
         note: item.note,
+        saved: item.saved,
       })),
     });
     const message = result.error?.message || result.data?.commitAllocation?.errors?.[0]?.message;
@@ -373,7 +378,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
     setAdjustments([]);
     setEdit(null);
     setError(null);
-    setNotice('Allocation reset to the engine proposal. Commit allocation to save it.');
+    setNotice('Allocation recalculated from the engine. Commit allocation to replace the saved one.');
   };
 
   const title = preview?.dealName || dealName || 'Allocation';
@@ -398,8 +403,14 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const stageIndex = STAGES.indexOf(preview?.stage || '');
   const selectedRow = preview?.rows.find((row) => row.fundId === selected) || null;
 
+  // Changing a hold is a request to recompute, so the saved amounts stop pinning the grid.
+  const changeHolds = (update: (current: Record<string, number>) => Record<string, number>) => {
+    setHolds(update);
+    setAdjustments((current) => (current.some((item) => item.saved) ? current.filter((item) => !item.saved) : current));
+  };
+
   const setAllHolds = (percent: number) => {
-    setHolds(Object.fromEntries(tranches.map((tranche) => [tranche.id, percent])));
+    changeHolds(() => Object.fromEntries(tranches.map((tranche) => [tranche.id, percent])));
   };
 
   const saveAttribute = async (code: string, value: string) => {
@@ -417,6 +428,75 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   };
 
   const leverageParts = (preview?.leverage || '').split('/').map((part) => part.replace(/x/gi, '').trim());
+  const tabLabel = ({
+    capital: 'Capital structure',
+    memo: 'IC memo',
+    compliance: 'Compliance',
+    syndicate: 'Syndicate',
+    closing: 'Closing',
+    servicing: 'Servicing',
+    financials: 'Financials',
+    performance: 'Performance',
+  } as const)[tab];
+  usePublishViewContext({
+    activity: 'viewing',
+    kind: 'deal',
+    label: title,
+    summary: tabLabel,
+    id: dealId,
+    domainCode: 'DEAL',
+    entityId: dealId,
+    snapshot: {
+      tab: tabLabel,
+      stage: preview?.stage || null,
+      strategy: strategyName || preview?.strategy || null,
+      description: preview?.description || null,
+      borrower: preview?.borrower || null,
+      sponsor: preview?.sponsor || null,
+      pricing: preview?.pricing || null,
+      oid: preview?.oid || null,
+      leverage: preview?.leverage || null,
+      maturity: preview?.maturity || null,
+      closeDate: preview?.closeDate || null,
+      facilitySize: preview?.facilitySize ?? null,
+      targetHold: preview?.targetHold ?? null,
+      allocated: preview?.allocated ?? null,
+      unallocated: preview?.unallocated ?? null,
+    },
+  });
+  usePublishPageData(tab === 'capital' && preview ? {
+    tranches: tranches.map((tranche) => ({
+      name: tranche.name,
+      size: tranche.size,
+      holdPct: holds[tranche.id] ?? tranche.holdPct,
+      targetAmount: tranche.targetAmount,
+      allocated: tranche.allocated,
+      unfunded: tranche.unfunded,
+      pricing: tranche.pricing || null,
+    })),
+    howToRead: 'Report allocations by portfolio, the top level in portfolios. A portfolio is a fund. Its subPortfolios are its sleeves and sum to it. Describe subPortfolios only when asked to break a portfolio down. Do not list them as separate funds, and never add them to the portfolio total.',
+    portfolios: preview.rows.filter((row) => row.level === 'PORTFOLIO').map((row) => {
+      const cells = (item: typeof row) => item.cells.map((cell) => ({
+        trancheId: cell.trancheId,
+        eligible: cell.eligible,
+        amount: cell.amount,
+        capReason: cell.capReason || null,
+        exclusion: cell.eligible ? null : cell.exclusionText || cell.exclusionKind || null,
+      }));
+      return {
+        portfolio: row.fundName,
+        availableCapital: row.availableCapital,
+        total: row.total,
+        tranches: cells(row),
+        subPortfolios: preview.rows.filter((item) => item.parentFundId === row.fundId).map((item) => ({
+          subPortfolio: item.fundName,
+          availableCapital: item.availableCapital,
+          total: item.total,
+          tranches: cells(item),
+        })),
+      };
+    }),
+  } : null);
   const dealBind = (code: string, name: string) => attrBind(dealId, 'DEAL', code, name, title);
   const trancheBind = (tranche: Tranche, code: string, name: string) => attrBind(tranche.id, 'DEAL_TRANCHE', code, name, tranche.name);
 
@@ -625,10 +705,10 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
                       Our hold of this tranche
                       <span><input type="number" min={0} max={tranche.size / 1_000_000} step={0.25} value={(target / 1_000_000).toFixed(2)} onChange={(event) => {
                         const next = Number(event.target.value);
-                        if (Number.isFinite(next)) setHolds((current) => ({ ...current, [tranche.id]: Math.min(100, Math.max(0, next * 1_000_000 / tranche.size * 100)) }));
+                        if (Number.isFinite(next)) changeHolds((current) => ({ ...current, [tranche.id]: Math.min(100, Math.max(0, next * 1_000_000 / tranche.size * 100)) }));
                       }} /> $M</span>
                     </label>
-                    <input type="range" min={0} max={100} value={Math.round(hold)} aria-label={`Our hold of the ${tranche.name}`} onChange={(event) => setHolds((current) => ({ ...current, [tranche.id]: Number(event.target.value) }))} />
+                    <input type="range" min={0} max={100} value={Math.round(hold)} aria-label={`Our hold of the ${tranche.name}`} onChange={(event) => changeHolds((current) => ({ ...current, [tranche.id]: Number(event.target.value) }))} />
                     <div className="da-cardmeta"><span>{hold.toFixed(0)}% of tranche</span><span>{tranche.targetAmount ? `${Math.round(tranche.allocated / tranche.targetAmount * 100)}% allocated` : ''}</span></div>
                     <div className="da-bar"><i style={{ width: `${tranche.targetAmount ? Math.min(100, tranche.allocated / tranche.targetAmount * 100) : 0}%`, background: COLOR[tranche.instrumentType] || '#0B5D73' }} /></div>
                     <p>{millions(tranche.allocated)} placed across {placed} portfolios</p>
@@ -666,11 +746,11 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
                           <span className="da-colhold">
                             <input type="number" min={0} step={0.25} value={((tranche.size * (holds[tranche.id] ?? tranche.holdPct) / 100) / 1_000_000).toFixed(2)} aria-label={`Our hold of the ${tranche.name}`} onChange={(event) => {
                               const next = Number(event.target.value);
-                              if (Number.isFinite(next)) setHolds((current) => ({ ...current, [tranche.id]: Math.min(100, next * 1_000_000 / tranche.size * 100) }));
+                              if (Number.isFinite(next)) changeHolds((current) => ({ ...current, [tranche.id]: Math.min(100, next * 1_000_000 / tranche.size * 100) }));
                             }} />
                             of {plain(tranche.size)}
                           </span>
-                          <input type="range" min={0} max={100} value={Math.round(holds[tranche.id] ?? tranche.holdPct)} onChange={(event) => setHolds((current) => ({ ...current, [tranche.id]: Number(event.target.value) }))} />
+                          <input type="range" min={0} max={100} value={Math.round(holds[tranche.id] ?? tranche.holdPct)} onChange={(event) => changeHolds((current) => ({ ...current, [tranche.id]: Number(event.target.value) }))} />
                         </th>
                       ))}
                       <th rowSpan={2} className="num">Total allocation</th>

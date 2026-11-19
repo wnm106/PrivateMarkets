@@ -7,6 +7,7 @@ import { SignedOutGate } from '@/components/auth/SignedOutGate';
 import { TopBar } from './TopBar';
 import { AppSidebar } from './AppSidebar';
 import { ChatPanel } from './ChatPanel';
+import { LivePage } from './LivePage';
 import { ImpersonationBanner } from './ImpersonationBanner';
 import { AttributeInspectProvider } from '@/components/detail/AttributeInspect';
 import type { SurfaceNavLink } from '@/lib/surface-links';
@@ -36,6 +37,8 @@ export function AppChrome({
         <AppSidebar surfaceLinks={surfaceLinks} />
         <div className="app-shell-main">
           <TopBar />
+          {/* Before the page, so a page that publishes its own data stays in front. */}
+          <LivePage route={routeContext} />
           <main className="main">{children}</main>
         </div>
         <ChatPanel context={routeContext} />

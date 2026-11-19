@@ -408,6 +408,41 @@ export async function loadAllocationDraft(
     }
   }
 
+  // Saved proposals are shown as they were saved. The engine recomputes only when the
+  // caller sends its own adjustments, which is what clearing the allocation does.
+  const savedAdjustments: AllocationAdjustment[] = [];
+  if (!adjustments) {
+    const taken = new Set(storedAdjustments.map((item) => `${item.fundId}|${item.trancheId}`));
+    const trancheIdSet = new Set(tranches.map((tranche) => tranche.id));
+    const saved = new Map<string, number>();
+    for (const position of positions) {
+      if (position.role === 'LOCK' || !trancheIdSet.has(position.trancheId)) continue;
+      const amount = numeric(read(values, position.id, def('MARKET_VALUE')));
+      if (amount == null) continue;
+      const key = `${position.fundId}|${position.trancheId}`;
+      saved.set(key, (saved.get(key) || 0) + amount);
+    }
+    for (const portfolio of portfolios) {
+      for (const tranche of tranches) {
+        const sleeveAmounts = portfolio.sleeves.map((item) => saved.get(`${item.id}|${tranche.id}`));
+        if (sleeveAmounts.every((amount) => amount === undefined)) continue;
+        let total = 0;
+        portfolio.sleeves.forEach((item, index) => {
+          const amount = sleeveAmounts[index];
+          if (amount === undefined) return;
+          total += amount;
+          if (!taken.has(`${item.id}|${tranche.id}`)) {
+            savedAdjustments.push({ fundId: item.id, trancheId: tranche.id, type: 'override', amount, saved: true });
+          }
+        });
+        const parentOnly = portfolio.sleeves.length === 1 && portfolio.sleeves[0].id === portfolio.id;
+        if (!parentOnly && !taken.has(`${portfolio.id}|${tranche.id}`)) {
+          savedAdjustments.push({ fundId: portfolio.id, trancheId: tranche.id, type: 'override', amount: total, saved: true });
+        }
+      }
+    }
+  }
+
   return {
     dealId: deal.id,
     dealCode: deal.entity_code,
@@ -416,7 +451,7 @@ export async function loadAllocationDraft(
     request: {
       tranches,
       portfolios,
-      adjustments: adjustments ?? storedAdjustments,
+      adjustments: adjustments ?? [...storedAdjustments, ...savedAdjustments],
     },
     tranches: loadedTranches,
     positions,
@@ -772,7 +807,8 @@ export async function commitAllocation(
     return created.id as string;
   };
 
-  const adjustments = draft.request.adjustments || [];
+  // Saved amounts are re-written as the proposal, not stamped as manual overrides.
+  const adjustments = (draft.request.adjustments || []).filter((item) => !item.saved);
   const adjustmentFor = (fundId: string, trancheId: string) => (
     adjustments.find((item) => item.fundId === fundId && (item.trancheId === trancheId || item.trancheId === '*')) || null
   );

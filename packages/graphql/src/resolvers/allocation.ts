@@ -18,6 +18,7 @@ function adjustments(input: any[] | null | undefined): AllocationAdjustment[] | 
     amount: item.amount == null ? undefined : Number(item.amount),
     reason: item.reasonCode || undefined,
     note: item.note || undefined,
+    saved: item.saved === true ? true : undefined,
   }));
 }
 

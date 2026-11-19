@@ -4,7 +4,7 @@ import type { ColDef } from 'ag-grid-community';
 import { AppGrid } from '@/components/grid/AppGrid';
 import { NarrativeBlocks } from '@/components/reporting/NarrativeBlocks';
 import { markdownToHtml } from '@/lib/markdown';
-import { nestTable, type ChatAnswer as ChatAnswerModel, type ChatTable } from '@tapestrai/mcp-server/src/lib/chat-answer';
+import { nestTable, toneFor, isTonedCell, type ChatAnswer as ChatAnswerModel, type ChatTable } from '@tapestrai/mcp-server/src/lib/chat-answer';
 
 function money(value: number): string {
   const sign = value < 0 ? '-' : '';
@@ -29,11 +29,12 @@ function columnKind(name: string): 'currency' | 'percent' | 'number' | 'text' {
 }
 
 function formatCell(value: unknown, kind: 'currency' | 'percent' | 'number' | 'text'): string {
-  if (value == null || value === '') return '';
-  if (typeof value !== 'number') return String(value);
-  if (kind === 'percent') return `${(Math.abs(value) <= 1 ? value * 100 : value).toFixed(1)}%`;
-  if (kind === 'currency') return money(value);
-  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const raw = isTonedCell(value) ? value.text : value;
+  if (raw == null || raw === '') return '';
+  if (typeof raw !== 'number') return String(raw);
+  if (kind === 'percent') return `${(Math.abs(raw) <= 1 ? raw * 100 : raw).toFixed(1)}%`;
+  if (kind === 'currency') return money(raw);
+  return raw.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
 function shareOfGroup(value: unknown, column: string, rowExposure: unknown, fundTotal: number | null): string {
@@ -64,11 +65,15 @@ function GroupedTable({ table }: { table: ChatTable }) {
             <tbody>
               {group.rows.map((row, rowIndex) => (
                 <tr key={rowIndex}>
-                  {detailColumns.map((column) => (
-                    <td key={column.name} className={typeof row[column.index] === 'number' ? 'num' : undefined}>
+                  {detailColumns.map((column) => {
+                    const tone = toneFor(column.name, row[column.index]);
+                    const numeric = typeof row[column.index] === 'number' || isTonedCell(row[column.index]);
+                    return (
+                    <td key={column.name} className={[numeric ? 'num' : '', tone ? `tone-${tone}` : ''].filter(Boolean).join(' ') || undefined}>
                       {shareOfGroup(row[column.index], column.name, nested.valueIndex >= 0 ? row[nested.valueIndex] : null, group.total)}
                     </td>
-                  ))}
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>

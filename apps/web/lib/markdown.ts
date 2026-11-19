@@ -1,4 +1,4 @@
-import { nestTable, parseChatAnswer, type ChatAnswer, type ChatTable } from '@tapestrai/mcp-server/src/lib/chat-answer';
+import { nestTable, parseChatAnswer, toneFor, isTonedCell, type ChatAnswer, type ChatChart, type ChatTable } from '@tapestrai/mcp-server/src/lib/chat-answer';
 
 /**
  * Simple markdown to HTML converter for chat messages
@@ -22,13 +22,25 @@ function money(value: number): string {
   return `${sign}$${abs.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
+function shown(value: unknown): unknown {
+  return isTonedCell(value) ? value.text : value;
+}
+
 function cellHtml(value: unknown, header: string): string {
-  if (value == null || value === '') return '';
-  if (typeof value !== 'number') return esc(String(value));
-  const name = header.toLowerCase();
-  if (/share|weight|percent|pct/.test(name)) return `${(Math.abs(value) <= 1 ? value * 100 : value).toFixed(1)}%`;
-  if (/exposure|value|amount|nav|market|commitment|contribution|distribution|asset|liabilit/.test(name)) return money(value);
-  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const tone = toneFor(header, value);
+  const raw = shown(value);
+  let body = '';
+  if (raw != null && raw !== '') {
+    if (typeof raw !== 'number') body = esc(String(raw));
+    else {
+      const name = header.toLowerCase();
+      if (/share|weight|percent|pct/.test(name)) body = `${(Math.abs(raw) <= 1 ? raw * 100 : raw).toFixed(1)}%`;
+      else if (/exposure|value|amount|nav|market|commitment|contribution|distribution|asset|liabilit/.test(name)) body = money(raw);
+      else body = raw.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    }
+  }
+  const cls = [typeof raw === 'number' ? 'num' : '', tone ? `tone-${tone}` : ''].filter(Boolean).join(' ');
+  return `<td${cls ? ` class="${cls}"` : ''}>${body}</td>`;
 }
 
 function groupedHtml(table: ChatTable): string | null {
@@ -41,11 +53,14 @@ function groupedHtml(table: ChatTable): string | null {
     const total = group.total == null ? '' : `<span>${esc(money(group.total))}</span>`;
     const head = detail.map((column) => `<th>${esc(column.name)}</th>`).join('');
     const body = group.rows.map((row) => `<tr>${detail.map((column) => {
-      const share = /share|weight|percent|pct/i.test(column.name) && group.total && typeof row[nested.valueIndex] === 'number'
-        ? `${((row[nested.valueIndex] as number / group.total) * 100).toFixed(1)}%`
-        : cellHtml(row[column.index], column.name);
-      const numeric = typeof row[column.index] === 'number';
-      return `<td${numeric ? ' class="num"' : ''}>${share}</td>`;
+      const share = /share|weight|percent|pct/i.test(column.name) && group.total && typeof shown(row[nested.valueIndex]) === 'number'
+        ? `${(((shown(row[nested.valueIndex]) as number) / group.total) * 100).toFixed(1)}%`
+        : null;
+      if (share != null) {
+        const tone = toneFor(column.name, row[column.index]);
+        return `<td class="num${tone ? ` tone-${tone}` : ''}">${share}</td>`;
+      }
+      return cellHtml(row[column.index], column.name);
     }).join('')}</tr>`).join('');
     return `<section class="chat-group"><div class="chat-group-head"><span>${esc(group.label)}</span>${total}</div><table class="chat-answer-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></section>`;
   }).join('');
@@ -57,10 +72,7 @@ function tableHtml(table: ChatTable): string {
   const grouped = groupedHtml(table);
   if (grouped) return grouped;
   const head = table.columns.map((column) => `<th>${esc(column)}</th>`).join('');
-  const body = table.rows.map((row) => `<tr>${table.columns.map((column, index) => {
-    const numeric = typeof row[index] === 'number';
-    return `<td${numeric ? ' class="num"' : ''}>${cellHtml(row[index], column)}</td>`;
-  }).join('')}</tr>`).join('');
+  const body = table.rows.map((row) => `<tr>${table.columns.map((column, index) => cellHtml(row[index], column)).join('')}</tr>`).join('');
   const title = table.title ? `<div class="chat-answer-kicker">${esc(table.title)}</div>` : '';
   return `${title}<div class="md-table-scroll"><table class="chat-answer-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
@@ -86,7 +98,63 @@ function answerHtml(answer: ChatAnswer): string {
     return `<div class="chat-meters">${title}${rows}</div>`;
   }).join('');
   const tables = answer.tables.map(tableHtml).join('');
-  return `<div class="chat-answer">${lead}${kpis}${meters}${tables}</div>`;
+  const chart = answer.chart ? chartHtml(answer.chart) : '';
+  return `<div class="chat-answer">${lead}${kpis}${meters}${chart}${tables}</div>`;
+}
+
+const CHART_COLORS = ['#0e7490', '#00334e', '#b45309', '#047857'];
+
+function chartHtml(chart: ChatChart): string {
+  const labels = chart.labels;
+  const series = chart.series.filter((item) => item.values.length);
+  if (!labels.length || !series.length) return '';
+  const w = 520;
+  const h = 210;
+  const pad = { l: 44, r: 12, t: 12, b: 36 };
+  const flat = series.flatMap((item) => item.values);
+  const min = Math.min(0, ...flat);
+  const max = Math.max(...flat);
+  const span = max - min || 1;
+  const plotW = w - pad.l - pad.r;
+  const plotH = h - pad.t - pad.b;
+  const yOf = (value: number) => pad.t + (1 - (value - min) / span) * plotH;
+  const xOf = (index: number) => pad.l + (labels.length <= 1 ? plotW / 2 : (index * plotW) / (labels.length - 1));
+  const ticks = [max, min + span / 2, min].map((value) => {
+    const y = yOf(value);
+    const label = Math.abs(value) >= 1000 ? value.toLocaleString(undefined, { maximumFractionDigits: 0 }) : value.toLocaleString(undefined, { maximumFractionDigits: 1 });
+    return `<line x1="${pad.l}" y1="${y}" x2="${w - pad.r}" y2="${y}" stroke="#e2e8f0"/><text x="${pad.l - 6}" y="${y + 3}" text-anchor="end" font-size="10" fill="#64748b">${esc(label)}</text>`;
+  }).join('');
+  const axisLabels = labels.map((label, index) => {
+    const x = chart.chartType === 'bar'
+      ? pad.l + (index + 0.5) * (plotW / labels.length)
+      : xOf(index);
+    return `<text x="${x}" y="${h - 14}" text-anchor="middle" font-size="10" fill="#475569">${esc(label)}</text>`;
+  }).join('');
+  let marks = '';
+  if (chart.chartType === 'bar') {
+    const groupW = plotW / labels.length;
+    const barW = Math.max(4, (groupW * 0.7) / series.length);
+    marks = labels.map((_, index) => series.map((item, seriesIndex) => {
+      const value = item.values[index] ?? 0;
+      const x = pad.l + index * groupW + (groupW - barW * series.length) / 2 + seriesIndex * barW;
+      const y = yOf(Math.max(value, 0));
+      const base = yOf(0);
+      const height = Math.max(1, Math.abs(base - yOf(value)));
+      return `<rect x="${x}" y="${Math.min(y, base)}" width="${barW - 2}" height="${height}" fill="${CHART_COLORS[seriesIndex % CHART_COLORS.length]}" rx="1"/>`;
+    }).join('')).join('');
+  } else {
+    marks = series.map((item, seriesIndex) => {
+      const color = CHART_COLORS[seriesIndex % CHART_COLORS.length];
+      const points = labels.map((_, index) => `${xOf(index)},${yOf(item.values[index] ?? 0)}`).join(' ');
+      const dots = labels.map((_, index) => `<circle cx="${xOf(index)}" cy="${yOf(item.values[index] ?? 0)}" r="2.5" fill="${color}"/>`).join('');
+      return `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="2"/>${dots}`;
+    }).join('');
+  }
+  const title = chart.title ? `<figcaption>${esc(chart.title)}</figcaption>` : '';
+  const legend = series.length > 1
+    ? `<div class="chat-chart-legend">${series.map((item, index) => `<span><i style="background:${CHART_COLORS[index % CHART_COLORS.length]}"></i>${esc(item.name)}</span>`).join('')}</div>`
+    : '';
+  return `<figure class="chat-chart">${title}<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(chart.title || 'Chart')}">${ticks}${marks}${axisLabels}</svg>${legend}</figure>`;
 }
 
 export function markdownToHtml(markdown: string): string {
@@ -96,7 +164,7 @@ export function markdownToHtml(markdown: string): string {
 function renderMarkdown(markdown: string, allowAnswer: boolean): string {
   if (allowAnswer) {
     const answer = parseChatAnswer(markdown);
-    if (answer && (answer.kpis.length || answer.meters.length || answer.tables.length)) {
+    if (answer && (answer.lead || answer.kpis.length || answer.meters.length || answer.tables.length || answer.chart)) {
       const rest = answer.prose ? renderMarkdown(answer.prose, false) : '';
       return answerHtml(answer) + rest;
     }
@@ -156,6 +224,8 @@ function renderMarkdown(markdown: string, allowAnswer: boolean): string {
     return `<div class="md-table-scroll"><table>${withHeader.replace(/\s*\n\s*/g, '')}</table></div>`;
   });
 
+  html = paintChangeColumns(html);
+
   // Unordered lists (- or * at start of line)
   html = html.replace(/^[\-\*] (.+)$/gm, '<li style="margin-left: 20px; margin-bottom: 4px;">$1</li>');
   
@@ -182,4 +252,37 @@ function renderMarkdown(markdown: string, allowAnswer: boolean): string {
   }
 
   return html;
+}
+
+/** Colors Change columns in a markdown table the model wrote by hand. */
+function paintChangeColumns(html: string): string {
+  return html.replace(/<table>([\s\S]*?)<\/table>/g, (table, inner: string) => {
+    const rows = inner.match(/<tr>[\s\S]*?<\/tr>/g);
+    if (!rows || rows.length < 2) return table;
+    const headers = [...rows[0].matchAll(/<th>([\s\S]*?)<\/th>/g)].map((match) => match[1].replace(/<[^>]+>/g, ''));
+    if (!headers.some((header) => /change|variance|\bvar\b|delta|growth|trend|diff/i.test(header))) return table;
+    const painted = rows.map((row, rowIndex) => {
+      if (rowIndex === 0) return row;
+      let column = 0;
+      return row.replace(/<td>/g, () => {
+        const header = headers[column] || '';
+        column += 1;
+        return /change|variance|\bvar\b|delta|growth|trend|diff/i.test(header) ? '<td class="tone-pending">' : '<td>';
+      }).replace(/<td class="tone-pending">([\s\S]*?)<\/td>/g, (_cell, content: string) => {
+        const text = content.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').trim();
+        const negative = /^[−-]/.test(text) || /^\(.*\)$/.test(text);
+        const positive = /^\+/.test(text);
+        const amount = Number(text.replace(/[$,%\s,]/g, '').replace(/[()]/g, ''));
+        const tone = negative || (Number.isFinite(amount) && text.startsWith('-'))
+          ? 'down'
+          : positive || (Number.isFinite(amount) && amount > 0)
+            ? 'up'
+            : Number.isFinite(amount) && amount === 0
+              ? 'flat'
+              : '';
+        return `<td${tone ? ` class="tone-${tone}"` : ''}>${content}</td>`;
+      });
+    }).join('');
+    return table.replace(inner, painted);
+  });
 }
