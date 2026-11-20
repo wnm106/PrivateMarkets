@@ -297,8 +297,12 @@ BEGIN
     SELECT id, client_id INTO v_fund, v_client
     FROM entity_instances.master_entities
     WHERE entity_code = 'HALY-FUND-HSI';
+    -- HALY-FUND-HSI is sample data that exists only where supabase/seed ran
+    -- before the migrations (as on the hosted project). On a fresh database the
+    -- seed runs after them: skip the sample book, and the scorecard below.
     IF v_fund IS NULL THEN
-        RAISE EXCEPTION 'HALY-FUND-HSI (Harbor Senior Income) was not found';
+        RAISE NOTICE 'HALY-FUND-HSI (Harbor Senior Income) is not present; 40 Act sample book not created';
+        RETURN;
     END IF;
     SELECT id INTO v_sleeve FROM entity_instances.master_entities WHERE entity_code = 'HALY-FUND-HSI-INST';
     IF v_client IS NULL THEN
@@ -667,6 +671,12 @@ DECLARE
     v_code TEXT;
     v_problems TEXT;
 BEGIN
+    -- Nothing to score without the sample book (see section 2).
+    IF NOT EXISTS (SELECT 1 FROM entity_instances.master_entities WHERE entity_code = 'HALY-FUND-HSI') THEN
+        RAISE NOTICE 'HALY-FUND-HSI is not present; 40 Act scorecard not checked';
+        RETURN;
+    END IF;
+
     FOREACH v_code IN ARRAY ARRAY[
         'ACT40_NO_MARGIN', 'ACT40_NO_SHORT', 'ACT40_NO_PHYSICAL', 'ACT40_ASSET_COVERAGE',
         'ACT40_UNDERWRITING', 'ACT40_ISSUER_5_25', 'ACT40_VOTING_10', 'ACT40_SRI_5',

@@ -349,6 +349,27 @@ CREATE TRIGGER dq_rules_rebuild_compiled
   FOR EACH STATEMENT
   EXECUTE FUNCTION data_quality.dq_rules_rebuild_compiled();
 
+-- The dashboard evaluator (20261014040000) and this compiler read an expression
+-- as true for a passing record. 00006 and 00061 store three of the original
+-- sample rules the other way round, as failure predicates. On the hosted
+-- project those three still read as below (supabase/remote-history/
+-- dq_program_before_2026-11-17.json), so a fresh database is given the same
+-- expressions here and the check further down compares the rules hosted has.
+-- Without this, "nav IS NULL" passes only for a fund with no NAV, and its lone
+-- "nav is present" message is one the compiled SQL leaves out, so the check
+-- stops the migration. A row that does not hold 00061's text is left alone.
+-- 20261117060000 replaces all three rules later.
+UPDATE data_quality.dq_rules AS r
+SET rule_expression = v.pass_expression,
+    updated_at = NOW()
+FROM (VALUES
+    ('FUND_NAV_NOT_NULL', 'nav IS NULL', 'nav IS NOT NULL'),
+    ('DEAL_DATE_NOT_FUTURE', 'deal_date IS NULL OR deal_date > CURRENT_DATE', 'DEAL_DATE <= CURRENT_DATE'),
+    ('PRICE_NOT_NEGATIVE', 'price IS NULL OR price < 0', 'price >= 0')
+) AS v(rule_code, fail_expression, pass_expression)
+WHERE r.rule_code = v.rule_code
+  AND r.rule_expression = v.fail_expression;
+
 UPDATE data_quality.dq_rules SET rule_expression = rule_expression;
 
 DO $check$

@@ -80,10 +80,7 @@ BEGIN
       );
 END $$;
 
-INSERT INTO supabase_migrations.schema_migrations (version, name)
-SELECT '20261102194523', 'tranche_seniority_backfill'
-WHERE NOT EXISTS (
-    SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261102194523'
-);
+-- The migration history row is written by the Supabase CLI after this file runs,
+-- in the same transaction. A row written here as well made that insert fail.
 
 NOTIFY pgrst, 'reload schema';

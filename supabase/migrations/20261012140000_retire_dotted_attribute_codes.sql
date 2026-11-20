@@ -15,8 +15,16 @@
 -- CREDIT_RATING on ISSUER) and nothing references them -- no template
 -- assignments, golden values or source values -- so they are removed. The two
 -- derived attributes that named them as dependencies are repointed first.
+--
+-- On a fresh database MARKET_VALUE does not exist yet (20261014123530 adds it)
+-- and CREDIT_RATING arrives with supabase/seed, which runs after the migrations.
+-- The dependency check is switched off for the repoint, as 00054 and later
+-- migrations do, so the derived attributes name the codes that will exist. Where
+-- both codes exist already, as on the hosted project, the result is the same.
+-- The migration runs in one transaction (the CLI wraps each file), so the file
+-- does not open its own.
 
-BEGIN;
+ALTER TABLE metadata_register.attribute_register DISABLE TRIGGER trg_validate_derived_attribute;
 
 -- 1. Repoint derived-attribute dependencies at the surviving attribute codes.
 UPDATE metadata_register.attribute_register
@@ -34,6 +42,6 @@ WHERE derivation_dependencies ?| ARRAY['POSITION.MARKET_VALUE', 'ISSUER.CREDIT_R
 DELETE FROM metadata_register.attribute_register
 WHERE attribute_code IN ('POSITION.MARKET_VALUE', 'ISSUER.CREDIT_RATING');
 
-COMMIT;
+ALTER TABLE metadata_register.attribute_register ENABLE TRIGGER trg_validate_derived_attribute;
 
 NOTIFY pgrst, 'reload schema';
