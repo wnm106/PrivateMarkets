@@ -791,6 +791,10 @@ explicitly before the rows go. See
 `supabase/migrations/20261012000000_chat_history.sql` and
 `supabase/migrations/20261012010000_chat_attachments.sql`.
 
+### Assistant connections
+
+`GET /api/assistant/connections` lists the client's MCP servers (never their credentials) and the sources one can be tied to. `POST /api/assistant/connections` adds or changes one, `DELETE /api/assistant/connections/:id` removes it, and `POST /api/assistant/connections/:id/check` connects, lists its tools and records the result. These use the signed-in session cookie. See [ASSISTANT_CONNECTIONS.md](ASSISTANT_CONNECTIONS.md).
+
 ## Best Practices
 
 1. **Use projections**: Only request fields you need
