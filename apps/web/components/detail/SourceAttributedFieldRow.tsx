@@ -192,7 +192,13 @@ function InlineFieldValue({
   const meta = useAttributeDisplay(field.attributeCode);
   const target = referenceTarget({ dataType: field.dataType || meta?.dataType, referenceDomainCode: meta?.referenceDomainCode });
   const ref = useEntityRef(shown, Boolean(target));
-  const display = target && ref ? ref.entityName : listDisplayLabel(shown, options) || formatAttributeValue(shown, field.dataType);
+  const display = target && ref ? ref.entityName : listDisplayLabel(shown, options) || formatAttributeValue(shown, field.dataType, {
+    dataType: field.dataType || meta?.dataType,
+    displayFormat: meta?.displayFormat,
+    numericPrecision: meta?.numericPrecision,
+    unitOfMeasure: meta?.unitOfMeasure,
+    referenceDomainCode: meta?.referenceDomainCode,
+  });
   const refLink = target && ref ? (
     <Link
       href={entityRefHref(ref)}

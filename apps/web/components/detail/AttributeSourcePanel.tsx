@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { sources, type FieldDrilldown, type SourceKey } from '@/lib/data';
 import { formatReceipt, isStaleReceipt, receiptAgeDays } from '@/lib/receipt-freshness';
 import { graphqlQuery } from '@/lib/graphql';
-import { AttributeValueInput, useAttributeListOptions, type ListOption } from '@/components/forms/AttributeValueInput';
+import { AttributeValueInput, useAttributeDisplay, useAttributeListOptions, type ListOption } from '@/components/forms/AttributeValueInput';
 import { CalcBreakdownPanel } from './CalcBreakdownPanel';
 import { AttributeTimeline } from './AttributeTimeline';
 import { formatAttributeValue, isNumericAttribute, type FieldData } from './attribute-source';
@@ -365,6 +365,7 @@ function SourceValueEditor({
   const skipCommit = useRef(false);
   const pendingRef = useRef<string | null>(null);
   const options = useAttributeListOptions(attributeCode);
+  const displayMeta = useAttributeDisplay(attributeCode);
   const numeric = isNumericAttribute(dataType);
 
   const normalize = (raw: string) => (numeric ? raw.replace(/,/g, '') : raw).trim();
@@ -382,7 +383,7 @@ function SourceValueEditor({
   }, [value, pending, numeric]);
 
   const shown = pending ?? value;
-  const display = choiceLabel(shown, options) || formatAttributeValue(shown, dataType);
+  const display = choiceLabel(shown, options) || formatAttributeValue(shown, dataType, displayMeta);
   if (!onSave) return <>{display}</>;
 
   const persist = (raw: string) => {

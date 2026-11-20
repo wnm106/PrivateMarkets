@@ -114,8 +114,27 @@ function formatBooleanValue(value: string): string {
   return value;
 }
 
+/** Unit written after a plain number. Percent and currency already carry their own mark. */
+function measureSuffix(format?: string | null): string {
+  const token = (format || '').trim().toLowerCase();
+  if (token === 'bps' || token === 'basis_points' || token === 'basis-points') return ' bps';
+  if (token === 'years' || token === 'year') return ' yrs';
+  if (token === 'months' || token === 'month') return ' mo';
+  if (token === 'multiple' || token === 'x') return 'x';
+  return '';
+}
+
+function parseNumericToken(value: string): number {
+  const cleaned = value
+    .replace(/,/g, '')
+    .replace(/\s*(%|bps|yrs|mo)$/i, '')
+    .replace(/x$/i, '')
+    .trim();
+  return Number(cleaned);
+}
+
 function formatNumericValue(value: string, kind: DisplayKind, meta?: AttributeDisplay | null): string {
-  const parsed = Number(value.replace(/,/g, '').replace(/%$/, ''));
+  const parsed = parseNumericToken(value);
   if (!Number.isFinite(parsed)) return value;
   const precision = meta?.numericPrecision;
   const digits = precision == null || Number.isNaN(precision) ? null : Math.max(0, precision);
@@ -142,9 +161,10 @@ function formatNumericValue(value: string, kind: DisplayKind, meta?: AttributeDi
     return parsed.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 0 });
   }
 
-  return parsed.toLocaleString('en-US', {
+  const body = parsed.toLocaleString('en-US', {
     useGrouping: true,
     minimumFractionDigits: digits ?? 0,
     maximumFractionDigits: digits ?? 6,
   });
+  return `${body}${measureSuffix(meta?.displayFormat)}`;
 }

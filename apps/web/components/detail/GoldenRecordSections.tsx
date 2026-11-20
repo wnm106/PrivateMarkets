@@ -250,29 +250,35 @@ export function GoldenRecordSections({
   // dashboards and data quality are mounted hidden below and publish themselves.
   const warmed = useWarmTabs(['documents', 'aliases', 'dashboards', 'quality'], tab);
   const shownIds = shown ? new Set([...shown.parents, ...shown.children].map((ref) => ref.entityId)) : null;
+  const publishedAttributes = listedAttributes.map((attribute) => {
+    const lineage = lineageMap.get(attribute.attributeCode);
+    const stored = attributes[attribute.attributeCode];
+    const storedValue = stored && typeof stored === 'object' && 'value' in stored ? stored.value : stored;
+    const value = lineageLoaded ? lineage?.currentValue : (lineage?.currentValue ?? storedValue);
+    return {
+      name: attribute.attributeName || attribute.attributeCode,
+      section: attribute.displaySection || 'General',
+      value: hasStoredValue(value) ? String(value) : null,
+      required: attribute.required,
+      calculated: Boolean(derivedFormulas[attribute.attributeCode] || attribute.isDerived),
+      source: lineage?.competingValues?.find((item) => item.value === lineage.currentValue)?.sourceName || null,
+    };
+  }).filter((row) => row.value !== null || row.required);
   usePublishTabs({
     attributes: {
       label: 'Attributes',
       purpose: `The ${entity.domainCode || 'record'}'s attribute values as of the selected dates, with the source that supplied each.`,
-      howToRead: 'A blank value means nothing was known at the selected As Of and Knowledge dates. calculated attributes are derived from others and cannot be edited. source is the system the prevailing value came from.',
+      howToRead: `A blank value means nothing was known at the selected As Of and Knowledge dates. calculated attributes are derived from others and cannot be edited. source is the system the prevailing value came from.${
+        entity.domainCode === 'SECURITY'
+          ? ' Analytics percentages are percent points: 4.25 is 4.25 percent. Spreads named in basis points are basis points. DV01 and CS01 are the price change in points per 100 of face for a 1 basis point move. Max drawdown is a negative percent.'
+          : ''
+      }`,
       data: lineageLoaded || displayEntries.length > 0 ? {
         record: entity.entityName,
         code: entity.entityCode,
         count: displayEntries.length,
-        attributes: listedAttributes.slice(0, 200).map((attribute) => {
-          const lineage = lineageMap.get(attribute.attributeCode);
-          const stored = attributes[attribute.attributeCode];
-          const storedValue = stored && typeof stored === 'object' && 'value' in stored ? stored.value : stored;
-          const value = lineageLoaded ? lineage?.currentValue : (lineage?.currentValue ?? storedValue);
-          return {
-            name: attribute.attributeName || attribute.attributeCode,
-            section: attribute.displaySection || 'General',
-            value: hasStoredValue(value) ? String(value) : null,
-            required: attribute.required,
-            calculated: Boolean(derivedFormulas[attribute.attributeCode] || attribute.isDerived),
-            source: lineage?.competingValues?.find((item) => item.value === lineage.currentValue)?.sourceName || null,
-          };
-        }).filter((row) => row.value !== null || row.required),
+        ...(publishedAttributes.length > 200 ? { omitted: publishedAttributes.length - 200 } : {}),
+        attributes: publishedAttributes.slice(0, 200),
       } : null,
     },
     relationships: {
