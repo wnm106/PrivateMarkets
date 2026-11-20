@@ -483,19 +483,22 @@ async function insertEntityAttributes(
 
   // Pre-fetch attribute metadata including reference list codes
   const attrCodes = Object.keys(attributes);
-  const { data: attrDefs } = await supabase
+  const { data: attrDefs, error: attrError } = await supabase
     .from('attribute_register')
     .select('attribute_code, id, default_precedence_rank, reference_list_code, data_type')
     .in('attribute_code', attrCodes);
+  if (attrError) throw attrError;
 
   const attrMap = new Map((attrDefs || []).map((a: any) => [a.attribute_code, a]));
 
-  const { data: source } = await supabase
+  const { data: source, error: sourceError } = await supabase
     .schema('entity_instances')
     .from('source_registry')
     .select('id')
     .eq('source_code', 'IMPORT')
     .maybeSingle();
+  if (sourceError) throw sourceError;
+  if (!source?.id) throw new Error('The IMPORT source is not registered.');
 
   for (const [attrCode, rawValue] of Object.entries(attributes)) {
     const attr = attrMap.get(attrCode);
@@ -523,10 +526,11 @@ async function insertEntityAttributes(
       }
     }
 
-    await supabase.from('entity_attribute_values').insert({
+    // A refused write must fail the record, not count it as created.
+    const { error: insertError } = await supabase.from('entity_attribute_values').insert({
       entity_id: entityId,
       attribute_id: attr.id,
-      source_id: source?.id,
+      source_id: source.id,
       golden_value: typeof value === 'string' ? value : null,
       golden_value_numeric: typeof value === 'number' ? value : null,
       golden_value_date: typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null,
@@ -534,6 +538,7 @@ async function insertEntityAttributes(
       precedence_rank: attr.default_precedence_rank,
       created_by: userId,
     });
+    if (insertError) throw insertError;
   }
 
   return { normalized: normalizedCount, unmapped: unmappedValues };
@@ -553,19 +558,22 @@ async function updateEntityAttributes(
 
   // Pre-fetch attribute metadata including reference list codes
   const attrCodes = Object.keys(attributes);
-  const { data: attrDefs } = await supabase
+  const { data: attrDefs, error: attrError } = await supabase
     .from('attribute_register')
     .select('attribute_code, id, default_precedence_rank, reference_list_code')
     .in('attribute_code', attrCodes);
+  if (attrError) throw attrError;
 
   const attrMap = new Map((attrDefs || []).map((a: any) => [a.attribute_code, a]));
 
-  const { data: source } = await supabase
+  const { data: source, error: sourceError } = await supabase
     .schema('entity_instances')
     .from('source_registry')
     .select('id')
     .eq('source_code', 'IMPORT')
     .maybeSingle();
+  if (sourceError) throw sourceError;
+  if (!source?.id) throw new Error('The IMPORT source is not registered.');
 
   for (const [attrCode, rawValue] of Object.entries(attributes)) {
     const attr = attrMap.get(attrCode);
@@ -592,24 +600,24 @@ async function updateEntityAttributes(
       }
     }
 
-    if (source?.id) {
-      await supabase
-        .from('entity_attribute_values')
-        .update({
-          valid_to: new Date().toISOString().split('T')[0],
-          system_to: new Date().toISOString(),
-        })
-        .eq('entity_id', entityId)
-        .eq('attribute_id', attr.id)
-        .eq('source_id', source.id)
-        .eq('system_to', '9999-12-31 23:59:59');
-    }
+    // A refused write must fail the record, not count it as updated.
+    const { error: closeError } = await supabase
+      .from('entity_attribute_values')
+      .update({
+        valid_to: new Date().toISOString().split('T')[0],
+        system_to: new Date().toISOString(),
+      })
+      .eq('entity_id', entityId)
+      .eq('attribute_id', attr.id)
+      .eq('source_id', source.id)
+      .eq('system_to', '9999-12-31 23:59:59');
+    if (closeError) throw closeError;
 
     // Insert new record
-    await supabase.from('entity_attribute_values').insert({
+    const { error: insertError } = await supabase.from('entity_attribute_values').insert({
       entity_id: entityId,
       attribute_id: attr.id,
-      source_id: source?.id,
+      source_id: source.id,
       golden_value: typeof value === 'string' ? value : null,
       golden_value_numeric: typeof value === 'number' ? value : null,
       golden_value_date: typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null,
@@ -617,6 +625,7 @@ async function updateEntityAttributes(
       precedence_rank: attr.default_precedence_rank,
       created_by: userId,
     });
+    if (insertError) throw insertError;
   }
 
   return { normalized: normalizedCount, unmapped: unmappedValues };
@@ -644,7 +653,7 @@ async function insertEntityRelationships(
       .maybeSingle();
 
     if (parentEntity) {
-      await supabase.from('entity_relationships').insert({
+      const { error: relationshipError } = await supabase.from('entity_relationships').insert({
         parent_entity_id: parentEntity.id,
         child_entity_id: entityId,
         relationship_type: relMapping.relationshipCode,
@@ -652,6 +661,7 @@ async function insertEntityRelationships(
         is_primary: true,
         valid_from: new Date().toISOString().split('T')[0],
       });
+      if (relationshipError) throw relationshipError;
     }
   }
 }

@@ -688,16 +688,12 @@ async function closeValue(
   if (error) throw new Error(error.message);
 }
 
-export async function commitAllocation(
-  supabase: SupabaseClient,
-  draft: AllocationDraft,
-  userId: string | null,
-  options?: { proposalsOnly?: boolean },
-): Promise<AllocationPreview> {
-  const preview = previewFromDraft(draft);
-  const defs = await attributeDefs(supabase);
-  const engine = await sourceId(supabase, 'ALLOCATION_ENGINE');
-  const manual = await sourceId(supabase, 'MANUAL');
+interface PositionScaffold {
+  templateId: string | null;
+  relationshipName: Map<string, string>;
+}
+
+async function positionScaffold(supabase: SupabaseClient): Promise<PositionScaffold> {
   const { data: template, error: templateError } = await supabase
     .from('domain_templates')
     .select('id')
@@ -710,7 +706,75 @@ export async function commitAllocation(
     .select('relationship_code, relationship_name')
     .in('relationship_code', ['POSITION_FUND', 'POSITION_SECURITY', 'POSITION_TRANCHE']);
   if (relationshipError) throw new Error(relationshipError.message);
-  const relationshipName = new Map((relationshipTypes || []).map((row) => [row.relationship_code, row.relationship_name]));
+  return {
+    templateId: template?.id ?? null,
+    relationshipName: new Map((relationshipTypes || []).map((row) => [row.relationship_code, row.relationship_name])),
+  };
+}
+
+/** Creates the position for one fund and tranche, linked to both and to the tranche's security. */
+async function createPosition(
+  supabase: SupabaseClient,
+  draft: AllocationDraft,
+  scaffold: PositionScaffold,
+  userId: string | null,
+  fundId: string,
+  fundName: string,
+  trancheId: string,
+  role: 'PROPOSAL' | 'LOCK',
+): Promise<string> {
+  const tranche = draft.tranches.find((item) => item.id === trancheId);
+  const code = `ALLOC-${slug(tranche?.code || trancheId).slice(0, 28)}-${fundId.replace(/-/g, '').slice(0, 12)}-${role === 'LOCK' ? 'L' : 'P'}`;
+  // The upsert matches on the code alone, and scoring writes with the service role.
+  // A code that already names another client's record is refused, not taken over.
+  const { data: taken, error: takenError } = await supabase
+    .from('master_entities')
+    .select('id, client_id')
+    .eq('entity_code', code)
+    .maybeSingle();
+  if (takenError) throw new Error(takenError.message);
+  if (taken && (taken.client_id ?? null) !== draft.clientId) {
+    throw new Error('An allocation position code on this deal is already used by another record.');
+  }
+  const { data: created, error } = await supabase.from('master_entities').upsert({
+    entity_code: code,
+    entity_name: `${draft.dealName}: ${fundName}`,
+    domain_code: 'POSITION',
+    template_id: scaffold.templateId,
+    description: role === 'LOCK' ? 'Portfolio allocation lock' : 'Proposed allocation',
+    client_id: draft.clientId,
+    created_by: userId,
+  }, { onConflict: 'entity_code' }).select('id').single();
+  if (error || !created) throw new Error(error?.message || 'Could not create the allocation position');
+  const links: Array<[string, string]> = [
+    ['POSITION_FUND', fundId],
+    ['POSITION_TRANCHE', trancheId],
+  ];
+  if (tranche?.securityId) links.push(['POSITION_SECURITY', tranche.securityId]);
+  for (const [relationshipCode, childId] of links) {
+    const { error: linkError } = await supabase.from('entity_relationships').insert({
+      parent_entity_id: created.id,
+      child_entity_id: childId,
+      relationship_type: scaffold.relationshipName.get(relationshipCode) || relationshipCode,
+      relationship_code: relationshipCode,
+      is_primary: true,
+      valid_from: draft.asOf,
+    });
+    if (linkError && linkError.code !== '23505' && !/duplicate key/.test(linkError.message || '')) throw new Error(linkError.message);
+  }
+  return created.id as string;
+}
+
+export async function commitAllocation(
+  supabase: SupabaseClient,
+  draft: AllocationDraft,
+  userId: string | null,
+): Promise<AllocationPreview> {
+  const preview = previewFromDraft(draft);
+  const defs = await attributeDefs(supabase);
+  const engine = await sourceId(supabase, 'ALLOCATION_ENGINE');
+  const manual = await sourceId(supabase, 'MANUAL');
+  const scaffold = await positionScaffold(supabase);
 
   const requireDef = (code: string) => {
     const found = defs.get(code);
@@ -758,13 +822,10 @@ export async function commitAllocation(
     });
   };
 
-  if (!options?.proposalsOnly) {
-    for (const tranche of preview.tranches) {
-      await put(tranche.id, 'TRANCHE_HOLD_PCT', String(tranche.holdPct), tranche.holdPct, null, manual, true, 'Allocation hold');
-    }
+  for (const tranche of preview.tranches) {
+    await put(tranche.id, 'TRANCHE_HOLD_PCT', String(tranche.holdPct), tranche.holdPct, null, manual, true, 'Allocation hold');
   }
 
-  const trancheById = new Map(draft.tranches.map((tranche) => [tranche.id, tranche]));
   const existing = new Map(draft.positions.map((position) => [`${position.fundId}|${position.trancheId}|${position.role}`, position]));
   const written = new Set<string>();
 
@@ -775,36 +836,9 @@ export async function commitAllocation(
       written.add(found.id);
       return found.id;
     }
-    const tranche = trancheById.get(trancheId);
-    const code = `ALLOC-${slug(tranche?.code || trancheId).slice(0, 28)}-${fundId.replace(/-/g, '').slice(0, 12)}-${role === 'LOCK' ? 'L' : 'P'}`;
-    const { data: created, error } = await supabase.from('master_entities').upsert({
-      entity_code: code,
-      entity_name: `${draft.dealName}: ${fundName}`,
-      domain_code: 'POSITION',
-      template_id: template?.id ?? null,
-      description: role === 'LOCK' ? 'Portfolio allocation lock' : 'Proposed allocation',
-      client_id: draft.clientId,
-      created_by: userId,
-    }, { onConflict: 'entity_code' }).select('id').single();
-    if (error || !created) throw new Error(error?.message || 'Could not create the allocation position');
-    const links: Array<[string, string]> = [
-      ['POSITION_FUND', fundId],
-      ['POSITION_TRANCHE', trancheId],
-    ];
-    if (tranche?.securityId) links.push(['POSITION_SECURITY', tranche.securityId]);
-    for (const [relationshipCode, childId] of links) {
-      const { error: linkError } = await supabase.from('entity_relationships').insert({
-        parent_entity_id: created.id,
-        child_entity_id: childId,
-        relationship_type: relationshipName.get(relationshipCode) || relationshipCode,
-        relationship_code: relationshipCode,
-        is_primary: true,
-        valid_from: draft.asOf,
-      });
-      if (linkError && linkError.code !== '23505' && !/duplicate key/.test(linkError.message || '')) throw new Error(linkError.message);
-    }
-    written.add(created.id);
-    return created.id as string;
+    const createdId = await createPosition(supabase, draft, scaffold, userId, fundId, fundName, trancheId, role);
+    written.add(createdId);
+    return createdId;
   };
 
   // Saved amounts are re-written as the proposal, not stamped as manual overrides.
@@ -817,10 +851,10 @@ export async function commitAllocation(
   for (const row of preview.rows) {
     for (const cell of row.cells) {
       const adjustment = adjustmentFor(row.fundId, cell.trancheId);
-      // A parent total is the sum of its sleeves. Writing it again would double count
-      // once the compliance rule rolls child funds into the parent.
-      if (options?.proposalsOnly && parents.has(row.fundId)) continue;
-      const role = options?.proposalsOnly ? 'PROPOSAL' : (row.level === 'PORTFOLIO' ? 'LOCK' : 'PROPOSAL');
+      // A parent total is the sum of its sleeves. It is stored as a lock, which compliance
+      // leaves out, so the parent is not counted twice. A portfolio with no sleeves holds
+      // its own proposal: scoring no longer writes one for it.
+      const role = parents.has(row.fundId) ? 'LOCK' : 'PROPOSAL';
       if (role === 'LOCK' && !adjustment) continue;
       if (role === 'PROPOSAL' && !cell.eligible && cell.amount === 0 && !adjustment) continue;
       const positionId = await ensurePosition(row.fundId, row.fundName, cell.trancheId, role);
@@ -850,9 +884,263 @@ export async function commitAllocation(
 
   for (const position of draft.positions) {
     if (written.has(position.id)) continue;
-    if (options?.proposalsOnly && position.role === 'LOCK') continue;
     await put(position.id, 'MARKET_VALUE', '0', 0, null, engine, false, null);
   }
 
   return preview;
+}
+
+/**
+ * Refuses holds and adjustments that name a tranche or fund this deal does not have.
+ * The draft is loaded with the caller's own access, so an id from another deal or
+ * another client is never in it.
+ */
+export function assertAllocationInputsOnDeal(
+  draft: AllocationDraft,
+  holds: AllocationHold[] | null | undefined,
+  adjustments: AllocationAdjustment[] | null | undefined,
+): void {
+  const trancheIds = new Set(draft.tranches.map((tranche) => tranche.id));
+  const fundIds = new Set<string>(draft.positions.map((position) => position.fundId));
+  for (const portfolio of draft.request.portfolios) {
+    fundIds.add(portfolio.id);
+    for (const sleeve of portfolio.sleeves) fundIds.add(sleeve.id);
+  }
+  for (const hold of holds || []) {
+    if (!trancheIds.has(hold.trancheId)) throw new Error('A hold names a tranche that is not on this deal.');
+  }
+  for (const item of adjustments || []) {
+    if (!fundIds.has(item.fundId)) throw new Error('An adjustment names a fund that is not on this deal.');
+    if (item.trancheId !== '*' && !trancheIds.has(item.trancheId)) {
+      throw new Error('An adjustment names a tranche that is not on this deal.');
+    }
+  }
+}
+
+export interface StagedWhatIf {
+  preview: AllocationPreview;
+  /** Score at this knowledge date. The what-if amounts are readable at this instant and no other. */
+  knowledgeDate: string;
+}
+
+interface VisibleAmount {
+  value: number | null;
+  precedence: number;
+  validFrom: string;
+  systemFrom: string;
+}
+
+function sameAmount(left: number | null, right: number): boolean {
+  return left != null && Math.abs(left - right) < 0.005;
+}
+
+/** A knowledge instant after `floor`, with microseconds so two requests do not share one. */
+function whatIfInstant(floor: number): string {
+  const micros = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+  return `${new Date(floor + 1).toISOString().slice(0, -1)}${micros}Z`;
+}
+
+/** The latest system time on rows written for these positions. The database clock set it. */
+async function latestSystemFrom(supabase: SupabaseClient, entityIds: string[]): Promise<number> {
+  let latest = 0;
+  for (let index = 0; index < entityIds.length; index += 150) {
+    const slice = entityIds.slice(index, index + 150);
+    const [links, values] = await Promise.all([
+      supabase.from('entity_relationships').select('system_from').in('parent_entity_id', slice).order('system_from', { ascending: false }).limit(1),
+      supabase.from('entity_attribute_values').select('system_from').in('entity_id', slice).order('system_from', { ascending: false }).limit(1),
+    ]);
+    if (links.error) throw new Error(links.error.message);
+    if (values.error) throw new Error(values.error.message);
+    for (const row of [...(links.data || []), ...(values.data || [])]) {
+      const at = Date.parse(row.system_from);
+      if (Number.isFinite(at) && at > latest) latest = at;
+    }
+  }
+  return latest;
+}
+
+/** What a rule reads for each position, attribute and source at this as-of and knowledge date. */
+async function visibleAmounts(
+  supabase: SupabaseClient,
+  entityIds: string[],
+  attributeIds: string[],
+  asOf: string,
+  knowledge: string,
+): Promise<Map<string, Map<string, VisibleAmount>>> {
+  const out = new Map<string, Map<string, VisibleAmount>>();
+  if (!attributeIds.length) return out;
+  const pageSize = 1000;
+  for (let index = 0; index < entityIds.length; index += 100) {
+    const slice = entityIds.slice(index, index + 100);
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await supabase
+        .from('entity_attribute_values')
+        .select('id, entity_id, attribute_id, source_id, golden_value, golden_value_numeric, precedence_rank, valid_from, system_from')
+        .in('entity_id', slice)
+        .in('attribute_id', attributeIds)
+        .lte('valid_from', asOf)
+        .gte('valid_to', asOf)
+        .lte('system_from', knowledge)
+        .gte('system_to', knowledge)
+        .order('id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw new Error(error.message);
+      for (const row of data || []) {
+        const key = `${row.entity_id}|${row.attribute_id}`;
+        const bySource = out.get(key) || new Map<string, VisibleAmount>();
+        const current = bySource.get(row.source_id);
+        const validFrom = String(row.valid_from);
+        const systemFrom = String(row.system_from);
+        // The same order the golden record read uses within one source.
+        if (!current || validFrom > current.validFrom || (validFrom === current.validFrom && Date.parse(systemFrom) > Date.parse(current.systemFrom))) {
+          bySource.set(row.source_id, {
+            value: numeric(row as unknown as ValueRow),
+            precedence: row.precedence_rank,
+            validFrom,
+            systemFrom,
+          });
+        }
+        out.set(key, bySource);
+      }
+      if (!data || data.length < pageSize) break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Puts a what-if allocation where the compliance rules can read it, without
+ * changing the saved allocation.
+ *
+ * The rules run in Postgres and read position amounts from the attribute ledger
+ * at an as-of date and a knowledge date. Each amount the what-if changes is
+ * added as a ledger row whose system time starts and ends at one instant, and
+ * whose valid time starts and ends on the as-of date. The rules are then run at
+ * that instant. A read at any other knowledge date, including now, never sees
+ * the row, and neither does a read of current rows (valid_to or system_to still
+ * open): to those readers it looks like superseded history. No saved row is
+ * updated or closed, so the committed amounts and manual overrides are exactly
+ * as the last save left them, even when two scores overlap or a request dies
+ * part way. The rows are kept, so a result's contributors can be read again at
+ * the run's knowledge date.
+ *
+ * A cell with no position yet gets one, flagged as a hypothetical proposal for
+ * this deal and holding no amount. Amounts are stored only by commitAllocation.
+ */
+export async function stageAllocationWhatIf(
+  supabase: SupabaseClient,
+  draft: AllocationDraft,
+  userId: string | null,
+): Promise<StagedWhatIf> {
+  // A what-if row ends on the as-of date. On the open end date it would read as current.
+  if (draft.asOf >= '9999-12-31') throw new Error('Choose an as-of date before 9999-12-31 to score a what-if.');
+  const preview = previewFromDraft(draft);
+  const defs = await attributeDefs(supabase);
+  const engine = await sourceId(supabase, 'ALLOCATION_ENGINE');
+  const marketValue = defs.get('MARKET_VALUE');
+  if (!marketValue) throw new Error('MARKET_VALUE is not registered');
+
+  const adjustments = (draft.request.adjustments || []).filter((item) => !item.saved);
+  const adjusted = (fundId: string, trancheId: string) => (
+    adjustments.some((item) => item.fundId === fundId && (item.trancheId === trancheId || item.trancheId === '*'))
+  );
+  const proposals = new Map<string, LoadedPosition>();
+  for (const position of draft.positions) {
+    const key = `${position.fundId}|${position.trancheId}`;
+    if (position.role === 'PROPOSAL' && !proposals.has(key)) proposals.set(key, position);
+  }
+
+  // Position id to the amount the what-if gives it, and the tranche it sits on.
+  const wanted = new Map<string, { amount: number; trancheId: string }>();
+  const created: string[] = [];
+  let scaffold: PositionScaffold | null = null;
+  const parents = new Set(preview.rows.map((row) => row.parentFundId).filter((id): id is string => !!id));
+  for (const row of preview.rows) {
+    // A parent total is the sum of its sleeves. Counting it as well would double
+    // count once a rule rolls child funds into the parent.
+    if (parents.has(row.fundId)) continue;
+    for (const cell of row.cells) {
+      if (!cell.eligible && cell.amount === 0 && !adjusted(row.fundId, cell.trancheId)) continue;
+      let positionId = proposals.get(`${row.fundId}|${cell.trancheId}`)?.id;
+      if (!positionId) {
+        scaffold = scaffold || await positionScaffold(supabase);
+        positionId = await createPosition(supabase, draft, scaffold, userId, row.fundId, row.fundName, cell.trancheId, 'PROPOSAL');
+        const identity: Array<[string, string, boolean | null]> = [
+          ['POSITION_IS_HYPOTHETICAL', 'true', true],
+          ['POSITION_SCENARIO_CODE', draft.dealCode, null],
+          ['POSITION_ALLOCATION_ROLE', 'PROPOSAL', null],
+        ];
+        for (const [code, value, flagValue] of identity) {
+          const def = defs.get(code);
+          if (!def) continue;
+          await writeValue(supabase, {
+            entityId: positionId,
+            attributeId: def.id,
+            sourceId: engine,
+            text: value,
+            numeric: null,
+            boolean: flagValue,
+            asOf: draft.asOf,
+            userId,
+            precedence: def.precedence,
+            manual: false,
+            reason: null,
+          });
+        }
+        created.push(positionId);
+      }
+      wanted.set(positionId, { amount: cell.amount, trancheId: cell.trancheId });
+    }
+  }
+  // A saved position the what-if leaves out counts as nothing in this score.
+  for (const position of draft.positions) {
+    if (position.role === 'LOCK' || wanted.has(position.id)) continue;
+    wanted.set(position.id, { amount: 0, trancheId: position.trancheId });
+  }
+
+  // Rows for these positions, new ones above all, carry the database clock. The
+  // instant must not be before any of them, even when this server's clock is behind.
+  const floor = Math.max(Date.now(), await latestSystemFrom(supabase, [...wanted.keys()]));
+  const knowledgeDate = whatIfInstant(floor);
+
+  const unfunded = new Map(preview.tranches.map((tranche) => [tranche.id, tranche.unfunded]));
+  const amountCodes = ['MARKET_VALUE', 'FUNDED_PAR_AMOUNT', 'UNFUNDED_COMMITMENT_AMOUNT'];
+  const amountDefs = amountCodes.map((code) => defs.get(code)).filter((def): def is AttributeDef => Boolean(def));
+  const visible = await visibleAmounts(supabase, [...wanted.keys()], amountDefs.map((def) => def.id), draft.asOf, knowledgeDate);
+
+  const rows: Array<Record<string, unknown>> = [];
+  for (const [positionId, target] of wanted) {
+    const codes = ['MARKET_VALUE', unfunded.get(target.trancheId) ? 'UNFUNDED_COMMITMENT_AMOUNT' : 'FUNDED_PAR_AMOUNT'];
+    for (const code of codes) {
+      const def = defs.get(code);
+      if (!def) continue;
+      const stored = visible.get(`${positionId}|${def.id}`);
+      // Every source that holds the amount is covered, so the winning source reads the what-if.
+      const sources: Array<[string, VisibleAmount | null]> = stored?.size ? [...stored.entries()] : [[engine, null]];
+      for (const [source, current] of sources) {
+        if (current ? sameAmount(current.value, target.amount) : target.amount === 0) continue;
+        rows.push({
+          entity_id: positionId,
+          attribute_id: def.id,
+          source_id: source,
+          golden_value: String(target.amount),
+          golden_value_numeric: target.amount,
+          valid_from: draft.asOf,
+          valid_to: draft.asOf,
+          system_from: knowledgeDate,
+          system_to: knowledgeDate,
+          precedence_rank: current?.precedence ?? def.precedence,
+          is_manual_override: false,
+          created_by: userId,
+          metadata: { allocationWhatIf: draft.dealCode },
+        });
+      }
+    }
+  }
+  for (let index = 0; index < rows.length; index += 500) {
+    const { error } = await supabase.from('entity_attribute_values').insert(rows.slice(index, index + 500));
+    if (error) throw new Error(error.message);
+  }
+
+  return { preview, knowledgeDate };
 }

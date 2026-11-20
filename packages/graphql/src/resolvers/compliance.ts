@@ -1,7 +1,7 @@
 import { Context } from '../context';
-import { ComplianceEngine, getComplianceEngine } from '../lib/compliance-engine';
-import { commitAllocation, loadAllocationDraft, type AllocationHold } from '../lib/allocation-store';
-import type { AllocationAdjustment } from '../lib/allocation-engine';
+import { ComplianceEngine } from '../lib/compliance-engine';
+import { assertAllocationInputsOnDeal, loadAllocationDraft, stageAllocationWhatIf } from '../lib/allocation-store';
+import { adjustments as allocationAdjustments, holds as allocationHolds } from './allocation';
 import {
   matchPopulationEntity,
   targetsAlongPath,
@@ -247,108 +247,80 @@ export const complianceResolvers = {
       try {
         const { input } = args;
 
-        // Close out the currently-open version (if any) at the moment the
-        // new version becomes known, preserving bi-temporal history rather
-        // than overwriting it.
-        const { data: existingVersions } = await cx(context)
+        // The live version is read only for the settings a new version inherits.
+        // It is not closed: resolve_rule_version prefers the higher version from
+        // its valid_from, so the live one stays in effect until then.
+        const { data: existingVersions, error: existingError } = await cx(context)
           .from('rule_versions')
-          .select('id, version_number')
+          .select('id, version_number, limit_direction, consolidate_descendants')
           .eq('rule_id', input.ruleId)
           .order('version_number', { ascending: false })
           .limit(1);
-
-        const nextVersionNumber = (existingVersions?.[0]?.version_number || 0) + 1;
+        if (existingError) throw existingError;
+        const previous = existingVersions?.[0];
 
         // Direction is set on the fund limit. Keep the previous version's value only
         // so a test that has not been given a fund limit yet still breaches the same way.
-        let limitDirection = input.limitDirection || null;
+        const limitDirection = input.limitDirection || previous?.limit_direction || null;
         // The editor does not show fund consolidation, so a new version keeps the previous setting.
-        let consolidateDescendants: boolean | null = typeof input.consolidateDescendants === 'boolean' ? input.consolidateDescendants : null;
-        if ((!limitDirection || consolidateDescendants === null) && existingVersions?.[0]?.id) {
-          const { data: previous } = await cx(context)
-            .from('rule_versions')
-            .select('limit_direction, consolidate_descendants')
-            .eq('id', existingVersions[0].id)
-            .maybeSingle();
-          limitDirection = limitDirection || previous?.limit_direction || null;
-          if (consolidateDescendants === null) consolidateDescendants = Boolean(previous?.consolidate_descendants);
-        }
+        const consolidateDescendants = typeof input.consolidateDescendants === 'boolean'
+          ? input.consolidateDescendants
+          : Boolean(previous?.consolidate_descendants);
 
-        if (existingVersions?.[0]?.id) {
-          await cx(context)
-            .from('rule_versions')
-            .update({ system_to: new Date().toISOString() })
-            .eq('id', existingVersions[0].id)
-            .eq('system_to', '9999-12-31 23:59:59');
-        }
+        const version = {
+          valid_from: input.validFrom,
+          valid_to: input.validTo || '9999-12-31',
+          rule_name: input.ruleName,
+          description: input.description,
+          change_reason: input.changeReason,
+          base_domain_code: input.baseDomainCode,
+          base_rollup_path: toSnakeHops(input.baseRollupPath),
+          group_by_path: toSnakeHops(input.groupByPath),
+          group_by_attribute_code: input.groupByAttributeCode,
+          numerator_attribute_code: input.numeratorAttributeCode,
+          numerator_aggregation: input.numeratorAggregation,
+          numerator_dimension: toSnakeDim(input.numeratorDimension),
+          denominator_dimension: toSnakeDim(input.denominatorDimension),
+          group_by_dimension: toSnakeDim(input.groupByDimension),
+          result_transform: input.resultTransform || 'NONE',
+          denominator_attribute_code: input.denominatorAttributeCode,
+          denominator_aggregation: input.denominatorAggregation,
+          denominator_scope: input.denominatorScope || 'SAME_GROUP',
+          denominator_source: input.denominatorSource || 'BASE',
+          denominator_constant_value: input.denominatorConstantValue,
+          result_unit: input.resultUnit || 'RATIO',
+          limit_direction: limitDirection,
+          soft_limit_value: input.softLimitValue,
+          hard_limit_value: input.hardLimitValue,
+          hard_limit_attribute_code: input.hardLimitAttributeCode,
+          soft_limit_factor: input.softLimitFactor,
+          consolidate_descendants: consolidateDescendants,
+          default_source_scope: input.defaultSourceScope || 'GOLDEN',
+          metadata: input.metadata || {},
+        };
+        const conditions = (input.conditions || []).map((cond: any, idx: number) => {
+          const { rule_version_id: _versionId, ...row } = conditionRow('', cond, { condition_order: cond.conditionOrder ?? idx + 1 });
+          return row;
+        });
 
-        const { data, error } = await cx(context)
-          .from('rule_versions')
-          .insert({
-            rule_id: input.ruleId,
-            version_number: nextVersionNumber,
-            valid_from: input.validFrom,
-            valid_to: input.validTo || '9999-12-31',
-            rule_name: input.ruleName,
-            description: input.description,
-            change_reason: input.changeReason,
-            base_domain_code: input.baseDomainCode,
-            base_rollup_path: toSnakeHops(input.baseRollupPath),
-            group_by_path: toSnakeHops(input.groupByPath),
-            group_by_attribute_code: input.groupByAttributeCode,
-            numerator_attribute_code: input.numeratorAttributeCode,
-            numerator_aggregation: input.numeratorAggregation,
-            numerator_dimension: toSnakeDim(input.numeratorDimension),
-            denominator_dimension: toSnakeDim(input.denominatorDimension),
-            group_by_dimension: toSnakeDim(input.groupByDimension),
-            result_transform: input.resultTransform || 'NONE',
-            denominator_attribute_code: input.denominatorAttributeCode,
-            denominator_aggregation: input.denominatorAggregation,
-            denominator_scope: input.denominatorScope || 'SAME_GROUP',
-            denominator_source: input.denominatorSource || 'BASE',
-            denominator_constant_value: input.denominatorConstantValue,
-            result_unit: input.resultUnit || 'RATIO',
-            limit_direction: limitDirection,
-            soft_limit_value: input.softLimitValue,
-            hard_limit_value: input.hardLimitValue,
-            hard_limit_attribute_code: input.hardLimitAttributeCode,
-            soft_limit_factor: input.softLimitFactor,
-            consolidate_descendants: consolidateDescendants ?? false,
-            default_source_scope: input.defaultSourceScope || 'GOLDEN',
-            metadata: input.metadata || {},
-            created_by: context.user?.id,
-          })
-          .select()
-          .single();
-
+        // One transaction: the version, its conditions and its measure lines are all saved or none is.
+        const { data: versionId, error } = await cx(context).rpc('create_rule_version', {
+          p_rule_id: input.ruleId,
+          p_version: version,
+          p_conditions: conditions,
+          p_measure_lines: measureLineRows(input.measureLines || []),
+        });
         if (error) throw error;
+        if (!versionId) throw new Error('The rule version was not saved.');
 
-        let storedConditions: any[] = [];
-        if (input.conditions?.length) {
-          const conditionsToInsert = input.conditions.map((cond: any, idx: number) => ({
-            rule_version_id: data.id,
-            applies_to: cond.appliesTo,
-            condition_group: cond.conditionGroup ?? 1,
-            condition_order: cond.conditionOrder ?? idx + 1,
-            attribute_code: cond.attributeCode,
-            attribute_dimension: toSnakeDim(cond.attributeDimension),
-            compare_attribute_code: cond.compareAttributeCode,
-            compare_dimension: toSnakeDim(cond.compareDimension),
-            operator: cond.operator,
-            value: cond.value,
-            logic_operator: cond.logicOperator ?? 'AND',
-            // These columns arrive with migration 20261103090000; only send them when used.
-            ...(cond.leftExpression ? { left_expression: cond.leftExpression } : {}),
-            ...(cond.rightExpression ? { right_expression: cond.rightExpression } : {}),
-          }));
-
-          const { data: condRows, error: condError } = await cx(context).from('rule_conditions').insert(conditionsToInsert).select('*');
-          if (condError) throw condError;
-          storedConditions = condRows || [];
-        }
-
-        const storedLines = await insertMeasureLines(context, data.id, input.measureLines || []);
-        return { version: mapVersion(data, storedConditions, storedLines), errors: [] };
+        const { data: stored, error: readError } = await cx(context)
+          .from('rule_versions')
+          .select('*, conditions:rule_conditions(*)')
+          .eq('id', versionId)
+          .single();
+        if (readError) throw readError;
+        const [mapped] = await withMeasureLines(context, [stored]);
+        return { version: mapped, errors: [] };
       } catch (error: any) {
         console.error('Error creating compliance rule version:', error);
         return { version: null, errors: [{ field: 'general', message: error.message, code: 'CREATE_FAILED' }] };
@@ -435,7 +407,8 @@ export const complianceResolvers = {
 
     evaluateComplianceRule: async (_: any, args: { input: any }, context: Context) => {
       try {
-        const engine = getComplianceEngine(context.supabase);
+        if (!context.user) throw new Error('Not authenticated');
+        const engine = new ComplianceEngine(context.supabase);
         const { run } = await engine.evaluateRule({
           ruleCode: args.input.ruleCode,
           asOfDate: args.input.asOfDate,
@@ -476,25 +449,26 @@ export const complianceResolvers = {
 
     scoreDealCompliance: async (_: any, args: { dealId: string; asOfDate?: string | null; holds?: any[] | null; adjustments?: any[] | null }, context: Context) => {
       try {
-        const holds: AllocationHold[] | null = args.holds
-          ? args.holds.map((item) => ({ trancheId: item.trancheId, holdPct: Number(item.holdPct) }))
-          : null;
-        const adjustments: AllocationAdjustment[] | null = args.adjustments
-          ? args.adjustments.map((item) => ({
-            fundId: item.fundId,
-            trancheId: item.trancheId,
-            type: item.type === 'exclude' ? 'exclude' : 'override',
-            amount: item.amount == null ? undefined : Number(item.amount),
-            reason: item.reasonCode || undefined,
-            note: item.note || undefined,
-          }))
-          : null;
+        if (!context.user) throw new Error('Not authenticated');
+        // Everything below the draft uses the service role, so the caller's own
+        // right to change this deal is settled first, with the caller's JWT.
+        const { data: mayWrite, error: accessError } = await context.supabase
+          .schema('tenancy')
+          .rpc('has_entity_access', { p_entity_id: args.dealId, p_level: 'WRITE' });
+        if (accessError || mayWrite !== true) throw new Error('You do not have access to score this deal.');
+
+        const holds = allocationHolds(args.holds);
+        const adjustments = allocationAdjustments(args.adjustments);
+        // The draft is read as the caller, so it holds only the tranches and funds they can see.
+        const draft = await loadAllocationDraft(context.supabase, args.dealId, args.asOfDate, holds, adjustments);
+        assertAllocationInputsOnDeal(draft, holds, adjustments);
+
         // Proposed positions are engine rows, not a user edit. The caller's JWT
-        // cannot insert them under the entity RLS policies, so the sync uses the
+        // cannot insert them under the entity RLS policies, so staging uses the
         // service role. The rule itself still runs as the compliance function.
+        // Staging never changes the saved allocation: see stageAllocationWhatIf.
         const writer = context.supabaseAdmin || context.supabase;
-        const draft = await loadAllocationDraft(writer, args.dealId, args.asOfDate, holds, adjustments);
-        const preview = await commitAllocation(writer, draft, context.user?.id ?? null, { proposalsOnly: true });
+        const { preview, knowledgeDate } = await stageAllocationWhatIf(writer, draft, context.user.id);
         const fundIds = new Set(preview.rows.map((row) => row.fundId));
 
         // Pro forma rules are inactive on purpose, so a platform-wide job skips
@@ -511,13 +485,16 @@ export const complianceResolvers = {
           : { data: [], error: null };
         if (thresholdError) throw new Error(thresholdError.message);
         const enrolledIds = [...new Set((thresholdRows || []).map((row) => row.rule_id))];
+        // The service role sees every client's rules. Keep the shared ones and the deal client's own.
+        const ownRules = draft.clientId ? `client_id.is.null,client_id.eq.${draft.clientId}` : 'client_id.is.null';
         const { data: surfaceRows, error: surfaceError } = await compliance
           .from('rules')
           .select('*')
-          .in('rule_code', [...DEAL_SURFACE_RULE_CODES]);
+          .in('rule_code', [...DEAL_SURFACE_RULE_CODES])
+          .or(ownRules);
         if (surfaceError) throw new Error(surfaceError.message);
         const { data: enrolledRows, error: enrolledError } = enrolledIds.length
-          ? await compliance.from('rules').select('*').in('id', enrolledIds)
+          ? await compliance.from('rules').select('*').in('id', enrolledIds).or(ownRules)
           : { data: [], error: null };
         if (enrolledError) throw new Error(enrolledError.message);
         const ruleById = new Map<string, any>();
@@ -537,13 +514,15 @@ export const complianceResolvers = {
           if (!current || version.version_number > current.version_number) versionByRule.set(version.rule_id, version);
         }
 
-        const engine = getComplianceEngine(writer);
+        const engine = new ComplianceEngine(writer);
         const results: any[] = [];
         const failures: string[] = [];
         const settled = await Promise.allSettled(plans.map(async (plan) => {
           const scored = await engine.evaluateRulesForFunds({
             ruleCode: plan.rule.rule_code,
             asOfDate: draft.asOf,
+            // The what-if amounts exist at this knowledge instant only.
+            knowledgeDate,
             scenarioCode: draft.dealCode,
             triggeredBy: context.user?.id,
             anchorEntityIds: plan.anchorIds,
@@ -764,60 +743,48 @@ function conditionRow(versionId: string, cond: any, extra: Record<string, unknow
   };
 }
 
-async function insertMeasureLines(context: Context, versionId: string, lines: any[]) {
-  const stored: any[] = [];
+/** Measure lines as rows for compliance.create_rule_version, each with its filter conditions. */
+function measureLineRows(lines: any[]) {
+  const rows: any[] = [];
   for (const side of ['NUMERATOR', 'DENOMINATOR', 'LIMIT']) {
     const sideLines = (lines || []).filter((line) => line.side === side);
-    for (let index = 0; index < sideLines.length; index += 1) {
-      const line = sideLines[index];
-      const { data, error } = await cx(context)
-        .from('rule_measure_lines')
-        .insert({
-          rule_version_id: versionId,
-          side,
-          line_order: index + 1,
-          label: line.label || null,
-          kind: line.kind,
-          sign: line.sign === -1 ? -1 : 1,
-          attribute_code: line.attributeCode || null,
-          dimension: toSnakeDim(line.dimension),
-          expression: line.expression ?? null,
-          path: toSnakeHops(line.path),
-          weight_attribute_code: line.weightAttributeCode || null,
-          value_path: toSnakeHops(line.valuePath),
-          transform: line.transform || null,
-          price_attribute_code: line.priceAttributeCode || null,
-          pct: line.pct ?? null,
-          pct_attribute_code: line.pctAttributeCode || null,
-          pct_path: toSnakeHops(line.pctPath),
-          total_path: line.totalPath?.length ? toSnakeHops(line.totalPath) : null,
-          required: Boolean(line.required),
-        })
-        .select('*')
-        .single();
-      if (error) throw error;
-
+    sideLines.forEach((line, index) => {
       const filters = [
         ...(line.conditions || []).filter((cond: any) => cond.attributeCode).map((cond: any) => ({ ...cond, filterRole: 'WHERE' })),
         ...(line.totalConditions || []).filter((cond: any) => cond.attributeCode).map((cond: any) => ({ ...cond, filterRole: 'TOTAL' })),
       ];
-      let storedConditions: any[] = [];
-      if (filters.length) {
-        const rows = filters.map((cond, order) => conditionRow(versionId, cond, {
-          measure_line_id: data.id,
-          applies_to: 'LINE',
-          filter_role: cond.filterRole,
-          condition_group: 1,
-          condition_order: order + 1,
-        }));
-        const { data: condRows, error: condError } = await cx(context).from('rule_conditions').insert(rows).select('*');
-        if (condError) throw condError;
-        storedConditions = condRows || [];
-      }
-      stored.push({ ...data, conditions: storedConditions });
-    }
+      rows.push({
+        side,
+        line_order: index + 1,
+        label: line.label || null,
+        kind: line.kind,
+        sign: line.sign === -1 ? -1 : 1,
+        attribute_code: line.attributeCode || null,
+        dimension: toSnakeDim(line.dimension),
+        expression: line.expression ?? null,
+        path: toSnakeHops(line.path),
+        weight_attribute_code: line.weightAttributeCode || null,
+        value_path: toSnakeHops(line.valuePath),
+        transform: line.transform || null,
+        price_attribute_code: line.priceAttributeCode || null,
+        pct: line.pct ?? null,
+        pct_attribute_code: line.pctAttributeCode || null,
+        pct_path: toSnakeHops(line.pctPath),
+        total_path: line.totalPath?.length ? toSnakeHops(line.totalPath) : null,
+        required: Boolean(line.required),
+        conditions: filters.map((cond, order) => {
+          const { rule_version_id: _versionId, ...row } = conditionRow('', cond, {
+            applies_to: 'LINE',
+            filter_role: cond.filterRole,
+            condition_group: 1,
+            condition_order: order + 1,
+          });
+          return row;
+        }),
+      });
+    });
   }
-  return stored;
+  return rows;
 }
 
 async function withMeasureLines(context: Context, rows: any[]) {

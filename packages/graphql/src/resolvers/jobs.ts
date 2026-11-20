@@ -73,14 +73,28 @@ export function mapRun(row: Row) {
   };
 }
 
-/** The client the caller is working in. Null when they have none. */
+/** One client id from a current_client_ids() row, which PostgREST may return bare or as an object. */
+function clientIdOf(row: unknown): string | null {
+  if (typeof row === 'string') return row;
+  const value = row && typeof row === 'object' ? Object.values(row)[0] : null;
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * The client the caller is working in: the simulated client, or their only
+ * membership. Null when they have none. current_client_ids() is a set with no
+ * order, so a caller in more than one client is refused rather than given
+ * whichever row came back first (the same stance as schema-scope.ts).
+ */
 export async function callerClientId(context: Context): Promise<string | null> {
   const { data, error } = await context.supabase.schema('tenancy').rpc('current_client_ids');
-  if (error || !Array.isArray(data) || data.length === 0) return null;
-  const first = data[0];
-  if (typeof first === 'string') return first;
-  const value = first && typeof first === 'object' ? Object.values(first)[0] : null;
-  return typeof value === 'string' ? value : null;
+  if (error) throw error;
+  const ids = [...new Set((Array.isArray(data) ? data : []).map(clientIdOf).filter((id): id is string => Boolean(id)))];
+  if (ids.length === 0) return null;
+  if (ids.length > 1) {
+    throw new Error('You belong to more than one client, so this cannot tell which one to use. Open the client you are working in first.');
+  }
+  return ids[0];
 }
 
 async function readRun(context: Context, id: string) {

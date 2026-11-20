@@ -2,6 +2,7 @@ import { Context } from '../context';
 import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePosition, storedRuleLabel } from '../lib/attribute-sequence';
 import { knowledgeCutoff, loadOnReadValues, mergeOnReadLineage } from '../lib/on-read-values';
 import { dirtyAttributeCodes } from './calculation';
+import { requireIsoDate } from '../lib/input-guards';
 
 const OPEN_SYSTEM_TO = '9999-12-31 23:59:59';
 
@@ -188,6 +189,8 @@ export const lineageResolvers = {
       args: { entityId: string; attributeCode: string; fromDate: string; toDate: string },
       context: Context
     ) => {
+      const fromDate = requireIsoDate(args.fromDate, 'fromDate');
+      const toDate = requireIsoDate(args.toDate, 'toDate');
       const { data: attrDef } = await context.supabase
         .from('attribute_register')
         .select('*')
@@ -196,12 +199,14 @@ export const lineageResolvers = {
       
       if (!attrDef) return [];
       
+      // A value overlaps the window when it starts by the window's end AND ends on or after its start.
       const { data, error } = await context.supabase
         .from('entity_attribute_values')
         .select(`*, source_registry!inner(source_code)`)
         .eq('entity_id', args.entityId)
         .eq('attribute_id', attrDef.id)
-        .or(`valid_from.lte.${args.toDate},valid_to.gte.${args.fromDate}`)
+        .lte('valid_from', toDate)
+        .gte('valid_to', fromDate)
         .order('valid_from', { ascending: true });
       
       if (error) throw error;

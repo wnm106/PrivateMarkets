@@ -237,7 +237,7 @@ const SCORE = `
   }
 `;
 
-type ScoreAdjustment = { fundId: string; trancheId: string; type: string; amount?: number | null; reason?: string | null; note?: string | null };
+type ScoreAdjustment = { fundId: string; trancheId: string; type: string; amount?: number | null; reason?: string | null; note?: string | null; saved?: boolean };
 
 export interface DealComplianceScore {
   board: Board | null;
@@ -278,6 +278,8 @@ export function useDealComplianceScore({
         amount: item.amount,
         reasonCode: item.reason,
         note: item.note,
+        // A saved amount is not a what-if override. Scoring never changes the saved allocation.
+        saved: item.saved === true ? true : undefined,
       }));
       graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>(SCORE, {
         dealId,
