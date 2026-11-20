@@ -4,8 +4,10 @@ import type { ReviewRouting } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { normalizeItems } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { runAgentStep, type AgentModel, type ModelTurn } from './agent';
 import { RunBusyError, advanceRun, message, type Actor, type AgentRequest, type EngineDeps, type FormRow, type LoadedRun, type ReviewRow, type StageRow, type StepRow, type WorkflowStore } from './engine';
+import { LeaseLostError, type JobRun } from '../worker';
+import { workflowAdvanceHandler } from './handlers';
 import { checkListValues } from './list-check';
-import { signReason, workflowTools } from './tools';
+import { namedRecords, signReason, workflowTools } from './tools';
 
 const CLEANUP = WORKFLOW_TEMPLATES.find((template) => template.code === 'DATA_CLEANUP')!.graph;
 
@@ -20,6 +22,9 @@ function memoryStore(graph: unknown, input: Record<string, unknown> = {}) {
   const stages: Array<StageRow & { nodeId: string; spec: Record<string, unknown>; returned: string[] }> = [];
   const events: Array<{ nodeId: string | null; type: string; actor: string; actorId: string | null; summary: string }> = [];
   const store: WorkflowStore = {
+    async clientOf(runId) {
+      return runId === run.id ? run.clientId : null;
+    },
     async load(_runId, owner): Promise<LoadedRun | 'busy' | 'done' | null> {
       if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(run.status)) return 'done';
       if (run.lockedBy && run.lockedBy !== owner) return 'busy';
@@ -318,6 +323,42 @@ describe('advanceRun', () => {
     expect(memory.steps.has('review')).toBe(false);
   });
 
+  it('stops making approved changes once the job has lost its claim, and leaves the rest to the job that has it', async () => {
+    const memory = memoryStore(CLEANUP);
+    const { deps: engine, calls } = deps(memory.store);
+    await advanceRun('run-1', 'job-1', engine);
+    const review = memory.reviews[0];
+    const [override, resolve] = (review.proposal as { items: Array<{ id: string }> }).items;
+    review.status = 'APPROVED';
+    review.decidedBy = 'reviewer';
+    review.decision = { items: { [override.id]: { decision: 'APPROVE', answers: { value: '2031-06-30' } }, [resolve.id]: { decision: 'APPROVE' } } };
+
+    // The claim is lost while the first change is being made.
+    const lost = new AbortController();
+    const run = engine.tools.run;
+    engine.tools.run = async (name, args, actor, permission) => {
+      if (permission === 'apply') lost.abort(new LeaseLostError());
+      return run(name, args, actor, permission);
+    };
+    expect(await advanceRun('run-1', 'job-2', engine, lost.signal)).toMatchObject({ status: 'CANCELLED' });
+    // The second change was not made, the step was not finished, and the lock was left for the copy that now has the job.
+    expect(calls.filter((call) => call.permission === 'apply')).toHaveLength(1);
+    expect(memory.steps.get('apply')?.status).toBe('RUNNING');
+    expect(memory.run.lockedBy).toBe('job-2');
+    expect(memory.events.some((event) => event.type === 'change.applied')).toBe(false);
+  });
+
+  it('runs no step at all for a job whose claim is already gone', async () => {
+    const memory = memoryStore(CLEANUP);
+    const { deps: engine, calls } = deps(memory.store);
+    const lost = new AbortController();
+    lost.abort(new LeaseLostError());
+    expect(await advanceRun('run-1', 'job-1', engine, lost.signal)).toMatchObject({ status: 'CANCELLED', steps: 0 });
+    expect(calls).toEqual([]);
+    expect(memory.run.lockedBy).toBeNull();
+    expect(memory.steps.size).toBe(0);
+  });
+
   it('asks for what the entity type requires, even when the agent did not', async () => {
     const memory = memoryStore(CLEANUP);
     const { deps: engine } = deps(memory.store, {
@@ -336,6 +377,40 @@ describe('advanceRun', () => {
     const [item] = (memory.reviews[0].proposal as { items: Array<{ needsReview: boolean; missing: Array<{ key: string; origin: string }> }> }).items;
     expect(item.needsReview).toBe(true);
     expect(item.missing).toEqual([expect.objectContaining({ key: 'attributes.MATURITY_DATE', origin: 'FOUNDATION', required: true })]);
+  });
+});
+
+describe('workflowAdvanceHandler', () => {
+  const job = (overrides: Partial<JobRun> = {}): JobRun => ({
+    id: 'job-1', clientId: 'client-a', scheduleId: null, requestedBy: null, jobType: 'workflow.advance', payload: { workflowRunId: 'run-1' }, attempts: 1, maxAttempts: 3, ...overrides,
+  });
+
+  it('moves only a run of the job\'s own client, and refuses any other id the same way', async () => {
+    const memory = memoryStore(CLEANUP);
+    const { deps: engine, calls } = deps(memory.store);
+    const handler = workflowAdvanceHandler(engine);
+    const other = await handler(job({ clientId: 'client-b' })).catch((error) => error);
+    const missing = await handler(job({ payload: { workflowRunId: 'run-9' } })).catch((error) => error);
+    expect(other.message).toBe('This client has no workflow run with that id.');
+    expect(missing.message).toBe(other.message);
+    // Refused before the run was locked or any step ran.
+    expect(memory.run.lockedBy).toBeNull();
+    expect(calls).toEqual([]);
+
+    expect(await handler(job())).toMatchObject({ workflowRunId: 'run-1', status: 'WAITING' });
+  });
+
+  it('reports no outcome of its own once the claim is lost', async () => {
+    const memory = memoryStore(CLEANUP);
+    const lost = new AbortController();
+    const { deps: engine } = deps(memory.store, {
+      agent: async () => {
+        lost.abort(new LeaseLostError());
+        return { summary: 'Done.', items: proposed() };
+      },
+    });
+    await expect(workflowAdvanceHandler(engine)(job(), { signal: lost.signal })).rejects.toBeInstanceOf(LeaseLostError);
+    expect(memory.reviews).toEqual([]);
   });
 });
 
@@ -488,14 +563,19 @@ describe('runAgentStep', () => {
 });
 
 describe('workflowTools', () => {
-  /** The service client, answering the two lookups the tool runner makes. */
-  function service(answers: { person?: Record<string, unknown>; account?: Record<string, unknown> }) {
+  /** The service client, answering the lookups the tool runner makes. */
+  function service(answers: {
+    person?: Record<string, unknown>;
+    account?: Record<string, unknown>;
+    access?: (args: Record<string, unknown>) => { data: unknown; error: { message: string } | null };
+  }) {
     const calls: Array<[string, Record<string, unknown>]> = [];
     const client = {
       async rpc(fn: string, args: Record<string, unknown>) {
         calls.push([fn, args]);
         if (fn === 'workflow_worker_person') return { data: answers.person ?? { name: 'Ada Reviewer' }, error: null };
         if (fn === 'workflow_worker_service_account') return { data: answers.account ?? { userId: 'svc-1' }, error: null };
+        if (fn === 'workflow_worker_entity_access') return answers.access ? answers.access(args) : { data: { denied: 0 }, error: null };
         return { data: null, error: null };
       },
     };
@@ -534,7 +614,81 @@ describe('workflowTools', () => {
       ['workflow.review', 'entity.write'],
       ['workflow.run', 'entity.write'],
     ]);
-    expect(ran).toEqual([{ entityId: 'e7' }, { value: '5', overrideReason: 'Missing Approved by Ada Reviewer in workflow run run-9.' }, { value: '6' }]);
+    // A fixed step that changes data is signed too, with the person it ran for.
+    expect(ran).toEqual([
+      { entityId: 'e7' },
+      { value: '5', overrideReason: 'Missing Approved by Ada Reviewer in workflow run run-9.' },
+      { value: '6', overrideReason: 'Made by a workflow step for Ada Reviewer.' },
+    ]);
+  });
+
+  it('checks each record a call names as the person behind it, and runs nothing they may not reach', async () => {
+    const ran: Array<Record<string, unknown>> = [];
+    const secret = '00000000-0000-4000-8000-000000000007';
+    const open = '00000000-0000-4000-8000-000000000008';
+    const { client, calls } = service({
+      access: (args) => ({ data: { denied: (args.p_entity_ids as string[]).filter((id) => id === secret).length }, error: null }),
+    });
+    const tools = workflowTools(client, env, registry(ran), async () => hour());
+
+    await tools.run('get_entity', { entityId: open }, actor, 'read');
+    await expect(tools.run('get_entity', { entityId: secret }, actor, 'read')).rejects.toThrow(/may not see the record it names/);
+    await expect(tools.run('submit_manual_override', { entityId: secret, value: '1' }, actor, 'apply')).rejects.toThrow(/may not change the record/);
+    expect(ran).toEqual([{ entityId: open }]);
+    // Asked as the person, at the level the call needs. A call that names no record is not asked about.
+    const asked = calls.filter(([fn]) => fn === 'workflow_worker_entity_access').map(([, args]) => args);
+    expect(asked).toEqual([
+      { p_user_id: 'reviewer', p_client_id: 'client-a', p_level: 'READ', p_entity_ids: [open], p_entity_codes: [] },
+      { p_user_id: 'reviewer', p_client_id: 'client-a', p_level: 'READ', p_entity_ids: [secret], p_entity_codes: [] },
+      { p_user_id: 'reviewer', p_client_id: 'client-a', p_level: 'WRITE', p_entity_ids: [secret], p_entity_codes: [] },
+    ]);
+  });
+
+  it('runs nothing that names a record when access cannot be checked', async () => {
+    const ran: Array<Record<string, unknown>> = [];
+    const { client } = service({ access: () => ({ data: null, error: { message: 'Could not find the function public.workflow_worker_entity_access' } }) });
+    const tools = workflowTools(client, env, registry(ran), async () => hour());
+    await expect(tools.run('get_entity', { entityId: '00000000-0000-4000-8000-000000000007' }, actor, 'read')).rejects.toThrow(/could not be checked/);
+    await tools.run('submit_manual_override', { value: '1' }, actor, 'write');
+    expect(ran).toEqual([{ value: '1', overrideReason: 'Made by a workflow step for Ada Reviewer.' }]);
+  });
+
+  it('needs load.promote from the person for a tool that writes live records from a load', async () => {
+    const ran: Array<Record<string, unknown>> = [];
+    const tools = [
+      { name: 'promote_load_batch', description: 'Promote', inputSchema: { type: 'object', properties: { batchId: {} } } },
+      { name: 'submit_manual_override', description: 'Set', inputSchema: { type: 'object', properties: { value: {} } } },
+    ];
+    const loads = { listTools: () => tools, executeTool: async (_name: string, args: Record<string, unknown>) => (ran.push(args), { ok: true }) } as never;
+    const calls: Array<Record<string, unknown>> = [];
+    const client = {
+      async rpc(fn: string, args: Record<string, unknown>) {
+        if (fn === 'workflow_worker_person') {
+          calls.push(args);
+          const missing = (args.p_permissions as string[]).includes('load.promote');
+          return { data: missing ? { problem: 'The person behind this step does not hold load.promote for this client.' } : { name: 'Ada' }, error: null };
+        }
+        if (fn === 'workflow_worker_service_account') return { data: { userId: 'svc-1' }, error: null };
+        return { data: null, error: null };
+      },
+    } as never;
+    const runner = workflowTools(client, env, loads, async () => hour());
+    await expect(runner.run('promote_load_batch', { batchId: 'b1' }, actor, 'write')).rejects.toThrow(/does not hold load\.promote/);
+    await expect(runner.run('promote_load_batch', { batchId: 'b1' }, actor, 'apply')).rejects.toThrow(/does not hold load\.promote/);
+    await runner.run('submit_manual_override', { value: '1' }, actor, 'write');
+    expect(calls.map((args) => args.p_permissions)).toEqual([
+      ['workflow.run', 'entity.write', 'load.promote'],
+      ['workflow.review', 'entity.write', 'load.promote'],
+      ['workflow.run', 'entity.write'],
+    ]);
+    expect(ran).toEqual([{ value: '1' }]);
+  });
+
+  it('finds the records a call names, by id and by code, at any depth', () => {
+    const id = '00000000-0000-4000-8000-00000000000a';
+    expect(namedRecords({ entityId: id, attributeCode: 'X', members: [{ entityId: id.replace('a', 'b'), memberRole: 'BORROWER' }] })).toEqual({ ids: [id, id.replace('a', 'b')], codes: [] });
+    expect(namedRecords({ entityCode: 'LOAN-7', anchorEntityId: id, securityCode: 'SEC1', fundId: 'FUND_A', entityIds: [id] })).toEqual({ ids: [id], codes: ['LOAN-7', 'SEC1', 'FUND_A'] });
+    expect(namedRecords({ exceptionId: 'ex-1', domainCode: 'LOAN', recordId: 'r1' })).toEqual({ ids: [], codes: [] });
   });
 
   it('refuses before anything runs when the person or the account is not allowed', async () => {

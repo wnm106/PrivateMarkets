@@ -89,13 +89,15 @@ export function feedPollHandler(deps: FeedDeps): JobHandler {
   const now = deps.now || (() => new Date());
   const connectorFor = deps.connectorFor || ((connection: ConnectionSpec) => buildConnector(deps.supabase, connection, deps.http));
 
-  return async (run) => {
+  return async (run, job) => {
     const feedId = typeof run.payload.feedId === 'string' ? run.payload.feedId : '';
     if (!feedId) throw new JobError('The job has no feedId.');
     const context = await call<Row | null>(deps.supabase, 'feed_poll_context', { p_feed_id: feedId });
     if (!context?.feed) throw new JobError('The feed no longer exists.');
     const feed = context.feed as Row;
     if (feed.client_id !== run.clientId) throw new JobError('The feed belongs to another client.');
+    // Saving a feed already insists on this. The connection's credential is used below, so it is checked again here.
+    if (context.connection && context.connection.client_id !== feed.client_id) throw new JobError('The feed\'s connection belongs to another client.');
     if (!feed.is_active) throw new JobError('The feed is paused.');
     if (!context.connection?.is_active) throw new JobError('The feed\'s connection is paused.');
 
@@ -107,11 +109,17 @@ export function feedPollHandler(deps: FeedDeps): JobHandler {
       const files = await connector.list(spec, started);
 
       for (const file of files) {
+        // A run another worker has taken over starts no further file. A file already loading is seen through
+        // to its ledger entry and its note below, so the worker that has the run now finds it done, does not
+        // load it again, and the load is still on record.
+        if (job?.signal.aborted) break;
         let outcome: FileOutcome = 'FAILED';
         let message: string | undefined;
         try {
           const fetched = await connector.fetch(file);
           if (!fetched) continue;
+          // A large download can outlast the claim.
+          if (job?.signal.aborted) break;
           const sha256 = createHash('sha256').update(fetched.bytes).digest('hex');
           const ledger = await call<Row>(deps.supabase, 'feed_file_begin', {
             p_feed_id: feedId,
@@ -194,6 +202,9 @@ export function feedPollHandler(deps: FeedDeps): JobHandler {
         p_payload: { file: report.file, outcome: report.outcome },
       });
     }
+
+    // Stopped early because the claim was lost: the worker that has the run now reports the outcome.
+    job?.signal.throwIfAborted();
 
     const count = (wanted: FileOutcome) => reports.filter((report) => report.outcome === wanted).length;
     const result = {
