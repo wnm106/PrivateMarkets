@@ -239,7 +239,7 @@ const SCORE = `
 
 type ScoreAdjustment = { fundId: string; trancheId: string; type: string; amount?: number | null; reason?: string | null; note?: string | null };
 
-const savedScoreRequests = new Map<string, ReturnType<typeof graphqlMutation<Board & { errors: Array<{ message: string }> }>>>();
+const savedScoreRequests = new Map<string, ReturnType<typeof graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>>>();
 
 export interface DealComplianceScore {
   board: Board | null;
