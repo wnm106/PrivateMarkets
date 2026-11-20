@@ -67,7 +67,7 @@ const STEPS = [
 const PILLARS = [
   { big: 'Field-level', small: 'lineage on every attribute' },
   { big: 'Bi-temporal', small: 'history, restatements & as-of views' },
-  { big: 'Multi-tenant', small: 'client isolation with role-based access' },
+  { big: 'User-adaptive', small: 'an interface that adapts to each persona and workflow' },
   { big: 'AI-native', small: 'assistant, reports & narratives' },
 ];
 
