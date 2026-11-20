@@ -38,7 +38,7 @@ const columnMappingSchema: JSONSchema7 = {
   description: 'One source column. Pass back the object returned by get_position_file_import, with any edits.',
   properties: {
     sourceColumn: { type: 'string' },
-    role: { type: 'string', enum: ['ignore', 'filter', 'as_of', 'identity', 'name', 'attribute', 'parent'] },
+    role: { type: 'string', enum: ['ignore', 'filter', 'as_of', 'identity', 'name', 'alias', 'attribute', 'parent'] },
     domainCode: { type: 'string' },
     attributeCode: { type: 'string' },
     parentDomainCode: { type: 'string' },
@@ -90,7 +90,7 @@ const listPositionFileTargetsTool: ToolDefinition = {
   },
   execute: async (args, supabase) => {
     const catalog = await listMappingCatalog(await sessionClientId(supabase));
-    const all = mappingTargets(catalog.attributes, catalog.domains);
+    const all = mappingTargets(catalog.attributes, catalog.domains, { domains: catalog.domainAliases, names: catalog.nameAliases });
     const domains = new Set((Array.isArray(args.domainCodes) ? args.domainCodes : []).map((code: unknown) => String(code).trim().toUpperCase()).filter(Boolean));
     const search = String(args.search || '').trim().toLowerCase();
     const targets = all.filter((target) => {

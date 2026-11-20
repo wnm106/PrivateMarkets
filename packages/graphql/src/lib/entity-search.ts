@@ -1,4 +1,4 @@
-export type EntitySearchMatchKind = 'NAME' | 'PARENT' | 'RELATED';
+export type EntitySearchMatchKind = 'NAME' | 'ALIAS' | 'PARENT' | 'RELATED';
 
 export interface SearchEntityRow {
   id: string;
@@ -6,6 +6,8 @@ export interface SearchEntityRow {
   entityName: string;
   domainCode: string;
   isActive?: boolean | null;
+  /** Another name of this record that the query matched. Null when the record name itself matched. */
+  matchedAlias?: string | null;
 }
 
 export interface SearchDomainRow {
@@ -73,8 +75,8 @@ export function domainDepth(code: string, parentOf: ReadonlyMap<string, string |
 }
 
 /**
- * Rank entities whose own name, a related entity name, or a parent entity name
- * contains the query. Records in parent domains come before records in child domains.
+ * Rank entities whose own name, a stored alias, a related entity name, or a parent
+ * entity name contains the query. Records in parent domains come before records in child domains.
  */
 export function rankEntitySearch(input: {
   query: string;
@@ -101,9 +103,16 @@ export function rankEntitySearch(input: {
     input.entities.filter((entity) => entity.isActive !== false && entity.id && entity.entityName),
   );
   const byId = new Map(entities.map((entity) => [entity.id.toLowerCase(), entity]));
-  const nameHits = new Set(
+  const ownNameHits = new Set(
     entities.filter((entity) => contains(entity.entityName, query)).map((entity) => entity.id.toLowerCase()),
   );
+  const aliasHits = new Map<string, string>();
+  for (const entity of entities) {
+    const id = entity.id.toLowerCase();
+    if (ownNameHits.has(id) || !entity.matchedAlias || !contains(entity.matchedAlias, query)) continue;
+    aliasHits.set(id, entity.matchedAlias);
+  }
+  const directHits = new Set<string>([...ownNameHits, ...aliasHits.keys()]);
 
   const linksByEntity = new Map<string, SearchLinkRow[]>();
   for (const link of input.links) {
@@ -117,16 +126,16 @@ export function rankEntitySearch(input: {
 
   const candidates = entities.filter((entity) => {
     const id = entity.id.toLowerCase();
-    if (nameHits.has(id)) return true;
-    return (linksByEntity.get(id) || []).some((link) => nameHits.has(otherEnd(link, id)));
+    if (directHits.has(id)) return true;
+    return (linksByEntity.get(id) || []).some((link) => directHits.has(otherEnd(link, id)));
   });
 
   const ranked = candidates.map((entity) => {
     const domainCode = entity.domainCode.toUpperCase();
     const choice = chooseMatch(
       entity,
-      query,
-      nameHits,
+      ownNameHits,
+      aliasHits,
       linksByEntity.get(entity.id.toLowerCase()) || [],
       byId,
       parentOf,
@@ -308,6 +317,7 @@ function mapEntity(row: Record<string, unknown>): SearchEntityRow {
     entityName: String(row.entity_name || ''),
     domainCode: String(row.domain_code || ''),
     isActive: row.is_active !== false,
+    matchedAlias: row.matched_alias ? String(row.matched_alias) : null,
   };
 }
 
@@ -326,30 +336,35 @@ interface MatchChoice {
 
 function chooseMatch(
   entity: SearchEntityRow,
-  query: string,
-  nameHits: ReadonlySet<string>,
+  ownNameHits: ReadonlySet<string>,
+  aliasHits: ReadonlyMap<string, string>,
   links: readonly SearchLinkRow[],
   byId: ReadonlyMap<string, SearchEntityRow>,
   parentOf: ReadonlyMap<string, string | null>,
   domainNames: ReadonlyMap<string, string>,
 ): MatchChoice {
-  if (nameHits.has(entity.id.toLowerCase())) {
+  const id = entity.id.toLowerCase();
+  if (ownNameHits.has(id)) {
     return { match: 'NAME', matchedName: null, matchedDomainName: null, viaDepth: 0 };
+  }
+  const alias = aliasHits.get(id);
+  if (alias) {
+    return { match: 'ALIAS', matchedName: alias, matchedDomainName: null, viaDepth: 0 };
   }
 
   let best: MatchChoice | null = null;
   for (const link of links) {
-    const otherId = otherEnd(link, entity.id.toLowerCase());
-    if (!nameHits.has(otherId)) continue;
+    const otherId = otherEnd(link, id);
     const other = byId.get(otherId);
-    if (!other || !contains(other.entityName, query)) continue;
+    const otherLabel = ownNameHits.has(otherId) ? other?.entityName : aliasHits.get(otherId);
+    if (!other || !otherLabel) continue;
     const otherDomain = other.domainCode.toUpperCase();
     const entityDomain = entity.domainCode.toUpperCase();
     const storedAsParent = link.parentEntityId === other.id.toLowerCase() && link.childEntityId === entity.id.toLowerCase();
     const ancestor = isAncestor(otherDomain, entityDomain, parentOf);
     const choice: MatchChoice = {
       match: storedAsParent || ancestor ? 'PARENT' : 'RELATED',
-      matchedName: other.entityName,
+      matchedName: otherLabel,
       matchedDomainName: domainNames.get(otherDomain) || other.domainCode,
       viaDepth: domainDepth(otherDomain, parentOf),
     };

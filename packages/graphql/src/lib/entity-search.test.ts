@@ -68,6 +68,21 @@ describe('entity search ranking', () => {
     expect(hits[0]).toMatchObject({ matchedName: 'Lane stake', matchedDomainName: 'Position' });
   });
 
+  it('finds a borrower by the project name stored on that record', () => {
+    const hits = rankEntitySearch({
+      query: 'Falcon',
+      entities: [
+        { id: 'i1', entityCode: 'I1', entityName: 'Acme Holdings', domainCode: 'ISSUER', isActive: true, matchedAlias: 'Project Falcon' },
+        { id: 'f1', entityCode: 'F1', entityName: 'Alpha Fund', domainCode: 'FUND', isActive: true },
+      ],
+      links: [],
+      domains,
+    });
+    expect(hits).toEqual([
+      expect.objectContaining({ entityName: 'Acme Holdings', match: 'ALIAS', matchedName: 'Project Falcon', domainCode: 'ISSUER' }),
+    ]);
+  });
+
   it('matches a parent name onto the child and skips inactive or unrelated records', () => {
     const hits = rankEntitySearch({ query: 'Alpha', entities, links, domains });
     expect(hits.map((hit) => hit.entityName)).toEqual(['Alpha Fund', 'Lane stake']);

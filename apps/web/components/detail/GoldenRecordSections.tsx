@@ -11,6 +11,7 @@ import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard'
 import { RelationshipEntityGrids } from './RelationshipEntityGrids';
 import { RecordTemplateChoices } from './RecordTemplateChoices';
 import { RecordDocuments } from '@/components/documents/RecordDocuments';
+import { EntityAliases } from './EntityAliases';
 import { classifyRecordRelationships, singularRelatedRefs } from '@/lib/relationship-grids';
 import { definingParentDomains, toParentLinkCounts, type ParentLinkCount, type ParentRelationshipType } from '@/lib/parent-entities';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
@@ -101,7 +102,8 @@ export function GoldenRecordSections({
   const calcRefreshKey = lineageData
     .map((row) => `${row.attributeCode}:${row.currentValue ?? ''}:${row.lastUpdated ?? ''}`)
     .join('|');
-  const [tab, setTab] = useState<'attributes' | 'dashboards' | 'quality' | 'relationships' | 'documents'>('attributes');
+  const [tab, setTab] = useState<'attributes' | 'dashboards' | 'quality' | 'relationships' | 'documents' | 'aliases'>('attributes');
+  const [aliasCount, setAliasCount] = useState<number | null>(null);
   const [relationshipCatalog, setRelationshipCatalog] = useState<{
     types: ParentRelationshipType[];
     linkCounts: ParentLinkCount[];
@@ -263,7 +265,7 @@ export function GoldenRecordSections({
 
   // The assistant sees every tab of the record, not only the open one. Documents,
   // dashboards and data quality are mounted hidden below and publish themselves.
-  const warmed = useWarmTabs(['documents', 'dashboards', 'quality'], tab);
+  const warmed = useWarmTabs(['documents', 'aliases', 'dashboards', 'quality'], tab);
   const shownIds = shown ? new Set([...shown.parents, ...shown.children].map((ref) => ref.entityId)) : null;
   usePublishTabs({
     attributes: {
@@ -333,11 +335,27 @@ export function GoldenRecordSections({
           active={tab === 'documents'}
           onClick={() => setTab('documents')}
         />
+        <SectionTab
+          label={aliasCount == null ? 'Aliases' : `Aliases (${aliasCount})`}
+          active={tab === 'aliases'}
+          onClick={() => setTab('aliases')}
+        />
       </div>
 
       {warmed.has('documents') && (
         <div hidden={tab !== 'documents'}>
           <RecordDocuments entityId={entity.id} entityName={entity.entityName} />
+        </div>
+      )}
+      {warmed.has('aliases') && (
+        <div hidden={tab !== 'aliases'}>
+          <EntityAliases
+            key={entity.id}
+            entityId={entity.id}
+            entityName={entity.entityName}
+            domainCode={entity.domainCode}
+            onCount={setAliasCount}
+          />
         </div>
       )}
       {warmed.has('dashboards') && (
@@ -350,7 +368,7 @@ export function GoldenRecordSections({
           <DataQualityDashboard embedded active={tab === 'quality'} domainCode={entity.domainCode} entityId={entity.id} />
         </div>
       )}
-      {tab === 'documents' || tab === 'dashboards' || tab === 'quality' ? null : tab === 'relationships' ? (
+      {tab === 'documents' || tab === 'aliases' || tab === 'dashboards' || tab === 'quality' ? null : tab === 'relationships' ? (
         !shown ? (
           <div className="field-section" aria-busy="true">
             <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>Loading…</div>

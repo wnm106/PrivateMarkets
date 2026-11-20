@@ -26,6 +26,14 @@ function indexWith(entities: MatchEntity[]): EntityMatchIndex {
 }
 
 describe('entity match for loads', () => {
+  it('matches a project name stored as another name of the borrower', () => {
+    const index = indexWith([
+      entity({ id: 'acme', code: 'ACME', name: 'Acme Holdings', aliases: ['Project Falcon'] }),
+    ]);
+    const hit = index.resolve({ code: 'Project Falcon', name: 'Project Falcon', attributes: new Map() });
+    expect(hit).toMatchObject({ kind: 'match', via: 'name', entity: { id: 'acme' } });
+  });
+
   it('matches a file that only has the issuer name to the entity with that name', () => {
     const index = indexWith([
       entity({ id: 'original', code: 'BENCH-ISS-0001', name: 'Bench Issuer 1' }),

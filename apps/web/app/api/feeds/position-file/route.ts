@@ -17,7 +17,7 @@ export async function GET() {
       sourceCode: 'IMPORT',
       name: 'Load data',
       description: 'Upload a file. Columns are discovered, confirmed, and saved as a map for the next file with the same columns.',
-      targets: mappingTargets(catalog.attributes, catalog.domains),
+      targets: mappingTargets(catalog.attributes, catalog.domains, { domains: catalog.domainAliases, names: catalog.nameAliases }),
       lists,
       sources,
       instances,

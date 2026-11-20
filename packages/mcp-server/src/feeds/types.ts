@@ -1,4 +1,4 @@
-export type FeedColumnRole = 'identity' | 'name' | 'attribute' | 'parent_key';
+export type FeedColumnRole = 'identity' | 'name' | 'alias' | 'attribute' | 'parent_key';
 
 export interface FeedAttributeColumn {
   column: string;
@@ -16,6 +16,11 @@ export interface FeedParentColumn {
   existing?: boolean;
 }
 
+export interface FeedAliasColumn {
+  column: string;
+  aliasCode: string;
+}
+
 export interface FeedDomainSpec {
   domainCode: string;
   templateCode: string;
@@ -23,6 +28,8 @@ export interface FeedDomainSpec {
   nameColumn: string;
   attributes: FeedAttributeColumn[];
   parents: FeedParentColumn[];
+  /** Other names of the same record, such as a project name for a borrower. */
+  aliasColumns?: FeedAliasColumn[];
 }
 
 /**

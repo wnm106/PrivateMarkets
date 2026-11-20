@@ -632,6 +632,7 @@ function MapChanges({ changes }: { changes: MapChange[] }) {
 function fieldTarget(assignment: Assignment) {
   if (assignment.role === 'identity') return 'Entity id';
   if (assignment.role === 'name') return 'Name';
+  if (assignment.role === 'alias') return 'Also known as';
   if (assignment.role === 'attribute') return assignment.attributeCode || 'Attribute';
   if (assignment.role === 'parent') {
     return assignment.parentExisting ? `Link to ${assignment.parentDomainCode} already stored` : `Parent ${assignment.parentDomainCode}`;

@@ -27,6 +27,44 @@ describe('duplicateNameWarning', () => {
   });
 });
 
+describe('search_attributes', () => {
+  function fakeSupabase(tables: Record<string, any[]>) {
+    return {
+      from(table: string) {
+        const rows = tables[table] || [];
+        const b: any = {
+          select: () => b,
+          eq: () => b,
+          or: () => b,
+          in: () => b,
+          order: () => b,
+          limit: () => b,
+          then: (resolve: any) => resolve({ data: rows, error: null }),
+        };
+        return b;
+      },
+    };
+  }
+
+  it('resolves a field alias, an entity type alias, and a name for the record', async () => {
+    const supabase = fakeSupabase({
+      attribute_register: [{ id: 'a1', attribute_code: 'NAV', attribute_name: 'NAV', description: 'Net asset value', data_type: 'NUMBER', domain_code: 'FUND' }],
+      attribute_aliases: [{ attribute_id: 'a1', alias_label: 'Ending NAV', alias_code: 'ENDING_NAV', domain_code: 'FUND' }],
+      entity_name_aliases: [{ domain_code: 'ISSUER', alias_label: 'Project name', alias_code: 'PROJECT_NAME' }],
+      domain_aliases: [{ domain_code: 'ISSUER', alias_label: 'Borrower', alias_code: 'BORROWER' }],
+      domain_types: [{ domain_code: 'ISSUER', domain_name: 'Issuer' }],
+    });
+    const registry = new ToolRegistry(supabase as never);
+    registerDomainTools(registry);
+    const ending: any = await registry.executeTool('search_attributes', { query: 'ending nav' }, supabase as never);
+    expect(ending.attributes).toEqual([expect.objectContaining({ attribute_code: 'NAV', matched_alias: 'Ending NAV' })]);
+    const borrower: any = await registry.executeTool('search_attributes', { query: 'borrower' }, supabase as never);
+    expect(borrower.entityTypes).toEqual([expect.objectContaining({ domain_code: 'ISSUER', matched_alias: 'Borrower' })]);
+    const project: any = await registry.executeTool('search_attributes', { query: 'project name' }, supabase as never);
+    expect(project.entityNames).toEqual([expect.objectContaining({ attribute_code: 'entity_name', domain_code: 'ISSUER', matched_alias: 'Project name' })]);
+  });
+});
+
 describe('list_entities', () => {
   /** A stand-in for the one query shape list_entities uses. */
   function fakeSupabase(rows: any[]) {

@@ -125,13 +125,33 @@ function useClient(client?: SupabaseClient): SupabaseClient {
 }
 
 /** The shared catalog plus this client's own additions. Another client's fields and record types stay out. */
-async function attributeCatalog(client: SupabaseClient, clientId: string): Promise<{ attributes: AttributeChoice[]; domains: string[] }> {
-  const [attributes, domains] = await Promise.all([
-    visibleToClient(client.schema('metadata_register').from('attribute_register').select('attribute_code, attribute_name, data_type, domain_code, reference_list_code'), clientId).order('attribute_name'),
-    visibleToClient(client.schema('metadata_register').from('domain_types').select('domain_code').eq('is_active', true), clientId).order('domain_code'),
+async function attributeCatalog(client: SupabaseClient, clientId: string): Promise<{
+  attributes: AttributeChoice[];
+  domains: string[];
+  domainAliases: { domainCode: string; aliasLabel: string; aliasCode: string }[];
+  nameAliases: { domainCode: string; aliasLabel: string; aliasCode: string }[];
+}> {
+  const register = client.schema('metadata_register');
+  const [attributes, domains, domainAliases, nameAliases, attributeAliases] = await Promise.all([
+    visibleToClient(register.from('attribute_register').select('id, attribute_code, attribute_name, data_type, domain_code, reference_list_code'), clientId).order('attribute_name'),
+    visibleToClient(register.from('domain_types').select('domain_code').eq('is_active', true), clientId).order('domain_code'),
+    register.from('domain_aliases').select('domain_code, alias_label, alias_code').eq('is_active', true),
+    register.from('entity_name_aliases').select('domain_code, alias_label, alias_code').eq('is_active', true),
+    register.from('attribute_aliases').select('attribute_id, alias_label').eq('is_active', true),
   ]);
-  if (attributes.error) throw new Error(attributes.error.message);
-  if (domains.error) throw new Error(domains.error.message);
+  const failure = attributes.error || domains.error || domainAliases.error || nameAliases.error || attributeAliases.error;
+  if (failure) throw new Error(failure.message);
+  const labels = new Map<string, string[]>();
+  for (const row of attributeAliases.data || []) {
+    const list = labels.get(row.attribute_id) || [];
+    list.push(row.alias_label);
+    labels.set(row.attribute_id, list);
+  }
+  const mapAlias = (row: { domain_code: string; alias_label: string; alias_code: string }) => ({
+    domainCode: row.domain_code,
+    aliasLabel: row.alias_label,
+    aliasCode: row.alias_code,
+  });
   return {
     attributes: (attributes.data || []).map((row: any) => ({
       attributeCode: row.attribute_code,
@@ -139,8 +159,11 @@ async function attributeCatalog(client: SupabaseClient, clientId: string): Promi
       dataType: row.data_type,
       domainCode: row.domain_code,
       referenceListCode: row.reference_list_code,
+      aliasLabels: labels.get(row.id) || [],
     })),
     domains: (domains.data || []).map((row: any) => row.domain_code),
+    domainAliases: (domainAliases.data || []).map(mapAlias),
+    nameAliases: (nameAliases.data || []).map(mapAlias),
   };
 }
 
@@ -248,7 +271,7 @@ function suggestedAsOf(assignments: ColumnAssignment[], rows: Record<string, str
 async function columnsForTable(client: SupabaseClient, clientId: string, headers: string[], rows: Record<string, string>[], hints: ColumnHint[] = [], context: ReviewContext = {}): Promise<{ columnMappings: ColumnAssignment[]; identity: LoadMapIdentity }> {
   const [catalog, lists] = await Promise.all([attributeCatalog(client, clientId), listReferenceLists(client)]);
   const stored = await findStoredMap(client, clientId, headerSignature(headers));
-  let suggested = suggestAssignments(headers, rows, catalog.attributes, hints);
+  let suggested = suggestAssignments(headers, rows, catalog.attributes, hints, { domains: catalog.domainAliases, names: catalog.nameAliases });
   if (stored) suggested = overlayStoredMap(suggested, stored.template, stored.name);
   const reviewed = await reviewColumns(suggested, catalog.attributes, catalog.domains, { ...context, rowCount: rows.length });
   const columnMappings = applyListSuggestions(reviewed, catalog.attributes, lists);

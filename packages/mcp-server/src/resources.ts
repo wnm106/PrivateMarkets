@@ -157,6 +157,19 @@ Each entity has: entity_code, entity_name, domain_code, and attribute values.
 
 Use \`tapestrai://model/attributes\` resource or \`get_attribute_metadata\` tool.
 
+## Aliases
+
+People do not say the catalog codes. Four lists store the words they use:
+
+| What someone says | Means |
+|---|---|
+| Borrower, Tranche | An entity type. Borrower is ISSUER. Tranche is SECURITY. \`list_domain_types\` returns these aliases. |
+| Project name, Borrower name | The record's name, not a new field. \`search_attributes\` returns \`entity_name\` on that type. |
+| Ending NAV | A field. Ending NAV is NAV. \`search_attributes\` and \`get_template_metadata\` return the alias. |
+| Project Falcon | One record's other name. \`search_entities\` matches it and says which name hit. |
+
+A column headed with one of these words maps to that type, name, or field. Do not invent a field for a word that is already an alias.
+
 ## Relationships
 
 Entities connect via **typed relationships**:
@@ -188,12 +201,13 @@ The domain table above is a sketch. Read \`tapestrai://model/domains\` or call \
 
 ## Key Tools for Exploration
 
-1. \`list_domain_types\` — live entity types, names, and descriptions
-2. \`get_template_metadata\` — which attributes belong to an entity type
-3. \`search_attributes\` — find a field from the words a person used
-4. \`get_relationship_types\` — how entity types connect
-5. \`query_data\` — counts, filters, and groupings. grain "value" is one row per field and its source. grain "entity" is one row per record
-6. \`get_entity\` — one record. \`list_entities\` is one page, not a total
+1. \`list_domain_types\` — live entity types, names, descriptions, and aliases such as Borrower for ISSUER
+2. \`get_template_metadata\` — which attributes belong to an entity type, including each field's alias labels
+3. \`search_attributes\` — find a field, an entity type, or an entity name from the words a person used, including aliases
+4. \`search_entities\` — find a record by its name or another stored name
+5. \`get_relationship_types\` — how entity types connect
+6. \`query_data\` — counts, filters, and groupings. grain "value" is one row per field and its source. grain "entity" is one row per record
+7. \`get_entity\` — one record. \`list_entities\` is one page, not a total
 `;
 const COMPLIANCE_GUIDE = `# Compliance Rules Engine — Complete Guide
 

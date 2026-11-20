@@ -20,9 +20,9 @@ import { normalizeSourceCode } from './row-context';
 import { describeOrphans, feedMapFromAssignments, orphanColumns, type AssignmentRole, type ColumnAssignment } from './suggest';
 import type { CellLocation, FeedLoadResult, PageSize, TransformKind } from './types';
 
-const ROLES: readonly AssignmentRole[] = ['ignore', 'filter', 'as_of', 'source', 'identity', 'name', 'attribute', 'parent'];
+const ROLES: readonly AssignmentRole[] = ['ignore', 'filter', 'as_of', 'source', 'identity', 'name', 'alias', 'attribute', 'parent'];
 const TRANSFORMS: readonly TransformKind[] = ['none', 'trim', 'number', 'percent', 'date', 'uppercase', 'lowercase', 'list', 'replace'];
-const NEEDS_DOMAIN: readonly AssignmentRole[] = ['identity', 'name', 'attribute', 'parent'];
+const NEEDS_DOMAIN: readonly AssignmentRole[] = ['identity', 'name', 'alias', 'attribute', 'parent'];
 
 export interface MappingCatalog {
   attributes: Array<{ attributeCode: string; domainCode?: string | null }>;

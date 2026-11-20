@@ -54,6 +54,8 @@ interface ValuePeriod {
 interface EntityDraft {
   code: string;
   name: string;
+  /** Other names of this record, such as a project name for the borrower. */
+  aliases: { aliasCode: string; aliasLabel: string }[];
   /** First non-blank value across all rows. Used to match the record to an existing one. */
   attributes: Map<string, string>;
   parents: Map<string, string>;
@@ -123,6 +125,7 @@ function mappedColumns(map: FeedMap): Set<string> {
   for (const domain of map.domains) {
     columns.add(domain.identityColumn);
     columns.add(domain.nameColumn);
+    for (const alias of domain.aliasColumns || []) columns.add(alias.column);
     for (const attribute of domain.attributes) columns.add(attribute.column);
     for (const parent of domain.parents) columns.add(parent.column);
   }
@@ -175,6 +178,7 @@ function collectDrafts(
         draft = {
           code,
           name: readCell(row, domain.nameColumn, map) || code,
+          aliases: [],
           attributes: new Map(),
           parents: new Map(),
           asOf: context.asOf,
@@ -192,6 +196,12 @@ function collectDrafts(
       }
       const name = readCell(row, domain.nameColumn, map);
       if (name && draft.name === draft.code) draft.name = name;
+      for (const alias of domain.aliasColumns || []) {
+        const value = readCell(row, alias.column, map);
+        if (value && !draft.aliases.some((item) => item.aliasCode === alias.aliasCode)) {
+          draft.aliases.push({ aliasCode: alias.aliasCode, aliasLabel: value });
+        }
+      }
       for (const attribute of domain.attributes) {
         const value = readCell(row, attribute.column, map);
         if (value && !draft.attributes.has(attribute.attributeCode)) {
@@ -562,6 +572,20 @@ async function loadEntityMatchIndex(
     }
   }
 
+  const aliasByEntity = new Map<string, string[]>();
+  for (let offset = 0; offset < entityIds.length; offset += 150) {
+    const chunk = entityIds.slice(offset, offset + 150);
+    const stored = await db.schema('entity_instances').from('entity_aliases').select('entity_id, alias_label').eq('is_active', true).in('entity_id', chunk);
+    if (stored.error) throw new Error(stored.error.message);
+    for (const row of stored.data || []) {
+      const label = String(row.alias_label || '').trim();
+      if (!label) continue;
+      const list = aliasByEntity.get(row.entity_id) || [];
+      list.push(label);
+      aliasByEntity.set(row.entity_id, list);
+    }
+  }
+
   for (const row of byId.values()) {
     const matchEntity: MatchEntity = {
       id: row.id,
@@ -573,10 +597,34 @@ async function loadEntityMatchIndex(
       provisional: false,
       identifiers: new Map(),
       identifierTerms: terms.get(row.id) || new Map(),
+      aliases: aliasByEntity.get(row.id) || [],
     };
     index.add(matchEntity);
   }
   return index;
+}
+
+async function storeDraftAliases(db: SupabaseClient, entities: EntityDraft[], idByCode: Map<string, string>): Promise<void> {
+  const rows: { entity_id: string; alias_code: string; alias_label: string; alias_kind: string; is_active: boolean; updated_at: string }[] = [];
+  for (const entity of entities) {
+    const id = idByCode.get(entity.code);
+    if (!id || id.startsWith('pending:') || id.startsWith(DRY_PREFIX)) continue;
+    for (const alias of entity.aliases) {
+      const label = alias.aliasLabel.trim();
+      if (!label || !alias.aliasCode) continue;
+      rows.push({
+        entity_id: id,
+        alias_code: alias.aliasCode.slice(0, 100),
+        alias_label: label.slice(0, 500),
+        alias_kind: alias.aliasCode.includes('PROJECT') ? 'project' : 'name',
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  }
+  if (rows.length === 0) return;
+  const saved = await db.schema('entity_instances').from('entity_aliases').upsert(rows, { onConflict: 'entity_id,alias_code' });
+  if (saved.error) throw new Error(saved.error.message);
 }
 
 function sameValue(existing: any, next: { golden_value: string; golden_value_numeric: number | null; golden_value_date: string | null }): boolean {
@@ -831,7 +879,7 @@ export async function executeParsedFeed(
     const { catalog: matchCatalog, attributeIds } = await loadIdentifierCatalog(db, domainCode);
     const index = await loadEntityMatchIndex(db, domainCode, catalog.clientId, entities.map((entity) => entity.code), matchCatalog, attributeIds);
     for (const entity of entities) {
-      const incoming = { code: entity.code, name: entity.name, attributes: entity.attributes };
+      const incoming = { code: entity.code, name: entity.name, attributes: entity.attributes, aliases: entity.aliases.map((alias) => alias.aliasLabel) };
       const hit = index.resolve(incoming, entity.asOf || asOfDate);
       const decision = decisionFor(decisions, domainCode, entity.code);
       if (hit.kind === 'ambiguous' && !decision) {
@@ -863,6 +911,7 @@ export async function executeParsedFeed(
         active: true,
         provisional: true,
         identifiers,
+        aliases: entity.aliases.map((alias) => alias.aliasLabel),
       });
     }
   }
@@ -926,7 +975,7 @@ export async function executeParsedFeed(
     };
 
     for (const entity of entities) {
-      const incoming = { code: entity.code, name: entity.name, attributes: entity.attributes };
+      const incoming = { code: entity.code, name: entity.name, attributes: entity.attributes, aliases: entity.aliases.map((alias) => alias.aliasLabel) };
       let hit = index.resolve(incoming, entity.asOf || asOfDate);
       const decision = decisionFor(decisions, domainCode, entity.code);
       if (hit.kind === 'ambiguous') {
@@ -1006,6 +1055,7 @@ export async function executeParsedFeed(
         active: true,
         provisional: true,
         identifiers,
+        aliases: entity.aliases.map((alias) => alias.aliasLabel),
       });
       pending.set(provisionalId, entity);
       linkedTo.set(entity.code, provisionalId);
@@ -1064,6 +1114,7 @@ export async function executeParsedFeed(
       stats.created += insert.data.length;
       for (const row of insert.data) rememberInserted(row.entity_code, row.id);
     }
+    if (!dry) await storeDraftAliases(db, entities, idByCode);
     ids.set(domainCode, idByCode);
 
     const entityIds = [...new Set(idByCode.values())].filter((id) => !id.startsWith(DRY_PREFIX));

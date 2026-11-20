@@ -68,6 +68,7 @@ type EntityEdge {
 
 enum EntitySearchMatch {
   NAME
+  ALIAS
   PARENT
   RELATED
 }
@@ -83,6 +84,33 @@ type EntitySearchHit {
   match: EntitySearchMatch!
   matchedName: String
   matchedDomainName: String
+}
+
+"""Another name of one record."""
+type EntityAlias {
+  id: ID!
+  aliasLabel: String!
+  aliasCode: String!
+  aliasKind: String!
+}
+
+"""A word this entity type uses for the record name."""
+type EntityNameAlias {
+  aliasLabel: String!
+  aliasCode: String!
+}
+
+input SaveEntityAliasInput {
+  id: ID
+  entityId: ID!
+  aliasLabel: String!
+  """A catalog code such as PROJECT_NAME. Omitted when the words themselves are the name."""
+  aliasCode: String
+}
+
+type SaveEntityAliasResult {
+  alias: EntityAlias
+  errors: [MutationError!]!
 }
 
 input EntityFilter {

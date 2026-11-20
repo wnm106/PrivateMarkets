@@ -5,6 +5,7 @@
 
 import { SupabaseClient } from '@supabase/supabase-js';
 import { parseData, ParsedData } from './data-parsers';
+import { saveEntityAliases, takeIdentityTargets } from '../semantic-aliases';
 import { recommendFieldMappings, MappingRecommendation, FieldMapping } from './field-mapper';
 import { validateIdentifierMappings, validateIdentifierValues, IdentifierValidationResult } from './identifier-validator';
 import { generateImportPlan, validateImportPlan, planToBatches, ImportPlan, ImportBatch } from './relationship-analyzer';
@@ -374,10 +375,11 @@ async function importDomainRecords(
             attributes[mapping.targetAttribute] = value;
           }
         }
+        const identity = takeIdentityTargets(attributes);
 
         // Generate entity code from identifier attributes
-        const entityCode = generateEntityCode(domainCode, attributes, mappings);
-        const entityName = attributes['name'] || attributes['entity_name'] || entityCode;
+        const entityCode = generateEntityCode(domainCode, identity.attributes, mappings);
+        const entityName = identity.entityName || identity.attributes['name'] || entityCode;
 
         // Check if entity already exists
         const { data: existing } = await supabase
@@ -389,7 +391,8 @@ async function importDomainRecords(
 
         if (existing) {
           // Update existing entity
-          await updateEntityAttributes(existing.id, attributes, supabase, userId);
+          await updateEntityAttributes(existing.id, identity.attributes, supabase, userId);
+          await saveEntityAliases(supabase, existing.id, identity.aliases);
           recordsUpdated++;
         } else {
           // Create new entity
@@ -407,7 +410,8 @@ async function importDomainRecords(
           if (entityError) throw entityError;
 
           // Insert attributes
-          await insertEntityAttributes(entity.id, attributes, supabase, userId);
+          await insertEntityAttributes(entity.id, identity.attributes, supabase, userId);
+          await saveEntityAliases(supabase, entity.id, identity.aliases);
 
           // Insert relationships if defined
           if (relationshipMappings && relationshipMappings.length > 0) {

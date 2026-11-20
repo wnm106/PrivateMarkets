@@ -1,8 +1,9 @@
+import { phrasesEqual, type DomainAlias, type EntityNameAlias } from '@tapestrai/graphql/src/lib/semantic-aliases';
 import { POSITION_FILE_MAP } from './position-file-map';
 import type { ColumnTransform, FeedMap, TransformKind } from './types';
 import { applyTransform, isBlankToken, numberText, parseUsDate } from './values';
 
-export type AssignmentRole = 'ignore' | 'filter' | 'as_of' | 'source' | 'identity' | 'name' | 'attribute' | 'parent';
+export type AssignmentRole = 'ignore' | 'filter' | 'as_of' | 'source' | 'identity' | 'name' | 'alias' | 'attribute' | 'parent';
 
 export interface ColumnHint {
   sourceColumn: string;
@@ -21,6 +22,13 @@ export interface AttributeChoice {
   dataType: string;
   domainCode: string | null;
   referenceListCode: string | null;
+  /** Other words for this field, such as "Ending NAV" for NAV. */
+  aliasLabels?: string[];
+}
+
+export interface MappingAliases {
+  domains: DomainAlias[];
+  names: EntityNameAlias[];
 }
 
 export interface DistinctValue {
@@ -290,10 +298,16 @@ function base(
   };
 }
 
-function scoreAttribute(header: string, attribute: AttributeChoice, domainCode: string): number {
-  const headerTokens = new Set(tokens(header));
+function scoreAttribute(header: string, attribute: AttributeChoice, domainCode: string, ignoreTokens: ReadonlySet<string> = new Set()): number {
+  if ((attribute.aliasLabels || []).some((label) => phrasesEqual(header, label))) return 0.96;
+  const rawTokens = tokens(header);
+  const stripped = rawTokens.filter((token) => !ignoreTokens.has(token));
+  const headerTokens = new Set(stripped.length > 0 ? stripped : rawTokens);
   const nameTokens = new Set(tokens(attribute.attributeName));
   const codeTokens = new Set(tokens(attribute.attributeCode.replace(/_/g, ' ')));
+  for (const label of attribute.aliasLabels || []) {
+    for (const token of tokens(label)) nameTokens.add(token);
+  }
   const compare = nameTokens.size > 0 ? nameTokens : codeTokens;
   let overlap = 0;
   for (const token of headerTokens) {
@@ -331,7 +345,12 @@ function splitHeader(column: string): { domain: string | null; field: string } {
  * identifies those records. "Issuer" with Acme, Beta, Gamma is the issuer, not a field of it.
  * This runs before any field is matched, so the other columns can be placed on these records.
  */
-function detectHeaderIdentities(headers: string[], rows: Record<string, string>[], domainCodes: Set<string>): Map<string, string> {
+function detectHeaderIdentities(
+  headers: string[],
+  rows: Record<string, string>[],
+  domainCodes: Set<string>,
+  domainAliases: readonly DomainAlias[] = [],
+): Map<string, string> {
   const found = new Map<string, string>();
   const taken = new Set<string>();
   for (const column of headers.filter(Boolean)) {
@@ -346,7 +365,12 @@ function detectHeaderIdentities(headers: string[], rows: Record<string, string>[
       return words.every((word) => parts.includes(word)) && parts[parts.length - 1] === words[words.length - 1];
     });
     const exact = matches.filter((code) => tokens(code.replace(/_/g, ' ')).join(' ') === words.join(' '));
-    const domain = exact.length === 1 ? exact[0] : matches.length === 1 ? matches[0] : null;
+    let domain = exact.length === 1 ? exact[0] : matches.length === 1 ? matches[0] : null;
+    if (!domain) {
+      const aliasHits = domainAliases.filter((alias) => domainCodes.has(alias.domainCode) && (phrasesEqual(column, alias.aliasLabel) || phrasesEqual(column, alias.aliasCode)));
+      const codes = [...new Set(aliasHits.map((alias) => alias.domainCode))];
+      domain = codes.length === 1 ? codes[0] : null;
+    }
     if (!domain || taken.has(domain)) continue;
     taken.add(domain);
     found.set(column, domain);
@@ -483,12 +507,23 @@ export function suggestAssignments(
   rows: Record<string, string>[],
   attributes: AttributeChoice[],
   hints: ColumnHint[] = [],
+  aliases: MappingAliases = { domains: [], names: [] },
 ): ColumnAssignment[] {
   const hintByColumn = new Map(hints.map((hint) => [hint.sourceColumn, hint]));
   const usedAttributes = new Set<string>();
   const domainCodes = new Set(attributes.map((attribute) => attribute.domainCode).filter((code): code is string => Boolean(code)));
-  const headerIdentities = detectHeaderIdentities(headers.filter((column) => !hintByColumn.has(column) && !knownAssignment(column, rows)), rows, domainCodes);
+  const headerIdentities = detectHeaderIdentities(
+    headers.filter((column) => !hintByColumn.has(column) && !knownAssignment(column, rows)),
+    rows,
+    domainCodes,
+    aliases.domains,
+  );
   const identified = new Set<string>([...headerIdentities.values(), ...hints.filter((hint) => hint.role === 'identity' && hint.domainCode).map((hint) => hint.domainCode as string)]);
+  const namedDomains = new Set<string>();
+  const ignoreFor = (domainCode: string) => new Set([
+    ...tokens(domainCode.replace(/_/g, ' ')),
+    ...aliases.domains.filter((alias) => alias.domainCode === domainCode).flatMap((alias) => tokens(alias.aliasLabel)),
+  ]);
   const assignments = headers.filter(Boolean).map((column) => {
     const known = knownAssignment(column, rows);
     if (known) {
@@ -513,6 +548,19 @@ export function suggestAssignments(
       return withDistinct(structural(column, samplesFor(rows, column), 'identity', identityDomain, `${column} holds a different ${label} on most rows, so it identifies each ${label}.`, 0.9), rows);
     }
 
+    const nameAlias = aliases.names.find((alias) => domainCodes.has(alias.domainCode) && (phrasesEqual(column, alias.aliasLabel) || phrasesEqual(column, alias.aliasCode)));
+    if (nameAlias) {
+      const role: AssignmentRole = namedDomains.has(nameAlias.domainCode) || identified.has(nameAlias.domainCode) ? 'alias' : 'name';
+      if (role === 'name') namedDomains.add(nameAlias.domainCode);
+      const reason = role === 'name'
+        ? `${column} is the name of each ${domainLabel(nameAlias.domainCode).toLowerCase()}.`
+        : `${column} is another name for the same ${domainLabel(nameAlias.domainCode).toLowerCase()}.`;
+      return withDistinct({
+        ...structural(column, samplesFor(rows, column), role, nameAlias.domainCode, reason, 0.93),
+        attributeCode: role === 'alias' ? nameAlias.aliasCode : null,
+      }, rows);
+    }
+
     const qualified = qualifiedAssignment(column, rows, attributes, usedAttributes);
     if (qualified) return withDistinct(qualified, rows);
 
@@ -529,7 +577,7 @@ export function suggestAssignments(
       for (const domainCode of domains) {
         const key = `${domainCode}:${attribute.attributeCode}`;
         if (usedAttributes.has(key)) continue;
-        const score = scoreAttribute(column, attribute, domainCode);
+        const score = scoreAttribute(column, attribute, domainCode, ignoreFor(domainCode));
         if (score < 0.45) continue;
         // A field on a record this file identifies wins over a slightly better name match on one it does not.
         const ranked = score + (identified.has(domainCode) ? 0.12 : 0);
@@ -657,11 +705,12 @@ export function targetKey(assignment: Pick<ColumnAssignment, 'role' | 'domainCod
   if (assignment.role === 'filter') return 'filter';
   if (assignment.role === 'identity') return `identity:${assignment.domainCode}`;
   if (assignment.role === 'name') return `name:${assignment.domainCode}`;
+  if (assignment.role === 'alias') return `alias:${assignment.domainCode}:${assignment.attributeCode}`;
   if (assignment.role === 'parent') return `parent:${assignment.domainCode}:${assignment.parentDomainCode}`;
   return `attribute:${assignment.domainCode}:${assignment.attributeCode}`;
 }
 
-export function mappingTargets(attributes: AttributeChoice[], domains: string[]): MappingTarget[] {
+export function mappingTargets(attributes: AttributeChoice[], domains: string[], aliases: MappingAliases = { domains: [], names: [] }): MappingTarget[] {
   const targets: MappingTarget[] = [
     { key: 'ignore', group: 'File', label: 'Do not load', role: 'ignore', domainCode: null, attributeCode: null, parentDomainCode: null, dataType: null, referenceListCode: null },
     { key: 'as_of', group: 'File', label: 'As-of date', role: 'as_of', domainCode: null, attributeCode: null, parentDomainCode: null, dataType: 'DATE', referenceListCode: null },
@@ -694,6 +743,19 @@ export function mappingTargets(attributes: AttributeChoice[], domains: string[])
       dataType: 'STRING',
       referenceListCode: null,
     });
+    for (const alias of aliases.names.filter((item) => item.domainCode === domainCode)) {
+      targets.push({
+        key: `alias:${domainCode}:${alias.aliasCode}`,
+        group: label,
+        label: `${label} · ${alias.aliasLabel}`,
+        role: 'alias',
+        domainCode,
+        attributeCode: alias.aliasCode,
+        parentDomainCode: null,
+        dataType: 'STRING',
+        referenceListCode: null,
+      });
+    }
   }
   for (const link of IDENTITY_LINKS) {
     targets.push({
@@ -763,7 +825,7 @@ export function orphanColumns(assignments: ColumnAssignment[]): OrphanColumn[] {
   );
   return assignments
     .filter((assignment) => (
-      (assignment.role === 'attribute' || assignment.role === 'name' || assignment.role === 'parent')
+      (assignment.role === 'attribute' || assignment.role === 'name' || assignment.role === 'alias' || assignment.role === 'parent')
       && assignment.domainCode
       && !identified.has(assignment.domainCode)
     ))
@@ -803,6 +865,7 @@ export function feedMapFromAssignments(
         nameColumn: '',
         attributes: [],
         parents: [],
+        aliasColumns: [],
       };
       domains.set(domainCode, domain);
     }
@@ -824,6 +887,10 @@ export function feedMapFromAssignments(
       if (!domain.nameColumn) domain.nameColumn = assignment.sourceColumn;
     }
     if (assignment.role === 'name') domain.nameColumn = assignment.sourceColumn;
+    if (assignment.role === 'alias' && assignment.attributeCode) {
+      domain.aliasColumns = domain.aliasColumns || [];
+      domain.aliasColumns.push({ column: assignment.sourceColumn, aliasCode: assignment.attributeCode });
+    }
     if (assignment.role === 'attribute' && assignment.attributeCode) {
       domain.attributes.push({ column: assignment.sourceColumn, attributeCode: assignment.attributeCode });
     }

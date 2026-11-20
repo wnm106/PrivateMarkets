@@ -85,7 +85,10 @@ export function buildPrompt(
   const fields = attributes
     .filter((attribute) => attribute.domainCode && domains.includes(attribute.domainCode))
     .slice(0, 700)
-    .map((attribute) => `${attribute.domainCode}|${attribute.attributeCode}|${attribute.attributeName}|${attribute.dataType}`);
+    .map((attribute) => {
+      const aka = (attribute.aliasLabels || []).slice(0, 4).join(', ');
+      return `${attribute.domainCode}|${attribute.attributeCode}|${attribute.attributeName}|${attribute.dataType}${aka ? `|${aka}` : ''}`;
+    });
   return [
     'You map the columns of an uploaded table onto a catalog of fields for an investment data platform.',
     context.fileName ? `The file is "${context.fileName}".` : '',

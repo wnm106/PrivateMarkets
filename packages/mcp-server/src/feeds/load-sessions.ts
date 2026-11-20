@@ -55,19 +55,29 @@ function useClient(client?: SupabaseClient): SupabaseClient {
 }
 
 async function specialistCatalog(client: SupabaseClient, clientId: string): Promise<SpecialistCatalog> {
-  const [attributes, domains, sources, relationships, maps] = await Promise.all([
-    visibleToClient(client.schema('metadata_register').from('attribute_register').select('attribute_code, attribute_name, data_type, domain_code, reference_list_code'), clientId).order('attribute_name'),
-    visibleToClient(client.schema('metadata_register').from('domain_types').select('domain_code, domain_name').eq('is_active', true), clientId).order('domain_code'),
+  const register = client.schema('metadata_register');
+  const [attributes, domains, sources, relationships, maps, domainAliases, nameAliases, attributeAliases] = await Promise.all([
+    visibleToClient(register.from('attribute_register').select('id, attribute_code, attribute_name, data_type, domain_code, reference_list_code'), clientId).order('attribute_name'),
+    visibleToClient(register.from('domain_types').select('domain_code, domain_name').eq('is_active', true), clientId).order('domain_code'),
     client.schema('entity_instances').from('source_registry').select('source_code, source_name').eq('is_active', true).order('source_name'),
-    visibleToClient(client.schema('metadata_register').from('relationship_types').select('relationship_code, relationship_name, parent_domain_code, child_domain_code').eq('is_active', true), clientId),
+    visibleToClient(register.from('relationship_types').select('relationship_code, relationship_name, parent_domain_code, child_domain_code').eq('is_active', true), clientId),
     visibleToClient(client.schema('entity_instances').from('feed_maps').select('map_code, column_mappings, client_id').eq('is_active', true), clientId),
+    register.from('domain_aliases').select('domain_code, alias_label').eq('is_active', true),
+    register.from('entity_name_aliases').select('domain_code, alias_label, alias_code').eq('is_active', true),
+    register.from('attribute_aliases').select('attribute_id, alias_label').eq('is_active', true),
   ]);
-  const failure = attributes.error || domains.error || sources.error || relationships.error || maps.error;
+  const failure = attributes.error || domains.error || sources.error || relationships.error || maps.error || domainAliases.error || nameAliases.error || attributeAliases.error;
   if (failure) throw new Error(failure.message);
   const ownedFirst = [...(maps.data || [])].sort((a: any, b: any) => Number(b.client_id === clientId) - Number(a.client_id === clientId));
   const stored = ownedFirst
     .map((row: any) => row.column_mappings as FeedMap)
     .filter((map) => map && map.mapCode && Array.isArray(map.domains));
+  const labels = new Map<string, string[]>();
+  for (const row of attributeAliases.data || []) {
+    const list = labels.get(row.attribute_id) || [];
+    list.push(row.alias_label);
+    labels.set(row.attribute_id, list);
+  }
   return {
     attributes: (attributes.data || []).map((row: any) => ({
       attributeCode: row.attribute_code,
@@ -75,8 +85,11 @@ async function specialistCatalog(client: SupabaseClient, clientId: string): Prom
       dataType: row.data_type,
       domainCode: row.domain_code,
       referenceListCode: row.reference_list_code,
+      aliasLabels: labels.get(row.id) || [],
     })),
     domains: (domains.data || []).map((row: any) => ({ code: row.domain_code, name: row.domain_name })),
+    domainAliases: (domainAliases.data || []).map((row: any) => ({ domainCode: row.domain_code, aliasLabel: row.alias_label })),
+    nameAliases: (nameAliases.data || []).map((row: any) => ({ domainCode: row.domain_code, aliasLabel: row.alias_label, aliasCode: row.alias_code })),
     sources: (sources.data || []).map((row: any) => ({ code: row.source_code, name: row.source_name })),
     relationships: (relationships.data || []).map((row: any) => ({
       code: row.relationship_code,
