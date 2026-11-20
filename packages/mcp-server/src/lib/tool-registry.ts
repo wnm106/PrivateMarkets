@@ -2,12 +2,24 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { ToolDefinition, ToolExecutionResult } from './types';
 import { ToolContext, getContextProfile, isCategoryAllowed } from './context-profiles';
 
+/**
+ * The tools an assistant or a workflow may call.
+ *
+ * The registry holds definitions only. It keeps no database client: every call
+ * names the client it runs as, which is the caller's own (their JWT, so tenancy
+ * and row security apply). A call without one is refused. It never falls back
+ * to a client of the registry's own, because that client would be the same for
+ * every caller and, built from a service key, would see every tenant.
+ */
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
-  private supabase: SupabaseClient;
 
-  constructor(supabase: SupabaseClient) {
-    this.supabase = supabase;
+  /**
+   * @param _unused Older callers passed a default client here. It is accepted so
+   * they still compile, and it is not kept or used.
+   */
+  constructor(_unused?: unknown) {
+    void _unused;
   }
 
   registerTool(tool: ToolDefinition): void {
@@ -86,14 +98,18 @@ export class ToolRegistry {
   }
 
   /**
-   * @param supabaseOverride Optional per-call client (e.g. scoped to the caller's JWT so RLS applies).
+   * @param supabase The client this call runs as: the caller's own, carrying their JWT.
+   * Required. A call without one is refused instead of running as anyone else.
    */
-  async executeTool(name: string, args: Record<string, any>, supabaseOverride?: SupabaseClient): Promise<ToolExecutionResult> {
+  async executeTool(name: string, args: Record<string, any>, supabase: SupabaseClient): Promise<ToolExecutionResult> {
     const tool = this.tools.get(name);
     if (!tool) {
       throw new Error(`Unknown tool: ${name}`);
     }
-    return tool.execute(args, supabaseOverride || this.supabase);
+    if (!supabase) {
+      throw new Error(`Tool ${name} was called without a database client. Pass the client of the user the call runs as.`);
+    }
+    return tool.execute(args, supabase);
   }
 
   /** Names of the arguments a tool declares, or an empty set for an unknown tool. */
@@ -102,15 +118,14 @@ export class ToolRegistry {
     return new Set(properties && typeof properties === 'object' ? Object.keys(properties) : []);
   }
 
-  getSupabase(): SupabaseClient {
-    return this.supabase;
-  }
-
   /**
    * Dynamically compile JSON schema from database template registry
    */
-  async compileSchemaFromTemplate(templateCode: string): Promise<any> {
-    const { data: template } = await this.supabase
+  async compileSchemaFromTemplate(templateCode: string, supabase: SupabaseClient): Promise<any> {
+    if (!supabase) {
+      throw new Error('compileSchemaFromTemplate was called without a database client.');
+    }
+    const { data: template } = await supabase
       .from('domain_templates')
       .select(`
         *,

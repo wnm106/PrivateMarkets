@@ -514,7 +514,21 @@ export async function saveSourceMap(id: string, name: string | undefined, client
   return getLoadSession(id, clientId, client);
 }
 
-export async function runLoadSession(id: string, clientId: string, client: SupabaseClient = useClient(), decisions?: EntityResolutionDecision[]): Promise<LoadSessionDetail> {
+/**
+ * Load a session's file into live records, creating the record types and fields
+ * the person accepted. This writes with the service role and checks nothing
+ * about the caller: a caller acting for a signed-in user must first have the
+ * database confirm, as that user, that they hold load.promote in `clientId`
+ * (requireLoadPromote in session-client.ts), and passes who they are as
+ * `options.actorId` so the records and values written name them.
+ */
+export async function runLoadSession(
+  id: string,
+  clientId: string,
+  client: SupabaseClient = useClient(),
+  decisions?: EntityResolutionDecision[],
+  options: { actorId?: string | null } = {},
+): Promise<LoadSessionDetail> {
   assertLocalSupabase(client);
   const row = await client.schema('entity_instances').from('load_sessions').select('*').eq('id', id).eq('client_id', clientId).single();
   if (row.error || !row.data) throw new Error(row.error?.message || 'Load session not found');
@@ -535,7 +549,7 @@ export async function runLoadSession(id: string, clientId: string, client: Supab
     const result = await executeParsedFeed(reading.map, row.data.file_name, {
       headers: table?.headers || [],
       rows: table?.rows || [],
-    }, reading.asOfDate, client, clientId, undefined, { decisions });
+    }, reading.asOfDate, client, clientId, undefined, { decisions, actorId: options.actorId });
     const needsResolution = result.resolutions.length > 0;
     const failed = !needsResolution && (result.errors.length > 0 || result.domains.some((domain) => domain.failed > 0));
     const saved = await client.schema('entity_instances').from('load_sessions').update({

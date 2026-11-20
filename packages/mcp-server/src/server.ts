@@ -112,7 +112,8 @@ const server = new Server(
   }
 );
 
-const toolRegistry = new ToolRegistry(supabase);
+// The registry holds no client. Each call below passes the configured user's client.
+const toolRegistry = new ToolRegistry();
 
 // Register all tool categories
 registerDomainTools(toolRegistry);
@@ -154,7 +155,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
-    const result = await toolRegistry.executeTool(name, args || {});
+    const result = await toolRegistry.executeTool(name, args || {}, supabase);
     return {
       content: [
         {

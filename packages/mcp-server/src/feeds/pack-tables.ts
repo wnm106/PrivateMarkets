@@ -293,7 +293,7 @@ export async function previewImportTable(id: string, clientId: string, input: Ta
 }
 
 /** Select a table of a stored file, save its mapping, its as-of date and its source, and load it. */
-export async function loadImportTable(id: string, clientId: string, input: TableLoadInput, client?: SupabaseClient) {
+export async function loadImportTable(id: string, clientId: string, input: TableLoadInput, client?: SupabaseClient, options: { actorId?: string | null } = {}) {
   const database = db(client);
   const planned = await plan(database, id, clientId, input);
   if (planned.row.status === 'PROCESSING') throw new Error('This file is already loading. Wait for it to finish before loading it again.');
@@ -319,7 +319,7 @@ export async function loadImportTable(id: string, clientId: string, input: Table
 
   let loaded;
   try {
-    loaded = await processImportInstance(id, clientId, planned.assignments, planned.asOf, database);
+    loaded = await processImportInstance(id, clientId, planned.assignments, planned.asOf, database, undefined, undefined, { actorId: options.actorId });
   } catch (error) {
     // The load records its own failure on the file. What it loaded before is still there.
     throw new Error(`${planned.table.name} did not load. ${error instanceof Error ? error.message : 'The load failed.'}`);

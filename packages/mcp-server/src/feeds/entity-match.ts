@@ -11,6 +11,16 @@ import { compactIdentifier, normalizeName } from '../../../graphql/src/lib/entit
  * that was current on that date. A dated identifier wins over the entity code,
  * so a historical file whose only key was later reused lands on the entity
  * that held the key on the file date.
+ *
+ * An index belongs to one client. Only that client's records are matched
+ * against, offered as choices, or handed back to be written to. Another
+ * client's record never enters the index, even if a caller adds it.
+ *
+ * Record codes are unique across every client in the database, so a code held
+ * elsewhere cannot be given to a new record here. The index is told those
+ * codes only (reserveCode), and a row that would need one is refused with a
+ * message that gives no reason. It says nothing about who holds the code, or
+ * whether anyone does.
  */
 
 export interface IdentifierCatalog {
@@ -50,6 +60,11 @@ export type ResolveHit =
   | { kind: 'ambiguous'; via: 'code' | 'identifier' | 'name'; entities: MatchEntity[]; message: string }
   | { kind: 'rejected'; message: string }
   | { kind: 'none' };
+
+/** Why a new record cannot take a code. The same words for every cause, so they confirm nothing about records the caller cannot see. */
+export function codeUnavailableMessage(code: string): string {
+  return `${code} is not available as a record code. Use a different code.`;
+}
 
 export function identifierCatalog(definitions: readonly (readonly string[])[]): IdentifierCatalog {
   const singles: string[] = [];
@@ -125,6 +140,8 @@ export class EntityMatchIndex {
   private readonly byCodeName = new Map<string, MatchEntity[]>();
   private readonly byIdentifier = new Map<string, MatchEntity[]>();
   private readonly byComposite = new Map<string, MatchEntity[]>();
+  /** Codes the database already holds outside this client. The code is all that is kept. */
+  private readonly reservedCodes = new Set<string>();
 
   constructor(
     private readonly catalog: IdentifierCatalog,
@@ -132,7 +149,22 @@ export class EntityMatchIndex {
     private readonly clientId: string,
   ) {}
 
+  /** A code a new record here cannot take, because the database holds it for a record this client does not own. */
+  reserveCode(code: string): void {
+    const key = code.trim();
+    if (key) this.reservedCodes.add(key);
+  }
+
+  codeReserved(code: string): boolean {
+    return this.reservedCodes.has(code.trim());
+  }
+
   add(entity: MatchEntity): void {
+    // A record of another client is never matched, offered or written to. All it can do is hold its code.
+    if (entity.clientId !== this.clientId) {
+      this.reserveCode(entity.code);
+      return;
+    }
     if (this.byId.has(entity.id)) return;
     this.byId.set(entity.id, entity);
     this.indexCode(entity, entity.code);
@@ -159,6 +191,15 @@ export class EntityMatchIndex {
   }
 
   resolve(incoming: IncomingEntity, asOf?: string): ResolveHit {
+    const hit = this.resolveOwn(incoming, asOf);
+    // Nothing of this client's matches, so the row would become a new record. Its code has to be free.
+    if (hit.kind === 'none' && this.codeReserved(incoming.code)) {
+      return { kind: 'rejected', message: codeUnavailableMessage(incoming.code) };
+    }
+    return hit;
+  }
+
+  private resolveOwn(incoming: IncomingEntity, asOf?: string): ResolveHit {
     const values = attributeValues(incoming.attributes);
     if (asOf) {
       const dated = this.collectIdentifiers(incoming.code, values, asOf, true);
@@ -190,7 +231,7 @@ export class EntityMatchIndex {
   private matchable(entity: MatchEntity): boolean {
     return entity.active
       && entity.domainCode === this.domainCode
-      && (!entity.clientId || entity.clientId === this.clientId);
+      && entity.clientId === this.clientId;
   }
 
   private push(index: Map<string, MatchEntity[]>, key: string, entity: MatchEntity): void {
@@ -268,9 +309,6 @@ export class EntityMatchIndex {
     if (!entity.active) return { kind: 'rejected', message: `${code} matches inactive ${entity.code}` };
     if (entity.domainCode !== this.domainCode) {
       return { kind: 'rejected', message: `${code} already exists as ${entity.domainCode}, not ${this.domainCode}` };
-    }
-    if (entity.clientId && entity.clientId !== this.clientId) {
-      return { kind: 'rejected', message: `${code} already belongs to another client` };
     }
     // A previous load stored the name in the code column. Prefer the entity that already had its own code.
     if (sameLabel(entity.code, entity.name)) {

@@ -82,19 +82,37 @@ export function bindAgentContext(context: AgentContext): void {
   storage.enterWith(agentStore(context));
 }
 
+/** The bearer token a client was built with (`global.headers.Authorization`), when it has one. */
+function bearerOf(supabase: SupabaseClient): string | null {
+  const headers = (supabase as unknown as { headers?: Record<string, string> }).headers || {};
+  const value = headers.Authorization || headers.authorization || '';
+  return value.startsWith('Bearer ') ? value.slice(7) : null;
+}
+
 /**
- * Runs fn as a feed or import for a client. A surrounding context keeps its
- * user. A signed-in client is asked who it is when nobody has said.
+ * The user a client is signed in as, or null. A client built with an
+ * Authorization header holds no session for Auth to read, so Auth is asked
+ * about that token instead. Either way Auth verifies the token: nothing is
+ * read from it unchecked.
  */
 export async function userIdOf(supabase: SupabaseClient): Promise<string | null> {
   try {
     const { data } = await supabase.auth.getUser();
+    if (data.user?.id) return data.user.id;
+  } catch {
+    // No session on this client. The token it was built with is tried next.
+  }
+  const token = bearerOf(supabase);
+  if (!token) return null;
+  try {
+    const { data } = await supabase.auth.getUser(token);
     return data.user?.id ?? null;
   } catch {
     return null;
   }
 }
 
+/** Runs fn as a feed or import for a client. A surrounding context keeps its user. */
 export async function runAsFeedClient<T>(
   args: { clientId: string; activity: string; metadata?: Record<string, unknown> },
   fn: () => Promise<T>,

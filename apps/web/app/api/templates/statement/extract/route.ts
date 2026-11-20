@@ -4,7 +4,7 @@ import { extractPdfText } from '@tapestrai/graphql/src/lib/import-intake';
 import { visionJsonToStatementText } from '@tapestrai/graphql/src/lib/statement-template/parse';
 import { invokeAgent, runWithAgentContext } from '@tapestrai/mcp-server/src/agent/harness';
 import { geminiAnswerText } from '@tapestrai/mcp-server/src/agent/usage';
-import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
+import { feedAuditClientId, requireFeedUser } from '@/lib/feeds/require-user';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,7 +36,8 @@ export async function POST(request: NextRequest) {
   if (files.length === 0) return NextResponse.json({ error: 'Choose a file or an image.' }, { status: 400 });
   if (files.length > MAX_FILES) return NextResponse.json({ error: `Upload at most ${MAX_FILES} files at a time.` }, { status: 400 });
 
-  const clientId = await feedClientId();
+  // Only names the client on the model call's receipt. Nothing is stored here.
+  const clientId = await feedAuditClientId();
   try {
     const sources = await runWithAgentContext(
       { userId: user.id, clientId, feature: 'statement-extract', activity: 'statement.vision' },
