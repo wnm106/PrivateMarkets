@@ -17,7 +17,7 @@ export const RECORD_CUBE_HTML = `<!DOCTYPE html>
 html,body{height:100%;margin:0}
 body{background:transparent;color:var(--ink);font:15px/1.3 "Avenir Next","Century Gothic","Segoe UI",system-ui,sans-serif;overflow:hidden}
 #stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;perspective:1800px;perspective-origin:50% 35%;box-sizing:border-box;cursor:grab;
- --tilt:56deg;--spin:0deg;--cw:70px;--ch:50px;--g:9px;--pad:14px;--G:150px;--Sw:300px;--Sh:200px;--rw:22px;--fc:12px;--fr:12px;--ft:12px;--sl:0px;--sr:0px}
+ --tilt:64deg;--spin:0deg;--cw:70px;--ch:50px;--g:9px;--pad:14px;--G:150px;--Sw:300px;--Sh:200px;--rw:22px;--fc:12px;--fr:12px;--ft:12px;--sl:0px;--sr:0px}
 #stage.drag{cursor:grabbing}
 #scene{position:relative;width:var(--Sw);height:var(--Sh);margin-left:calc(var(--sl) - var(--sr));transform-style:preserve-3d;transform:rotateX(var(--tilt)) rotateZ(var(--spin))}
 .layer{position:absolute;inset:0;transform-style:preserve-3d;transform:translateZ(var(--z));border-radius:calc(var(--ch)*.4);background:var(--plate);border:1px solid var(--plate-b);transition:opacity .4s}
@@ -42,23 +42,18 @@ body{background:transparent;color:var(--ink);font:15px/1.3 "Avenir Next","Centur
 .tag button{pointer-events:auto;font:inherit;font-weight:700;font-size:var(--ft);color:var(--ink);background:var(--tag);border:2px solid var(--gray);border-radius:99px;padding:.3em .75em;cursor:pointer;white-space:nowrap;box-sizing:border-box;width:var(--tpw,auto);text-align:center}
 .tag button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .tag button:focus-visible{outline:3px solid var(--b1);outline-offset:1px}
-#tip{position:absolute;left:16px;bottom:12px;max-width:64%;font-size:clamp(14px,2.6vw,20px);font-weight:700;pointer-events:none}
-#tip small{display:block;color:var(--mute);font-size:clamp(11px,1.8vw,14px);font-weight:500;margin-top:2px}
-#brand{position:absolute;right:16px;bottom:12px;font-size:clamp(17px,3.4vw,26px);font-weight:700;letter-spacing:-.02em;pointer-events:none}
+#brand{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);font-size:clamp(17px,3.4vw,26px);font-weight:700;letter-spacing:-.02em;pointer-events:none}
 #brand em{font-style:normal;color:#0a8cff}
-body.ls body.ls body.ls #tip{max-width:190px;font-size:15px}
-body.ls #tip small{font-size:11px}
 @media (prefers-reduced-motion:reduce){.ribbon::after{animation:none}.ribbon{transition:none}}
 </style>
 </head>
 <body>
 <div id="stage"><div id="scene"></div></div>
-<div id="tip"></div>
 <div id="brand">tapestr<em>.ai</em></div>
 <script>
 (function(){
-var ENT=['Issuer','Security','Position'],SRC=['Bloomberg','WSO','Fund Admin'],TIM=['Front Office','Middle Office','Back Office'];
-var scene=document.getElementById('scene'),tip=document.getElementById('tip'),stage=document.getElementById('stage');
+var ENT=['Issuer','Security','Position'],SRC=['Bloomberg','IBOR','Fund Admin'],TIM=['Front Office','Middle Office','Back Office'];
+var scene=document.getElementById('scene'),stage=document.getElementById('stage');
 var reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
 var sel={c:0,r:1},focus=-1,tiles=[],layers=[],cols=[],rows=[],tags=[],touched=false;
 function el(tag,cls,parent,html){var e=document.createElement(tag);if(cls)e.className=cls;if(html!=null)e.innerHTML=html;if(parent)parent.appendChild(e);return e}
@@ -110,10 +105,8 @@ function render(){
  rows.forEach(function(e,i){e.classList.toggle('on',i===sel.r)});
  layers.forEach(function(l,i){l.classList.toggle('dim',focus>=0&&focus!==i)});
  tags.forEach(function(b,i){b.setAttribute('aria-pressed',focus===i?'true':'false')});
- tip.innerHTML=ENT[sel.r]+' &middot; '+SRC[sel.c]+(focus>=0?' &middot; '+TIM[focus]:'')+
-  '<small>'+(focus>=0?'Showing '+TIM[focus]+' only. Tap it again for all three.':'The same record across the Front, Middle and Back Office.')+'</small>';
 }
-var cur={t:56,s:0},justDragged=false;
+var cur={t:64,s:0},justDragged=false;
 function apply(){stage.style.setProperty('--tilt',cur.t+'deg');stage.style.setProperty('--spin',cur.s+'deg')}
 var down=null;
 stage.addEventListener('pointerdown',function(e){if(e.target.closest('.tag'))return;down={x:e.clientX,y:e.clientY,moved:false}});

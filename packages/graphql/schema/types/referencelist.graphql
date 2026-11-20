@@ -25,6 +25,9 @@ type ReferenceListValue {
   isActive: Boolean!
   synonyms: [String!]!
   metadata: JSON
+  parentValueId: ID
+  parentValueCode: String
+  level: Int
 }
 
 type NormalizationResult {

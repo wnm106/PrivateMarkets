@@ -15,6 +15,17 @@ type FieldError = { field: string | null; message: string; code: string };
 
 const FEED_BUCKET = 'feed-inbox';
 
+/** The domain Cloudflare Email Routing receives for, for example in.tapestr.ai. */
+export function inboundDomain(): string | null {
+  const value = typeof process !== 'undefined' ? process.env?.INBOUND_EMAIL_DOMAIN : undefined;
+  const domain = String(value || '').trim().toLowerCase().replace(/^@/, '');
+  return domain || null;
+}
+
+export function inboundAddress(token: unknown, domain: string | null = inboundDomain()): string | null {
+  return typeof token === 'string' && token && domain ? `${token}@${domain}` : null;
+}
+
 function fail(message: string, field: string | null = null, code = 'VALIDATION'): FieldError {
   return { field, message, code };
 }
@@ -40,6 +51,34 @@ export function mapConnection(row: Row) {
     lastCheckOk: row.last_check_ok ?? null,
     lastCheckMessage: row.last_check_message || null,
     inboxPath: row.kind === 'STORAGE' ? [FEED_BUCKET, row.client_id, config.folder].filter(Boolean).join('/') : null,
+    inboundAddress: row.kind === 'EMAIL' ? inboundAddress(row.inbound_token) : null,
+  };
+}
+
+export function mapInboundMessage(row: Row) {
+  return {
+    id: row.id,
+    connectionId: row.connection_id,
+    connectionName: row.connection_name || null,
+    envelopeFrom: row.envelope_from || null,
+    headerFrom: row.header_from || null,
+    subject: row.subject || null,
+    sizeBytes: row.size_bytes == null ? null : Number(row.size_bytes),
+    status: row.status,
+    reason: row.reason || null,
+    auth: row.auth || null,
+    // The stored name is internal. People see the name the sender gave.
+    attachments: (Array.isArray(row.attachments) ? row.attachments : []).map((item: Row) => ({
+      name: item.name,
+      size: item.size ?? null,
+      mediaType: item.mediaType || null,
+      taken: item.taken === true,
+      reason: item.reason || null,
+    })),
+    receivedAt: row.received_at,
+    screenedAt: row.screened_at || null,
+    releasedAt: row.released_at || null,
+    discardedAt: row.discarded_at || null,
   };
 }
 
@@ -150,6 +189,8 @@ export const feedResolvers = {
     receivedFiles: async (_: unknown, args: { feedId?: string | null; first?: number | null }, context: Context) =>
       (await rows(context, 'feed_received_files_list', { p_feed_id: args.feedId || null, p_limit: args.first ?? 50 })).map(mapReceivedFile),
     feedMaps: async (_: unknown, __: unknown, context: Context) => visibleMaps(context),
+    inboundMessages: async (_: unknown, args: { connectionId?: string | null; first?: number | null }, context: Context) =>
+      (await rows(context, 'inbound_messages_list', { p_connection_id: args.connectionId || null, p_limit: args.first ?? 50 })).map(mapInboundMessage),
   },
 
   Mutation: {
@@ -324,6 +365,24 @@ export const feedResolvers = {
       const { data, error } = await context.supabase.rpc('feed_delete', { p_id: args.id });
       if (error) return { success: false, errors: [failure(error, 'DELETE_FAILED')] };
       if (data !== true) return { success: false, errors: [fail('Feed was not found.', 'id', 'NOT_FOUND')] };
+      return { success: true, errors: [] };
+    },
+
+    rotateFeedConnectionAddress: async (_: unknown, args: { id: string }, context: Context) => {
+      const { data, error } = await context.supabase.rpc('feed_connection_rotate_address', { p_id: args.id });
+      if (error) return { connection: null, errors: [failure(error, 'SAVE_FAILED')] };
+      return { connection: mapConnection(data as Row), errors: [] };
+    },
+
+    releaseInboundMessage: async (_: unknown, args: { id: string }, context: Context) => {
+      const { error } = await context.supabase.rpc('inbound_message_release', { p_id: args.id });
+      if (error) return { success: false, errors: [failure(error, 'RELEASE_FAILED')] };
+      return { success: true, errors: [] };
+    },
+
+    discardInboundMessage: async (_: unknown, args: { id: string }, context: Context) => {
+      const { error } = await context.supabase.rpc('inbound_message_discard', { p_id: args.id });
+      if (error) return { success: false, errors: [failure(error, 'DISCARD_FAILED')] };
       return { success: true, errors: [] };
     },
 

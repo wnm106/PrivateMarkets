@@ -391,6 +391,31 @@ type DealComplianceScore {
   errors: [MutationError!]!
 }
 
+# The amount a Hypo run placed with one fund, as the allocation grid showed it.
+type DealHypoAllocation {
+  fundId: ID!
+  fundName: String!
+  parentFundId: ID
+  # PORTFOLIO | SLEEVE
+  level: String!
+  amount: Float!
+}
+
+# A Hypo run: the allocation is written as positions under scenarioCode
+# ('<deal code>#HYPO') and every rule on the deal's funds is scored twice.
+# before is the book without this deal; after is the book with the Hypo
+# allocation. The deal's saved allocation is not written.
+type DealHypoRun {
+  scenarioCode: String
+  asOfDate: Date
+  ranAt: DateTime!
+  rules: [ComplianceFundRule!]!
+  before: [ComplianceEvaluationResult!]!
+  after: [ComplianceEvaluationResult!]!
+  allocations: [DealHypoAllocation!]!
+  errors: [MutationError!]!
+}
+
 # One record that fed a fund's result, with the values the rule read from it.
 type ComplianceContributorColumn {
   code: String!

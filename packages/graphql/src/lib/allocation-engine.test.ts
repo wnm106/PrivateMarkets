@@ -335,6 +335,99 @@ describe('allocation engine', () => {
     expect(result.allocated).toBeCloseTo(80, 2);
   });
 
+  it('shows a sleeve with no room under a compliance rule as blocked by that rule, and moves its share to its sibling', () => {
+    const sector = { trancheIds: ['tl'], capacity: 0, ruleName: 'Sector share of invested book' };
+    const result = allocate({
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 40, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [{
+        id: 'hsi',
+        name: 'Harbor Senior Income',
+        nav: 2000,
+        issuerLimit: 1,
+        sponsorLimit: 1,
+        unfundedLimit: 1,
+        sponsorExposure: 0,
+        unfundedExposure: 0,
+        allowed: ['LOAN'],
+        denyNote: '',
+        capacityPools: [],
+        sleeves: [
+          { id: 'inst', name: 'Institutional', nav: 1000, cash: 100, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '', capacityPools: [sector] },
+          { id: 'retail', name: 'Retail', nav: 1000, cash: 100, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '', capacityPools: [] },
+        ],
+      }],
+    });
+    const blocked = cell(result, 'inst', 'tl');
+    expect(blocked.eligible).toBe(false);
+    expect(blocked.amount).toBe(0);
+    expect(blocked.exclusionKind).toBe('limit');
+    expect(blocked.exclusionText).toContain('Sector share of invested book');
+    expect(cell(result, 'retail', 'tl').amount).toBeCloseTo(40, 2);
+    expect(cell(result, 'hsi', 'tl').eligible).toBe(true);
+  });
+
+  it('shows a fund with no room under a compliance rule as blocked, unless the cell is overridden', () => {
+    const issuer = { trancheIds: ['tl'], capacity: -5, ruleName: 'Single-issuer share of NAV' };
+    const fund = (id: string, pools: AllocationPortfolio['capacityPools']): AllocationPortfolio => ({
+      id, name: id, nav: 1000, issuerLimit: 1, sponsorLimit: 1, unfundedLimit: 1, sponsorExposure: 0, unfundedExposure: 0,
+      allowed: ['LOAN'], denyNote: '', capacityPools: pools,
+      sleeves: [{ id: `${id}-main`, name: id, nav: 1000, cash: 100, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN'], denyNote: '', capacityPools: pools }],
+    });
+    const request: AllocationRequest = {
+      tranches: [{ id: 'tl', name: 'Term Loan', size: 40, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
+      portfolios: [fund('full', [issuer]), fund('open', [])],
+    };
+    const result = allocate(request);
+    expect(cell(result, 'full', 'tl').eligible).toBe(false);
+    expect(cell(result, 'full', 'tl').exclusionKind).toBe('limit');
+    expect(cell(result, 'full', 'tl').exclusionText).toContain('Single-issuer share of NAV');
+    expect(cell(result, 'open', 'tl').amount).toBeCloseTo(40, 2);
+
+    const overridden = allocate({ ...request, adjustments: [{ fundId: 'full', trancheId: 'tl', type: 'override', amount: 5 }] });
+    expect(cell(overridden, 'full', 'tl').eligible).toBe(true);
+    expect(cell(overridden, 'full', 'tl').amount).toBeCloseTo(5, 2);
+  });
+
+  it('reads a 0 limit as a prohibition: a mandate on the fund, a guideline on a sleeve', () => {
+    const banned = { trancheIds: ['rcf'], capacity: 0, hardLimit: 0, groupValue: 'REVOLVING_CREDIT', ruleName: 'Permitted instrument types' };
+    const sleeveOf = (id: string, pools: AllocationPortfolio['capacityPools']) => ({
+      id, name: id, nav: 1000, cash: 100, undrawn: 0, line: 0, reserve: 0, allowed: ['LOAN', 'REVOLVING_CREDIT'], denyNote: '', capacityPools: pools,
+    });
+    const fund = (id: string, pools: AllocationPortfolio['capacityPools'], sleeves: AllocationPortfolio['sleeves']): AllocationPortfolio => ({
+      id, name: id, nav: 2000, issuerLimit: 1, sponsorLimit: 1, unfundedLimit: 1, sponsorExposure: 0, unfundedExposure: 0,
+      allowed: ['LOAN', 'REVOLVING_CREDIT'], denyNote: '', capacityPools: pools, sleeves,
+    });
+    const result = allocate({
+      tranches: [
+        { id: 'tl', name: 'Term Loan', size: 40, holdPct: 100, unfunded: false, instrumentType: 'LOAN' },
+        { id: 'rcf', name: 'Revolver', size: 10, holdPct: 100, unfunded: true, instrumentType: 'REVOLVING_CREDIT' },
+      ],
+      portfolios: [
+        fund('mdl', [], [sleeveOf('sma', [banned]), sleeveOf('lp', [])]),
+        fund('poc', [banned], [sleeveOf('poc-main', [])]),
+      ],
+    });
+    expect(cell(result, 'sma', 'rcf').exclusionKind).toBe('guideline');
+    expect(cell(result, 'sma', 'rcf').exclusionText).toContain('Permitted instrument types');
+    expect(cell(result, 'sma', 'rcf').exclusionText).toContain('revolving credit');
+    expect(cell(result, 'sma', 'tl').eligible).toBe(true);
+    expect(cell(result, 'poc', 'rcf').exclusionKind).toBe('mandate');
+    expect(cell(result, 'poc-main', 'rcf').eligible).toBe(false);
+    expect(cell(result, 'lp', 'rcf').amount).toBeCloseTo(10, 2);
+
+    // A saved amount on the portfolio still goes only to the sleeve the rule lets hold it.
+    const saved = allocate({
+      tranches: [
+        { id: 'tl', name: 'Term Loan', size: 40, holdPct: 100, unfunded: false, instrumentType: 'LOAN' },
+        { id: 'rcf', name: 'Revolver', size: 10, holdPct: 100, unfunded: true, instrumentType: 'REVOLVING_CREDIT' },
+      ],
+      portfolios: [fund('mdl', [], [sleeveOf('sma', [banned]), sleeveOf('lp', [])])],
+      adjustments: [{ fundId: 'mdl', trancheId: 'rcf', type: 'override', amount: 6, saved: true }],
+    });
+    expect(cell(saved, 'sma', 'rcf').eligible).toBe(false);
+    expect(cell(saved, 'lp', 'rcf').amount).toBeCloseTo(6, 2);
+  });
+
   it('splits a child override across the children that were not overridden', () => {
     const result = allocate({
       tranches: [{ id: 'tl', name: 'Term Loan', size: 100, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],

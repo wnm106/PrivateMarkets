@@ -18,6 +18,7 @@ import { supabaseBrowserClient } from '@/lib/supabase-browser';
 import { attributeSectionLinks, fieldsForVisibility, groupForDisplay, type AttributeSectionOrder, type FieldVisibility } from '@/lib/attribute-layout';
 import { decompileCalcExpression } from '@/lib/calc-expression';
 import { usePublishTabs, useWarmTabs } from '@/lib/view-context';
+import { RecordValuesProvider } from '@/components/forms/RecordValues';
 
 export interface TemplateAttribute {
   attributeCode: string;
@@ -58,10 +59,14 @@ interface GoldenRecordSectionsProps {
   onAddAttribute?: (attributeCode: string, value: string, source: SourceKey) => void;
   onSourceChange?: (attributeCode: string, newSource: SourceKey) => void;
   onValueChange?: (attributeCode: string, newValue: string) => void;
+  /** Saves several fields in one change, such as the levels above a picked GICS value. */
+  onValuesChange?: (changes: Record<string, string>) => void | Promise<void>;
   onAddSourceValue?: (attributeCode: string, source: SourceKey, value: string) => void;
   onDeleteSourceValue?: (attributeCode: string, sourceCode: string) => void;
   asOfDate?: string;
   lineageLoaded?: boolean;
+  /** Reads the record's values again, after a version is deleted from a timeline. */
+  onReload?: () => void | Promise<void>;
 }
 
 function formulaLabel(formula: string | null | undefined): string {
@@ -87,10 +92,12 @@ export function GoldenRecordSections({
   onAddAttribute,
   onSourceChange,
   onValueChange,
+  onValuesChange,
   onAddSourceValue,
   onDeleteSourceValue,
   asOfDate,
   lineageLoaded = false,
+  onReload,
 }: GoldenRecordSectionsProps) {
   const calcRefreshKey = lineageData
     .map((row) => `${row.attributeCode}:${row.currentValue ?? ''}:${row.lastUpdated ?? ''}`)
@@ -194,6 +201,16 @@ export function GoldenRecordSections({
   const lineageMap = new Map<string, LineageData>();
   lineageData.forEach((ld) => lineageMap.set(ld.attributeCode, ld));
 
+  // What each field shows, so dependent fields can read the field above them.
+  const recordValues: Record<string, string> = {};
+  for (const [code, stored] of Object.entries(attributes)) {
+    const raw = stored && typeof stored === 'object' && 'value' in stored ? (stored as { value: unknown }).value : stored;
+    if (!lineageLoaded && hasStoredValue(raw)) recordValues[code] = String(raw);
+  }
+  for (const lineage of lineageData) {
+    if (hasStoredValue(lineage.currentValue)) recordValues[lineage.attributeCode] = String(lineage.currentValue);
+  }
+
   const listedAttributes: TemplateAttribute[] = [];
   const listedCodes = new Set<string>();
   for (const attribute of templateAttributes) {
@@ -250,29 +267,35 @@ export function GoldenRecordSections({
   // dashboards and data quality are mounted hidden below and publish themselves.
   const warmed = useWarmTabs(['documents', 'aliases', 'dashboards', 'quality'], tab);
   const shownIds = shown ? new Set([...shown.parents, ...shown.children].map((ref) => ref.entityId)) : null;
+  const publishedAttributes = listedAttributes.map((attribute) => {
+    const lineage = lineageMap.get(attribute.attributeCode);
+    const stored = attributes[attribute.attributeCode];
+    const storedValue = stored && typeof stored === 'object' && 'value' in stored ? stored.value : stored;
+    const value = lineageLoaded ? lineage?.currentValue : (lineage?.currentValue ?? storedValue);
+    return {
+      name: attribute.attributeName || attribute.attributeCode,
+      section: attribute.displaySection || 'General',
+      value: hasStoredValue(value) ? String(value) : null,
+      required: attribute.required,
+      calculated: Boolean(derivedFormulas[attribute.attributeCode] || attribute.isDerived),
+      source: lineage?.competingValues?.find((item) => item.value === lineage.currentValue)?.sourceName || null,
+    };
+  }).filter((row) => row.value !== null || row.required);
   usePublishTabs({
     attributes: {
       label: 'Attributes',
       purpose: `The ${entity.domainCode || 'record'}'s attribute values as of the selected dates, with the source that supplied each.`,
-      howToRead: 'A blank value means nothing was known at the selected As Of and Knowledge dates. calculated attributes are derived from others and cannot be edited. source is the system the prevailing value came from.',
+      howToRead: `A blank value means nothing was known at the selected As Of and Knowledge dates. calculated attributes are derived from others and cannot be edited. source is the system the prevailing value came from.${
+        entity.domainCode === 'SECURITY'
+          ? ' Analytics percentages are percent points: 4.25 is 4.25 percent. Spreads named in basis points are basis points. DV01 and CS01 are the price change in points per 100 of face for a 1 basis point move. Max drawdown is a negative percent.'
+          : ''
+      }`,
       data: lineageLoaded || displayEntries.length > 0 ? {
         record: entity.entityName,
         code: entity.entityCode,
         count: displayEntries.length,
-        attributes: listedAttributes.slice(0, 200).map((attribute) => {
-          const lineage = lineageMap.get(attribute.attributeCode);
-          const stored = attributes[attribute.attributeCode];
-          const storedValue = stored && typeof stored === 'object' && 'value' in stored ? stored.value : stored;
-          const value = lineageLoaded ? lineage?.currentValue : (lineage?.currentValue ?? storedValue);
-          return {
-            name: attribute.attributeName || attribute.attributeCode,
-            section: attribute.displaySection || 'General',
-            value: hasStoredValue(value) ? String(value) : null,
-            required: attribute.required,
-            calculated: Boolean(derivedFormulas[attribute.attributeCode] || attribute.isDerived),
-            source: lineage?.competingValues?.find((item) => item.value === lineage.currentValue)?.sourceName || null,
-          };
-        }).filter((row) => row.value !== null || row.required),
+        ...(publishedAttributes.length > 200 ? { omitted: publishedAttributes.length - 200 } : {}),
+        attributes: publishedAttributes.slice(0, 200),
       } : null,
     },
     relationships: {
@@ -374,6 +397,7 @@ export function GoldenRecordSections({
           </div>
         </div>
       ) : (
+        <RecordValuesProvider values={recordValues} saveMany={onValuesChange} reload={onReload}>
         <AttributeSections
           sections={sections}
           items={listedAttributes.map((templateAttr) => {
@@ -452,9 +476,11 @@ export function GoldenRecordSections({
             sortOrder: templateAttr.sortOrder ?? 0,
             name: displayLabel,
             populated: hasValue,
+            required: templateAttr.required === true,
             node: (
               <SourceAttributedFieldRow
                 field={fieldData}
+                required={templateAttr.required === true}
                 onDrilldown={handleDrilldown}
                 onSourceChange={handleSourceChange}
                 onValueChange={onValueChange}
@@ -469,6 +495,7 @@ export function GoldenRecordSections({
           };
         })}
         />
+        </RecordValuesProvider>
       )}
     </div>
   );
@@ -490,11 +517,13 @@ interface AttributeDisplayNode {
   sortOrder: number;
   name: string;
   populated: boolean;
+  required: boolean;
   node: ReactNode;
 }
 
 const FIELD_VISIBILITY: Array<{ value: FieldVisibility; label: string }> = [
   { value: 'all', label: 'All' },
+  { value: 'required', label: 'Required' },
   { value: 'populated', label: 'Populated' },
   { value: 'missing', label: 'Missing' },
 ];
@@ -519,6 +548,7 @@ function AttributeSections({
   const populatedCount = items.filter((item) => item.populated).length;
   const visibilityCount: Record<FieldVisibility, number> = {
     all: items.length,
+    required: items.filter((item) => item.required).length,
     populated: populatedCount,
     missing: items.length - populatedCount,
   };
@@ -557,9 +587,11 @@ function AttributeSections({
 
   const emptyLabel = items.length === 0
     ? 'No attribute values yet.'
-    : visibility === 'populated'
-      ? 'No populated fields.'
-      : 'No missing fields.';
+    : visibility === 'required'
+      ? 'No required fields on this record type.'
+      : visibility === 'populated'
+        ? 'No populated fields.'
+        : 'No missing fields.';
 
   const filter = (
     <div className="attr-field-filter">

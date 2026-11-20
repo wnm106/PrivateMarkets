@@ -15,7 +15,7 @@
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
     "typecheck:ci": "npm run typecheck --workspaces --if-present",
-    "test:ci": "npm run test --workspace @tapestrai/web && npm exec --workspace @tapestrai/graphql -- vitest run && npm exec --workspace @tapestrai/mcp-server -- vitest run && npm exec --workspace @tapestrai/worker -- vitest run",
+    "test:ci": "npm run test --workspace @tapestrai/web && npm exec --workspace @tapestrai/graphql -- vitest run && npm exec --workspace @tapestrai/mcp-server -- vitest run && npm exec --workspace @tapestrai/worker -- vitest run && npm exec --workspace @tapestrai/inbound-email -- vitest run",
     "db:migrate": "supabase db push",
     "db:seed": "supabase db seed",
     "db:reset": "supabase db reset --local --yes",

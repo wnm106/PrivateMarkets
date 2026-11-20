@@ -10,7 +10,7 @@ import { usePublishPageData, usePublishViewContext } from '@/lib/view-context';
  * Baseline for every screen. A page can publish a more specific focus or a
  * richer payload; those replace this reading while that page is mounted.
  */
-export function LivePage({ route }: { route: RouteChatContext }) {
+export function LivePage({ route }: { route: RouteChatContext }): null {
   const pathname = usePathname() || '/';
   const [reading, setReading] = useState<VisiblePage | null>(null);
 
@@ -47,5 +47,6 @@ export function LivePage({ route }: { route: RouteChatContext }) {
     entityId: route.entityId,
   });
   usePublishPageData(reading?.data ?? { path: pathname, title: route.page });
+  // Draws nothing: it only tells the assistant what is on screen.
   return null;
 }

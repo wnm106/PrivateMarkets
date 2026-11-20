@@ -136,6 +136,7 @@ export function feedPollHandler(deps: FeedDeps): JobHandler {
                   clientId: String(feed.client_id),
                   feature: 'feed-intake',
                   activity: 'feed.load',
+                  subject: { type: 'feed', id: String(feedId), label: fetched.name },
                   metadata: { feedId, fileName: fetched.name, jobRunId: run.id },
                 },
                 () =>

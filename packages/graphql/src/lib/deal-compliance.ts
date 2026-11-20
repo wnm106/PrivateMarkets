@@ -107,3 +107,75 @@ export function dealSurfaceResults<T extends { ruleId: string; anchorEntityId: s
   }
   return kept;
 }
+
+/** One row of compliance.rule_evaluation_results, as the deal surfaces read it. */
+export interface DealScoreResult {
+  id: string;
+  runId: string;
+  ruleId: string;
+  ruleVersionId: string;
+  anchorEntityId: string;
+  groupByValue: string | null;
+  asOfDate: string;
+  knowledgeDate: string;
+  sourceScope: string | null;
+  numeratorValue: number | null;
+  denominatorValue: number | null;
+  computedValue: number | null;
+  limitDirection: string | null;
+  softLimitValue: number | null;
+  hardLimitValue: number | null;
+  status: string;
+  breachAmount: number | null;
+  contributingEntityIds: string[] | null;
+  contributingCount: number | null;
+  rankPosition: number | null;
+  detail: Record<string, unknown>;
+  evaluatedAt: string;
+}
+
+/**
+ * Scores every planned rule for its funds in one database call
+ * (compliance.score_deal_funds). Rules run one after another inside it, so
+ * they do not crowd each other out the way parallel calls did.
+ */
+export async function scoreDealFunds(
+  compliance: { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { message: string } | null }> },
+  plans: Array<{ rule: { rule_code: string }; anchorIds: string[] }>,
+  asOf: string,
+  scenarioCode: string,
+  triggeredBy: string | null,
+): Promise<DealScoreResult[]> {
+  const { data, error } = await compliance.rpc('score_deal_funds', {
+    p_plans: plans.map((plan) => ({ ruleCode: plan.rule.rule_code, anchors: plan.anchorIds })),
+    p_as_of: asOf,
+    p_knowledge: new Date().toISOString(),
+    p_scenario: scenarioCode,
+    p_triggered_by: triggeredBy,
+  });
+  if (error) throw new Error(error.message);
+  return ((data || []) as any[]).map((row) => ({
+    id: row.id,
+    runId: row.run_id,
+    ruleId: row.rule_id,
+    ruleVersionId: row.rule_version_id,
+    anchorEntityId: row.anchor_entity_id,
+    groupByValue: row.group_by_value,
+    asOfDate: row.as_of_date,
+    knowledgeDate: row.knowledge_date,
+    sourceScope: row.source_scope,
+    numeratorValue: row.numerator_value,
+    denominatorValue: row.denominator_value,
+    computedValue: row.computed_value,
+    limitDirection: row.limit_direction,
+    softLimitValue: row.soft_limit_value,
+    hardLimitValue: row.hard_limit_value,
+    status: row.status,
+    breachAmount: row.breach_amount,
+    contributingEntityIds: row.contributing_entity_ids,
+    contributingCount: row.contributing_count,
+    rankPosition: row.rank_position ?? null,
+    detail: row.detail || {},
+    evaluatedAt: row.evaluated_at,
+  }));
+}

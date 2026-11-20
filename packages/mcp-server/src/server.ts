@@ -26,6 +26,7 @@ import { registerComplianceTools } from './tools/compliance-tools';
 import { registerReportingTools } from './tools/reporting-tools';
 import { registerQueryTools } from './tools/query-data';
 import { registerNarrativeTools } from './tools/narrative-tools';
+import { registerExternalIdTools } from './tools/external-id-tools';
 import { SERVER_INSTRUCTIONS } from './lib/narrative-guide';
 import { ToolRegistry } from './lib/tool-registry';
 import { listResources, readResource } from './resources';
@@ -129,6 +130,7 @@ registerComplianceTools(toolRegistry);
 registerReportingTools(toolRegistry);
 registerQueryTools(toolRegistry);
 registerNarrativeTools(toolRegistry);
+registerExternalIdTools(toolRegistry);
 
 // Handle tool listing
 server.setRequestHandler(ListToolsRequestSchema, async () => {

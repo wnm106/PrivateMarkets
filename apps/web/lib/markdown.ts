@@ -1,3 +1,5 @@
+import katex from 'katex';
+import { domainHref } from './domain-routes';
 import { nestTable, parseChatAnswer, toneFor, isTonedCell, type ChatAnswer, type ChatChart, type ChatTable } from '@tapestrai/mcp-server/src/lib/chat-answer';
 
 /**
@@ -170,26 +172,52 @@ function renderMarkdown(markdown: string, allowAnswer: boolean): string {
     }
   }
 
+  // Code and formulas are set aside first, so no later rule (bold, italics,
+  // line breaks) reaches inside them. Each is put back at the end.
+  const slots: string[] = [];
+  const slot = (content: string) => `@@MD${slots.push(content) - 1}@@`;
+
   let html = markdown;
 
-  // Escape HTML entities first (but preserve markdown syntax)
+  // Code blocks (```...```)
+  html = html.replace(/```([\s\S]*?)```/g, (_match, code: string) =>
+    slot(`<pre style="background: var(--bg); padding: 12px; border-radius: 6px; overflow-x: auto; margin: 8px 0;"><code>${esc(code.trim())}</code></pre>`));
+
+  // Inline code (`...`)
+  html = html.replace(/`([^`\n]+)`/g, (_match, code: string) =>
+    slot(`<code style="background: var(--bg); padding: 2px 6px; border-radius: 3px; font-family: var(--font-ibm-plex-mono), monospace; font-size: 12px;">${esc(code)}</code>`));
+
+  // Formulas: $$...$$ and \[...\] stand on their own; \(...\) sits in a sentence.
+  // A single $ is left alone, because in this app it is almost always money.
+  html = html.replace(/\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]/g, (_match, a: string | undefined, b: string | undefined) =>
+    slot(`<div class="md-math">${formula(a ?? b ?? '', true)}</div>`));
+  html = html.replace(/\\\(([\s\S]+?)\\\)/g, (_match, tex: string) => slot(formula(tex, false)));
+
+  // Escape HTML entities (but preserve markdown syntax)
   html = html
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 
-  // Code blocks (```...```)
-  html = html.replace(/```([\s\S]*?)```/g, (match, code) => {
-    return `<pre style="background: var(--bg); padding: 12px; border-radius: 6px; overflow-x: auto; margin: 8px 0;"><code>${code.trim()}</code></pre>`;
+  // Link targets are set aside too, so an underscore or asterisk in a path is not read as emphasis.
+  const targets: string[] = [];
+  html = html.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_match, text: string, href: string) => `[${text}](@@URL${targets.push(href) - 1}@@)`);
+
+  // Headers (# to ######)
+  html = html.replace(/^(#{1,6}) (.+)$/gm, (_match, marks: string, text: string) => {
+    const level = marks.length;
+    return `<h${level} style="${HEADING_STYLES[level - 1]}">${text.replace(/\s+#+\s*$/, '')}</h${level}>`;
   });
 
-  // Inline code (`...`)
-  html = html.replace(/`([^`]+)`/g, '<code style="background: var(--bg); padding: 2px 6px; border-radius: 3px; font-family: var(--font-ibm-plex-mono), monospace; font-size: 12px;">$1</code>');
+  // A rule: a line of three or more -, * or _
+  html = html.replace(/^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm, '<hr class="md-rule"/>');
 
-  // Headers (### or ## or #)
-  html = html.replace(/^### (.+)$/gm, '<h3 style="font-size: 15px; font-weight: 600; margin: 12px 0 8px 0; color: var(--ink);">$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2 style="font-size: 16px; font-weight: 600; margin: 14px 0 10px 0; color: var(--ink);">$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1 style="font-size: 18px; font-weight: 600; margin: 16px 0 12px 0; color: var(--ink);">$1</h1>');
+  // Block quotes: consecutive lines that start with >
+  html = html.replace(/(?:^&gt; ?.*(?:\n|$))+/gm, (block) => {
+    const ends = block.endsWith('\n') ? '\n' : '';
+    const lines = block.replace(/\n$/, '').split('\n').map((line) => line.replace(/^&gt; ?/, ''));
+    return `<blockquote class="md-quote">${lines.join('<br/>')}</blockquote>${ends}`;
+  });
 
   // Bold (**text** or __text__)
   html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
@@ -201,8 +229,8 @@ function renderMarkdown(markdown: string, allowAnswer: boolean): string {
   html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
   html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/gm, '$1<em>$2</em>');
 
-  // Links [text](url)
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color: var(--accent-2); text-decoration: underline;">$1</a>');
+  // Links [text](url). Only safe targets become links; see linkHtml.
+  html = html.replace(/\[([^\]\n]+)\]\(@@URL(\d+)@@\)/g, (_match, text: string, index: string) => linkHtml(text, targets[Number(index)]));
 
   // Tables. A separator is `| --- |` or an alignment marker such as `|:---|`.
   html = html.replace(/^\|(.+)\|[ \t]*\r?\n?/gm, (match, content) => {
@@ -246,12 +274,75 @@ function renderMarkdown(markdown: string, allowAnswer: boolean): string {
   // Single newlines to <br>
   html = html.replace(/\n/g, '<br/>');
 
+  // A block (formula, code) on a line of its own needs no line break around it.
+  html = html.replace(/(?:<br\/>)?(@@MD\d+@@)(?:<br\/>)?/g, (match, token: string) =>
+    slots[Number(token.slice(4, -2))].startsWith('<div') || slots[Number(token.slice(4, -2))].startsWith('<pre') ? token : match);
+
+  const startsWithText = !html.startsWith('<') && !/^@@MD\d+@@/.test(html);
+  html = html.replace(/@@MD(\d+)@@/g, (_match, index: string) => slots[Number(index)]);
+
   // Wrap in paragraph if not already wrapped
-  if (!html.startsWith('<')) {
+  if (startsWithText) {
     html = `<p style="margin: 8px 0;">${html}</p>`;
   }
 
   return html;
+}
+
+const HEADING_STYLES = [
+  'font-size: 18px; font-weight: 600; margin: 16px 0 12px 0; color: var(--ink);',
+  'font-size: 16px; font-weight: 600; margin: 14px 0 10px 0; color: var(--ink);',
+  'font-size: 15px; font-weight: 600; margin: 12px 0 8px 0; color: var(--ink);',
+  'font-size: 14px; font-weight: 600; margin: 12px 0 6px 0; color: var(--ink);',
+  'font-size: 13px; font-weight: 600; margin: 10px 0 6px 0; color: var(--ink-2);',
+  'font-size: 12px; font-weight: 600; margin: 10px 0 6px 0; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.04em;',
+];
+
+/** A formula typeset by KaTeX. A formula KaTeX cannot read is shown as its source. */
+function formula(tex: string, display: boolean): string {
+  try {
+    return katex.renderToString(tex.trim(), { displayMode: display, throwOnError: false, output: 'html', strict: 'ignore' });
+  } catch {
+    return `<code>${esc(tex.trim())}</code>`;
+  }
+}
+
+/**
+ * Where a link may go. A path inside the app routes without leaving the page;
+ * entity:DOMAIN_CODE/id names a record and resolves to its page; http(s) and
+ * mailto open outside. Anything else (javascript:, data:, //host) is not a link.
+ */
+export function linkTarget(raw: string): { href: string; internal: boolean } | null {
+  // raw arrives HTML-escaped; read it as written.
+  const href = raw.replace(/&amp;/g, '&').trim();
+  const entity = /^entity:([A-Za-z][A-Za-z0-9_]*)[/:](.+)$/.exec(href);
+  if (entity) return { href: `${domainHref(entity[1].toUpperCase())}/${encodeURIComponent(entity[2])}`, internal: true };
+  if (href.startsWith('/') && !href.startsWith('//') && !href.startsWith('/\\')) return { href, internal: true };
+  if (href.startsWith('#')) return { href, internal: true };
+  if (/^(https?:\/\/|mailto:)/i.test(href)) return { href, internal: false };
+  return null;
+}
+
+function linkHtml(text: string, raw: string | undefined): string {
+  const target = raw == null ? null : linkTarget(raw);
+  if (!target) return text;
+  const href = esc(target.href);
+  return target.internal
+    ? `<a href="${href}" data-internal="1" class="md-link">${text}</a>`
+    : `<a href="${href}" target="_blank" rel="noopener noreferrer" class="md-link">${text}</a>`;
+}
+
+/**
+ * Click handler for rendered markdown: an in-app link routes with the app's
+ * router instead of reloading the page. A modified click (new tab) is left alone.
+ */
+export function followInternalLink(event: { target: EventTarget | null; defaultPrevented: boolean; button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; preventDefault: () => void }, push: (href: string) => void): void {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const anchor = (event.target as Element | null)?.closest?.('a[data-internal]');
+  const href = anchor?.getAttribute('href');
+  if (!href || href.startsWith('#')) return;
+  event.preventDefault();
+  push(href);
 }
 
 /** Colors Change columns in a markdown table the model wrote by hand. */

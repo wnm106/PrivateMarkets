@@ -2890,15 +2890,20 @@ function EntityTable({ rows, limit, attributeCode, attributeName, asOf, onDone, 
         {bulkMessage && <span className="dq-sub">{bulkMessage}</span>}
       </div>
       {matching.length === 0 && <div className="dq-empty">No entities match that search.</div>}
+      {shown.length > 0 && (
+        <div className="dq-fix-row dq-fix-head" aria-hidden="true">
+          <span />
+          <span>Entity</span>
+          <span>{attributeName}</span>
+        </div>
+      )}
       {shown.map((entity) => (
-        <div className="dq-case dq-case-row dq-case-pick" key={entity.id}>
-          <label className="dq-pick">
-            <input type="checkbox" checked={selected.has(entity.id)} onChange={() => toggleOne(entity.id)} aria-label={`Select ${entity.entityName}`} />
-            <span>
-              <Link href={entityHref(entity.domainCode, entity.id)}>{entity.entityName}</Link>
-              <span className="dq-sub">{attributeName} is required and blank</span>
-            </span>
-          </label>
+        <div className="dq-fix-row" key={entity.id}>
+          <input type="checkbox" checked={selected.has(entity.id)} onChange={() => toggleOne(entity.id)} aria-label={`Select ${entity.entityName}`} />
+          <span className="dq-fix-name">
+            <Link href={entityHref(entity.domainCode, entity.id)}>{entity.entityName}</Link>
+            <span className="dq-sub">Required and blank</span>
+          </span>
           <ResolveForm
             entityId={entity.id}
             attributeCode={attributeCode}

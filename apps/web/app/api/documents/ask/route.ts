@@ -63,6 +63,8 @@ export async function POST(request: NextRequest) {
       feature: 'documents',
       activity: 'document.answer',
       agent: 'reader',
+      // One document asked about is the subject. A search across many has none.
+      subject: filters.documentIds?.length === 1 ? { type: 'document', id: filters.documentIds[0] } : null,
     }, () => answerDocuments(supabase, query, filters, embedConfigFromEnv(), documentAnswerModel(supabase)));
     return NextResponse.json(result);
   } catch (error) {

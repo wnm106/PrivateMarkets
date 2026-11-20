@@ -15,7 +15,8 @@ export type ToolCategory =
   | 'narrative'          // Running narratives: evidence, composing, saving runs
   | 'workflow'           // Finding and starting workflows
   | 'intersection'       // Intersection tools
-  | 'reconciliation';    // Fund close: NAV, position, and cash reconciliation
+  | 'reconciliation'     // Fund close: NAV, position, and cash reconciliation
+  | 'external';          // The client's own MCP servers, and remembering ids in those systems
 
 export interface ToolDefinition {
   name: string;

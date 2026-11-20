@@ -15,6 +15,8 @@ import { JobError } from './worker';
  *   STORAGE  a folder in the private feed-inbox bucket, under the client's own folder
  *   HTTP     an https address
  *   SFTP     a folder on an SFTP server
+ *   EMAIL    attachments from mail sent to the connection's address, once
+ *            email.screen has accepted them (see email.ts)
  *
  * To add a kind: implement Connector, add it to buildConnector, and allow the
  * kind in ops.connections (supabase/migrations/20261114210000_feeds.sql).
@@ -189,6 +191,70 @@ export function storageConnector(supabase: SupabaseClient, connection: Connectio
       // The time keeps two files with the same name from colliding.
       const stamp = now.toISOString().replace(/[-:]/g, '').slice(0, 15);
       const { error } = await bucket.move(file.ref, `${folder}/${target}/${stamp}_${file.name}`);
+      if (error) throw new Error(`${file.name} was handled but could not be moved to ${target}: ${error.message}`);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// EMAIL: attachments that screening accepted
+// ---------------------------------------------------------------------------
+
+/** Under a client's folder: <client>/_email/<connection>/ holds accepted attachments, raw/ the messages. */
+export const EMAIL_FOLDER = '_email';
+
+/** Where accepted attachments of an email connection wait for its feeds. */
+export function emailInbox(clientId: string, connectionId: string): string {
+  return safeFolder(clientId, EMAIL_FOLDER, connectionId);
+}
+
+/**
+ * Stored attachment names start with eight hex characters from the message
+ * id, so two messages can send a file of the same name. Feeds match, and the
+ * ledger records, the name the sender gave.
+ */
+const STORED_PREFIX = /^[0-9a-f]{8}_/;
+
+export function emailConnector(supabase: SupabaseClient, connection: ConnectionSpec): Connector {
+  const bucket = supabase.storage.from(FEED_BUCKET);
+  const root = emailInbox(connection.clientId, connection.id);
+
+  return {
+    async check() {
+      const { error } = await bucket.list(root, { limit: 1 });
+      if (error) throw new Error(error.message);
+      return 'The email inbox can be read. Mail is screened as it arrives; see Inbound email for each message.';
+    },
+
+    async list(feed) {
+      const { data, error } = await bucket.list(root, { limit: 200, sortBy: { column: 'name', order: 'asc' } });
+      if (error) throw new Error(error.message);
+      return (data || [])
+        .filter((entry) => entry.id && STORED_PREFIX.test(entry.name))
+        .map((entry) => ({ stored: entry.name, name: entry.name.replace(STORED_PREFIX, ''), size: Number((entry.metadata as { size?: number } | null)?.size) || undefined }))
+        .filter((entry) => entry.name && matchesPattern(entry.name, feed.filePattern))
+        .slice(0, MAX_FILES_PER_POLL)
+        .map((entry) => ({ name: entry.name, ref: `${root}/${entry.stored}`, size: entry.size }));
+    },
+
+    async fetch(file) {
+      if (file.size && file.size > MAX_FILE_BYTES) {
+        throw new JobError(`${file.name} is larger than ${MAX_FILE_BYTES / 1024 / 1024} MB.`);
+      }
+      const { data, error } = await bucket.download(file.ref);
+      if (error) {
+        if (/not.?found/i.test(error.message)) return null;
+        throw new Error(error.message);
+      }
+      return { name: file.name, bytes: Buffer.from(await data.arrayBuffer()), mediaType: mediaTypeFor(file.name, data.type) };
+    },
+
+    async settle(file, outcome, now) {
+      const target = SETTLED_FOLDER[outcome];
+      if (!target) return;
+      const stored = posix.basename(file.ref);
+      const stamp = now.toISOString().replace(/[-:]/g, '').slice(0, 15);
+      const { error } = await bucket.move(file.ref, `${root}/${target}/${stamp}_${stored}`);
       if (error) throw new Error(`${file.name} was handled but could not be moved to ${target}: ${error.message}`);
     },
   };
@@ -484,5 +550,6 @@ export function buildConnector(supabase: SupabaseClient, connection: ConnectionS
   if (connection.kind === 'STORAGE') return storageConnector(supabase, connection);
   if (connection.kind === 'HTTP') return httpConnector(connection, options);
   if (connection.kind === 'SFTP') return sftpConnector(connection, options);
+  if (connection.kind === 'EMAIL') return emailConnector(supabase, connection);
   throw new JobError(`There is no connector for "${connection.kind}".`);
 }

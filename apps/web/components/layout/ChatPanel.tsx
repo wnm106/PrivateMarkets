@@ -1,9 +1,10 @@
 'use client';
 
 import Image from 'next/image';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { sendGeminiMessage, ChatMessage, ChatContext } from '@/lib/gemini';
-import { markdownToHtml } from '@/lib/markdown';
+import { followInternalLink, markdownToHtml } from '@/lib/markdown';
 import { CHAT_VOICES, readStoredChatVoice } from '@/lib/chat-voice';
 import { useTemporalStore } from '@/lib/store';
 import {
@@ -102,6 +103,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const chatVoice = useTemporalStore((state) => state.chatVoice);
   const setChatVoice = useTemporalStore((state) => state.setChatVoice);
 
+  const router = useRouter();
   const [messages, setMessages] = useState<PanelMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -118,11 +120,18 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const [viewFocus, setViewFocus] = useState<ViewFocus | null>(() => getViewContext().focus);
   const [pageData, setPageData] = useState<Record<string, unknown> | null>(() => getViewContext().pageData);
   const [appliedProposals, setAppliedProposals] = useState<Record<string, boolean>>({});
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [skillView, setSkillView] = useState<SkillView | null>(null);
   const skillStateRef = useRef<SkillState | null>(null);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesBoxRef = useRef<HTMLDivElement>(null);
+  const responseRowRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const copiedTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (copiedTimer.current != null) window.clearTimeout(copiedTimer.current);
+  }, []);
   // Mirrors conversationId for the upload closures, so every file in a batch
   // lands in the same thread.
   const conversationIdRef = useRef<string | null>(null);
@@ -237,8 +246,34 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   /** Draft the assistant should iterate on, when a designer is open. */
   const designerDraft = activeDesigner?.draft;
 
+  // A reply is aligned to the top of the thread so the answer can be read from
+  // its first line. Sending still moves to the bottom, where the question and
+  // the typing indicator are.
+  const messageCountRef = useRef(0);
+  const wasLoadingRef = useRef(false);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const box = messagesBoxRef.current;
+    const count = messages.length;
+    const grewByOne = count === messageCountRef.current + 1;
+    const finished = wasLoadingRef.current && !isLoading;
+    messageCountRef.current = count;
+    wasLoadingRef.current = isLoading;
+    if (!box) return;
+
+    const last = messages[count - 1];
+    const row = responseRowRef.current;
+    if (finished && grewByOne && last?.role === 'model' && row) {
+      const boxRect = box.getBoundingClientRect();
+      const style = getComputedStyle(box);
+      const inset = (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.paddingTop) || 0);
+      const top = box.scrollTop + (row.getBoundingClientRect().top - boxRect.top) - inset;
+      box.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+      return;
+    }
+
+    if (isLoading || finished) {
+      box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+    }
   }, [messages, isLoading]);
 
   useEffect(() => {
@@ -249,6 +284,37 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [isOpen, setChatOpen]);
+
+  // Put the caret in the box as soon as the conversation is on screen, so typing
+  // starts immediately. Skip when sources cover the conversation.
+  useEffect(() => {
+    if (!isOpen || inspectOpen) {
+      const field = inputRef.current;
+      if (inspectOpen && field && field === document.activeElement) field.blur();
+      return;
+    }
+    const field = inputRef.current;
+    if (!field || field.disabled) return;
+    const placeCaret = () => {
+      const end = field.value.length;
+      field.focus({ preventScroll: true });
+      field.setSelectionRange(end, end);
+    };
+    const opener = document.activeElement;
+    placeCaret();
+    // The dock animates open from zero width. If the first focus did not take,
+    // try again once the box has width, unless focus has moved on purpose.
+    const dock = field.closest('.chat-popout');
+    const onDone = (event: Event) => {
+      const transition = event as TransitionEvent;
+      if (transition.target !== dock || transition.propertyName !== 'width') return;
+      if (document.activeElement === field) return;
+      if (document.activeElement !== opener && document.activeElement !== document.body) return;
+      placeCaret();
+    };
+    dock?.addEventListener('transitionend', onDone);
+    return () => dock?.removeEventListener('transitionend', onDone);
+  }, [isOpen, inspectOpen]);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -521,6 +587,22 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
     }
   };
 
+  const copyMessage = async (index: number, text: string) => {
+    const value = text.trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      return;
+    }
+    setCopiedIndex(index);
+    if (copiedTimer.current != null) window.clearTimeout(copiedTimer.current);
+    copiedTimer.current = window.setTimeout(() => {
+      copiedTimer.current = null;
+      setCopiedIndex((current) => (current === index ? null : current));
+    }, 1500);
+  };
+
   const handlePaste = (e: React.ClipboardEvent) => {
     const files = Array.from(e.clipboardData?.files || []);
     if (files.length) {
@@ -724,7 +806,10 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
 
       {/* Messages */}
       <div
+        ref={messagesBoxRef}
         className={`chat-messages ${dragActive ? 'drag-active' : ''}`}
+        // A citation or record link in an answer opens in the app; the chat stays open.
+        onClick={(e) => followInternalLink(e, (href) => router.push(href))}
         onDragOver={(e) => {
           e.preventDefault();
           setDragActive(true);
@@ -770,8 +855,13 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
         )}
         {messages.map((msg, idx) => {
           const structured = msg.role === 'model' && msg.text.includes('```answer');
+          const latestResponse = msg.role === 'model' && idx === messages.length - 1;
           return (
-          <div key={idx} className={`chat-row ${msg.role === 'user' ? 'user' : 'model'}${structured ? ' has-answer' : ''}`}>
+          <div
+            key={idx}
+            ref={latestResponse ? responseRowRef : undefined}
+            className={`chat-row ${msg.role === 'user' ? 'user' : 'model'}${structured ? ' has-answer' : ''}`}
+          >
             {msg.role === 'user' ? (
               <div style={{ fontSize: '22px', flexShrink: 0 }} aria-hidden>👤</div>
             ) : (
@@ -808,6 +898,16 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
               )}
               {(msg.text || !msg.attachments?.length) && (
                 <div className="chat-bubble">
+                  {msg.text.trim() && (
+                    <button
+                      type="button"
+                      className="btn btn-sm chat-copy"
+                      aria-label={copiedIndex === idx ? 'Copied' : 'Copy message'}
+                      onClick={() => { void copyMessage(idx, msg.text); }}
+                    >
+                      {copiedIndex === idx ? 'Copied' : 'Copy'}
+                    </button>
+                  )}
                   {msg.role === 'user' ? (
                     msg.text
                   ) : (
@@ -886,7 +986,6 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
             </div>
           </div>
         )}
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Staged attachments */}
@@ -939,6 +1038,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
           📎
         </button>
         <textarea
+          ref={inputRef}
           className="chat-textarea"
           value={input}
           onChange={(e) => setInput(e.target.value)}

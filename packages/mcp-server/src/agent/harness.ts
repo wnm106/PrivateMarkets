@@ -13,6 +13,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { geminiKey } from '../feeds/model';
 import { priceUsage, type PriceCatalog, type PricedUsage } from './pricing';
@@ -20,13 +21,42 @@ import { extractUsage, redactSecrets } from './usage';
 
 export type AgentProvider = 'gemini' | 'claude' | 'openai';
 
+/** What the work was about, so usage can add up cost by document, run, feed or fund. */
+export interface AgentSubject {
+  /** document, narrative-run, workflow-run, feed, fund, file. */
+  type: string;
+  id: string;
+  label?: string | null;
+}
+
 export interface AgentContext {
   userId?: string | null;
   clientId?: string | null;
   feature: string;
   activity?: string;
   agent?: string | null;
+  /** Every call made while handling one request shares this. A new top-level context gets one of its own. */
+  turnId?: string;
+  /** The chat conversation, when the work is a chat turn. */
+  conversationId?: string | null;
+  subject?: AgentSubject | null;
   metadata?: Record<string, unknown>;
+}
+
+/** The metadata keys usage groups by. They are kept when other metadata is trimmed. */
+const TAG_KEYS = ['turnId', 'conversationId', 'subjectType', 'subjectId', 'subjectLabel'] as const;
+
+/** Folds turn, conversation and subject into metadata, where the audit row reads them. */
+function tagsOf(fields: Pick<AgentContext, 'turnId' | 'conversationId' | 'subject'>): Record<string, unknown> {
+  const tags: Record<string, unknown> = {};
+  if (fields.turnId) tags.turnId = fields.turnId;
+  if (fields.conversationId) tags.conversationId = fields.conversationId;
+  if (fields.subject?.type && fields.subject.id) {
+    tags.subjectType = fields.subject.type;
+    tags.subjectId = String(fields.subject.id);
+    if (fields.subject.label) tags.subjectLabel = fields.subject.label;
+  }
+  return tags;
 }
 
 interface AgentStore extends Required<Pick<AgentContext, 'feature'>> {
@@ -61,13 +91,16 @@ export function takeAgentAudits(): AgentAudit[] {
 
 function agentStore(context: AgentContext): AgentStore {
   const parent = storage.getStore();
+  const metadata: Record<string, unknown> = { ...(parent?.metadata ?? {}), ...(context.metadata ?? {}), ...tagsOf(context) };
+  // A nested context stays in its parent's turn. A top-level one starts a turn.
+  if (typeof metadata.turnId !== 'string' || !metadata.turnId) metadata.turnId = randomUUID();
   return {
     userId: context.userId !== undefined ? context.userId : parent?.userId ?? null,
     clientId: context.clientId !== undefined ? context.clientId : parent?.clientId ?? null,
     feature: context.feature || parent?.feature || 'unspecified',
     activity: context.activity || parent?.activity || context.feature || parent?.feature || 'unspecified',
     agent: context.agent !== undefined ? context.agent : parent?.agent ?? null,
-    metadata: { ...(parent?.metadata ?? {}), ...(context.metadata ?? {}) },
+    metadata,
     audits: [],
     parent,
   };
@@ -145,6 +178,8 @@ export interface AgentAudit {
   error: string | null;
   latencyMs: number;
   persisted: boolean;
+  /** The turn this call belongs to. Null for a call made outside any context. */
+  turnId: string | null;
 }
 
 /** What a caller returns to its own client: the calls just made, and what they cost. */
@@ -196,6 +231,7 @@ export function usageForClient(audits: readonly AgentAudit[]): ClientUsage {
         status: audit.status,
         error: audit.error,
         latencyMs: audit.latencyMs,
+        turnId: audit.turnId,
       };
     }),
   };
@@ -337,6 +373,8 @@ export interface AgentCall {
   agent?: string | null;
   userId?: string | null;
   clientId?: string | null;
+  conversationId?: string | null;
+  subject?: AgentSubject | null;
   metadata?: Record<string, unknown>;
   /** Provider request body. Gemini generateContent, or OpenAI chat completions. */
   body?: unknown;
@@ -371,7 +409,7 @@ function resolved(call: AgentCall): {
     feature: call.feature || ambient?.feature || 'unspecified',
     activity: call.activity || ambient?.activity || call.feature || ambient?.feature || 'unspecified',
     agent: call.agent !== undefined ? call.agent : ambient?.agent ?? null,
-    metadata: { ...(ambient?.metadata ?? {}), ...(call.metadata ?? {}), requestedModel: call.model },
+    metadata: { ...(ambient?.metadata ?? {}), ...(call.metadata ?? {}), ...tagsOf(call), requestedModel: call.model },
   };
 }
 
@@ -430,9 +468,13 @@ function metadataOf(metadata: Record<string, unknown>): Record<string, unknown> 
     const json = JSON.stringify(metadata);
     if (json.length <= 8_000) return metadata;
   } catch {
-    return { note: 'metadata could not be stored' };
+    const kept: Record<string, unknown> = { note: 'metadata could not be stored' };
+    for (const key of TAG_KEYS) if (typeof metadata[key] === 'string') kept[key] = metadata[key];
+    return kept;
   }
-  return { note: 'metadata truncated', requestedModel: metadata.requestedModel ?? null };
+  const kept: Record<string, unknown> = { note: 'metadata truncated', requestedModel: metadata.requestedModel ?? null };
+  for (const key of TAG_KEYS) if (metadata[key] !== undefined) kept[key] = metadata[key];
+  return kept;
 }
 
 function auditFrom(args: {
@@ -468,6 +510,7 @@ function auditFrom(args: {
     error: args.error,
     latencyMs: args.latencyMs,
     persisted: args.persisted,
+    turnId: typeof args.context.metadata.turnId === 'string' ? args.context.metadata.turnId : null,
   };
 }
 

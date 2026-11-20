@@ -15,9 +15,12 @@ import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/complia
 import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
 import { QUERY_DATA_GUIDE, registerQueryTools } from '@tapestrai/mcp-server/src/tools/query-data';
 import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrative-tools';
+import { registerExternalIdTools } from '@tapestrai/mcp-server/src/tools/external-id-tools';
+import { loadExternalServers } from '@tapestrai/mcp-server/src/external/load';
+import { buildExternalToolset, externalServersPrompt, type ExternalToolset } from '@tapestrai/mcp-server/src/external/toolset';
 import { NARRATIVE_COMPOSE_GUIDE } from '@tapestrai/mcp-server/src/lib/narrative-guide';
 import { formatLessons, lessonFromRow, matchLessons } from '@tapestrai/mcp-server/src/lib/chat-lessons';
-import { getContextProfile } from '@tapestrai/mcp-server/src/lib/context-profiles';
+import { getContextProfile, isCategoryAllowed } from '@tapestrai/mcp-server/src/lib/context-profiles';
 import {
   coerceSkillState,
   completeAssistantTurn,
@@ -81,10 +84,11 @@ registerComplianceTools(toolRegistry);
 registerReportingTools(toolRegistry);
 registerQueryTools(toolRegistry);
 registerNarrativeTools(toolRegistry);
+registerExternalIdTools(toolRegistry);
 
 async function callGemini(
   body: Record<string, any>,
-  scope: { userId: string | null; clientId: string | null; agent: string | null; metadata?: Record<string, unknown> },
+  scope: { userId: string | null; clientId: string | null; agent: string | null; conversationId: string | null; metadata?: Record<string, unknown> },
   audits: AgentAudit[],
 ) {
   const { response, audit } = await invokeAgent({
@@ -95,6 +99,7 @@ async function callGemini(
     agent: scope.agent,
     userId: scope.userId,
     clientId: scope.clientId,
+    conversationId: scope.conversationId,
     metadata: scope.metadata,
     body,
   });
@@ -190,6 +195,9 @@ async function loadAttachments(
 }
 
 /** House vocabulary. It applies on every page, with or without the screen data. */
+/** How the chat panel renders links and formulas, so answers use forms it can show and route. */
+const LINKS_AND_FORMULAS = `\n\n## Links and formulas\n- Cite a document passage as a markdown link to the href the document tools return: [Credit Agreement, 1.1 Defined Terms, page 18](/documents/...?at=...). Never write an href yourself.\n- Link a record you name when a tool gave you its id and domain code: [Acme Fund III](entity:FUND/<id>). The app opens the record's page. Do not link a record whose id you do not have.\n- Write a formula in LaTeX between $$ and $$ on a line of its own, or between \\( and \\) inside a sentence. Never use a single $ for math: in this app it means money.\n- Headings go no deeper than ###.`;
+
 const DOMAIN_GLOSSARY = `\n\n## House terms\n- A portfolio is a top-level fund. A sub-portfolio is a sleeve of a portfolio, linked to it by FUND_PARENT, and its sub-portfolios sum to it. A fund with no children is its own portfolio.\n- Report allocations, positions, exposure and holdings by portfolio unless the user asks for sub-portfolios or a breakdown. Positions and proposed allocations are stored at the sub-portfolio level, so roll them up to the parent through FUND_PARENT before reporting, and never list a sub-portfolio as if it were a portfolio or add it to its parent's total.\n- When you roll up, you may name the sub-portfolios under each portfolio in a short parenthetical if it helps.`;
 
 const TODAY = () => new Date().toISOString().slice(0, 10);
@@ -250,6 +258,8 @@ function screenContextBlock(context: Record<string, any> | null | undefined): st
 }
 
 export async function POST(request: NextRequest) {
+  // The client's own MCP servers, connected on first use this turn and closed when it ends.
+  let externalToolset: ExternalToolset | null = null;
   try {
     const { messages, context, toolContext, conversationId, attachmentIds, designerDraft, voice, skill: requestedSkill, skillState: clientSkillState } = await request.json();
     const requestedAttachmentIds: string[] = Array.isArray(attachmentIds) ? attachmentIds : [];
@@ -359,7 +369,7 @@ export async function POST(request: NextRequest) {
       : null;
 
     const profile = getContextProfile(skill?.toolContext ?? toolContext);
-    let systemInstruction = profile.systemInstruction + chatVoiceInstruction(voice) + DOMAIN_GLOSSARY + screenContextBlock(context);
+    let systemInstruction = profile.systemInstruction + chatVoiceInstruction(voice) + DOMAIN_GLOSSARY + LINKS_AND_FORMULAS + screenContextBlock(context);
 
     // Report designer: give the model the current draft and the query format up front.
     if (profile.name === 'report-designer') {
@@ -405,6 +415,23 @@ export async function POST(request: NextRequest) {
     const tools = toolRegistry
       .listToolsForGemini(skill?.toolContext ?? toolContext)
       .filter((tool) => skillAllowsTool(skill, skillState, tool.name));
+
+    // Outside systems the client has connected. Offered only to a signed-in
+    // caller, in a context that allows them, and not while a guided skill runs.
+    // The client id comes from the caller's own session. A server that cannot
+    // be loaded leaves the assistant with Tapestry's own tools.
+    if (auth && clientId && !skill && isCategoryAllowed('external', toolContext)) {
+      try {
+        const servers = await loadExternalServers(supabase, clientId);
+        if (servers.length) {
+          externalToolset = buildExternalToolset(servers);
+          tools.push(...externalToolset.declarations);
+          systemInstruction += externalServersPrompt(servers, externalToolset);
+        }
+      } catch (error) {
+        console.error('[Chat API] Could not load assistant connections:', error);
+      }
+    }
     if (tools.some((tool) => tool.name === 'query_data')) {
       systemInstruction += QUERY_DATA_GUIDE;
       if (auth) {
@@ -465,7 +492,8 @@ export async function POST(request: NextRequest) {
       userId: auth?.userId ?? null,
       clientId,
       agent: skill?.id ?? 'assistant',
-      metadata: { conversationId: conversation?.id ?? conversationId ?? null, page: context?.page ?? null },
+      conversationId: (conversation?.id ?? conversationId ?? null) as string | null,
+      metadata: { page: context?.page ?? null },
     };
 
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
@@ -533,7 +561,9 @@ export async function POST(request: NextRequest) {
             results.set(call, outcome);
             continue;
           }
-          const value = await toolRegistry.executeTool(name, args || {}, toolSupabase);
+          const value = externalToolset?.has(name)
+            ? await externalToolset.execute(name, args || {})
+            : await toolRegistry.executeTool(name, args || {}, toolSupabase);
           const outcome = { ok: true, value };
           successfulTools.add(name);
           callCache.set(cacheKey, outcome);
@@ -628,5 +658,7 @@ export async function POST(request: NextRequest) {
       { error: error.message || 'Unknown error occurred', details: error.toString() },
       { status: 500 }
     );
+  } finally {
+    await externalToolset?.close();
   }
 }

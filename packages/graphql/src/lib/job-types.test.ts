@@ -7,6 +7,6 @@ describe('assistant job types', () => {
     expect(jobScheduleProblem('assistant.sweep', 'client-a')).toBeNull();
     expect(jobScheduleProblem('assistant.brief', 'client-a')).toMatch(/not put on a schedule/);
     expect(jobScheduleProblem('assistant.watch', null)).toMatch(/needs a client/);
-    expect(JOB_TYPES.filter((type) => type.schedulable === false).map((type) => type.code)).toEqual(['assistant.brief', 'assistant.watch', 'notify.deliver', 'document.process', 'workflow.advance']);
+    expect(JOB_TYPES.filter((type) => type.schedulable === false).map((type) => type.code)).toEqual(['assistant.brief', 'assistant.watch', 'notify.deliver', 'email.screen', 'document.process', 'workflow.advance']);
   });
 });

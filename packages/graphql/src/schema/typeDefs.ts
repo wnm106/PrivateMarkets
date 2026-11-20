@@ -95,14 +95,19 @@ type FieldLineage {
 
 # One recorded write of an attribute value, newest first in entityActivity.
 type AttributeActivity {
+  # The stored version this write made. Pass it to deleteAttributeVersion.
+  id: ID
   attributeCode: String!
   attributeName: String!
   value: String
   updatedAt: DateTime!
   updatedBy: String!
   sourceName: String
+  sourceCode: String
   validFrom: Date!
   validTo: Date!
+  # Still believed at the knowledge date. False when a later write replaced or deleted it.
+  current: Boolean!
 }
 
 # Attribute Definition with Derived Attribute Support
@@ -153,6 +158,9 @@ type AttributeDefinition {
   # Reference list linkage
   referenceListCode: String
   referenceList: ReferenceListSummary
+  # For fields on a tree list: the level this field takes, and the field whose value narrows it
+  referenceListLevel: Int
+  controllingAttributeCode: String
 
   # Global source sequence. Templates override this only when they set their own chain.
   defaultPrecedenceChain: [String!]!
@@ -1123,6 +1131,31 @@ type DeleteComplianceThresholdResult {
 type DealComplianceScore {
   rules: [ComplianceFundRule!]!
   results: [ComplianceEvaluationResult!]!
+  errors: [MutationError!]!
+}
+
+# The amount a Hypo run placed with one fund, as the allocation grid showed it.
+type DealHypoAllocation {
+  fundId: ID!
+  fundName: String!
+  parentFundId: ID
+  # PORTFOLIO | SLEEVE
+  level: String!
+  amount: Float!
+}
+
+# A Hypo run: the allocation is written as positions under scenarioCode
+# ('<deal code>#HYPO') and every rule on the deal's funds is scored twice.
+# before is the book without this deal; after is the book with the Hypo
+# allocation. The deal's saved allocation is not written.
+type DealHypoRun {
+  scenarioCode: String
+  asOfDate: Date
+  ranAt: DateTime!
+  rules: [ComplianceFundRule!]!
+  before: [ComplianceEvaluationResult!]!
+  after: [ComplianceEvaluationResult!]!
+  allocations: [DealHypoAllocation!]!
   errors: [MutationError!]!
 }
 
@@ -2337,6 +2370,10 @@ type ReferenceListValue {
   displayOrder: Int!
   synonyms: [String!]
   isActive: Boolean!
+  # The value this one sits under, for lists that form a tree
+  parentValueId: ID
+  parentValueCode: String
+  level: Int
   createdAt: DateTime!
   updatedAt: DateTime!
 }
@@ -2687,7 +2724,29 @@ type AllocationPreview {
   tranches: [AllocationTrancheResult!]!
   rows: [AllocationRow!]!
   adjustments: [AllocationAdjustmentView!]!
+  # Where each fund stands on each compliance rule this deal would worsen.
+  capacities: [AllocationCapacity!]!
   errors: [MutationError!]!
+}
+
+# One fund's standing on one compliance rule and group that the deal's
+# securities would worsen, read from the booked book (hypothetical positions
+# left out). current is numerator / denominator, or numerator for an amount
+# rule. room is what the fund can add before the hard limit; when
+# denominatorGrows the new position counts in the denominator too.
+type AllocationCapacity {
+  fundId: ID!
+  ruleCode: String!
+  ruleName: String!
+  groupValue: String
+  trancheIds: [ID!]!
+  room: Float!
+  numerator: Float
+  denominator: Float
+  hardLimit: Float
+  softLimit: Float
+  resultUnit: String
+  denominatorGrows: Boolean!
 }
 
 type AllocationAdjustmentView {
@@ -3242,7 +3301,7 @@ type Query {
   """How each workflow did over the last days (default 30): runs, durations, review times, overdue reviews, approvals, slowest steps, commonest failure."""
   workflowAnalytics(days: Int): JSON!
   """Token use and cost of model calls this session can see. days is a rolling window (default 30, at most a year). from and to are ISO timestamps and override days. Filters match one feature, agent, user, or model."""
-  agentUsage(days: Int, from: String, to: String, feature: String, agent: String, userId: ID, model: String): JSON!
+  agentUsage(days: Int, from: String, to: String, feature: String, agent: String, userId: ID, model: String, turnId: String, conversationId: String, subjectType: String, subjectId: String): JSON!
   """One model call, including its thinking, when this session can see that client."""
   agentCall(id: ID!): JSON
   """Forms workflow steps are waiting on. status defaults to OPEN; runId keeps one run's."""
@@ -3260,6 +3319,8 @@ type Query {
   receivedFiles(feedId: ID, first: Int): [ReceivedFile!]!
   """Saved maps a feed can load through."""
   feedMaps: [FeedMapOption!]!
+  """Emails sent to EMAIL connections, newest first."""
+  inboundMessages(connectionId: ID, first: Int): [InboundMessage!]!
   # Document content: types, templates, documents and search (see docs/DOCUMENTS.md)
   documentTypes: [DocumentType!]!
   documentTemplates(typeId: ID): [DocumentTemplate!]!
@@ -3436,6 +3497,8 @@ type Mutation {
   clearManualOverride(input: ClearManualOverrideInput!): ClearManualOverrideResult!
   addCompetingSource(input: AddCompetingSourceInput!): AddCompetingSourceResult!
   deleteCompetingSource(input: DeleteCompetingSourceInput!): DeleteCompetingSourceResult!
+  # Removes one stored version of a value. The same source's version just before it runs on to cover the gap.
+  deleteAttributeVersion(input: DeleteAttributeVersionInput!): DeleteCompetingSourceResult!
   
   # Metadata mutations
   createDomainType(input: CreateDomainTypeInput!): CreateDomainTypeResult!
@@ -3561,6 +3624,7 @@ type Mutation {
   deleteComplianceScopeAssignment(id: ID!): DeleteComplianceScopeAssignmentResult!
   evaluateComplianceRule(input: EvaluateComplianceRuleInput!): EvaluateComplianceRuleResult!
   scoreDealCompliance(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealComplianceScore!
+  runDealHypo(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealHypoRun!
   upsertComplianceThreshold(input: UpsertComplianceThresholdInput!): UpsertComplianceThresholdResult!
   deleteComplianceThreshold(id: ID!): DeleteComplianceThresholdResult!
 
@@ -3635,6 +3699,12 @@ type Mutation {
   deleteFeed(id: ID!): MutationResult!
   """Queues a poll of the feed now."""
   pollFeedNow(id: ID!): JobRunResult!
+  """Gives an EMAIL connection a new address. Mail to the old one is refused from then on."""
+  rotateFeedConnectionAddress(id: ID!): FeedConnectionResult!
+  """Screens a quarantined email again without the sender and authentication checks. File type and malware checks still apply."""
+  releaseInboundMessage(id: ID!): MutationResult!
+  """Sets a quarantined email aside for good."""
+  discardInboundMessage(id: ID!): MutationResult!
   # Document content
   saveDocumentType(input: SaveDocumentTypeInput!): DocumentTypeResult!
   saveDocumentTemplate(input: SaveDocumentTemplateInput!): DocumentTemplateResult!
@@ -3751,6 +3821,11 @@ input DeleteCompetingSourceInput {
   attributeCode: String!
   sourceId: ID!
   asOfDate: Date
+}
+
+input DeleteAttributeVersionInput {
+  entityId: ID!
+  versionId: ID!
 }
 
 type DeleteCompetingSourceResult {
@@ -5679,7 +5754,7 @@ type FeedConnection {
   clientId: ID!
   connectionCode: String!
   connectionName: String!
-  """STORAGE (a folder in the feed inbox), HTTP (an https address), or SFTP (a folder on an SFTP server)."""
+  """STORAGE (a folder in the feed inbox), HTTP (an https address), SFTP (a folder on an SFTP server), or EMAIL (attachments sent to the connection's own address)."""
   kind: String!
   """Settings that are safe to show. Never a credential."""
   config: JSON!
@@ -5690,6 +5765,31 @@ type FeedConnection {
   lastCheckMessage: String
   """STORAGE only: where to put files, as bucket/folder."""
   inboxPath: String
+  """EMAIL only, and only for people who manage feeds: the address to send files to. Null when INBOUND_EMAIL_DOMAIN is not set, or for anyone else."""
+  inboundAddress: String
+}
+
+"""An email sent to an EMAIL connection, and what screening decided."""
+type InboundMessage {
+  id: ID!
+  connectionId: ID!
+  connectionName: String
+  envelopeFrom: String
+  headerFrom: String
+  subject: String
+  sizeBytes: Float
+  """RECEIVING, RECEIVED (waiting to be screened), ACCEPTED, QUARANTINED (a person can release or discard it), REJECTED, or DISCARDED."""
+  status: String!
+  """Why it was quarantined or rejected, or what was set aside."""
+  reason: String
+  """What the authentication check found: { dkim, dkimAligned, dmarc, spf }."""
+  auth: JSON
+  """One entry per attachment: { name, size, mediaType, taken, reason }."""
+  attachments: JSON!
+  receivedAt: DateTime!
+  screenedAt: DateTime
+  releasedAt: DateTime
+  discardedAt: DateTime
 }
 
 type Feed {

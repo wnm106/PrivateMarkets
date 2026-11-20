@@ -10,7 +10,7 @@ import { formatTokens, formatUsd } from '@tapestrai/mcp-server/src/agent/pricing
  * Days are America/New_York, the same zone the usage function groups by.
  */
 
-type Tab = 'overview' | 'agents' | 'features' | 'users' | 'models' | 'calls';
+type Tab = 'overview' | 'turns' | 'conversations' | 'subjects' | 'agents' | 'features' | 'users' | 'models' | 'calls';
 
 interface Bucket {
   key: string;
@@ -39,8 +39,82 @@ interface DayBucket {
   costUsd: number;
 }
 
+/** One request: a chat reply, a narrative section, a workflow step. Its calls added up. */
+interface TurnRow {
+  key: string;
+  startedAt: string;
+  endedAt: string;
+  userLabel: string;
+  clientName: string | null;
+  feature: string;
+  activity: string;
+  agent: string | null;
+  conversationId: string | null;
+  subjectType: string | null;
+  subjectId: string | null;
+  subjectLabel: string | null;
+  models: string[];
+  calls: number;
+  totalTokens: number;
+  thinkingTokens: number;
+  costUsd: number;
+  latencyMs: number;
+  errors: number;
+}
+
+interface ConversationRow {
+  key: string;
+  title: string | null;
+  userLabel: string;
+  startedAt: string;
+  lastAt: string;
+  calls: number;
+  turns: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+interface SubjectRow {
+  type: string;
+  key: string;
+  label: string | null;
+  feature: string;
+  startedAt: string;
+  lastAt: string;
+  calls: number;
+  turns: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+/** Narrows the page to one turn, conversation or subject. */
+type Drill =
+  | { kind: 'turn'; id: string; label: string }
+  | { kind: 'conversation'; id: string; label: string }
+  | { kind: 'subject'; type: string; id: string; label: string };
+
+const SUBJECT_NAMES: Record<string, string> = {
+  document: 'Document',
+  'narrative-run': 'Narrative run',
+  narrative: 'Narrative',
+  'workflow-run': 'Workflow run',
+  feed: 'Feed',
+  fund: 'Fund',
+  file: 'File',
+};
+
+function subjectName(type: string | null): string {
+  if (!type) return '';
+  return SUBJECT_NAMES[type] ?? type;
+}
+
 interface CallRow {
   id: string;
+  turnId: string;
+  conversationId: string | null;
+  subjectType: string | null;
+  subjectId: string | null;
+  subjectLabel: string | null;
   createdAt: string;
   clientName: string | null;
   userLabel: string;
@@ -64,13 +138,16 @@ interface CallRow {
 interface Usage {
   from: string;
   to: string;
-  totals: { calls: number; inputTokens: number; outputTokens: number; thinkingTokens: number; totalTokens: number; costUsd: number; errors: number };
+  totals: { calls: number; turns: number; inputTokens: number; outputTokens: number; thinkingTokens: number; totalTokens: number; costUsd: number; errors: number };
   facets: { features: string[]; agents: string[]; models: string[]; users: Array<{ id: string | null; label: string }> };
   byFeature: Bucket[];
   byAgent: Bucket[];
   byUser: UserBucket[];
   byModel: Bucket[];
   byDay: DayBucket[];
+  byTurn: TurnRow[];
+  byConversation: ConversationRow[];
+  bySubject: SubjectRow[];
   calls: CallRow[];
 }
 
@@ -81,13 +158,16 @@ interface CallDetail extends CallRow {
   cachedInputTokens: number;
 }
 
-const QUERY = `query AgentUsage($days: Int, $from: String, $to: String, $feature: String, $agent: String, $userId: ID, $model: String) {
-  agentUsage(days: $days, from: $from, to: $to, feature: $feature, agent: $agent, userId: $userId, model: $model)
+const QUERY = `query AgentUsage($days: Int, $from: String, $to: String, $feature: String, $agent: String, $userId: ID, $model: String, $turnId: String, $conversationId: String, $subjectType: String, $subjectId: String) {
+  agentUsage(days: $days, from: $from, to: $to, feature: $feature, agent: $agent, userId: $userId, model: $model, turnId: $turnId, conversationId: $conversationId, subjectType: $subjectType, subjectId: $subjectId)
 }`;
 const CALL_QUERY = `query AgentCall($id: ID!) { agentCall(id: $id) }`;
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'overview', label: 'Overview' },
+  { id: 'turns', label: 'Turns' },
+  { id: 'conversations', label: 'Conversations' },
+  { id: 'subjects', label: 'Subjects' },
   { id: 'agents', label: 'Agents' },
   { id: 'features', label: 'Features' },
   { id: 'users', label: 'Users' },
@@ -132,15 +212,35 @@ function when(value: string): string {
 }
 
 /** What each tab tells the assistant, from the one load that feeds them all. Costs are US dollars. */
-function usageTabs(usage: Usage): Record<string, TabPayload> {
+function usageTabs(usage: Usage, drill: Drill | null): Record<string, TabPayload> {
   const bucket = (row: Bucket) => ({ name: row.key, feature: row.feature || null, provider: row.provider || null, calls: row.calls, inputTokens: row.inputTokens ?? null, outputTokens: row.outputTokens ?? null, thinkingTokens: row.thinkingTokens ?? null, totalTokens: row.totalTokens, costUsd: row.costUsd });
-  const period = `${usage.from} to ${usage.to}`;
+  const period = drill ? `${usage.from} to ${usage.to}, narrowed to ${drill.kind} ${drill.label}` : `${usage.from} to ${usage.to}`;
   return {
     overview: {
       label: 'Overview',
       purpose: 'How many model calls were made in the period, how many tokens they used and what they cost, day by day.',
       howToRead: 'Days are in America/New_York. thinkingTokens are the model\'s reasoning tokens and are counted in totalTokens. errors counts failed calls.',
       data: { period, totals: usage.totals, byDay: usage.byDay },
+    },
+    turns: {
+      label: 'Turns',
+      purpose: 'Each request added up: one chat reply, narrative section or workflow step, with all the model calls it made, newest first.',
+      howToRead: 'calls is how many model calls the turn made. A chat reply that used tools makes one call per tool round. costUsd and totalTokens are the sum of those calls. latencyMs is time spent in model calls, not wall time.',
+      data: {
+        period, total: usage.totals.turns, shown: Math.min(usage.byTurn.length, 60),
+        turns: usage.byTurn.slice(0, 60).map((row) => ({ at: row.startedAt, user: row.userLabel, feature: row.feature, activity: row.activity, agent: row.agent, subject: row.subjectType ? `${subjectName(row.subjectType)}: ${row.subjectLabel || row.subjectId}` : null, conversationId: row.conversationId, models: row.models, calls: row.calls, totalTokens: row.totalTokens, costUsd: row.costUsd, latencyMs: row.latencyMs, errors: row.errors })),
+      },
+    },
+    conversations: {
+      label: 'Conversations',
+      purpose: 'Cost of each chat conversation: how many replies (turns) and model calls it took, most recent first.',
+      data: { period, conversations: usage.byConversation.map((row) => ({ title: row.title, user: row.userLabel, lastAt: row.lastAt, turns: row.turns, calls: row.calls, totalTokens: row.totalTokens, costUsd: row.costUsd })) },
+    },
+    subjects: {
+      label: 'Subjects',
+      purpose: 'Cost by what the work was about: a document, narrative run, workflow run, feed, fund or file, costliest first.',
+      howToRead: 'Only calls that name a subject appear here. Chat turns are under Conversations instead.',
+      data: { period, subjects: usage.bySubject.map((row) => ({ type: subjectName(row.type), name: row.label || row.key, feature: row.feature, turns: row.turns, calls: row.calls, totalTokens: row.totalTokens, costUsd: row.costUsd })) },
     },
     agents: {
       label: 'Agents',
@@ -168,7 +268,7 @@ function usageTabs(usage: Usage): Record<string, TabPayload> {
       howToRead: 'status is the call\'s outcome and error says why it failed. latencyMs is the time the call took.',
       data: {
         period, total: usage.totals.calls, shown: Math.min(usage.calls.length, 60),
-        calls: usage.calls.slice(0, 60).map((call) => ({ at: call.createdAt, user: call.userLabel, client: call.clientName, feature: call.feature, activity: call.activity, agent: call.agent, model: call.model, totalTokens: call.totalTokens, costUsd: call.costUsd, status: call.status, error: call.error, latencyMs: call.latencyMs })),
+        calls: usage.calls.slice(0, 60).map((call) => ({ at: call.createdAt, turnId: call.turnId, user: call.userLabel, client: call.clientName, feature: call.feature, activity: call.activity, agent: call.agent, model: call.model, totalTokens: call.totalTokens, costUsd: call.costUsd, status: call.status, error: call.error, latencyMs: call.latencyMs })),
       },
     },
   };
@@ -186,8 +286,16 @@ export default function AgentUsagePage() {
   const [usage, setUsage] = useState<Usage | null>(null);
   const [message, setMessage] = useState('');
   const [selected, setSelected] = useState<CallDetail | null>(null);
+  const [drill, setDrill] = useState<Drill | null>(null);
   usePublishViewContext({ activity: 'viewing', kind: 'agent usage', label: 'Agent usage', summary: 'Token use and cost of model calls' });
-  usePublishTabs(usage ? usageTabs(usage) : {});
+  usePublishTabs(usage ? usageTabs(usage, drill) : {});
+
+  /** Narrows to one turn, conversation or subject and shows what it is made of. */
+  const narrow = (next: Drill) => {
+    setDrill(next);
+    setSelected(null);
+    setTab(next.kind === 'turn' ? 'calls' : 'turns');
+  };
 
   useEffect(() => {
     let live = true;
@@ -202,6 +310,10 @@ export default function AgentUsagePage() {
       agent: agent || null,
       userId: userId || null,
       model: model || null,
+      turnId: drill?.kind === 'turn' ? drill.id : null,
+      conversationId: drill?.kind === 'conversation' ? drill.id : null,
+      subjectType: drill?.kind === 'subject' ? drill.type : null,
+      subjectId: drill?.kind === 'subject' ? drill.id : null,
     };
     void graphqlQuery<{ agentUsage: Usage }>(QUERY, variables, 'network-only').then((result) => {
       if (!live || result.aborted) return;
@@ -211,7 +323,7 @@ export default function AgentUsagePage() {
     return () => {
       live = false;
     };
-  }, [days, fromDate, toDate, feature, agent, userId, model]);
+  }, [days, fromDate, toDate, feature, agent, userId, model, drill]);
 
   const openCall = (id: string) => {
     setSelected(null);
@@ -234,6 +346,7 @@ export default function AgentUsagePage() {
         <div className="da-facts">
           <div className="da-fact big"><span>Cost</span><strong>{totals ? formatUsd(totals.costUsd) : '—'}</strong></div>
           <div className="da-fact"><span>Tokens</span><strong>{totals ? formatTokens(totals.totalTokens) : '—'}</strong></div>
+          <div className="da-fact"><span>Turns</span><strong>{totals ? formatTokens(totals.turns ?? 0) : '—'}</strong></div>
           <div className="da-fact"><span>Calls</span><strong>{totals ? formatTokens(totals.calls) : '—'}</strong></div>
           <div className="da-fact"><span>Failed</span><strong>{totals ? formatTokens(totals.errors) : '—'}</strong></div>
         </div>
@@ -272,6 +385,13 @@ export default function AgentUsagePage() {
           </div>
         </div>
 
+        {drill && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0', fontSize: 13 }}>
+            <span className="da-chip">{drill.kind === 'subject' ? subjectName(drill.type) : drill.kind === 'turn' ? 'Turn' : 'Conversation'}</span>
+            <span>{drill.label}</span>
+            <button type="button" className="btn" onClick={() => setDrill(null)} style={{ fontSize: 12 }}>Show all</button>
+          </div>
+        )}
         {message && <div role="alert" style={{ color: 'var(--red)', margin: '12px 0' }}>{message}</div>}
         {!usage && !message && <div style={{ color: 'var(--ink-3)', margin: '16px 0' }}>Reading usage…</div>}
 
@@ -310,6 +430,111 @@ export default function AgentUsagePage() {
               </div>
             )}
 
+            {tab === 'turns' && (
+              <div className="da-gridwrap">
+                <table className="da-grid">
+                  <thead>
+                    <tr>
+                      <th>When</th><th>User</th><th>Feature</th><th>About</th>
+                      <th className="num">Calls</th><th className="num">Tokens</th><th className="num">Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usage.byTurn.length === 0 && <tr><td colSpan={7}>No turns.</td></tr>}
+                    {usage.byTurn.map((row) => (
+                      <tr
+                        key={row.key}
+                        onClick={() => narrow({ kind: 'turn', id: row.key, label: `${row.activity} · ${when(row.startedAt)}` })}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            narrow({ kind: 'turn', id: row.key, label: `${row.activity} · ${when(row.startedAt)}` });
+                          }
+                        }}
+                        tabIndex={0}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <td>{when(row.startedAt)}{row.errors > 0 ? <small>{row.errors} failed</small> : null}</td>
+                        <td>{row.userLabel}<small>{row.clientName || ''}</small></td>
+                        <td>{row.feature}<small>{row.agent ? `${row.activity} · ${row.agent}` : row.activity}</small></td>
+                        <td>{row.subjectType ? <>{row.subjectLabel || row.subjectId}<small>{subjectName(row.subjectType)}</small></> : row.conversationId ? <>Chat<small>Conversation</small></> : '—'}</td>
+                        <td className="num">{formatTokens(row.calls)}<small>{row.models.join(', ')}</small></td>
+                        <td className="num">{formatTokens(row.totalTokens)}</td>
+                        <td className="num">{formatUsd(row.costUsd)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {tab === 'conversations' && (
+              <div className="da-gridwrap">
+                <table className="da-grid">
+                  <thead>
+                    <tr><th>Conversation</th><th>User</th><th>Last</th><th className="num">Turns</th><th className="num">Calls</th><th className="num">Tokens</th><th className="num">Cost</th></tr>
+                  </thead>
+                  <tbody>
+                    {usage.byConversation.length === 0 && <tr><td colSpan={7}>No chat conversations in this period.</td></tr>}
+                    {usage.byConversation.map((row) => (
+                      <tr
+                        key={row.key}
+                        onClick={() => narrow({ kind: 'conversation', id: row.key, label: row.title || 'Untitled chat' })}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            narrow({ kind: 'conversation', id: row.key, label: row.title || 'Untitled chat' });
+                          }
+                        }}
+                        tabIndex={0}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <td>{row.title || 'Untitled chat'}</td>
+                        <td>{row.userLabel}</td>
+                        <td>{when(row.lastAt)}</td>
+                        <td className="num">{formatTokens(row.turns)}</td>
+                        <td className="num">{formatTokens(row.calls)}</td>
+                        <td className="num">{formatTokens(row.totalTokens)}</td>
+                        <td className="num">{formatUsd(row.costUsd)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {tab === 'subjects' && (
+              <div className="da-gridwrap">
+                <table className="da-grid">
+                  <thead>
+                    <tr><th>Subject</th><th>Feature</th><th>Last</th><th className="num">Turns</th><th className="num">Calls</th><th className="num">Tokens</th><th className="num">Cost</th></tr>
+                  </thead>
+                  <tbody>
+                    {usage.bySubject.length === 0 && <tr><td colSpan={7}>No calls named a subject in this period.</td></tr>}
+                    {usage.bySubject.map((row) => (
+                      <tr
+                        key={`${row.type}:${row.key}`}
+                        onClick={() => narrow({ kind: 'subject', type: row.type, id: row.key, label: row.label || row.key })}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            narrow({ kind: 'subject', type: row.type, id: row.key, label: row.label || row.key });
+                          }
+                        }}
+                        tabIndex={0}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <td>{row.label || row.key}<small>{subjectName(row.type)}</small></td>
+                        <td>{row.feature}</td>
+                        <td>{when(row.lastAt)}</td>
+                        <td className="num">{formatTokens(row.turns)}</td>
+                        <td className="num">{formatTokens(row.calls)}</td>
+                        <td className="num">{formatTokens(row.totalTokens)}</td>
+                        <td className="num">{formatUsd(row.costUsd)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
             {tab === 'agents' && <BucketTable rows={usage.byAgent} name="Agent" />}
             {tab === 'features' && <BucketTable rows={usage.byFeature} name="Feature" />}
             {tab === 'users' && (
@@ -376,6 +601,12 @@ export default function AgentUsagePage() {
                     <div className="da-big">{formatUsd(selected.costUsd)}</div>
                     <p>{selected.model} · {formatTokens(selected.totalTokens)} tokens · {selected.latencyMs ?? '—'} ms</p>
                     <p>{selected.userLabel} · {selected.feature}{selected.agent ? ` · ${selected.agent}` : ''}</p>
+                    {selected.subjectType && <p>{subjectName(selected.subjectType)}: {selected.subjectLabel || selected.subjectId}</p>}
+                    {drill?.kind !== 'turn' && selected.turnId && (
+                      <button type="button" className="btn" style={{ fontSize: 12 }} onClick={() => narrow({ kind: 'turn', id: selected.turnId, label: `${selected.activity} · ${when(selected.createdAt)}` })}>
+                        Show every call in this turn
+                      </button>
+                    )}
                     {selected.error && <p style={{ color: 'var(--red)' }}>{selected.error}</p>}
                     <h3 style={{ fontSize: 14, margin: '12px 0 6px' }}>Thinking</h3>
                     {selected.thinking ? (

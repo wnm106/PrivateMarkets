@@ -7,7 +7,7 @@ import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { describeCron } from '@/lib/jobs';
 import { fileSize, feedStatusLabel, isLate, type FeedRow } from '@/lib/feeds-admin';
 
-const CONNECTION_FIELDS = `id connectionCode connectionName kind config hasSecret isActive lastCheckedAt lastCheckOk lastCheckMessage inboxPath`;
+const CONNECTION_FIELDS = `id connectionCode connectionName kind config hasSecret isActive lastCheckedAt lastCheckOk lastCheckMessage inboxPath inboundAddress`;
 const FEED_FIELDS = `
   id connectionId connectionName connectionKind feedCode feedName path filePattern mapCode sourceCode isActive
   pollCron pollTimezone nextPollAt expectedCron expectedTimezone graceMinutes lastPolledAt lastReceivedAt
@@ -19,6 +19,7 @@ const FEEDS_QUERY = `
     feeds { ${FEED_FIELDS} }
     receivedFiles(first: 50) { id feedId feedName fileName sizeBytes status attempts importInstanceId rowsCreated rowsMatched message receivedAt lastSeenAt }
     feedMaps { mapCode mapName }
+    inboundMessages(first: 50) { id connectionId connectionName envelopeFrom headerFrom subject sizeBytes status reason auth attachments receivedAt screenedAt releasedAt discardedAt }
   }
 `;
 const SAVE_CONNECTION = `mutation($input: SaveFeedConnectionInput!) { saveFeedConnection(input: $input) { connection { id } errors { field message } } }`;
@@ -27,21 +28,44 @@ const CHECK_CONNECTION = `mutation($id: ID!) { checkFeedConnection(id: $id) { ru
 const SAVE_FEED = `mutation($input: SaveFeedInput!) { saveFeed(input: $input) { feed { id } errors { field message } } }`;
 const DELETE_FEED = `mutation($id: ID!) { deleteFeed(id: $id) { success errors { message } } }`;
 const POLL_FEED = `mutation($id: ID!) { pollFeedNow(id: $id) { run { id } errors { message } } }`;
+const ROTATE_ADDRESS = `mutation($id: ID!) { rotateFeedConnectionAddress(id: $id) { connection { id } errors { message } } }`;
+const RELEASE_MESSAGE = `mutation($id: ID!) { releaseInboundMessage(id: $id) { success errors { message } } }`;
+const DISCARD_MESSAGE = `mutation($id: ID!) { discardInboundMessage(id: $id) { success errors { message } } }`;
+const EMAIL_FILE_TYPES = ['csv', 'xlsx', 'xls', 'pdf', 'json', 'txt'];
 
-type ConnectionKind = 'STORAGE' | 'HTTP' | 'SFTP';
+type ConnectionKind = 'STORAGE' | 'HTTP' | 'SFTP' | 'EMAIL';
 
 interface Connection {
   id: string;
   connectionCode: string;
   connectionName: string;
   kind: ConnectionKind;
-  config: Record<string, string>;
+  config: Record<string, any>;
   hasSecret: boolean;
   isActive: boolean;
   lastCheckedAt: string | null;
   lastCheckOk: boolean | null;
   lastCheckMessage: string | null;
   inboxPath: string | null;
+  inboundAddress: string | null;
+}
+
+interface InboundMessage {
+  id: string;
+  connectionId: string;
+  connectionName: string | null;
+  envelopeFrom: string | null;
+  headerFrom: string | null;
+  subject: string | null;
+  sizeBytes: number | null;
+  status: string;
+  reason: string | null;
+  auth: { dkimAligned?: string | null; dmarc?: string } | null;
+  attachments: Array<{ name: string; size: number | null; taken: boolean; reason: string | null }>;
+  receivedAt: string;
+  screenedAt: string | null;
+  releasedAt: string | null;
+  discardedAt: string | null;
 }
 
 interface ReceivedFile {
@@ -73,6 +97,10 @@ interface ConnectionDraft {
   port: string;
   hostKey: string;
   leaveFiles: boolean;
+  allowedSenders: string;
+  requireDkim: boolean;
+  fileTypes: string[];
+  maxPerHour: string;
   secret: string;
   hasSecret: boolean;
   isActive: boolean;
@@ -98,7 +126,15 @@ type MutationErrors = Array<{ field?: string | null; message: string }>;
 
 const AUTH_LABEL: Record<string, string> = { NONE: 'No sign-in', BEARER: 'Bearer token', BASIC: 'User name and password', HEADER: 'Key in a header' };
 const SECRET_LABEL: Record<string, string> = { BEARER: 'Token', BASIC: 'Password', HEADER: 'Key', PASSWORD: 'Password', KEY: 'Private key' };
-const KIND_LABEL: Record<ConnectionKind, string> = { STORAGE: 'Drop folder', HTTP: 'Web address', SFTP: 'SFTP server' };
+const KIND_LABEL: Record<ConnectionKind, string> = { STORAGE: 'Drop folder', HTTP: 'Web address', SFTP: 'SFTP server', EMAIL: 'Email' };
+const MESSAGE_STATUS: Record<string, { label: string; color: string }> = {
+  RECEIVING: { label: 'Arriving', color: 'var(--ink-3)' },
+  RECEIVED: { label: 'Being checked', color: 'var(--accent)' },
+  ACCEPTED: { label: 'Accepted', color: 'var(--success, #276749)' },
+  QUARANTINED: { label: 'Quarantined', color: 'var(--warning, #975a16)' },
+  REJECTED: { label: 'Rejected', color: 'var(--danger, #9b2c2c)' },
+  DISCARDED: { label: 'Discarded', color: 'var(--ink-3)' },
+};
 const STATUS_COLOR: Record<string, string> = {
   LOADED: 'var(--success, #276749)',
   LOADING: 'var(--accent)',
@@ -134,6 +170,7 @@ export default function FeedsPage() {
   const [feeds, setFeeds] = useState<FeedRow[]>([]);
   const [files, setFiles] = useState<ReceivedFile[]>([]);
   const [maps, setMaps] = useState<Array<{ mapCode: string; mapName: string }>>([]);
+  const [messages, setMessages] = useState<InboundMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [notice, setNotice] = useState('');
@@ -142,11 +179,17 @@ export default function FeedsPage() {
   const [draftError, setDraftError] = useState('');
   const [saving, setSaving] = useState(false);
 
-  usePublishViewContext({ activity: 'viewing', kind: 'feeds', label: 'Feeds', summary: 'Connections, feeds and received files' });
+  usePublishViewContext({ activity: 'viewing', kind: 'feeds', label: 'Feeds', summary: 'Connections, feeds, inbound email and received files' });
 
   const load = useCallback(async () => {
     const result = await graphqlQuery<
-      { feedConnections: Connection[]; feeds: FeedRow[]; receivedFiles: ReceivedFile[]; feedMaps: Array<{ mapCode: string; mapName: string }> },
+      {
+        feedConnections: Connection[];
+        feeds: FeedRow[];
+        receivedFiles: ReceivedFile[];
+        feedMaps: Array<{ mapCode: string; mapName: string }>;
+        inboundMessages: InboundMessage[];
+      },
       Record<string, never>
     >(FEEDS_QUERY, {}, 'network-only');
     if (result.aborted) return;
@@ -157,6 +200,7 @@ export default function FeedsPage() {
       setFeeds(result.data.feeds);
       setFiles(result.data.receivedFiles);
       setMaps(result.data.feedMaps);
+      setMessages(result.data.inboundMessages);
       setMessage('');
     }
     setLoading(false);
@@ -185,6 +229,10 @@ export default function FeedsPage() {
       port: String(connection?.config.port || 22),
       hostKey: connection?.config.hostKey || '',
       leaveFiles: connection?.config.afterLoad === 'LEAVE',
+      allowedSenders: Array.isArray(connection?.config.allowedSenders) ? connection.config.allowedSenders.join('\n') : '',
+      requireDkim: connection?.config.requireDkim !== false,
+      fileTypes: Array.isArray(connection?.config.fileTypes) ? connection.config.fileTypes : ['csv', 'xlsx', 'xls', 'pdf'],
+      maxPerHour: String(connection?.config.maxPerHour ?? 30),
       secret: '',
       hasSecret: connection?.hasSecret || false,
       isActive: connection?.isActive ?? true,
@@ -219,7 +267,9 @@ export default function FeedsPage() {
     const config =
       draft.kind === 'STORAGE'
         ? { folder: draft.folder }
-        : draft.kind === 'SFTP'
+        : draft.kind === 'EMAIL'
+          ? { allowedSenders: draft.allowedSenders, requireDkim: draft.requireDkim, fileTypes: draft.fileTypes, maxPerHour: draft.maxPerHour }
+          : draft.kind === 'SFTP'
           ? {
               host: draft.host,
               port: draft.port,
@@ -297,6 +347,17 @@ export default function FeedsPage() {
     act(DELETE_CONNECTION, 'deleteFeedConnection', connection.id, '');
   };
 
+  const rotateAddress = (connection: Connection) => {
+    if (!window.confirm(`Give "${connection.connectionName}" a new address? Mail to the old address is refused from now on, so the sender must be told the new one.`)) return;
+    act(ROTATE_ADDRESS, 'rotateFeedConnectionAddress', connection.id, '');
+  };
+
+  const releaseMessage = (item: InboundMessage) => {
+    const sender = item.headerFrom || item.envelopeFrom || 'an unknown sender';
+    if (!window.confirm(`Release the email from ${sender}? Its attachments are checked again and loaded if they pass. Only release mail you know to be genuine.`)) return;
+    act(RELEASE_MESSAGE, 'releaseInboundMessage', item.id, 'The email is queued to be checked again.');
+  };
+
   const removeFeed = (feed: FeedRow) => {
     if (!window.confirm(`Delete the feed "${feed.feedName}"? Its schedule and file history are deleted too. Loaded data stays.`)) return;
     act(DELETE_FEED, 'deleteFeed', feed.id, '');
@@ -356,6 +417,7 @@ export default function FeedsPage() {
                   setConnectionDraft({ ...connectionDraft, kind, authType: kind === 'SFTP' ? 'PASSWORD' : 'NONE', username: '', secret: '' });
                 }}>
                 <option value="STORAGE">A drop folder (feed inbox)</option>
+                <option value="EMAIL">Email sent to its own address</option>
                 <option value="SFTP">An SFTP server</option>
                 <option value="HTTP">A web address (https)</option>
               </select>
@@ -372,6 +434,50 @@ export default function FeedsPage() {
               <div style={hint}>
                 Files go in the private feed-inbox bucket, inside your client&apos;s own folder. After a poll, a loaded file moves to a processed subfolder and one that needs a person moves to review.
               </div>
+            </>
+          )}
+
+          {connectionDraft.kind === 'EMAIL' && (
+            <>
+              <label style={field}>
+                <span style={fieldLabel}>Allowed senders</span>
+                <textarea className="text-input" rows={3} value={connectionDraft.allowedSenders} spellCheck={false} style={mono}
+                  placeholder={'reporting@adminco.com\nfundadmin.co.uk'}
+                  onChange={(event) => setConnectionDraft({ ...connectionDraft, allowedSenders: event.target.value })} />
+              </label>
+              <div style={hint}>
+                One per line: a whole address, or a domain to allow every address at exactly that domain. Mail from anyone else is quarantined for you to release or discard. The address is saved with the connection and shown in the list.
+              </div>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input type="checkbox" checked={connectionDraft.requireDkim} onChange={(event) => setConnectionDraft({ ...connectionDraft, requireDkim: event.target.checked })} />
+                Require a DKIM signature from the sender&apos;s domain
+              </label>
+              <div style={{ ...hint, color: connectionDraft.requireDkim ? hint.color : STATUS_COLOR.FAILED }}>
+                {connectionDraft.requireDkim
+                  ? 'The From address is easy to fake. A DKIM signature proves the sender\'s domain sent the message. Mail without one is quarantined.'
+                  : 'Without DKIM, anyone who learns the address can send mail that looks like it is from an allowed sender. Turn this off only for a sender whose mail server cannot sign.'}
+              </div>
+              <div style={field}>
+                <span style={fieldLabel}>File types to take</span>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  {EMAIL_FILE_TYPES.map((type) => (
+                    <label key={type} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <input type="checkbox" checked={connectionDraft.fileTypes.includes(type)}
+                        onChange={(event) => setConnectionDraft({
+                          ...connectionDraft,
+                          fileTypes: event.target.checked ? [...connectionDraft.fileTypes, type] : connectionDraft.fileTypes.filter((item) => item !== type),
+                        })} />
+                      .{type}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div style={hint}>Other attachments are set aside. Workbooks with macros and PDFs with scripts are never taken, and nor is a file whose content does not match its type.</div>
+              <label style={{ ...field, maxWidth: 200 }}>
+                <span style={fieldLabel}>Messages an hour, at most</span>
+                <input className="text-input" type="number" min={1} max={500} value={connectionDraft.maxPerHour}
+                  onChange={(event) => setConnectionDraft({ ...connectionDraft, maxPerHour: event.target.value })} />
+              </label>
             </>
           )}
 
@@ -521,7 +627,9 @@ export default function FeedsPage() {
                     <code>
                       {connection.kind === 'STORAGE'
                         ? connection.inboxPath
-                        : connection.kind === 'SFTP'
+                        : connection.kind === 'EMAIL'
+                          ? connection.inboundAddress || 'Address not shown'
+                          : connection.kind === 'SFTP'
                           ? `${connection.config.username}@${connection.config.host}:${connection.config.folder || '.'}`
                           : connection.config.baseUrl}
                     </code>
@@ -529,6 +637,7 @@ export default function FeedsPage() {
                       {KIND_LABEL[connection.kind]}
                       {connection.kind === 'HTTP' && `, ${(AUTH_LABEL[connection.config.authType] || 'No sign-in').toLowerCase()}`}
                       {connection.kind === 'SFTP' && (connection.config.hostKey ? ', host key pinned' : ', host key not pinned')}
+                      {connection.kind === 'EMAIL' && `, from ${(connection.config.allowedSenders || []).join(', ')}${connection.config.requireDkim === false ? ', DKIM not required' : ''}`}
                       {connection.hasSecret ? ', credential stored' : ''}
                     </div>
                   </td>
@@ -544,6 +653,12 @@ export default function FeedsPage() {
                     ) : 'Not checked'}
                   </td>
                   <td style={{ ...cell, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                    {connection.kind === 'EMAIL' && connection.inboundAddress && (
+                      <>
+                        <button type="button" className="btn" onClick={() => navigator.clipboard?.writeText(connection.inboundAddress || '')}>Copy address</button>{' '}
+                        <button type="button" className="btn" onClick={() => rotateAddress(connection)}>New address</button>{' '}
+                      </>
+                    )}
                     <button type="button" className="btn" onClick={() => act(CHECK_CONNECTION, 'checkFeedConnection', connection.id, 'The check is queued.')}>Check</button>{' '}
                     <button type="button" className="btn" onClick={() => editConnection(connection)}>Edit</button>{' '}
                     <button type="button" className="btn" onClick={() => removeConnection(connection)}>Delete</button>
@@ -583,12 +698,14 @@ export default function FeedsPage() {
             </label>
           </div>
           <div style={formRow}>
-            <label style={field}>
-              <span style={fieldLabel}>{feedConnection?.kind === 'HTTP' ? 'File address, after the connection address' : 'Subfolder (optional)'}</span>
-              <input className="text-input" value={feedDraft.path} spellCheck={false}
-                placeholder={feedConnection?.kind === 'HTTP' ? 'nav/positions_{YYYY}{MM}{DD}.csv' : 'nav'}
-                onChange={(event) => setFeedDraft({ ...feedDraft, path: event.target.value })} />
-            </label>
+            {feedConnection?.kind !== 'EMAIL' && (
+              <label style={field}>
+                <span style={fieldLabel}>{feedConnection?.kind === 'HTTP' ? 'File address, after the connection address' : 'Subfolder (optional)'}</span>
+                <input className="text-input" value={feedDraft.path} spellCheck={false}
+                  placeholder={feedConnection?.kind === 'HTTP' ? 'nav/positions_{YYYY}{MM}{DD}.csv' : 'nav'}
+                  onChange={(event) => setFeedDraft({ ...feedDraft, path: event.target.value })} />
+              </label>
+            )}
             {feedConnection?.kind !== 'HTTP' && (
               <label style={field}>
                 <span style={fieldLabel}>File names to take</span>
@@ -598,6 +715,9 @@ export default function FeedsPage() {
             )}
           </div>
           {feedConnection?.kind === 'HTTP' && <div style={hint}>{'{YYYY}'}, {'{MM}'} and {'{DD}'} become the date of the poll.</div>}
+          {feedConnection?.kind === 'EMAIL' && (
+            <div style={hint}>Every feed on this connection sees the same attachments, so give each a file name pattern of its own. An accepted email queues a poll straight away; the schedule below is a backstop.</div>
+          )}
           <div style={formRow}>
             <label style={field}>
               <span style={fieldLabel}>Saved map</span>
@@ -717,6 +837,77 @@ export default function FeedsPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {(messages.length > 0 || connections.some((connection) => connection.kind === 'EMAIL')) && (
+        <>
+          <div style={{ ...sectionHead, marginTop: 28 }}>
+            <h2 style={sectionTitle}>Inbound email</h2>
+            <button type="button" className="btn" onClick={load}>Refresh</button>
+          </div>
+          <div style={{ ...hint, marginBottom: 8 }}>
+            Each email is checked before anything in it is loaded: the sender must be allowed, signed by its domain (DKIM), and the attachments must be types the connection takes. Quarantined mail waits here. Releasing skips the sender checks, never the file checks.
+          </div>
+          {messages.length === 0 && <div style={{ color: 'var(--ink-3)' }}>No email has arrived.</div>}
+          {messages.length > 0 && (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={table}>
+                <thead>
+                  <tr style={headRow}>
+                    <th style={cell}>Received</th>
+                    <th style={cell}>From</th>
+                    <th style={cell}>Attachments</th>
+                    <th style={cell}>Status</th>
+                    <th style={cell} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {messages.map((item) => {
+                    const status = MESSAGE_STATUS[item.status] || { label: item.status, color: 'var(--ink-2)' };
+                    return (
+                      <tr key={item.id} style={bodyRow}>
+                        <td style={cell}>
+                          {when(item.receivedAt)}
+                          <div style={hint}>{item.connectionName}</div>
+                        </td>
+                        <td style={{ ...cell, maxWidth: 280, overflowWrap: 'anywhere' }}>
+                          {item.headerFrom || item.envelopeFrom || 'Unknown sender'}
+                          {item.subject && <div style={hint}>{item.subject}</div>}
+                          {item.auth && (
+                            <div style={hint}>{item.auth.dkimAligned ? `Signed by ${item.auth.dkimAligned}` : 'Not signed by the sender\'s domain'}</div>
+                          )}
+                        </td>
+                        <td style={cell}>
+                          {item.attachments.length === 0 && <span style={hint}>{item.screenedAt ? 'None' : ''}</span>}
+                          {item.attachments.map((attachment, index) => (
+                            <div key={`${attachment.name}-${index}`}>
+                              {attachment.name}{' '}
+                              <span style={hint}>{fileSize(attachment.size)}</span>
+                              {!attachment.taken && attachment.reason && <div style={hint}>Not taken: {attachment.reason}</div>}
+                            </div>
+                          ))}
+                        </td>
+                        <td style={cell}>
+                          <span style={{ color: status.color, fontWeight: 500 }}>{status.label}</span>
+                          {item.releasedAt && <div style={hint}>Released {when(item.releasedAt)}</div>}
+                          {item.reason && <div style={{ ...hint, maxWidth: 360 }}>{item.reason}</div>}
+                        </td>
+                        <td style={{ ...cell, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                          {item.status === 'QUARANTINED' && (
+                            <>
+                              <button type="button" className="btn" onClick={() => releaseMessage(item)}>Release</button>{' '}
+                              <button type="button" className="btn" onClick={() => act(DISCARD_MESSAGE, 'discardInboundMessage', item.id, '')}>Discard</button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
 
       <div style={{ ...sectionHead, marginTop: 28 }}>

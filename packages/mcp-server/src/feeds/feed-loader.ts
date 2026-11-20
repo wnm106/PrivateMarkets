@@ -8,7 +8,8 @@ import { normalizeSourceCode, resolveRowContext } from './row-context';
 import { compactIdentifier } from '../../../graphql/src/lib/entity-resolution/similarity';
 import type { DomainLoadStats, EntityResolution, EntityResolutionDecision, FeedLoadResult, FeedMap, FeedPreview, LoadReject, NormalizationHit, ParsedTable } from './types';
 import { emptyReferenceIndex, indexReferences, matchReference, referenceLookups, type ReferenceIndex } from './references';
-import { applyTransform, coerceAttributeValue, dayBefore, planPeriod, indexReferenceLists, normalizeToList, parseUsDate, type ListValueRow } from './values';
+import { applyTransform, coerceAttributeValue, dayBefore, planPeriod, indexListParents, indexReferenceLists, listLevelKey, normalizeToList, parseUsDate, type ListValueRow } from './values';
+import { planTreeValues, type ListParents, type TreeAttribute } from './tree-values';
 
 const OPEN_TO = '9999-12-31';
 const OPEN_SYSTEM_TO = '9999-12-31 23:59:59';
@@ -24,6 +25,16 @@ interface AttributeMeta {
   reference_list_code: string | null;
   /** For REFERENCE attributes: the entity type the value names. */
   reference_domain_code: string | null;
+  /** For fields on a tree list: the level the field takes. */
+  reference_list_level?: number | null;
+  /** The field whose value this one must sit under. */
+  controlling_attribute_code?: string | null;
+}
+
+function treeAttributeOf(catalog: Catalog, attributeCode: string): TreeAttribute | undefined {
+  const meta = catalog.attributes.get(attributeCode);
+  if (!meta?.reference_list_code) return undefined;
+  return { listCode: meta.reference_list_code, level: meta.reference_list_level ?? null, controllingCode: meta.controlling_attribute_code || null };
 }
 
 /** The entity type a reference attribute points to. */
@@ -66,6 +77,7 @@ interface Catalog {
   templates: Map<string, string>;
   attributes: Map<string, AttributeMeta>;
   lists: ReturnType<typeof indexReferenceLists>;
+  listParents: ListParents;
   relationshipTypes: RelationshipTypeRow[];
 }
 
@@ -232,9 +244,9 @@ async function loadCatalog(db: SupabaseClient, map: FeedMap, clientId: string): 
       ? db.schema('metadata_register').from('domain_templates').select('id, template_code').in('template_code', templateCodes)
       : Promise.resolve({ data: [], error: null }),
     attributeCodes.length
-      ? db.schema('metadata_register').from('attribute_register').select('id, attribute_code, data_type, reference_list_code, reference_domain_code').in('attribute_code', attributeCodes)
+      ? db.schema('metadata_register').from('attribute_register').select('*').in('attribute_code', attributeCodes)
       : Promise.resolve({ data: [], error: null }),
-    db.schema('metadata_register').from('reference_list_values').select('value_code, value_label, synonyms, list:reference_lists!inner(list_code)'),
+    db.schema('metadata_register').from('reference_list_values').select('*, list:reference_lists!inner(list_code)'),
     db.schema('metadata_register').from('relationship_types').select('relationship_code, parent_domain_code, child_domain_code, is_required').eq('is_active', true),
   ]);
 
@@ -242,20 +254,37 @@ async function loadCatalog(db: SupabaseClient, map: FeedMap, clientId: string): 
   if (failure) throw new Error(failure.message);
   if (!source.data?.id) throw new Error(`Source ${map.sourceCode} is not in the source registry.`);
 
+  const codeById = new Map((listValues.data || []).map((row: any) => [row.id, row.value_code]));
   const lists: ListValueRow[] = (listValues.data || []).map((row: any) => ({
     list_code: row.list?.list_code,
     value_code: row.value_code,
     value_label: row.value_label,
     synonyms: Array.isArray(row.synonyms) ? row.synonyms : [],
+    level: row.level ?? null,
+    parent_code: row.parent_value_id ? codeById.get(row.parent_value_id) ?? null : null,
   }));
+
+  // Fields above a mapped tree field are loaded too, so a file that sends only the
+  // lowest level can fill them in.
+  const attributeRows: any[] = [...(attributes.data || [])];
+  for (let depth = 0; depth < 6; depth += 1) {
+    const known = new Set(attributeRows.map((row) => row.attribute_code));
+    const missing = [...new Set(attributeRows.map((row) => row.controlling_attribute_code).filter((code) => code && !known.has(code)))];
+    if (missing.length === 0) break;
+    const above = await db.schema('metadata_register').from('attribute_register').select('*').in('attribute_code', missing);
+    if (above.error) throw new Error(above.error.message);
+    if (!above.data?.length) break;
+    attributeRows.push(...above.data);
+  }
 
   return {
     clientId,
     sourceId: source.data.id,
     precedenceRank: source.data.precedence_rank ?? 45,
     templates: new Map((templates.data || []).map((row: any) => [row.template_code, row.id])),
-    attributes: new Map((attributes.data || []).map((row: any) => [row.attribute_code, row])),
+    attributes: new Map(attributeRows.map((row: any) => [row.attribute_code, row])),
     lists: indexReferenceLists(lists.filter((row) => row.list_code)),
+    listParents: indexListParents(lists.filter((row) => row.list_code)),
     relationshipTypes: (relationshipTypes.data || []) as RelationshipTypeRow[],
   };
 }
@@ -305,7 +334,9 @@ function normalizationFor(
 ): { stored: string; hit: NormalizationHit | null } {
   const meta = catalog.attributes.get(attributeCode);
   if (!meta?.reference_list_code) return { stored: raw, hit: null };
-  const normalized = normalizeToList(catalog.lists, meta.reference_list_code, raw);
+  // A field on one level of a tree list matches within that level.
+  const levelKey = listLevelKey(meta.reference_list_code, meta.reference_list_level);
+  const normalized = normalizeToList(catalog.lists, catalog.lists.has(levelKey) ? levelKey : meta.reference_list_code, raw);
   if (!normalized) return { stored: raw, hit: null };
   const hit: NormalizationHit = {
     attributeCode,
@@ -1155,6 +1186,25 @@ export async function executeParsedFeed(
       for (const period of entityPeriods) {
       const valueSource = valueSources.get(normalizeSourceCode(period.sourceCode)) || { id: catalog.sourceId, rank: catalog.precedenceRank };
       const validFrom = period.asOf || asOfDate;
+      // Fields on a tree list, such as GICS: fill in the levels the file left out,
+      // and flag a value that sits under a different parent than the file gives.
+      const treeCodes = new Map<string, string>();
+      for (const [attributeCode, raw] of period.attributes) {
+        if (!treeAttributeOf(catalog, attributeCode) || !raw.trim()) continue;
+        treeCodes.set(attributeCode, normalizationFor(catalog, attributeCode, raw).stored);
+      }
+      const treePlan = treeCodes.size > 0
+        ? planTreeValues(treeCodes, (code) => treeAttributeOf(catalog, code), catalog.listParents)
+        : { fills: [], conflicts: [] };
+      const filledFrom = new Map<string, string>();
+      for (const fill of treePlan.fills) {
+        if ((catalog.attributes.get(fill.attributeCode) as any)?.domain_code !== domainCode) continue;
+        period.attributes.set(fill.attributeCode, fill.value);
+        filledFrom.set(fill.attributeCode, fill.from);
+        const from = period.origins.get(fill.from);
+        if (from && !period.origins.has(fill.attributeCode)) period.origins.set(fill.attributeCode, from);
+      }
+      const treeConflicts = new Map(treePlan.conflicts.map((conflict) => [conflict.attributeCode, conflict]));
       for (const [attributeCode, raw] of period.attributes) {
         const origin = period.origins.get(attributeCode);
         const meta = catalog.attributes.get(attributeCode);
@@ -1169,6 +1219,12 @@ export async function executeParsedFeed(
         const hit = normalized.hit;
         let stored = normalized.stored;
         if (hit) hits.push(hit);
+        const treeConflict = treeConflicts.get(attributeCode);
+        if (treeConflict) {
+          const why = `${treeConflict.value} sits under ${treeConflict.expected}, not under ${treeConflict.controllingCode} ${treeConflict.controllingValue}. Stored as given.`;
+          warnings.push(`${domainCode} ${entity.code}: ${attributeCode} ${why}`);
+          reject({ kind: 'value', domainCode, entityCode: entity.code, attributeCode, value: raw, message: why, row: origin?.row, column: origin?.column });
+        }
         // A reference stores the id of the record it names, found by id, code or name.
         const referenceDomain = referenceDomainOf(meta);
         let referenceMatch: string | null = null;
@@ -1207,6 +1263,7 @@ export async function executeParsedFeed(
           list_code: hit?.listCode || null,
           match_type: hit?.matchType || null,
           ...(referenceDomain ? { reference_domain: referenceDomain, reference_match: referenceMatch } : {}),
+          ...(filledFrom.has(attributeCode) ? { filled_from: filledFrom.get(attributeCode) } : {}),
           ...(origin && options.provenance ? { source_ref: sourceRef(table, origin, options.provenance) } : {}),
         };
         const sliceKey = varying ? `${entityId}|${meta.id}|${valueSource.id}|${validFrom}` : `${entityId}|${meta.id}|${validFrom}`;

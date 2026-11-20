@@ -43,10 +43,14 @@ describe('attribute section anchors', () => {
 
 describe('field visibility', () => {
   const items = [
-    { name: 'Country', populated: false },
-    { name: 'Sector', populated: true },
+    { name: 'Country', populated: false, required: true },
+    { name: 'Sector', populated: true, required: true },
     { name: 'Industry', populated: false },
   ];
+
+  it('keeps required fields, filled or blank', () => {
+    assert.deepEqual(fieldsForVisibility(items, 'required').map((item) => item.name), ['Country', 'Sector']);
+  });
 
   it('keeps every field', () => {
     assert.deepEqual(fieldsForVisibility(items, 'all').map((item) => item.name), ['Country', 'Sector', 'Industry']);

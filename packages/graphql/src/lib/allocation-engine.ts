@@ -31,6 +31,10 @@ export interface AllocationCapacityPool {
   /** Additional amount, in the same unit as the tranche sizes. Already the rule's capacity. */
   capacity: number;
   ruleName: string;
+  /** The rule's limit for this fund and group. 0 means the fund may not hold the security at all. */
+  hardLimit?: number | null;
+  /** The rule group the security lands in, such as the instrument type or issuer. */
+  groupValue?: string | null;
 }
 
 export interface AllocationSleeve {
@@ -342,6 +346,45 @@ function resolveComplianceCaps(
   return { capTotal: cappedTotal, totalWhy, capPerTranche: perCap, whyPerTranche: perWhy, pools: fillPools };
 }
 
+interface RuleBlock {
+  rule: string;
+  /** The rule's limit is 0: a prohibition, not a limit that has been used up. */
+  prohibited: boolean;
+  group: string | null;
+}
+
+/** The rule that leaves no room for this tranche, when one does. A prohibition wins over a full limit. */
+function blockingRule(pools: AllocationCapacityPool[] | undefined, trancheId: string): RuleBlock | null {
+  let full: RuleBlock | null = null;
+  for (const pool of pools || []) {
+    if (!pool.trancheIds.includes(trancheId) || !Number.isFinite(pool.capacity)) continue;
+    if (pool.capacity > 1e-7) continue;
+    const block = { rule: pool.ruleName, prohibited: pool.hardLimit === 0, group: pool.groupValue ?? null };
+    if (block.prohibited) return block;
+    full = full || block;
+  }
+  return full;
+}
+
+function groupWords(group: string | null): string {
+  if (!group) return 'this security';
+  return group.toLowerCase().replace(/_/g, ' ');
+}
+
+/** The cell reason for a rule block. A prohibition on a portfolio reads as its mandate, on a sleeve as its guidelines. */
+function blockReason(block: RuleBlock, level: 'fund' | 'sleeve'): { kind: string; text: string } {
+  if (block.prohibited) {
+    return {
+      kind: level === 'fund' ? 'mandate' : 'guideline',
+      text: `${block.rule}: ${groupWords(block.group)} is not permitted${level === 'fund' ? ' for this fund' : ' for this sub-portfolio'} (limit 0)`,
+    };
+  }
+  return {
+    kind: 'limit',
+    text: `No room under ${block.rule}${block.group ? ` (${block.group})` : ''}: ${level === 'fund' ? 'the fund' : 'this sub-portfolio'} is at or over this limit`,
+  };
+}
+
 function poolsAfterLocks(pools: FillPool[], locks: Array<number | null>): FillPool[] {
   return pools.map((pool) => ({
     ...pool,
@@ -366,6 +409,14 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
     return cell && cell.type === 'override' ? cell : null;
   };
   const allowed = (list: string[], instrument: string) => list.includes(instrument);
+  // A compliance rule already at or over its limit leaves a fund no room for this
+  // security. The cell is shown as blocked by that rule, not as eligible with nothing.
+  // A manual override still places an amount, and the score then shows the breach.
+  // An override that places an amount gets past a rule block; one of 0 places nothing, so the block shows.
+  const placesAmount = (fundId: string, trancheId: string) => (override(fundId, trancheId)?.amount ?? 0) > 1e-7;
+  const ruleBlock = (fund: AllocationPortfolio | AllocationSleeve, trancheId: string): RuleBlock | null => (
+    placesAmount(fund.id, trancheId) ? null : blockingRule(fund.capacityPools, trancheId)
+  );
 
   const sleeveCap = (portfolio: AllocationPortfolio, sleeve: AllocationSleeve) => {
     const available = sleeveAvailable(sleeve);
@@ -374,12 +425,24 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
       ? { value: available, why: 'available capital' }
       : { value: issuer, why: 'pro forma single-issuer limit' };
   };
-  const sleeveEligible = (portfolio: AllocationPortfolio, sleeve: AllocationSleeve, trancheIndex: number) => {
+  const sleeveOpen = (portfolio: AllocationPortfolio, sleeve: AllocationSleeve, trancheIndex: number) => {
     const tranche = tranches[trancheIndex];
     return allowed(portfolio.allowed, tranche.instrumentType)
       && allowed(sleeve.allowed, tranche.instrumentType)
       && !exclusion(portfolio.id, tranche.id)
-      && !exclusion(sleeve.id, tranche.id);
+      && !exclusion(sleeve.id, tranche.id)
+      && !ruleBlock(portfolio, tranche.id);
+  };
+  const sleeveEligible = (portfolio: AllocationPortfolio, sleeve: AllocationSleeve, trancheIndex: number) => {
+    if (!sleeveOpen(portfolio, sleeve, trancheIndex)) return false;
+    const tranche = tranches[trancheIndex];
+    if (sleeve.id === portfolio.id || !ruleBlock(sleeve, tranche.id)) return true;
+    // An amount placed on the fund goes to the sleeves a rule lets hold it. Only when
+    // no sleeve may hold it does the override carry the amount past the sleeves' rules.
+    if (!placesAmount(portfolio.id, tranche.id)) return false;
+    return !portfolio.sleeves.some((other) => (
+      other.id !== sleeve.id && sleeveOpen(portfolio, other, trancheIndex) && !ruleBlock(other, tranche.id)
+    ));
   };
   const portfolioEligible = (portfolio: AllocationPortfolio, trancheIndex: number) => (
     portfolio.sleeves.some((sleeve) => sleeveEligible(portfolio, sleeve, trancheIndex))
@@ -550,6 +613,15 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
     if (!allowed(portfolio.allowed, tranche.instrumentType)) {
       return { kind: 'mandate', text: portfolio.denyNote || 'Not permitted by mandate' };
     }
+    const block = ruleBlock(portfolio, tranche.id);
+    if (block) return blockReason(block, 'fund');
+    const sleeveBlocks = portfolio.sleeves.map((sleeve) => ruleBlock(sleeve, tranche.id)).filter((item): item is RuleBlock => Boolean(item));
+    if (sleeveBlocks.length && portfolio.sleeves.every((sleeve) => !allowed(sleeve.allowed, tranche.instrumentType) || ruleBlock(sleeve, tranche.id) || exclusion(sleeve.id, tranche.id))) {
+      const names = [...new Set(sleeveBlocks.map((item) => item.rule))].join(', ');
+      return sleeveBlocks.every((item) => item.prohibited)
+        ? { kind: 'guideline', text: `${names}: no sub-portfolio may hold ${groupWords(sleeveBlocks[0].group)}` }
+        : { kind: 'limit', text: `No sub-portfolio has room under ${names}` };
+    }
     return { kind: 'sub', text: 'No sub-portfolio is eligible' };
   };
   const sleeveReason = (portfolio: AllocationPortfolio, sleeve: AllocationSleeve, trancheIndex: number) => {
@@ -566,6 +638,10 @@ function compute(request: AllocationRequest, adjustments: AllocationAdjustment[]
     if (sleeveExcluded) {
       return { kind: 'manual', code: sleeveExcluded.reason, text: `Excluded: ${reasonLabel(sleeveExcluded.reason) || 'manager discretion'}` };
     }
+    const parentBlock = ruleBlock(portfolio, tranche.id);
+    if (parentBlock) return blockReason(parentBlock, 'fund');
+    const block = ruleBlock(sleeve, tranche.id);
+    if (block) return blockReason(block, 'sleeve');
     return { kind: 'guideline', text: 'Not eligible' };
   };
 
