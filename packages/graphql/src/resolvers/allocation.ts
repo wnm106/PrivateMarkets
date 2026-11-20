@@ -34,15 +34,10 @@ async function build(
   holdInput: any[] | null | undefined,
   adjustmentInput: any[] | null | undefined,
 ): Promise<AllocationPreview> {
-  const savedBook = holdInput == null && adjustmentInput == null;
-  const draft = await loadAllocationDraft(
-    context.supabase,
-    dealId,
-    asOfDate,
-    holds(holdInput),
-    adjustments(adjustmentInput),
-    savedBook ? { capacities: false } : undefined,
-  );
+  // Always read the compliance capacities. Without them the engine falls back
+  // to the fund's own issuer, sponsor and unfunded limits, and the first view
+  // of the saved book shows allocations no compliance rule capped.
+  const draft = await loadAllocationDraft(context.supabase, dealId, asOfDate, holds(holdInput), adjustments(adjustmentInput));
   return previewFromDraft(draft);
 }
 

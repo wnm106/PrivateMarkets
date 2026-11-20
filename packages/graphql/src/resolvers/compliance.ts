@@ -506,7 +506,8 @@ export const complianceResolvers = {
           asOf = anchors.asOf;
           fundIds = new Set(anchors.fundIds);
         } else {
-          const draft = await loadAllocationDraft(writer, args.dealId, args.asOfDate, holds, adjustments, { capacities: false });
+          // Capacities cap the proposals written here, so the score matches the grid.
+          const draft = await loadAllocationDraft(writer, args.dealId, args.asOfDate, holds, adjustments);
           const preview = await commitAllocation(writer, draft, context.user?.id ?? null, { proposalsOnly: true });
           dealCode = draft.dealCode;
           asOf = draft.asOf;
