@@ -35,7 +35,11 @@ export const referenceListResolvers = {
         .select('*')
         .eq('list_id', data.id)
         .order('display_order');
-      list.values = (values || []).map(mapReferenceListValue);
+      const codeById = new Map((values || []).map((row: any) => [row.id, row.value_code]));
+      list.values = (values || []).map((row: any) => ({
+        ...mapReferenceListValue(row),
+        parentValueCode: row.parent_value_id ? codeById.get(row.parent_value_id) ?? null : null,
+      }));
       return list;
     },
 
@@ -281,6 +285,8 @@ function mapReferenceListValue(row: any) {
     isActive: row.is_active !== false,
     synonyms: row.synonyms || [],
     metadata: row.metadata || {},
+    parentValueId: row.parent_value_id ?? null,
+    level: row.level ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at || row.created_at,
   };
@@ -298,6 +304,8 @@ function mapAttributeDefinition(row: any) {
     isMultiValued: row.is_multi_valued || false,
     referenceDomainCode: row.reference_domain_code,
     referenceListCode: row.reference_list_code,
+    referenceListLevel: row.reference_list_level ?? null,
+    controllingAttributeCode: row.controlling_attribute_code ?? null,
     domainCode: row.domain_code,
     defaultPrecedenceRank: row.default_precedence_rank || 100,
     isDerived: row.is_derived || false,

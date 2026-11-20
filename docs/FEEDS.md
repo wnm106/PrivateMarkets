@@ -6,7 +6,7 @@ A feed is a file that arrives on its own and loads through a saved map, with nob
 
 | Part | Where | What it does |
 |---|---|---|
-| Tables and functions | `supabase/migrations/20261114210000_feeds.sql`, `20261114220000_feed_sftp.sql`, `20261119120000_feed_email.sql` | `ops.connections`, `ops.feeds`, `ops.received_files`, `ops.inbound_messages`, reached only through the `feed_*`, `email_*` and `inbound_message_*` functions |
+| Tables and functions | `supabase/migrations/20261114210000_feeds.sql`, `20261114220000_feed_sftp.sql`, `20261119120100_feed_email.sql` | `ops.connections`, `ops.feeds`, `ops.received_files`, `ops.inbound_messages`, reached only through the `feed_*`, `email_*` and `inbound_message_*` functions |
 | Email Worker | `apps/inbound-email` | Cloudflare Email Worker: refuses mail it should not take, stores the rest and queues screening |
 | Screening | `packages/worker/src/email.ts`, `email-screen.ts` | `email.screen`: checks the sender, DKIM and attachments, and hands accepted attachments to the feeds |
 | Connectors | `packages/worker/src/connectors.ts` | List, fetch and tidy files for each kind of connection |

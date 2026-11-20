@@ -218,6 +218,7 @@ export async function POST(request: NextRequest) {
           feature: 'narrative',
           activity: 'narrative.section',
           agent: sectionKey,
+          subject: runId ? { type: 'narrative-run', id: runId, label: spec.narrativeName ?? null } : null,
           metadata: { runId, sectionKey },
         }, () => executeSection({
           supabase, spec, section, entityId, asOfDate: useAsOf, params: useParams,
@@ -327,6 +328,7 @@ export async function POST(request: NextRequest) {
         feature: 'narrative',
         activity: 'narrative.review',
         agent: 'reviewer',
+        subject: { type: 'narrative-run', id: run.id, label: template ? narrativeSpecFromRow(template).narrativeName ?? null : null },
         metadata: { runId: run.id },
       }, () => reviewRun({ model: template?.model, sections: inputs }));
       const review = reviewed.result;
@@ -397,6 +399,7 @@ export async function POST(request: NextRequest) {
         feature: 'narrative',
         activity: 'narrative.section',
         agent: sections[0].key,
+        subject: narrativeId ? { type: 'narrative', id: narrativeId, label: spec.narrativeName ?? null } : null,
       }, () => executeSection({
         supabase, spec, section: sections[0], entityId, asOfDate, params, prior: [],
       }));

@@ -8,7 +8,7 @@ Set it up in **Admin → Assistant connections** (`/admin/assistant-connections`
 
 | Piece | Where |
 | --- | --- |
-| Servers, credentials and ids (tables and functions) | `supabase/migrations/20261119190000_assistant_mcp_servers.sql` |
+| Servers, credentials and ids (tables and functions) | `supabase/migrations/20261119190100_assistant_mcp_servers.sql` |
 | MCP client, tool naming, Gemini schema conversion, URL guard | `packages/mcp-server/src/external/` |
 | ID tools: `get_external_ids`, `find_entity_by_external_id`, `save_external_id` | `packages/mcp-server/src/tools/external-id-tools.ts` |
 | Admin routes | `apps/web/app/api/assistant/connections/` |

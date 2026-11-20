@@ -949,6 +949,8 @@ function mapAttributeDefinition(row: any) {
     isVisible: row.is_visible !== false,
     // Reference list link
     referenceListCode: row.reference_list_code || null,
+    referenceListLevel: row.reference_list_level ?? null,
+    controllingAttributeCode: row.controlling_attribute_code ?? null,
     clientId: row.client_id ?? null,
     // Aggregation and precision
     aggregationType: row.aggregation_type || 'NONE',

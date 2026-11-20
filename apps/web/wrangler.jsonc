@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tapestrai-web",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    { "binding": "WORKER_SELF_REFERENCE", "service": "tapestrai-web" }
+  ],
+  "observability": { "enabled": true }
+  // Secrets are set with `npx wrangler secret put <NAME>`, never written here:
+  // SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,
+  // LLAMA_CLOUD_API_KEY, VOYAGE_API_KEY.
+  // NEXT_PUBLIC_* values are baked in at build time from .env.local / the build env.
+}

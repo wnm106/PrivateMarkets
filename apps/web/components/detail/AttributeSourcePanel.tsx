@@ -28,6 +28,12 @@ interface AttributeSourcePanelProps {
   standalone?: boolean;
 }
 
+/** Delete on a value that starts on the As Of date removes it outright; the server lets the prior value run on. */
+function startsOnAsOf(validFrom: string | null | undefined, asOfDate: string | undefined): boolean {
+  if (!validFrom || !asOfDate || !/^\d{4}-\d{2}-\d{2}/.test(validFrom)) return false;
+  return validFrom.slice(0, 10) >= asOfDate.slice(0, 10);
+}
+
 export function AttributeSourcePanel({
   field,
   entityId,
@@ -163,6 +169,7 @@ export function AttributeSourcePanel({
           embedded
           entityId={entityId}
           attributes={[{ code: field.attributeCode, name: field.label }]}
+          canDelete={Boolean(onDeleteSourceValue) && field.editable !== false}
         />
       ) : field.calculated && entityId && field.attributeCode ? (
         <CalcBreakdownPanel
@@ -248,8 +255,11 @@ export function AttributeSourcePanel({
                           <button
                             className="btn btn-sm"
                             onClick={() => onDeleteSourceValue(field.attributeCode || field.label, String(c.src))}
+                            title={startsOnAsOf(c.updated, asOfDate)
+                              ? 'This value starts on the As Of date. It is removed and this source\'s prior value runs on.'
+                              : 'Ends this source\'s value the day before the As Of date. Earlier dates keep it.'}
                           >
-                            End as of {asOfDate || 'today'}
+                            {startsOnAsOf(c.updated, asOfDate) ? 'Remove, prior value resumes' : `End as of ${asOfDate || 'today'}`}
                           </button>
                           <button className="btn btn-sm" onClick={() => setPendingDelete(null)}>Cancel</button>
                         </span>
@@ -366,7 +376,10 @@ function SourceValueEditor({
   const pendingRef = useRef<string | null>(null);
   const options = useAttributeListOptions(attributeCode);
   const displayMeta = useAttributeDisplay(attributeCode);
+  const listReady = Boolean(options && options.length > 0);
   const numeric = isNumericAttribute(dataType);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
   const normalize = (raw: string) => (numeric ? raw.replace(/,/g, '') : raw).trim();
 
@@ -407,10 +420,15 @@ function SourceValueEditor({
       skipCommit.current = false;
       return;
     }
-    persist(draft);
+    persist(draftRef.current);
   };
 
-  if (!editing) {
+  const editValue = (next: string) => {
+    draftRef.current = next;
+    setDraft(next);
+  };
+
+  if (!editing && !listReady) {
     return (
       <span className="sa-source-value-wrap">
         <button
@@ -439,29 +457,40 @@ function SourceValueEditor({
   }
 
   return (
-    <AttributeValueInput
-      attributeCode={attributeCode}
-      dataType={dataType}
-      className="text-input sa-source-editor"
-      style={{ fontSize: '13px', padding: '4px 6px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}
-      value={draft}
-      autoFocus
-      ariaLabel="Source value"
-      onClick={(event) => event.stopPropagation()}
-      onChange={setDraft}
-      onSelect={(next) => {
-        setDraft(next);
-        persist(next);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') event.currentTarget.blur();
-        if (event.key === 'Escape') {
-          skipCommit.current = true;
-          setDraft(value);
-          setEditing(false);
-        }
-      }}
-      onBlur={commit}
-    />
+    <span className="sa-source-value-wrap">
+      <AttributeValueInput
+        attributeCode={attributeCode}
+        dataType={dataType}
+        className="text-input sa-source-editor"
+        style={{ fontSize: '13px', padding: '4px 6px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}
+        value={draft}
+        autoFocus={editing && !listReady}
+        ariaLabel="Source value"
+        onClick={(event) => event.stopPropagation()}
+        onChange={editValue}
+        onSelect={(next) => {
+          editValue(next);
+          persist(next);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur();
+          if (event.key === 'Escape') {
+            skipCommit.current = true;
+            draftRef.current = value;
+            setDraft(value);
+            setEditing(false);
+          }
+        }}
+        onBlur={commit}
+      />
+      {saving && (
+        <svg className="sa-save-spin" viewBox="0 0 16 16" width="14" height="14" role="status" aria-label="Saving">
+          <path
+            fill="currentColor"
+            d="M13.7 2.3A7 7 0 0 0 2.4 6.2l1.5.4a5.4 5.4 0 0 1 8.7-2.4L11 6h4V2l-1.3.3zM2.3 13.7A7 7 0 0 0 13.6 9.8l-1.5-.4a5.4 5.4 0 0 1-8.7 2.4L5 10H1v4l1.3-.3z"
+          />
+        </svg>
+      )}
+    </span>
   );
 }

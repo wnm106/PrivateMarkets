@@ -72,3 +72,9 @@ migrate_entities_to_bill_client.sql
 
 # Stray duplicate of apps/web/public/tapestrai.jpg
 /tapestrai.jpg
+
+# Cloudflare / OpenNext
+.open-next/
+.wrangler/
+.dev.vars*
+!.dev.vars.example

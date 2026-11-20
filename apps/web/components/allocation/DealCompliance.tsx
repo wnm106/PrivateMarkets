@@ -47,7 +47,7 @@ interface Board {
 type Bucket = 'all' | 'over' | 'near' | 'within' | 'na';
 type SortKey = 'utilisation' | 'name' | 'status';
 
-const CATEGORY: Record<string, string> = {
+export const CATEGORY: Record<string, string> = {
   CONCENTRATION: 'Concentration',
   EXPOSURE: 'Exposure',
   DIVERSIFICATION: 'Diversification',
@@ -68,16 +68,19 @@ const STATUS_RANK: Record<string, number> = {
   PASS: 4,
 };
 
-const GROUP_LABEL: Record<string, string> = {
+export const GROUP_LABEL: Record<string, string> = {
   ISSUER_LEGAL_NAME: 'Issuer',
   SECTOR: 'Sector',
   SPONSOR_NAME: 'Sponsor',
 };
 
-function reading(result: FundResult, direction?: string | null): { bucket: Exclude<Bucket, 'all'>; tone: string; label: string } {
+export function reading(result: FundResult, direction?: string | null): { bucket: Exclude<Bucket, 'all'>; tone: string; label: string } {
   if (result.status === 'NO_DATA' || result.status === 'ERROR' || result.computedValue == null) {
     return { bucket: 'na', tone: 'na', label: result.status === 'ERROR' ? 'Error' : 'Not applicable' };
   }
+  // The rule's own status wins over the ratio: a soft limit or a MIN rule can breach below 100%.
+  if (result.status === 'HARD_BREACH') return { bucket: 'over', tone: 'breach', label: 'Over limit' };
+  if (result.status === 'SOFT_BREACH') return { bucket: 'near', tone: 'near', label: 'Over soft limit' };
   const ratio = utilisation(result, direction);
   if (ratio == null) return { bucket: 'within', tone: 'ok', label: 'Within limit' };
   if (ratio > 1.005) return { bucket: 'over', tone: 'breach', label: 'Over limit' };
@@ -86,7 +89,7 @@ function reading(result: FundResult, direction?: string | null): { bucket: Exclu
   return { bucket: 'within', tone: 'ok', label: 'Within limit' };
 }
 
-function formatMeasure(value: number | null | undefined, unit?: string | null): string {
+export function formatMeasure(value: number | null | undefined, unit?: string | null): string {
   if (value == null || Number.isNaN(value)) return '—';
   if (unit === 'PERCENTAGE') return `${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
   if (unit === 'CURRENCY') {
@@ -415,13 +418,16 @@ export function ComplianceGaugeList({
   );
 }
 
-export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds, score }: {
+export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds, score, hypoRun = null, hypoHowToRead = '' }: {
   dealId: string;
   asOfDate?: string | null;
   holds: Record<string, number>;
   adjustments: ScoreAdjustment[];
   funds: ComplianceFundRef[];
   score?: DealComplianceScore;
+  /** The last Hypo run, as the tab tells the assistant. The Hypo panel draws it under this one. */
+  hypoRun?: object | null;
+  hypoHowToRead?: string;
 }) {
   const own = useDealComplianceScore({ dealId, asOfDate, holds, adjustments, enabled: !score });
   const board = score?.board ?? own.board;
@@ -507,9 +513,10 @@ export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds, sc
 
   usePublishTab('compliance', {
     label: 'Compliance',
-    purpose: 'How this deal scores against each compliance rule, pro forma, for the fund selected in the tab.',
-    howToRead: 'tally counts the rules across the deal. rules lists the selected fund only. value is the rule\'s computed pro forma figure and hardLimit its limit.',
+    purpose: 'How this deal scores against each compliance rule, pro forma, for the fund selected in the tab, and what the last Hypo run did to each fund\'s rules.',
+    howToRead: `tally counts the rules across the deal. rules lists the selected fund only. value is the rule's computed pro forma figure and hardLimit its limit. ${hypoHowToRead}`.trim(),
     data: {
+      hypoRun,
       tally: dealTally,
       selectedFund: selected?.fundName || null,
       rules: rows.slice(0, 80).map((result) => {

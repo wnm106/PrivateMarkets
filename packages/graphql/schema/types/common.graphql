@@ -91,14 +91,19 @@ type FieldLineage {
 
 # One recorded write of an attribute value, newest first in entityActivity.
 type AttributeActivity {
+  # The stored version this write made. Pass it to deleteAttributeVersion.
+  id: ID
   attributeCode: String!
   attributeName: String!
   value: String
   updatedAt: DateTime!
   updatedBy: String!
   sourceName: String
+  sourceCode: String
   validFrom: Date!
   validTo: Date!
+  # Still believed at the knowledge date. False when a later write replaced or deleted it.
+  current: Boolean!
 }
 
 # Attribute Definition with Derived Attribute Support
@@ -144,6 +149,8 @@ type AttributeDefinition {
   # Reference list link
   referenceListCode: String
   referenceList: ReferenceList
+  referenceListLevel: Int
+  controllingAttributeCode: String
   
   # Aggregation and precision
   aggregationType: String

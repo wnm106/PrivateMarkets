@@ -2,6 +2,8 @@ import { Context } from '../context';
 import { ComplianceEngine, getComplianceEngine } from '../lib/compliance-engine';
 import { commitAllocation, loadAllocationDraft, loadDealScoreAnchors, type AllocationHold } from '../lib/allocation-store';
 import type { AllocationAdjustment } from '../lib/allocation-engine';
+import { runDealHypo, type DealScoreArgs } from '../lib/deal-hypo';
+import { DEAL_SURFACE_RULE_CODES, dealSurfaceResults, rulesToScore, scoreDealFunds } from '../lib/deal-compliance';
 import {
   matchPopulationEntity,
   targetsAlongPath,
@@ -11,7 +13,6 @@ import {
   conditionExpressionReads,
 } from '../lib/compliance-population';
 import { parseFundBoardResultPayload, selectLatestFundResults } from '../lib/fund-board-results';
-import { DEAL_SURFACE_RULE_CODES, dealSurfaceResults, rulesToScore } from '../lib/deal-compliance';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
 // through `.schema('compliance')` first (same convention as tenancy.ts /
@@ -313,7 +314,8 @@ export const complianceResolvers = {
             hard_limit_value: input.hardLimitValue,
             hard_limit_attribute_code: input.hardLimitAttributeCode,
             soft_limit_factor: input.softLimitFactor,
-            consolidate_descendants: consolidateDescendants ?? false,
+            // A parent fund's limits measure the aggregate, so a new rule rolls its child funds up.
+            consolidate_descendants: consolidateDescendants ?? true,
             default_source_scope: input.defaultSourceScope || 'GOLDEN',
             metadata: input.metadata || {},
             created_by: context.user?.id,
@@ -474,7 +476,7 @@ export const complianceResolvers = {
       }
     },
 
-    scoreDealCompliance: async (_: any, args: { dealId: string; asOfDate?: string | null; holds?: any[] | null; adjustments?: any[] | null }, context: Context) => {
+    scoreDealCompliance: async (_: any, args: DealScoreArgs, context: Context) => {
       try {
         const holds: AllocationHold[] | null = args.holds
           ? args.holds.map((item) => ({ trancheId: item.trancheId, holdPct: Number(item.holdPct) }))
@@ -555,38 +557,7 @@ export const complianceResolvers = {
         }
 
         const failures: string[] = [];
-        const { data: scoredRows, error: scoreError } = await compliance.rpc('score_deal_funds', {
-          p_plans: plans.map((plan) => ({ ruleCode: plan.rule.rule_code, anchors: plan.anchorIds })),
-          p_as_of: asOf,
-          p_knowledge: new Date().toISOString(),
-          p_scenario: dealCode,
-          p_triggered_by: context.user?.id ?? null,
-        });
-        if (scoreError) throw new Error(scoreError.message);
-        const results = ((scoredRows || []) as any[]).map((row) => ({
-          id: row.id,
-          runId: row.run_id,
-          ruleId: row.rule_id,
-          ruleVersionId: row.rule_version_id,
-          anchorEntityId: row.anchor_entity_id,
-          groupByValue: row.group_by_value,
-          asOfDate: row.as_of_date,
-          knowledgeDate: row.knowledge_date,
-          sourceScope: row.source_scope,
-          numeratorValue: row.numerator_value,
-          denominatorValue: row.denominator_value,
-          computedValue: row.computed_value,
-          limitDirection: row.limit_direction,
-          softLimitValue: row.soft_limit_value,
-          hardLimitValue: row.hard_limit_value,
-          status: row.status,
-          breachAmount: row.breach_amount,
-          contributingEntityIds: row.contributing_entity_ids,
-          contributingCount: row.contributing_count,
-          rankPosition: row.rank_position ?? null,
-          detail: row.detail || {},
-          evaluatedAt: row.evaluated_at,
-        }));
+        const results = await scoreDealFunds(compliance, plans, asOf, dealCode, context.user?.id ?? null);
 
         const { data: scenarioAttribute } = await writer
           .from('attribute_register')
@@ -625,6 +596,35 @@ export const complianceResolvers = {
       } catch (error: any) {
         console.error('Error scoring deal compliance:', error);
         return { rules: [], results: [], errors: [{ field: 'general', message: error.message, code: 'EVALUATE_FAILED' }] };
+      }
+    },
+
+    runDealHypo: async (_: any, args: DealScoreArgs, context: Context) => {
+      const ranAt = new Date().toISOString();
+      try {
+        const run = await runDealHypo(context, args, true);
+        return {
+          scenarioCode: run.scenarioCode,
+          asOfDate: run.asOfDate,
+          ranAt,
+          rules: run.rules,
+          before: run.before,
+          after: run.after,
+          allocations: run.allocations,
+          errors: run.errors,
+        };
+      } catch (error: any) {
+        console.error('Error running the Hypo compliance test:', error);
+        return {
+          scenarioCode: null,
+          asOfDate: null,
+          ranAt,
+          rules: [],
+          before: [],
+          after: [],
+          allocations: [],
+          errors: [{ field: 'general', message: error.message, code: 'HYPO_FAILED' }],
+        };
       }
     },
   },

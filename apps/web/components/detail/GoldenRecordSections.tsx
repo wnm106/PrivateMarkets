@@ -18,6 +18,7 @@ import { supabaseBrowserClient } from '@/lib/supabase-browser';
 import { attributeSectionLinks, fieldsForVisibility, groupForDisplay, type AttributeSectionOrder, type FieldVisibility } from '@/lib/attribute-layout';
 import { decompileCalcExpression } from '@/lib/calc-expression';
 import { usePublishTabs, useWarmTabs } from '@/lib/view-context';
+import { RecordValuesProvider } from '@/components/forms/RecordValues';
 
 export interface TemplateAttribute {
   attributeCode: string;
@@ -58,10 +59,14 @@ interface GoldenRecordSectionsProps {
   onAddAttribute?: (attributeCode: string, value: string, source: SourceKey) => void;
   onSourceChange?: (attributeCode: string, newSource: SourceKey) => void;
   onValueChange?: (attributeCode: string, newValue: string) => void;
+  /** Saves several fields in one change, such as the levels above a picked GICS value. */
+  onValuesChange?: (changes: Record<string, string>) => void | Promise<void>;
   onAddSourceValue?: (attributeCode: string, source: SourceKey, value: string) => void;
   onDeleteSourceValue?: (attributeCode: string, sourceCode: string) => void;
   asOfDate?: string;
   lineageLoaded?: boolean;
+  /** Reads the record's values again, after a version is deleted from a timeline. */
+  onReload?: () => void | Promise<void>;
 }
 
 function formulaLabel(formula: string | null | undefined): string {
@@ -87,10 +92,12 @@ export function GoldenRecordSections({
   onAddAttribute,
   onSourceChange,
   onValueChange,
+  onValuesChange,
   onAddSourceValue,
   onDeleteSourceValue,
   asOfDate,
   lineageLoaded = false,
+  onReload,
 }: GoldenRecordSectionsProps) {
   const calcRefreshKey = lineageData
     .map((row) => `${row.attributeCode}:${row.currentValue ?? ''}:${row.lastUpdated ?? ''}`)
@@ -193,6 +200,16 @@ export function GoldenRecordSections({
   const displayEntries = lineageLoaded ? temporalEntries : populatedEntries;
   const lineageMap = new Map<string, LineageData>();
   lineageData.forEach((ld) => lineageMap.set(ld.attributeCode, ld));
+
+  // What each field shows, so dependent fields can read the field above them.
+  const recordValues: Record<string, string> = {};
+  for (const [code, stored] of Object.entries(attributes)) {
+    const raw = stored && typeof stored === 'object' && 'value' in stored ? (stored as { value: unknown }).value : stored;
+    if (!lineageLoaded && hasStoredValue(raw)) recordValues[code] = String(raw);
+  }
+  for (const lineage of lineageData) {
+    if (hasStoredValue(lineage.currentValue)) recordValues[lineage.attributeCode] = String(lineage.currentValue);
+  }
 
   const listedAttributes: TemplateAttribute[] = [];
   const listedCodes = new Set<string>();
@@ -380,6 +397,7 @@ export function GoldenRecordSections({
           </div>
         </div>
       ) : (
+        <RecordValuesProvider values={recordValues} saveMany={onValuesChange} reload={onReload}>
         <AttributeSections
           sections={sections}
           items={listedAttributes.map((templateAttr) => {
@@ -458,9 +476,11 @@ export function GoldenRecordSections({
             sortOrder: templateAttr.sortOrder ?? 0,
             name: displayLabel,
             populated: hasValue,
+            required: templateAttr.required === true,
             node: (
               <SourceAttributedFieldRow
                 field={fieldData}
+                required={templateAttr.required === true}
                 onDrilldown={handleDrilldown}
                 onSourceChange={handleSourceChange}
                 onValueChange={onValueChange}
@@ -475,6 +495,7 @@ export function GoldenRecordSections({
           };
         })}
         />
+        </RecordValuesProvider>
       )}
     </div>
   );
@@ -496,11 +517,13 @@ interface AttributeDisplayNode {
   sortOrder: number;
   name: string;
   populated: boolean;
+  required: boolean;
   node: ReactNode;
 }
 
 const FIELD_VISIBILITY: Array<{ value: FieldVisibility; label: string }> = [
   { value: 'all', label: 'All' },
+  { value: 'required', label: 'Required' },
   { value: 'populated', label: 'Populated' },
   { value: 'missing', label: 'Missing' },
 ];
@@ -525,6 +548,7 @@ function AttributeSections({
   const populatedCount = items.filter((item) => item.populated).length;
   const visibilityCount: Record<FieldVisibility, number> = {
     all: items.length,
+    required: items.filter((item) => item.required).length,
     populated: populatedCount,
     missing: items.length - populatedCount,
   };
@@ -563,9 +587,11 @@ function AttributeSections({
 
   const emptyLabel = items.length === 0
     ? 'No attribute values yet.'
-    : visibility === 'populated'
-      ? 'No populated fields.'
-      : 'No missing fields.';
+    : visibility === 'required'
+      ? 'No required fields on this record type.'
+      : visibility === 'populated'
+        ? 'No populated fields.'
+        : 'No missing fields.';
 
   const filter = (
     <div className="attr-field-filter">

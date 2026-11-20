@@ -15,13 +15,14 @@ export interface AttributeDisplayItem {
   name: string;
 }
 
-export type FieldVisibility = 'all' | 'populated' | 'missing';
+export type FieldVisibility = 'all' | 'required' | 'populated' | 'missing';
 
-/** Fields that match the attribute-page radio: every field, only stored values, or only blanks. */
-export function fieldsForVisibility<T extends { populated: boolean }>(
+/** Fields that match the attribute-page radio: every field, required ones, only stored values, or only blanks. */
+export function fieldsForVisibility<T extends { populated: boolean; required?: boolean }>(
   items: T[],
   visibility: FieldVisibility,
 ): T[] {
+  if (visibility === 'required') return items.filter((item) => item.required === true);
   if (visibility === 'populated') return items.filter((item) => item.populated);
   if (visibility === 'missing') return items.filter((item) => !item.populated);
   return items;
