@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { WORKFLOW_TEMPLATES } from '@tapestrai/graphql/src/lib/workflow-templates';
 import { guidedSteps, isGuided } from './workflow-stages';
 
@@ -9,22 +10,22 @@ const labels = (steps: ReturnType<typeof guidedSteps>) => steps.map((step) => `$
 
 describe('guided runs', () => {
   it('are the workflows with a stage in them', () => {
-    expect(isGuided(INTAKE)).toBe(true);
-    expect(isGuided(CLEANUP)).toBe(false);
-    expect(isGuided(null)).toBe(false);
+    assert.equal(isGuided(INTAKE), true);
+    assert.equal(isGuided(CLEANUP), false);
+    assert.equal(isGuided(null), false);
   });
 
   it('show the steps a person would recognise, in order, and leave out the routing', () => {
     const steps = guidedSteps(INTAKE, [], 'QUEUED', null);
-    expect(steps.map((step) => step.label)).toEqual(['Index for search', 'Understand the file', 'Map the file', 'Stage the values', 'Check the values', 'Promote to live records', 'Discard the batch']);
-    expect(steps.filter((step) => step.human).map((step) => step.label)).toEqual(['Understand the file', 'Map the file', 'Check the values']);
-    expect(steps.every((step) => step.state === 'waiting')).toBe(true);
+    assert.deepEqual(steps.map((step) => step.label), ['Index for search', 'Understand the file', 'Map the file', 'Stage the values', 'Check the values', 'Promote to live records', 'Discard the batch']);
+    assert.deepEqual(steps.filter((step) => step.human).map((step) => step.label), ['Understand the file', 'Map the file', 'Check the values']);
+    assert.equal(steps.every((step) => step.state === 'waiting'), true);
   });
 
   it('mark the stage that is waiting on a person', () => {
     const steps = guidedSteps(INTAKE, [{ nodeId: 'start', status: 'SUCCEEDED', outcome: null }, { nodeId: 'receive', status: 'SUCCEEDED', outcome: null }, { nodeId: 'understand', status: 'WAITING', outcome: null }], 'WAITING', 'understand');
-    expect(labels(steps).slice(0, 3)).toEqual(['Index for search:done', 'Understand the file:current', 'Map the file:waiting']);
-    expect(steps[1].note).toBe('waiting for a person');
+    assert.deepEqual(labels(steps).slice(0, 3), ['Index for search:done', 'Understand the file:current', 'Map the file:waiting']);
+    assert.equal(steps[1].note, 'waiting for a person');
   });
 
   it('drop the path a decision did not take', () => {
@@ -43,13 +44,13 @@ describe('guided runs', () => {
       'RUNNING',
       'promote',
     );
-    expect(labels(steps)).toEqual(['Index for search:done', 'Understand the file:done', 'Map the file:done', 'Stage the values:done', 'Check the values:done', 'Promote to live records:current']);
-    expect(steps[5].note).toBe('working');
+    assert.deepEqual(labels(steps), ['Index for search:done', 'Understand the file:done', 'Map the file:done', 'Stage the values:done', 'Check the values:done', 'Promote to live records:current']);
+    assert.equal(steps[5].note, 'working');
   });
 
   it('end where the person stops the run', () => {
     const steps = guidedSteps(INTAKE, [{ nodeId: 'start', status: 'SUCCEEDED', outcome: null }, { nodeId: 'receive', status: 'SUCCEEDED', outcome: null }, { nodeId: 'understand', status: 'SUCCEEDED', outcome: 'abandoned' }], 'SUCCEEDED', null);
-    expect(labels(steps)).toEqual(['Index for search:done', 'Understand the file:done']);
+    assert.deepEqual(labels(steps), ['Index for search:done', 'Understand the file:done']);
   });
 
   it('mark the step a run failed at', () => {
@@ -59,6 +60,6 @@ describe('guided runs', () => {
       'FAILED',
       'stage',
     );
-    expect(labels(steps).slice(2, 4)).toEqual(['Map the file:done', 'Stage the values:attention']);
+    assert.deepEqual(labels(steps).slice(2, 4), ['Map the file:done', 'Stage the values:attention']);
   });
 });
