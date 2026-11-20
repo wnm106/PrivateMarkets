@@ -8,12 +8,15 @@ import { usePublishTabs, usePublishViewContext, type TabPayload } from '@/lib/vi
 import { useTemporalStore } from '@/lib/store';
 import { CLEAR_MANUAL_OVERRIDE_MUTATION, DATA_QUALITY_DASHBOARD_QUERY, DATA_QUALITY_DASHBOARD_WITH_ENTITIES_QUERY, DQ_AVAILABILITY_DETAIL_QUERY, FIELD_LINEAGE_QUERY, STALE_ATTRIBUTES_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { CommittedDateInput } from '@/components/forms/CommittedDateInput';
+import { TypeaheadSelect, type TypeaheadOption } from '@/components/forms/TypeaheadSelect';
 import { STALE_AFTER_DAYS, formatReceipt } from '@/lib/receipt-freshness';
 import { domainHref } from '@/lib/domain-routes';
+import { nestDomainLinks, type DomainNavItem } from '@/lib/domain-nav';
 import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
 import { groupByEntityType, splitChangesByEntityType, splitRulesByEntityType } from '@/lib/dq-groups';
+import { compareScores, scoreFromWeights, type ScoreWeights } from '@/lib/dq-scores';
 
-type Section = 'availability' | 'quality' | 'trajectory' | 'handoff' | 'freshness';
+type Section = 'availability' | 'quality' | 'trajectory' | 'handoff' | 'freshness' | 'consensus';
 type Period = 'day' | 'week' | 'month' | 'quarter' | 'custom';
 
 interface EntityRef {
@@ -32,6 +35,21 @@ interface AvailabilityDetailData {
   missingEntities: EntityRef[];
   resolvedEntities: MeasureShift[];
   introducedEntities: MeasureShift[];
+}
+
+interface ConsensusConflict {
+  id: string;
+  entityCode: string;
+  entityName: string;
+  domainCode: string;
+  attributeCode: string;
+  attributeName: string;
+  goldenSourceCode: string;
+  goldenSourceName: string;
+  goldenValue: string | null;
+  sourceCode: string;
+  sourceName: string;
+  value: string | null;
 }
 
 interface StaleAttribute {
@@ -127,6 +145,9 @@ interface Dashboard {
     introducedEntities: MeasureShift[];
   }>;
   overrideMatches: OverrideMatch[];
+  scores: ScoreWeights | null;
+  entityTypeScores: Array<ScoreWeights & { domainCode: string | null; entityCount: number }> | null;
+  consensusConflicts: ConsensusConflict[];
   trajectory: Array<{
     attributeCode: string;
     attributeName: string;
@@ -180,6 +201,15 @@ interface Dashboard {
     qualityIntroducedCount: number;
     overrideMatchCount: number;
     overrideCount: number;
+    availabilityPassing: number;
+    availabilityApplicable: number;
+    qualityPassing: number;
+    qualityApplicable: number;
+    freshnessPassing: number;
+    freshnessApplicable: number;
+    consensusPassing: number;
+    consensusApplicable: number;
+    waivedChecks: number;
   }>;
 }
 
@@ -233,12 +263,15 @@ function domainLabel(code?: string | null) {
   return code.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function TypeHead({ code, count, singular, plural }: { code: string; count: number; singular: string; plural?: string }) {
+function TypeHead({ code, count, singular, plural, score }: { code: string; count: number; singular: string; plural?: string; score?: number | null }) {
   const noun = count === 1 ? singular : (plural ?? `${singular}s`);
   return (
     <div className="dq-type-head">
       <h2>{code ? domainLabel(code) : 'All types'}</h2>
-      <span>{count.toLocaleString()} {noun}</span>
+      <span className="dq-type-meta">
+        {score !== undefined && <strong className="dq-type-score" title="Score for every record of this type">{formatPercent(score)} type score</strong>}
+        <span>{count.toLocaleString()} {noun}</span>
+      </span>
     </div>
   );
 }
@@ -261,6 +294,16 @@ function formatPercent(value: number | null | undefined) {
   if (value > 0 && value < 100 && value >= 99.95) return '99.9%';
   const rounded = Math.round(value * 10) / 10;
   return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`;
+}
+
+function scoreLine(weights: ScoreWeights) {
+  const score = scoreFromWeights(weights);
+  return [
+    ['Availability', score.availability],
+    ['Quality', score.quality],
+    ['Freshness', score.freshness],
+    ['Consensus', score.consensus],
+  ].map(([label, value]) => `${label} ${formatPercent(value as number | null)}`).join(' · ');
 }
 
 function RefreshMark() {
@@ -334,6 +377,28 @@ const top = <T,>(rows: T[], limit: number) => rows.slice(0, limit);
  * What each pillar of the dashboard tells the assistant, from the one load that feeds
  * all of them, so the assistant sees every pillar and not only the open one.
  */
+const SCORE_READING = 'The score averages availability, quality, freshness, and consensus. A dimension with no checks is left out. The firm score and each entity-type score add up the checks underneath; they are not the average of the record scores. Quality weights a critical check as 8, high as 4, medium as 2, and low as 1, and leaves out a failure a person has accepted. Freshness passes when a sourced value was received within 30 days of the end date; derived and calculated values are left out. Consensus passes when every other active source value agrees with the golden source. An attribute with no second active value is left out. A conflict is one active value that disagrees with the golden source. The availability and quality percentages in each panel count each check once.';
+
+function publishedScore(weights: ScoreWeights | null | undefined) {
+  if (!weights) return null;
+  const score = scoreFromWeights(weights);
+  return {
+    score: score.score,
+    availability: score.availability,
+    quality: score.quality,
+    freshness: score.freshness,
+    consensus: score.consensus,
+    dimensionsApplied: score.dimensionsApplied,
+    acceptedFailuresLeftOut: score.waivedChecks,
+    checks: {
+      availability: `${score.weights.availabilityPassing} of ${score.weights.availabilityApplicable}`,
+      qualityWeight: `${score.weights.qualityPassing} of ${score.weights.qualityApplicable}`,
+      freshness: `${score.weights.freshnessPassing} of ${score.weights.freshnessApplicable}`,
+      consensus: `${score.weights.consensusPassing} of ${score.weights.consensusApplicable}`,
+    },
+  };
+}
+
 function qualityTabs(
   dashboard: Dashboard | null,
   stale: StaleReport | null,
@@ -343,12 +408,44 @@ function qualityTabs(
   const { summary } = dashboard;
   const where = scope.entityId ? 'this record' : scope.domainCode ? `every ${scope.domainCode} record` : 'every record';
   const ref = (row: { entityCode: string; entityName: string; domainCode: string }) => ({ code: row.entityCode, name: row.entityName, domain: row.domainCode });
-  const common = { period: `${scope.fromDate} to ${scope.toDate}`, scope: where, entityCount: summary.entityCount };
+  const entityTypeScores = [...(dashboard.entityTypeScores ?? [])]
+    .map((row) => ({
+      domain: row.domainCode,
+      label: row.domainCode ? domainLabel(row.domainCode) : 'All types',
+      records: row.entityCount,
+      ...publishedScore(row),
+    }))
+    .sort((a, b) => compareScores({ score: a.score ?? null, label: a.label }, { score: b.score ?? null, label: b.label }));
+  const entityScores = dashboard.entities
+    ? {
+        note: 'The lowest record scores among records with something open. A record with nothing open still counts in the firm and entity-type scores.',
+        records: top(
+          dashboard.entities
+            .map((entity) => ({
+              ...ref(entity),
+              ...publishedScore(entity),
+            }))
+            .sort((a, b) => compareScores(
+              { score: a.score ?? null, label: a.name },
+              { score: b.score ?? null, label: b.name },
+            )),
+          40,
+        ),
+      }
+    : null;
+  const common = {
+    period: `${scope.fromDate} to ${scope.toDate}`,
+    scope: where,
+    entityCount: summary.entityCount,
+    score: publishedScore(dashboard.scores),
+    entityTypeScores,
+    entityScores,
+  };
   return {
     'dq-availability': {
       label: 'Data quality: Availability',
       purpose: `Whether the required attributes have values for ${where}, by attribute.`,
-      howToRead: 'Required attributes come from the entity template. missing is a required value with no value. resolved means a gap at the start of the period now has a value. introduced means a value at the start is now missing.',
+      howToRead: `Required attributes come from the entity template. missing is a required value with no value. resolved means a gap at the start of the period now has a value. introduced means a value at the start is now missing. ${SCORE_READING}`,
       data: {
         ...common, availabilityPercent: summary.availabilityPercent, requiredValues: summary.requiredSlots, populated: summary.populatedSlots, missing: summary.missingSlots,
         entitiesMissingRequired: summary.entitiesMissingRequired, filledIn: summary.availabilityResolvedCount, nowMissing: summary.availabilityIntroducedCount,
@@ -360,7 +457,7 @@ function qualityTabs(
     'dq-quality': {
       label: 'Data quality: Quality',
       purpose: `Whether ${where} pass the data quality rules, by rule.`,
-      howToRead: 'A rule expression is true for records that fail it. failing counts records failing the rule, accepted are failures someone has accepted. resolved and introduced compare with the start of the period.',
+      howToRead: `A rule expression is true for records that fail it. failing counts records failing the rule, accepted are failures someone has accepted. resolved and introduced compare with the start of the period. ${SCORE_READING}`,
       data: {
         ...common, qualityPercent: summary.qualityPercent, rulesEvaluated: summary.rulesEvaluated, passingChecks: summary.passingChecks, failingChecks: summary.failingChecks,
         entitiesFailingRules: summary.entitiesFailingRules, nowPassing: summary.qualityResolvedCount, nowFailing: summary.qualityIntroducedCount,
@@ -374,7 +471,7 @@ function qualityTabs(
     'dq-trajectory': {
       label: 'Data quality: Trajectory',
       purpose: `Which attribute values changed over the period for ${where}.`,
-      howToRead: 'changeCount counts values that differ between the start and the end of the period. Each example shows the previous and current value.',
+      howToRead: `changeCount counts values that differ between the start and the end of the period. Each example shows the previous and current value. ${SCORE_READING}`,
       data: {
         ...common, valuesChanged: summary.attributeChangeCount, recordsChanged: summary.changedEntityCount, attributesChanged: summary.changedAttributeCount,
         attributes: top(dashboard.trajectory, 60).map((row) => ({
@@ -386,7 +483,7 @@ function qualityTabs(
     'dq-handoff': {
       label: 'Data quality: Handoff',
       purpose: `Manual overrides on ${where} that can be released because a priority source now matches the manual value.`,
-      howToRead: 'ready means the priority source\'s value matches the override as of the end of the period, so the manual value can be cleared.',
+      howToRead: `ready means the priority source's value matches the override as of the end of the period, so the manual value can be cleared. ${SCORE_READING}`,
       data: {
         ...common, overridesReady: summary.overrideMatchCount,
         overrides: top(dashboard.overrideMatches, 80).map((row) => ({ ...ref(row), attribute: row.attributeName, override: row.overrideValue, reason: row.overrideReason, prioritySource: row.prioritySourceName, priorityValue: row.priorityValue, ready: row.ready })),
@@ -395,11 +492,28 @@ function qualityTabs(
     'dq-freshness': {
       label: 'Data quality: Freshness',
       purpose: `Which prevailing values for ${where} have not been received recently.`,
-      howToRead: 'A value is stale when its source has not sent it in olderThanDays days as of the date shown. ageDays is days since it was received.',
+      howToRead: `A value is stale when its source has not sent it in olderThanDays days as of the date shown. ageDays is days since it was received. The freshness used in the score is fixed at 30 days and does not follow this panel's older-than control. ${SCORE_READING}`,
       data: stale ? {
         scope: where, asOfDate: stale.asOfDate, olderThanDays: stale.olderThanDays, staleValues: stale.count,
         values: top(stale.attributes, 80).map((row) => ({ ...ref(row), attribute: row.attributeName, source: row.sourceName, value: row.value, receivedAt: row.receivedAt, ageDays: row.ageDays })),
       } : null,
+    },
+    'dq-consensus': {
+      label: 'Data quality: Consensus',
+      purpose: `Where the golden source for ${where} disagrees with another active value of the same attribute.`,
+      howToRead: `A conflict is one active source value that does not match the golden source. The consensus score counts an attribute as passing only when every other active value agrees, and leaves out an attribute that has no second active value. ${SCORE_READING}`,
+      data: {
+        ...common,
+        conflictCount: (dashboard.consensusConflicts ?? []).length,
+        conflicts: top(dashboard.consensusConflicts ?? [], 80).map((row) => ({
+          ...ref({ entityCode: row.entityCode, entityName: row.entityName, domainCode: row.domainCode }),
+          attribute: row.attributeName,
+          goldenSource: row.goldenSourceName,
+          goldenValue: row.goldenValue,
+          otherSource: row.sourceName,
+          otherValue: row.value,
+        })),
+      },
     },
   };
 }
@@ -426,6 +540,7 @@ export function DataQualityDashboard({
   const [fromDate, setFromDate] = useState(shiftBack(today, 'day'));
   const [domainCode, setDomainCode] = useState(fixedDomain || '');
   const [knownDomains, setKnownDomains] = useState<string[]>([]);
+  const [domainCatalog, setDomainCatalog] = useState<DomainNavItem[]>([]);
   const [section, setSection] = useState<Section>('availability');
   const [view, setView] = useState<'measures' | 'entities'>('measures');
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
@@ -474,8 +589,50 @@ export function DataQualityDashboard({
   });
 
   useEffect(() => {
-    if (view === 'entities' && section !== 'freshness') setEntitiesNeeded(true);
+    if (view === 'entities' && section !== 'freshness' && section !== 'consensus') setEntitiesNeeded(true);
   }, [view, section]);
+
+  useEffect(() => {
+    let cancelled = false;
+    graphqlQuery<{
+      domainTypes: Array<{
+        domainCode: string;
+        domainName: string;
+        isActive: boolean;
+        displayOrder: number;
+        parentDomainCode?: string | null;
+        group?: { groupName: string; displayOrder: number } | null;
+      }>;
+    }, Record<string, never>>(
+      `query QualityDomains {
+        domainTypes {
+          domainCode
+          domainName
+          isActive
+          displayOrder
+          parentDomainCode
+          group { groupName displayOrder }
+        }
+      }`,
+      {},
+      'network-only',
+    ).then((result) => {
+      if (cancelled || result.error || !result.data) return;
+      setDomainCatalog(
+        (result.data.domainTypes || [])
+          .filter((domain) => domain.isActive)
+          .map((domain) => ({
+            code: domain.domainCode,
+            name: domain.domainName,
+            groupName: domain.group?.groupName || 'Other',
+            groupOrder: domain.group?.displayOrder ?? 9999,
+            displayOrder: domain.displayOrder || 0,
+            parentCode: domain.parentDomainCode || null,
+          })),
+      );
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const refreshJob = useRef({ domainCode, entityId, fromDate, toDate, knownAt, staleDays, refreshToken, entitiesNeeded });
   refreshJob.current = { domainCode, entityId, fromDate, toDate, knownAt, staleDays, refreshToken, entitiesNeeded };
@@ -610,6 +767,18 @@ export function DataQualityDashboard({
   };
 
   const summary = dashboard?.summary;
+  const scopeScore = useMemo(() => (dashboard?.scores ? scoreFromWeights(dashboard.scores) : null), [dashboard]);
+  const typeScoreCards = useMemo(() => (
+    [...(dashboard?.entityTypeScores ?? [])]
+      .map((row) => ({
+        code: row.domainCode ?? '',
+        label: row.domainCode ? domainLabel(row.domainCode) : 'All types',
+        entityCount: row.entityCount,
+        scored: scoreFromWeights(row),
+      }))
+      .sort((a, b) => compareScores({ score: a.scored.score, label: a.label }, { score: b.scored.score, label: b.label }))
+  ), [dashboard]);
+  const typeScoreByCode = useMemo(() => new Map(typeScoreCards.map((row) => [row.code, row.scored])), [typeScoreCards]);
   usePublishTabs(qualityTabs(dashboard, staleReport, { fromDate, toDate, domainCode, entityId }));
   const filteredEntities = useMemo(() => {
     const rows = (dashboard?.entities ?? []).filter((entity) => {
@@ -687,6 +856,28 @@ export function DataQualityDashboard({
     () => groupByEntityType(freshnessEntities, (entity) => entity.domainCode, domainLabel),
     [freshnessEntities],
   );
+  const consensusRows = dashboard?.consensusConflicts ?? [];
+  const consensusGroups = useMemo(() => {
+    const query = measureQuery.trim().toLowerCase();
+    const rows = consensusRows.filter((row) => !query || row.attributeName.toLowerCase().includes(query) || row.entityName.toLowerCase().includes(query));
+    return groupByEntityType(rows, (row) => row.domainCode, domainLabel).map((group) => ({
+      ...group,
+      attributes: groupConflictsByAttribute(group.items),
+    }));
+  }, [consensusRows, measureQuery]);
+  const consensusEntities = useMemo(() => {
+    const query = entityQuery.trim().toLowerCase();
+    return groupConflictsByEntity(consensusRows).filter((entity) =>
+      !query ||
+      entity.entityName.toLowerCase().includes(query) ||
+      entity.entityCode.toLowerCase().includes(query) ||
+      entity.domainCode.toLowerCase().includes(query)
+    );
+  }, [consensusRows, entityQuery]);
+  const consensusEntityGroups = useMemo(
+    () => groupByEntityType(consensusEntities, (entity) => entity.domainCode, domainLabel),
+    [consensusEntities],
+  );
   const pageFor = (code: string) => entityPages[code] ?? 0;
 
   const toggle = (key: string) => {
@@ -694,9 +885,33 @@ export function DataQualityDashboard({
     setOpenKey((current) => (current === key ? null : key));
   };
 
-  const domainOptions = fixedDomain && !knownDomains.includes(fixedDomain)
-    ? [fixedDomain, ...knownDomains]
-    : knownDomains;
+  const domainOptions = useMemo(() => {
+    const catalog = domainCatalog.length > 0
+      ? domainCatalog
+      : knownDomains.map((code) => ({
+          code,
+          name: domainLabel(code),
+          groupName: '',
+          groupOrder: 0,
+          displayOrder: 0,
+          parentCode: null,
+        }));
+    const rows = nestDomainLinks(catalog);
+    const options: TypeaheadOption[] = fixedDomain ? [] : [{ value: '', label: 'All domains' }];
+    if (fixedDomain && !catalog.some((domain) => domain.code === fixedDomain)) {
+      options.push({ value: fixedDomain, label: domainLabel(fixedDomain), search: fixedDomain });
+    }
+    for (const row of rows) {
+      options.push({
+        value: row.domain.code,
+        label: row.domain.name,
+        group: row.domain.groupName || undefined,
+        depth: row.depth,
+        search: row.domain.code,
+      });
+    }
+    return options;
+  }, [domainCatalog, knownDomains, fixedDomain]);
 
   return (
     <div className="view-fade da">
@@ -708,29 +923,6 @@ export function DataQualityDashboard({
         </div>
       )}
 
-      <header className="da-ribbon">
-        <div className="da-title">
-          <span className="da-chip">{entityId ? 'Record' : fixedDomain ? domainLabel(fixedDomain) : 'Book'}</span>
-          <h1>Data quality</h1>
-          <p>
-            {entityId
-              ? 'Availability, rule results, and how those measures moved for this record.'
-              : fixedDomain
-                ? `Availability, rule results, and how those measures moved across every ${domainLabel(fixedDomain)}.`
-                : 'Availability, rule results, and how those measures moved since the prior date.'}
-          </p>
-        </div>
-        <div className="da-facts">
-          <div className="da-fact big"><span>Availability</span><strong>{loading && !summary ? '—' : formatPercent(summary?.availabilityPercent)}</strong></div>
-          <div className="da-fact"><span>Quality</span><strong>{loading && !summary ? '—' : formatPercent(summary?.qualityPercent)}</strong></div>
-          <div className="da-fact"><span>Failing checks</span><strong>{summary ? summary.failingChecks.toLocaleString() : '—'}</strong></div>
-        </div>
-        <div className="da-holdbox">
-          <div className="da-holdtop"><span>Required values populated</span><b>{loading && !summary ? '—' : formatPercent(summary?.availabilityPercent)}</b></div>
-          <div className="da-bar"><i style={{ width: `${Math.min(100, summary?.availabilityPercent ?? 0)}%` }} /></div>
-          <p>{summary ? `${summary.populatedSlots.toLocaleString()} of ${summary.requiredSlots.toLocaleString()} required values.` : 'Loading required values.'}</p>
-        </div>
-      </header>
       <div className="da-sechead">
         <p>{comparing ? `Comparing ${formatDay(fromDate)} to ${formatDay(toDate)}` : `As of ${formatDay(toDate)}`}</p>
         <div className="page-actions">
@@ -746,14 +938,16 @@ export function DataQualityDashboard({
 
       <div className="dq-toolbar">
         {!entityId && (
-          <div className="dq-field">
+          <div className="dq-field dq-domain">
             <label htmlFor="dq-domain">Domain</label>
-            <select id="dq-domain" className="select" value={domainCode} disabled={Boolean(fixedDomain)} onChange={(event) => setDomainCode(event.target.value)}>
-              {!fixedDomain && <option value="">All domains</option>}
-              {domainOptions.map((domain) => (
-                <option key={domain} value={domain}>{domainLabel(domain)}</option>
-              ))}
-            </select>
+            <TypeaheadSelect
+              id="dq-domain"
+              options={domainOptions}
+              value={domainCode}
+              onChange={setDomainCode}
+              placeholder="All domains"
+              disabled={Boolean(fixedDomain)}
+            />
           </div>
         )}
         <div className="dq-field">
@@ -806,6 +1000,22 @@ export function DataQualityDashboard({
           <div className="dq-seg" role="group" aria-label="Dashboard view">
             <button type="button" className={view === 'measures' ? 'active' : ''} onClick={() => setView('measures')}>{section === 'quality' ? 'Rule' : 'Attribute'}</button>
             <button type="button" className={view === 'entities' ? 'active' : ''} onClick={() => setView('entities')}>Entity</button>
+          </div>
+        </div>
+        <div className="dq-score">
+          <div className="da-holdtop">
+            <span>Score</span>
+            <b>{loading && !scopeScore ? '—' : formatPercent(scopeScore?.score)}</b>
+          </div>
+          <div
+            className="da-bar"
+            role="meter"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={scopeScore?.score ?? 0}
+            aria-label={scopeScore ? `Score ${formatPercent(scopeScore.score)}. ${scoreLine(scopeScore.weights)}` : 'Score'}
+          >
+            <i style={{ width: `${Math.min(100, Math.max(0, scopeScore?.score ?? 0))}%` }} />
           </div>
         </div>
       </div>
@@ -901,6 +1111,24 @@ export function DataQualityDashboard({
                 : 'Checking last receipt'}
           </div>
         </button>
+        <button
+          type="button"
+          className={`pillar ${section === 'consensus' ? 'active' : ''}`}
+          style={{ '--pillar-color': 'var(--red)' } as React.CSSProperties}
+          aria-pressed={section === 'consensus'}
+          onClick={() => setSection('consensus')}
+        >
+          <PillarHead label="Consensus" refreshing={loading} tone={!dashboard ? 'quiet' : consensusRows.length > 0 ? 'attention' : 'success'} />
+          <div className="pillar-val">
+            {loading && !dashboard ? '…' : consensusRows.length.toLocaleString()}
+          </div>
+          <div className="pillar-sub">values disagree with the golden source</div>
+          <div className="pillar-det">
+            {scopeScore
+              ? `${formatPercent(scopeScore.consensus)} of attributes with a second active value agree`
+              : `Comparing sources as of ${formatDay(toDate)}`}
+          </div>
+        </button>
       </div>
 
       {view === 'measures' && section === 'availability' && (
@@ -925,7 +1153,7 @@ export function DataQualityDashboard({
           )}
           {availabilityGroups.map((group) => (
             <div className="dq-type" key={group.code || 'all'}>
-              <TypeHead code={group.code} count={group.items.length} singular="attribute" />
+              <TypeHead code={group.code} count={group.items.length} singular="attribute" score={typeScoreByCode.get(group.code)?.score} />
               <div className="dq-grid dq-avail">
                 <div />
                 <div>Attribute</div>
@@ -998,7 +1226,7 @@ export function DataQualityDashboard({
           )}
           {qualityGroups.map((group) => (
             <div className="dq-type" key={group.code || 'all'}>
-              <TypeHead code={group.code} count={group.items.length} singular="rule" />
+              <TypeHead code={group.code} count={group.items.length} singular="rule" score={typeScoreByCode.get(group.code)?.score} />
               <div className="dq-grid dq-qual">
                 <div />
                 <div>Rule</div>
@@ -1104,7 +1332,7 @@ export function DataQualityDashboard({
           {!comparing && dashboard && trajectoryGroups.length === 0 && <div className="dq-empty">No attribute values changed in this period.</div>}
           {trajectoryGroups.map((group) => (
             <div className="dq-type" key={group.code || 'all'}>
-              <TypeHead code={group.code} count={group.items.length} singular="attribute" />
+              <TypeHead code={group.code} count={group.items.length} singular="attribute" score={typeScoreByCode.get(group.code)?.score} />
               <div className="dq-grid dq-traj">
                 <div />
                 <div>Attribute</div>
@@ -1172,7 +1400,7 @@ export function DataQualityDashboard({
           )}
           {handoffGroups.map((group) => (
             <div className="dq-type" key={group.code || 'all'}>
-              <TypeHead code={group.code} count={group.attributes.length} singular="attribute" />
+              <TypeHead code={group.code} count={group.attributes.length} singular="attribute" score={typeScoreByCode.get(group.code)?.score} />
               <div className="dq-grid dq-hand-attr">
                 <div />
                 <div>Attribute</div>
@@ -1264,7 +1492,7 @@ export function DataQualityDashboard({
           )}
           {freshnessGroups.map((group) => (
             <div className="dq-type" key={group.code || 'all'}>
-              <TypeHead code={group.code} count={group.attributes.length} singular="attribute" />
+              <TypeHead code={group.code} count={group.attributes.length} singular="attribute" score={typeScoreByCode.get(group.code)?.score} />
               <div className="dq-grid dq-fresh">
                 <div />
                 <div>Attribute</div>
@@ -1343,7 +1571,7 @@ export function DataQualityDashboard({
             const slice = slicePage(group.items, pageFor(group.code));
             return (
             <div className="dq-type" key={group.code || 'all'}>
-              <TypeHead code={group.code} count={group.items.length} singular="entity" plural="entities" />
+              <TypeHead code={group.code} count={group.items.length} singular="entity" plural="entities" score={typeScoreByCode.get(group.code)?.score} />
               <div className="dq-grid dq-fresh">
                 <div />
                 <div>Entity</div>
@@ -1383,13 +1611,132 @@ export function DataQualityDashboard({
         </section>
       )}
 
-      {view === 'entities' && section !== 'freshness' && (
+      {view === 'measures' && section === 'consensus' && (
+        <section className="dq-panel">
+          <div className="dq-head">
+            <div>
+              <div className="qm-title">Consensus by attribute</div>
+              <p>
+                Active values that disagree with the golden source as of {formatDay(toDate)}. An attribute passes consensus when every other active value matches the golden source. An attribute with only the golden source is left out of the score.
+              </p>
+            </div>
+            <div className="dq-head-tools">
+              <input className="text-input" placeholder="Search attributes" value={measureQuery} onChange={(event) => setMeasureQuery(event.target.value)} aria-label="Search attributes" />
+            </div>
+          </div>
+          {loading && !dashboard && <div className="dq-empty">Comparing sources…</div>}
+          {dashboard && consensusGroups.length === 0 && (
+            <div className="dq-empty">
+              {measureQuery.trim()
+                ? 'No conflicts match that search.'
+                : scopeScore?.weights.consensusApplicable
+                  ? 'Every other active value agrees with the golden source.'
+                  : 'No attribute has a golden source and another active value.'}
+            </div>
+          )}
+          {consensusGroups.map((group) => (
+            <div className="dq-type" key={group.code || 'all'}>
+              <TypeHead code={group.code} count={group.attributes.length} singular="attribute" score={typeScoreByCode.get(group.code)?.score} />
+              <div className="dq-grid dq-hand-attr">
+                <div />
+                <div>Attribute</div>
+                <div>Conflicts</div>
+              </div>
+              {group.attributes.map((attribute) => {
+                const key = `cons-${group.code}-${attribute.attributeCode}`;
+                const open = openKey === key;
+                return (
+                  <div className="dq-line" key={key}>
+                    <button type="button" className="dq-open dq-hand-attr" aria-expanded={open} onClick={() => toggle(key)}>
+                      <span>{open ? '▾' : '▸'}</span>
+                      <span className="dq-name">{attribute.attributeName}</span>
+                      <span className="dq-num">{attribute.rows.length.toLocaleString()}</span>
+                    </button>
+                    {open && (
+                      <ConflictTable
+                        rows={attribute.rows}
+                        limit={detailLimit}
+                        showEntity
+                        onMore={() => setDetailLimit((count) => count + DETAIL_PAGE)}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </section>
+      )}
+
+      {view === 'entities' && section === 'consensus' && (
+        <section className="dq-panel">
+          <div className="dq-head">
+            <div>
+              <div className="qm-title">Consensus by entity</div>
+              <p>
+                Records whose golden source disagrees with another active value as of {formatDay(toDate)}.
+                {dashboard ? ` ${consensusEntities.length.toLocaleString()} shown.` : ''}
+              </p>
+            </div>
+            <input
+              className="text-input"
+              placeholder="Search entities"
+              value={entityQuery}
+              onChange={(event) => { setEntityQuery(event.target.value); setEntityPages({}); }}
+              aria-label="Search entities"
+            />
+          </div>
+          {loading && !dashboard && <div className="dq-empty">Comparing sources…</div>}
+          {dashboard && consensusEntityGroups.length === 0 && (
+            <div className="dq-empty">
+              {entityQuery.trim() ? 'No entities match that search.' : 'No golden source disagrees with another active value.'}
+            </div>
+          )}
+          {consensusEntityGroups.map((group) => {
+            const slice = slicePage(group.items, pageFor(group.code));
+            return (
+              <div className="dq-type" key={group.code || 'all'}>
+                <TypeHead code={group.code} count={group.items.length} singular="entity" plural="entities" score={typeScoreByCode.get(group.code)?.score} />
+                <div className="dq-grid dq-hand-attr">
+                  <div />
+                  <div>Entity</div>
+                  <div>Conflicts</div>
+                </div>
+                {slice.rows.map((entity) => {
+                  const key = `cons-ent-${entity.entityId}`;
+                  const open = openKey === key;
+                  return (
+                    <div className="dq-line" key={key}>
+                      <button type="button" className="dq-open dq-hand-attr" aria-expanded={open} onClick={() => toggle(key)}>
+                        <span>{open ? '▾' : '▸'}</span>
+                        <span className="dq-name">{entity.entityName}</span>
+                        <span className="dq-num">{entity.rows.length.toLocaleString()}</span>
+                      </button>
+                      {open && (
+                        <ConflictTable
+                          rows={entity.rows}
+                          limit={detailLimit}
+                          showAttribute
+                          onMore={() => setDetailLimit((count) => count + DETAIL_PAGE)}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+                <GroupPager page={slice.page} pageCount={slice.pageCount} onPage={(page) => setEntityPages((current) => ({ ...current, [group.code]: page }))} />
+              </div>
+            );
+          })}
+        </section>
+      )}
+
+      {view === 'entities' && section !== 'freshness' && section !== 'consensus' && (
         <section className="dq-panel">
           <div className="dq-head">
             <div>
               <div className="qm-title">Results by entity</div>
               <p>
-                {section === 'availability' && `Entities with a required-attribute gap, or a gap that was resolved or introduced between ${formatDay(fromDate)} and ${formatDay(toDate)}.`}
+                {section === 'availability' && `Entities with a required-attribute gap, or a gap that was resolved or introduced between ${formatDay(fromDate)} and ${formatDay(toDate)}. The score is that record's score across every check.`}
                 {section === 'quality' && `Entities failing a rule, or whose rule result was resolved or introduced between ${formatDay(fromDate)} and ${formatDay(toDate)}.`}
                 {section === 'trajectory' && `Entities whose values changed between ${formatDay(fromDate)} and ${formatDay(toDate)}.`}
                 {section === 'handoff' && handoffScope === 'ready' && `Entities whose manual override matches the priority source as of ${formatDay(toDate)}.`}
@@ -1426,10 +1773,11 @@ export function DataQualityDashboard({
             const slice = slicePage(group.items, pageFor(`ent-${group.code}`));
             return (
             <div className="dq-type" key={group.code || 'all'}>
-              <TypeHead code={group.code} count={group.items.length} singular="entity" plural="entities" />
+              <TypeHead code={group.code} count={group.items.length} singular="entity" plural="entities" score={typeScoreByCode.get(group.code)?.score} />
               <div className={`dq-grid ${section === 'handoff' ? 'dq-ent-hand' : 'dq-ent-one'}`}>
                 <div />
                 <div>Entity</div>
+                <div>Score</div>
                 {section === 'handoff' && <div>{handoffScope === 'ready' ? 'Ready' : 'Overrides'}</div>}
                 {section === 'availability' && <div>Missing</div>}
                 {section === 'quality' && <div>Failing</div>}
@@ -1444,7 +1792,9 @@ export function DataQualityDashboard({
                   <span>{open ? '▾' : '▸'}</span>
                   <span className="dq-name">
                     {entity.entityName}
+                    <span className="dq-sub">{scoreLine(entity)}</span>
                   </span>
+                  <span className="dq-num">{formatPercent(scoreFromWeights(entity).score)}</span>
                   {section === 'handoff' && (
                     <span className="dq-num">
                       {(handoffScope === 'all' ? entity.overrideCount : entity.overrideMatchCount).toLocaleString()}
@@ -1564,6 +1914,90 @@ function groupMatchesByAttribute(matches: OverrideMatch[]) {
   return [...groups.values()].sort((a, b) => b.matches.length - a.matches.length || a.attributeName.localeCompare(b.attributeName));
 }
 
+function groupConflictsByAttribute(rows: ConsensusConflict[]) {
+  const groups = new Map<string, { attributeCode: string; attributeName: string; rows: ConsensusConflict[] }>();
+  for (const row of rows) {
+    const existing = groups.get(row.attributeCode);
+    if (existing) existing.rows.push(row);
+    else groups.set(row.attributeCode, { attributeCode: row.attributeCode, attributeName: row.attributeName, rows: [row] });
+  }
+  return [...groups.values()].sort((a, b) => b.rows.length - a.rows.length || a.attributeName.localeCompare(b.attributeName));
+}
+
+function groupConflictsByEntity(rows: ConsensusConflict[]) {
+  const groups = new Map<string, { entityId: string; entityCode: string; entityName: string; domainCode: string; rows: ConsensusConflict[] }>();
+  for (const row of rows) {
+    const existing = groups.get(row.id);
+    if (existing) existing.rows.push(row);
+    else groups.set(row.id, { entityId: row.id, entityCode: row.entityCode, entityName: row.entityName, domainCode: row.domainCode, rows: [row] });
+  }
+  return [...groups.values()].sort((a, b) => b.rows.length - a.rows.length || a.entityName.localeCompare(b.entityName));
+}
+
+function conflictKey(row: ConsensusConflict) {
+  return `${row.id}:${row.attributeCode}:${row.sourceCode}`;
+}
+
+function ConflictTable({
+  rows,
+  limit,
+  showEntity,
+  showAttribute,
+  onMore,
+}: {
+  rows: ConsensusConflict[];
+  limit: number;
+  showEntity?: boolean;
+  showAttribute?: boolean;
+  onMore: () => void;
+}) {
+  const columns = useMemo<ColDef[]>(() => {
+    const defs: ColDef[] = [];
+    if (showEntity) {
+      defs.push({
+        colId: 'entity',
+        headerName: 'Entity',
+        flex: 1.2,
+        minWidth: 160,
+        valueGetter: (params) => params.data?.entityName || '',
+        cellRenderer: (params: any) => (
+          <div>
+            <Link href={entityHref(params.data.domainCode, params.data.id)}>{params.data.entityName}</Link>
+            <div><Link href={`/resolve?entity=${params.data.id}`}>Resolve</Link></div>
+          </div>
+        ),
+      });
+    }
+    if (showAttribute) {
+      defs.push({ field: 'attributeName', headerName: 'Attribute', flex: 1.1, minWidth: 150 });
+    }
+    defs.push(
+      { field: 'goldenSourceName', headerName: 'Golden source', minWidth: 140, flex: 1 },
+      { colId: 'golden', headerName: 'Golden value', minWidth: 120, cellClass: 'dq-num', valueGetter: (params) => displayValue(params.data?.goldenValue) },
+      { field: 'sourceName', headerName: 'Other source', minWidth: 140, flex: 1 },
+      { colId: 'other', headerName: 'Other value', minWidth: 120, cellClass: 'dq-num', valueGetter: (params) => displayValue(params.data?.value) },
+    );
+    return defs;
+  }, [showAttribute, showEntity]);
+  return (
+    <div className="dq-detail">
+      <AppGrid
+        rows={rows.slice(0, limit)}
+        columns={columns}
+        getRowId={(row) => conflictKey(row)}
+        autoHeight
+        autoRowHeight
+        emptyMessage="No conflicts."
+      />
+      {rows.length > limit && (
+        <button type="button" className="dq-more" onClick={onMore}>
+          Show more ({rows.length - limit} remaining)
+        </button>
+      )}
+    </div>
+  );
+}
+
 function groupStaleByAttribute(rows: StaleAttribute[]) {
   const groups = new Map<string, { attributeCode: string; attributeName: string; rows: StaleAttribute[] }>();
   for (const row of rows) {
@@ -1633,9 +2067,17 @@ function StaleTable({
       {
         colId: 'received',
         headerName: 'Last received',
-        minWidth: 150,
+        minWidth: 170,
         valueGetter: (params) => formatReceipt(params.data?.receivedAt),
-        cellRenderer: (params: any) => <div>{formatReceipt(params.data.receivedAt)}<div className="dq-sub">{params.data.ageDays}d ago</div></div>,
+      },
+      {
+        colId: 'age',
+        headerName: 'Age',
+        width: 110,
+        minWidth: 96,
+        cellStyle: { color: 'var(--ink-3)' },
+        valueGetter: (params) => (params.data ? `${params.data.ageDays}d ago` : ''),
+        comparator: (_left, _right, nodeA, nodeB) => (nodeA?.data?.ageDays ?? 0) - (nodeB?.data?.ageDays ?? 0),
       },
       {
         colId: 'confirm',
@@ -1656,7 +2098,7 @@ function StaleTable({
         columns={columns}
         getRowId={(row) => `${row.entityId}-${row.attributeCode}`}
         autoHeight
-        autoRowHeight
+        getRowHeight={() => 48}
         emptyMessage="No stale values."
       />
       {rows.length > limit && (

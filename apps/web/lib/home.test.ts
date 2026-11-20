@@ -4,6 +4,8 @@ import {
   defaultHiddenModules,
   groupNeedsYou,
   headline,
+  heroLead,
+  agentLine,
   summarize,
   homeRole,
   needsYouItems,
@@ -185,5 +187,24 @@ describe('grouped needs you and the headline', () => {
     assert.equal(headline(summary), '4 reviews (19 proposed changes) are waiting for your decision. 4 failed runs need attention.');
     assert.equal(headline({ reviews: 1, proposedChanges: 0, filesWaiting: 0, failures: 1, urgentExceptions: 0 }), '1 review is waiting for your decision. 1 failed run needs attention.');
     assert.equal(headline({ reviews: 0, proposedChanges: 0, filesWaiting: 0, failures: 0, urgentExceptions: 0 }), 'You’re all caught up. Nothing is waiting on you.');
+  });
+});
+
+describe('the briefing line', () => {
+  const group = (title: string) => ({ key: title, lane: 'fix' as const, kind: 'run-failed' as const, urgency: 'high' as const, title, count: 1, changes: 0, newestAt: '', oldestAt: '', aggregate: false, items: [], href: '/', action: 'Open' });
+
+  it('names how much is waiting and where to start', () => {
+    assert.deepEqual(heroLead([]), { lead: 'Nothing is waiting on you.', start: null });
+    assert.deepEqual(heroLead([group('A failed'), group('B failed')]), { lead: 'Two things need you', start: 'A failed' });
+    assert.equal(heroLead(Array.from({ length: 9 }, (_, index) => group(`Item ${index}`))).lead, '9 things need you');
+  });
+
+  it('says what the agents did and are doing', () => {
+    assert.equal(agentLine(null), 'Checking what your agents are doing…');
+    assert.equal(agentLine({ running: 0, waiting: 0, finished: [] }), 'Your agents are idle. Hand them a task below and they will bring back what they find.');
+    assert.equal(
+      agentLine({ running: 1, waiting: 4, finished: [{ outcome: 'done' }, { outcome: 'done' }, { outcome: 'failed' }] }),
+      'In the last day your agents finished 2 runs and 1 stopped with an error. 1 run is in progress and 4 runs are paused for a review.',
+    );
   });
 });
