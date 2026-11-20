@@ -67,7 +67,7 @@ const STEPS = [
 const PILLARS = [
   { big: 'Field-level', small: 'lineage on every attribute' },
   { big: 'Bi-temporal', small: 'history, restatements & as-of views' },
-  { big: 'User-adaptive', small: 'an interface that adapts to each persona and workflow' },
+  { big: 'Role-aware', small: 'views tailored to every persona' },
   { big: 'AI-native', small: 'assistant, reports & narratives' },
 ];
 
@@ -99,23 +99,23 @@ function ProductPreview() {
           <span className="w-3 h-3 rounded-full bg-[#ff5f57]" />
           <span className="w-3 h-3 rounded-full bg-[#febc2e]" />
           <span className="w-3 h-3 rounded-full bg-[#28c840]" />
-          <span className="ml-3 text-xs text-ink-3 font-mono">app.tapestr.ai / funds / Northwind Capital Partners IV</span>
+          <span className="ml-3 text-[13px] text-ink-3 font-mono">app.tapestr.ai / funds / Northwind Capital Partners IV</span>
         </div>
         <div className="grid md:grid-cols-3 gap-0">
           <div className="md:col-span-2 p-6 text-left">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <div className="text-xs tracking-widest text-ink-3">Golden record</div>
-                <div className="text-xl font-semibold">Northwind Capital Partners IV</div>
+                <div className="text-[13px] tracking-widest text-ink-3">Golden record</div>
+                <div className="text-[20px] font-semibold">Northwind Capital Partners IV</div>
               </div>
-              <span className="text-xs font-semibold text-green bg-green/10 px-2.5 py-1 rounded-full">Verified</span>
+              <span className="text-[13px] font-semibold text-green bg-green/10 px-2.5 py-1 rounded-full">Verified</span>
             </div>
             <div className="divide-y divide-line border border-line rounded-lg">
               {rows.map((r) => (
-                <div key={r.f} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                  <span className="text-ink-3 w-40">{r.f}</span>
+                <div key={r.f} className="flex items-center justify-between px-4 py-2.5 text-[15px]">
+                  <span className="text-ink-3 w-44 shrink-0 pr-3">{r.f}</span>
                   <span className="flex-1 font-medium">{r.v}</span>
-                  <span className="flex items-center gap-1.5 text-xs text-ink-2">
+                  <span className="flex items-center gap-1.5 text-[13px] text-ink-2">
                     <span className="w-2 h-2 rounded-full" style={{ background: r.c }} />
                     {r.s}
                   </span>
@@ -124,17 +124,17 @@ function ProductPreview() {
             </div>
           </div>
           <div className="p-6 bg-bg border-l border-line text-left">
-            <div className="text-xs tracking-widest text-ink-3 mb-3">Data quality</div>
+            <div className="text-[13px] tracking-widest text-ink-3 mb-3">Data quality</div>
             <div className="text-4xl font-display font-semibold text-brand-blue">98.4%</div>
             <div className="mt-2 h-2 rounded-full bg-line overflow-hidden">
               <div className="h-full w-[98%] bg-gradient-to-r from-brand-blue to-brand-cyan" />
             </div>
-            <div className="mt-6 text-xs tracking-widest text-ink-3 mb-2">Source conflicts</div>
-            <div className="text-sm rounded-lg bg-white border border-line p-3">
+            <div className="mt-6 text-[13px] tracking-widest text-ink-3 mb-2">Source conflicts</div>
+            <div className="text-[15px] rounded-lg bg-white border border-line p-3">
               <div className="font-medium">Committed capital</div>
               <div className="text-ink-3 mt-1">Allvue and manual entry differ. Precedence rule applied.</div>
             </div>
-            <div className="mt-4 text-sm rounded-lg bg-gradient-to-r from-brand-blue to-brand-cyan text-white p-3">
+            <div className="mt-4 text-[15px] rounded-lg bg-gradient-to-r from-brand-blue to-brand-cyan text-white p-3">
               Ask tapestr.ai: &ldquo;Why does this value differ from last quarter?&rdquo;
             </div>
           </div>
@@ -146,7 +146,7 @@ function ProductPreview() {
 
 export default function WelcomePage() {
   return (
-    <div className="min-h-screen bg-white text-ink">
+    <div className="min-h-screen bg-white text-ink text-[16px] leading-normal">
       {/* Header */}
       <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-line shadow-[0_1px_0_rgba(10,22,40,0.04)]">
         <div className="h-1 bg-gradient-to-r from-brand-navy via-brand-blue to-brand-cyan" />
@@ -154,14 +154,14 @@ export default function WelcomePage() {
           <Link href="/welcome" aria-label="tapestr.ai home">
             <Logo height={64} priority />
           </Link>
-          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-ink-2">
+          <nav className="hidden md:flex items-center gap-8 text-[15px] font-medium text-ink-2">
             <a href="#platform" className="hover:text-brand-blue">Platform</a>
+            <a href="#trust" className="hover:text-brand-blue">Enterprise</a>
             <a href="#how" className="hover:text-brand-blue">How it works</a>
-            <a href="#trust" className="hover:text-brand-blue">Security</a>
           </nav>
           <Link
             href="/login"
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-semibold bg-accent shadow-lg shadow-brand-cyan/30 hover:brightness-110"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-[15px] font-semibold bg-accent shadow-lg shadow-brand-cyan/30 hover:brightness-110"
             aria-label="Log in"
           >
             <LoginIcon />
@@ -173,7 +173,7 @@ export default function WelcomePage() {
       {/* Hero */}
       <section className="relative overflow-hidden bg-[radial-gradient(ellipse_at_top,rgba(0,163,255,0.22),transparent_55%),radial-gradient(circle_at_100%_60%,rgba(30,64,175,0.14),transparent_45%),radial-gradient(circle_at_0%_80%,rgba(0,163,255,0.10),transparent_40%)]">
         <div className="max-w-7xl mx-auto px-6 pt-20 pb-24 text-center">
-          <div className="inline-block text-xs font-semibold tracking-widest text-brand-blue bg-brand-blue/10 rounded-full px-4 py-1.5">
+          <div className="inline-block text-[14px] font-semibold tracking-[0.04em] text-brand-blue bg-brand-blue/10 rounded-full px-4 py-1.5">
             Master Data Management for Private Markets
           </div>
           <h1 className="mt-6 font-display text-5xl md:text-7xl font-semibold tracking-tight leading-[1.05]">
@@ -182,7 +182,7 @@ export default function WelcomePage() {
             <br />
             across every system.
           </h1>
-          <p className="mt-6 max-w-3xl mx-auto text-xl text-ink-3 leading-relaxed">
+          <p className="mt-6 max-w-3xl mx-auto text-[20px] text-ink-3 leading-relaxed">
             tapestr.ai weaves together the funds, issuers, securities, deals and positions scattered
             across your vendors and platforms into one governed, fully traceable record - so your
             team can trust every number.
@@ -190,11 +190,11 @@ export default function WelcomePage() {
           <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
             <Link
               href="/login"
-              className="px-8 py-4 rounded-xl text-white text-base font-semibold bg-accent shadow-xl shadow-brand-cyan/30 hover:brightness-110"
+              className="px-8 py-4 rounded-xl text-white text-[16px] font-semibold bg-accent shadow-xl shadow-brand-cyan/30 hover:brightness-110"
             >
               Log in to tapestr.ai
             </Link>
-            <a href="#platform" className="px-8 py-4 rounded-xl border border-line-strong bg-white text-base font-semibold hover:bg-bg">
+            <a href="#platform" className="px-8 py-4 rounded-xl border border-line-strong bg-white text-[16px] font-semibold hover:bg-bg">
               Explore the platform
             </a>
           </div>
@@ -208,10 +208,10 @@ export default function WelcomePage() {
       {/* Source strip */}
       <section className="border-y border-line bg-white">
         <div className="max-w-7xl mx-auto px-6 py-8 text-center">
-          <div className="text-xs font-semibold tracking-widest text-ink-3 mb-4">
+          <div className="text-[14px] font-bold uppercase tracking-[0.14em] text-ink-2 mb-4">
             Unifies the systems your team already uses
           </div>
-          <div className="flex flex-wrap items-center justify-center gap-x-12 gap-y-3 text-lg font-semibold text-ink-4">
+          <div className="flex flex-wrap items-center justify-center gap-x-12 gap-y-3 text-[18px] font-semibold text-ink-3">
             {SOURCES.map((s) => (
               <span key={s}>{s}</span>
             ))}
@@ -222,9 +222,9 @@ export default function WelcomePage() {
       {/* Features */}
       <section id="platform" className="max-w-7xl mx-auto px-6 py-24 scroll-mt-20">
         <div className="text-center mb-14">
-          <div className="text-xs font-semibold tracking-widest text-brand-sky mb-3">The platform</div>
+          <div className="text-[14px] font-bold uppercase tracking-[0.14em] text-brand-blue mb-3">The platform</div>
           <h2 className="font-display text-4xl font-semibold">Built for data you can defend</h2>
-          <p className="text-lg text-ink-3 mt-3">Everything you need to unify, govern and deliver investment data.</p>
+          <p className="text-[18px] text-ink-3 mt-3">Everything you need to unify, govern and deliver investment data.</p>
         </div>
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((f) => (
@@ -237,8 +237,8 @@ export default function WelcomePage() {
                   {f.icon}
                 </svg>
               </div>
-              <h3 className="text-xl font-semibold mb-2">{f.title}</h3>
-              <p className="text-base text-ink-3 leading-relaxed">{f.body}</p>
+              <h3 className="text-[20px] font-semibold mb-2">{f.title}</h3>
+              <p className="text-[16px] text-ink-3 leading-relaxed">{f.body}</p>
             </div>
           ))}
         </div>
@@ -252,7 +252,7 @@ export default function WelcomePage() {
             {PILLARS.map((p) => (
               <div key={p.big}>
                 <div className="font-display text-4xl font-semibold">{p.big}</div>
-                <div className="mt-2 text-white/75">{p.small}</div>
+                <div className="mt-2 text-white/85">{p.small}</div>
               </div>
             ))}
           </div>
@@ -273,10 +273,10 @@ export default function WelcomePage() {
           <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
             {STEPS.map((s) => (
               <div key={s.n} className="text-center">
-                <div className="mx-auto mb-5 w-14 h-14 rounded-full bg-gradient-to-br from-brand-blue to-brand-cyan text-white text-xl font-semibold flex items-center justify-center shadow-lg shadow-brand-cyan/30">
+                <div className="mx-auto mb-5 w-14 h-14 rounded-full bg-gradient-to-br from-brand-blue to-brand-cyan text-white text-[20px] font-semibold flex items-center justify-center shadow-lg shadow-brand-cyan/30">
                   {s.n}
                 </div>
-                <h3 className="text-lg font-semibold mb-2">{s.title}</h3>
+                <h3 className="text-[18px] font-semibold mb-2">{s.title}</h3>
                 <p className="text-ink-3 leading-relaxed">{s.body}</p>
               </div>
             ))}
@@ -291,8 +291,8 @@ export default function WelcomePage() {
             <Logo height={56} />
           </div>
           <h2 className="font-display text-4xl font-semibold">Ready to see your data clearly?</h2>
-          <p className="mt-3 text-lg text-white/80">Access is limited to authorized users.</p>
-          <Link href="/login" className="inline-block mt-8 px-8 py-4 rounded-xl bg-white text-brand-blue text-base font-semibold shadow-xl hover:bg-bg">
+          <p className="mt-3 text-[18px] text-white/80">Access is limited to authorized users.</p>
+          <Link href="/login" className="inline-block mt-8 px-8 py-4 rounded-xl bg-white text-brand-blue text-[16px] font-semibold shadow-xl hover:bg-bg">
             Log in
           </Link>
         </div>
@@ -301,7 +301,7 @@ export default function WelcomePage() {
       <footer className="bg-white border-t border-line">
         <div className="max-w-7xl mx-auto px-6 py-8 flex flex-col sm:flex-row items-center justify-between gap-4">
           <Logo height={36} />
-          <div className="text-sm text-ink-3">&copy; {new Date().getFullYear()} tapestr.ai. All rights reserved.</div>
+          <div className="text-[15px] text-ink-3">&copy; {new Date().getFullYear()} tapestr.ai. All rights reserved.</div>
         </div>
       </footer>
     </div>
