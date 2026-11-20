@@ -95,14 +95,19 @@ type FieldLineage {
 
 # One recorded write of an attribute value, newest first in entityActivity.
 type AttributeActivity {
+  # The stored version this write made. Pass it to deleteAttributeVersion.
+  id: ID
   attributeCode: String!
   attributeName: String!
   value: String
   updatedAt: DateTime!
   updatedBy: String!
   sourceName: String
+  sourceCode: String
   validFrom: Date!
   validTo: Date!
+  # Still believed at the knowledge date. False when a later write replaced or deleted it.
+  current: Boolean!
 }
 
 # Attribute Definition with Derived Attribute Support
@@ -153,6 +158,9 @@ type AttributeDefinition {
   # Reference list linkage
   referenceListCode: String
   referenceList: ReferenceListSummary
+  # For fields on a tree list: the level this field takes, and the field whose value narrows it
+  referenceListLevel: Int
+  controllingAttributeCode: String
 
   # Global source sequence. Templates override this only when they set their own chain.
   defaultPrecedenceChain: [String!]!
@@ -1065,6 +1073,31 @@ type DeleteComplianceThresholdResult {
 type DealComplianceScore {
   rules: [ComplianceFundRule!]!
   results: [ComplianceEvaluationResult!]!
+  errors: [MutationError!]!
+}
+
+# The amount a Hypo run placed with one fund, as the allocation grid showed it.
+type DealHypoAllocation {
+  fundId: ID!
+  fundName: String!
+  parentFundId: ID
+  # PORTFOLIO | SLEEVE
+  level: String!
+  amount: Float!
+}
+
+# A Hypo run: the allocation is written as positions under scenarioCode
+# ('<deal code>#HYPO') and every rule on the deal's funds is scored twice.
+# before is the book without this deal; after is the book with the Hypo
+# allocation. The deal's saved allocation is not written.
+type DealHypoRun {
+  scenarioCode: String
+  asOfDate: Date
+  ranAt: DateTime!
+  rules: [ComplianceFundRule!]!
+  before: [ComplianceEvaluationResult!]!
+  after: [ComplianceEvaluationResult!]!
+  allocations: [DealHypoAllocation!]!
   errors: [MutationError!]!
 }
 
@@ -2231,6 +2264,10 @@ type ReferenceListValue {
   displayOrder: Int!
   synonyms: [String!]
   isActive: Boolean!
+  # The value this one sits under, for lists that form a tree
+  parentValueId: ID
+  parentValueCode: String
+  level: Int
   createdAt: DateTime!
   updatedAt: DateTime!
 }
@@ -2580,7 +2617,29 @@ type AllocationPreview {
   tranches: [AllocationTrancheResult!]!
   rows: [AllocationRow!]!
   adjustments: [AllocationAdjustmentView!]!
+  # Where each fund stands on each compliance rule this deal would worsen.
+  capacities: [AllocationCapacity!]!
   errors: [MutationError!]!
+}
+
+# One fund's standing on one compliance rule and group that the deal's
+# securities would worsen, read from the booked book (hypothetical positions
+# left out). current is numerator / denominator, or numerator for an amount
+# rule. room is what the fund can add before the hard limit; when
+# denominatorGrows the new position counts in the denominator too.
+type AllocationCapacity {
+  fundId: ID!
+  ruleCode: String!
+  ruleName: String!
+  groupValue: String
+  trancheIds: [ID!]!
+  room: Float!
+  numerator: Float
+  denominator: Float
+  hardLimit: Float
+  softLimit: Float
+  resultUnit: String
+  denominatorGrows: Boolean!
 }
 
 type AllocationAdjustmentView {
@@ -3317,6 +3376,8 @@ type Mutation {
   clearManualOverride(input: ClearManualOverrideInput!): ClearManualOverrideResult!
   addCompetingSource(input: AddCompetingSourceInput!): AddCompetingSourceResult!
   deleteCompetingSource(input: DeleteCompetingSourceInput!): DeleteCompetingSourceResult!
+  # Removes one stored version of a value. The same source's version just before it runs on to cover the gap.
+  deleteAttributeVersion(input: DeleteAttributeVersionInput!): DeleteCompetingSourceResult!
   
   # Metadata mutations
   createDomainType(input: CreateDomainTypeInput!): CreateDomainTypeResult!
@@ -3441,6 +3502,7 @@ type Mutation {
   deleteComplianceScopeAssignment(id: ID!): DeleteComplianceScopeAssignmentResult!
   evaluateComplianceRule(input: EvaluateComplianceRuleInput!): EvaluateComplianceRuleResult!
   scoreDealCompliance(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealComplianceScore!
+  runDealHypo(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealHypoRun!
   upsertComplianceThreshold(input: UpsertComplianceThresholdInput!): UpsertComplianceThresholdResult!
   deleteComplianceThreshold(id: ID!): DeleteComplianceThresholdResult!
 
@@ -3632,6 +3694,11 @@ input DeleteCompetingSourceInput {
   attributeCode: String!
   sourceId: ID!
   asOfDate: Date
+}
+
+input DeleteAttributeVersionInput {
+  entityId: ID!
+  versionId: ID!
 }
 
 type DeleteCompetingSourceResult {

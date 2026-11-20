@@ -6,7 +6,9 @@ import { graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION } from '@/lib/gra
 import { domainHref } from '@/lib/domain-routes';
 import { useTemporalStore } from '@/lib/store';
 import { IcMemo } from './IcMemo';
-import { ComplianceGaugeList, DealCompliance, useDealComplianceScore } from './DealCompliance';
+import { DealCompliance, useDealHypo } from './DealCompliance';
+import { CapacityRules, formatReading } from './CapacityRules';
+import { standingsForFund, type CapacityReading } from '@/lib/capacity-view';
 import { DealSyndicate } from './DealSyndicate';
 import { DealClosing } from './DealClosing';
 import { DealServicing } from './DealServicing';
@@ -139,6 +141,7 @@ interface Preview {
   tranches: Tranche[];
   rows: Row[];
   adjustments: Adjustment[];
+  capacities: CapacityReading[];
   errors: Array<{ message: string }>;
 }
 
@@ -153,6 +156,7 @@ const PREVIEW = `
         cells { trancheId eligible amount systemAmount capReason imbalance exclusionKind exclusionText overridden reasonCode }
       }
       adjustments { fundId trancheId type amount reason note saved }
+      capacities { fundId ruleCode ruleName groupValue trancheIds room numerator denominator hardLimit softLimit resultUnit denominatorGrows }
       errors { message }
     }
   }
@@ -280,13 +284,9 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
     return (open.length ? open : [...DEAL_PANEL_KEYS]).filter((key) => key !== 'capital');
   }, [live.pages]);
   const warmed = useWarmTabs(warmKeys, tab);
-  const complianceScore = useDealComplianceScore({
-    dealId,
-    asOfDate,
-    holds,
-    adjustments,
-    enabled: seeded && (tab === 'capital' || warmed.has('compliance')),
-  });
+  // The capital tab reads each fund's standing from the capacity the preview loads.
+  // A full test of every rule is a Hypo run the user starts. Opening the deal writes nothing.
+  const hypo = useDealHypo({ dealId, asOfDate, holds, adjustments });
   useEffect(() => {
     if (live.pages.length === 0) return;
     const open = live.pages.filter((page) => mountedPanel(page, DEAL_PANEL_KEYS));
@@ -473,7 +473,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   usePublishTab('capital', {
     label: 'Capital',
     purpose: 'How the deal\'s hold is allocated across our funds, by tranche: the allocation grid, liquidity and the portfolio detail.',
-    howToRead: 'This is the allocation grid as shown, with any unsaved adjustments. Report allocations by portfolio, the top level in portfolios. A portfolio is a fund. Its subPortfolios are its sleeves and sum to it. Describe subPortfolios only when asked to break a portfolio down. Do not list them as separate funds, and never add them to the portfolio total.',
+    howToRead: 'This is the allocation grid as shown, with any unsaved adjustments. Report allocations by portfolio, the top level in portfolios. A portfolio is a fund. Its subPortfolios are its sleeves and sum to it. Describe subPortfolios only when asked to break a portfolio down. Do not list them as separate funds, and never add them to the portfolio total. complianceRules are the rules this deal would worsen for that fund, read from the booked book without running them: now is the figure today, withDeal the figure with this allocation, room the dollars the fund can add before the limit, allocatedHere what the grid places in the tranches the rule counts. heldBy names the sub-portfolio a rule is set on when the portfolio has none. A full test of every rule is the Compliance tab\'s Hypo run.',
     data: preview ? {
     tranches: tranches.map((tranche) => ({
       name: tranche.name,
@@ -492,15 +492,28 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
         capReason: cell.capReason || null,
         exclusion: cell.eligible ? null : cell.exclusionText || cell.exclusionKind || null,
       }));
+      const rules = (fundId: string) => standingsForFund(fundId, preview.capacities || [], preview.rows).slice(0, 12).map((item) => ({
+        rule: item.reading.ruleName,
+        group: item.reading.groupValue || null,
+        heldBy: item.ownerId ? preview.rows.find((other) => other.fundId === item.ownerId)?.fundName || null : null,
+        now: formatReading(item.current, item.reading.resultUnit),
+        withDeal: formatReading(item.proForma, item.reading.resultUnit),
+        limit: formatReading(item.reading.hardLimit, item.reading.resultUnit),
+        room: item.reading.room,
+        allocatedHere: item.used,
+        status: item.label,
+      }));
       return {
         portfolio: row.fundName,
         availableCapital: row.availableCapital,
         total: row.total,
+        complianceRules: rules(row.fundId),
         tranches: cells(row),
         subPortfolios: preview.rows.filter((item) => item.parentFundId === row.fundId).map((item) => ({
           subPortfolio: item.fundName,
           availableCapital: item.availableCapital,
           total: item.total,
+          complianceRules: rules(item.fundId),
           tranches: cells(item),
         })),
       };
@@ -666,17 +679,13 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       {warmed.has('compliance') && preview && (
         <div hidden={tab !== 'compliance'}>
           <DealCompliance
-            dealId={dealId}
-            asOfDate={asOfDate}
-            holds={holds}
-            adjustments={adjustments}
+            hypo={hypo}
             funds={preview.rows.map((row) => ({
               fundId: row.fundId,
               fundName: row.fundName,
               parentFundId: row.parentFundId,
               level: row.level,
             }))}
-            score={complianceScore}
           />
         </div>
       )}
@@ -868,8 +877,8 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
                     })}
                     onChange={setEdit}
                     onCancel={() => setEdit(null)}
-                    compliance={complianceScore}
-                    funds={preview.rows}
+                    readings={preview.capacities || []}
+                    onOpenHypo={() => { setTab('compliance'); if (!hypo.running) hypo.start(); }}
                     onApply={() => {
                       if (!edit) return;
                       const sleeve = selectedRow.level === 'SLEEVE';
@@ -999,6 +1008,7 @@ function ineligibleLabel(kind?: string | null): string {
   if (kind === 'guideline') return 'Guideline';
   if (kind === 'manual') return 'Excluded';
   if (kind === 'sub') return 'No eligible sub';
+  if (kind === 'limit') return 'No room';
   return 'Not eligible';
 }
 
@@ -1045,8 +1055,8 @@ function FundPanel({
   onChange,
   onCancel,
   onApply,
-  compliance,
-  funds,
+  readings,
+  onOpenHypo,
 }: {
   row: Row;
   parentName?: string;
@@ -1059,8 +1069,8 @@ function FundPanel({
   onChange: (next: { fundId: string; trancheId: string; amount: string; reason: string; note: string; type: 'override' | 'exclude' }) => void;
   onCancel: () => void;
   onApply: () => void;
-  compliance: Parameters<typeof ComplianceGaugeList>[0]['score'];
-  funds: Array<{ fundId: string; fundName: string; parentFundId?: string | null }>;
+  readings: CapacityReading[];
+  onOpenHypo: () => void;
 }) {
   const sleeve = row.level === 'SLEEVE';
   const share = allocated ? row.total / allocated : 0;
@@ -1179,7 +1189,7 @@ function FundPanel({
       </section>
       <section>
         <h4>Compliance rules</h4>
-        <ComplianceGaugeList fundId={row.fundId} funds={funds} score={compliance} />
+        <CapacityRules fundId={row.fundId} readings={readings} rows={rows} onOpenHypo={onOpenHypo} />
       </section>
     </>
   );

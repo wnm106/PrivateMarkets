@@ -1,9 +1,18 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { graphqlMutation } from '@/lib/graphql';
-import { dealCheckResults, resultsForAssignedRules, resultsForFund } from '@/lib/deal-compliance-view';
+import {
+  CHANGE_LABEL,
+  filterHypoLines,
+  groupHypoLines,
+  isBreach,
+  pairHypoResults,
+  tallyHypo,
+  type HypoFilter,
+  type HypoLine,
+} from '@/lib/deal-hypo-view';
 import { usePublishTab } from '@/lib/view-context';
 
 export interface ComplianceFundRef {
@@ -39,14 +48,6 @@ export interface FundResult {
   contributingCount?: number | null;
 }
 
-interface Board {
-  rules: FundRule[];
-  results: FundResult[];
-}
-
-type Bucket = 'all' | 'over' | 'near' | 'within' | 'na';
-type SortKey = 'utilisation' | 'name' | 'status';
-
 const CATEGORY: Record<string, string> = {
   CONCENTRATION: 'Concentration',
   EXPOSURE: 'Exposure',
@@ -60,30 +61,24 @@ const CATEGORY: Record<string, string> = {
   OTHER: 'Other',
 };
 
-const STATUS_RANK: Record<string, number> = {
-  HARD_BREACH: 0,
-  SOFT_BREACH: 1,
-  ERROR: 2,
-  NO_DATA: 3,
-  PASS: 4,
-};
-
 const GROUP_LABEL: Record<string, string> = {
   ISSUER_LEGAL_NAME: 'Issuer',
   SECTOR: 'Sector',
   SPONSOR_NAME: 'Sponsor',
 };
 
-function reading(result: FundResult, direction?: string | null): { bucket: Exclude<Bucket, 'all'>; tone: string; label: string } {
+function reading(result: FundResult, direction?: string | null): { tone: string; label: string } {
   if (result.status === 'NO_DATA' || result.status === 'ERROR' || result.computedValue == null) {
-    return { bucket: 'na', tone: 'na', label: result.status === 'ERROR' ? 'Error' : 'Not applicable' };
+    return { tone: 'na', label: result.status === 'ERROR' ? 'Error' : 'Not applicable' };
   }
+  if (result.status === 'HARD_BREACH') return { tone: 'breach', label: 'Over limit' };
+  if (result.status === 'SOFT_BREACH') return { tone: 'near', label: 'Over soft limit' };
   const ratio = utilisation(result, direction);
-  if (ratio == null) return { bucket: 'within', tone: 'ok', label: 'Within limit' };
-  if (ratio > 1.005) return { bucket: 'over', tone: 'breach', label: 'Over limit' };
-  if (ratio >= 0.995) return { bucket: 'over', tone: 'breach', label: 'At limit' };
-  if (ratio >= 0.85) return { bucket: 'near', tone: 'near', label: 'Near limit' };
-  return { bucket: 'within', tone: 'ok', label: 'Within limit' };
+  if (ratio == null) return { tone: 'ok', label: 'Within limit' };
+  if (ratio > 1.005) return { tone: 'breach', label: 'Over limit' };
+  if (ratio >= 0.995) return { tone: 'breach', label: 'At limit' };
+  if (ratio >= 0.85) return { tone: 'near', label: 'Near limit' };
+  return { tone: 'ok', label: 'Within limit' };
 }
 
 function formatMeasure(value: number | null | undefined, unit?: string | null): string {
@@ -100,12 +95,23 @@ function formatMeasure(value: number | null | undefined, unit?: string | null): 
   return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function formatRaw(value: number): string {
-  if (Math.abs(value) >= 1_000_000) {
-    const millionsValue = value / 1_000_000;
-    return `$${millionsValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}M`;
+/** A signed change in the rule's unit: percentage points, dollars, or a plain number. */
+function formatDelta(value: number | null | undefined, unit?: string | null): string {
+  if (value == null || Number.isNaN(value)) return '—';
+  if (Math.abs(value) < 1e-9) return '0';
+  const sign = value > 0 ? '+' : '−';
+  const size = Math.abs(value);
+  if (unit === 'PERCENTAGE') return `${sign}${size.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} pts`;
+  if (unit === 'CURRENCY') {
+    if (size >= 1_000_000) return `${sign}$${(size / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}M`;
+    return `${sign}${size.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}`;
   }
-  return value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (unit === 'COUNT') return `${sign}${size.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+  return `${sign}${size.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function millions(value: number): string {
+  return `$${(value / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}M`;
 }
 
 function utilisation(result: FundResult, direction?: string | null): number | null {
@@ -119,538 +125,314 @@ function utilisation(result: FundResult, direction?: string | null): number | nu
   return result.computedValue / limit;
 }
 
-function detailSections(rule: FundRule, result: FundResult): Array<{ label: string; value: string }> {
-  const direction = result.limitDirection || rule.limitDirection;
-  const sections: Array<{ label: string; value: string }> = [];
-  if (result.groupByValue) {
-    sections.push({
-      label: GROUP_LABEL[rule.groupByAttributeCode || ''] || 'Group',
-      value: result.groupByValue,
-    });
-  }
-  if (result.rankPosition != null) sections.push({ label: 'Rank', value: String(result.rankPosition) });
-  if (result.contributingCount != null) {
-    sections.push({ label: 'Positions', value: result.contributingCount.toLocaleString('en-US') });
-  }
-  sections.push({ label: 'Pro-forma', value: formatMeasure(result.computedValue, rule.resultUnit) });
-  if (result.hardLimitValue != null) {
-    sections.push({
-      label: direction === 'MIN' ? 'Floor' : 'Limit',
-      value: formatMeasure(result.hardLimitValue, rule.resultUnit),
-    });
-  }
-  if (result.softLimitValue != null) {
-    sections.push({ label: 'Soft limit', value: formatMeasure(result.softLimitValue, rule.resultUnit) });
-  }
-  if (result.numeratorValue != null) sections.push({ label: 'Numerator', value: formatRaw(result.numeratorValue) });
-  if (result.denominatorValue != null) sections.push({ label: 'Denominator', value: formatRaw(result.denominatorValue) });
-  return sections;
-}
-
-function explain(rule: FundRule, result: FundResult): string {
-  const direction = result.limitDirection || rule.limitDirection;
-  const groupName = result.groupByValue
-    ? `${GROUP_LABEL[rule.groupByAttributeCode || ''] || 'Group'} ${result.groupByValue}. `
-    : '';
-  const rank = result.rankPosition != null ? `Rank ${result.rankPosition}. ` : '';
-  const count = result.contributingCount != null
-    ? `${result.contributingCount} position${result.contributingCount === 1 ? '' : 's'}. `
-    : '';
-  const value = formatMeasure(result.computedValue, rule.resultUnit);
-  const hard = formatMeasure(result.hardLimitValue, rule.resultUnit);
-  const bound = direction === 'MIN' ? 'floor of' : 'limit of';
-  const parts = result.numeratorValue != null && result.denominatorValue != null
-    ? ` Numerator ${formatRaw(result.numeratorValue)}, denominator ${formatRaw(result.denominatorValue)}.`
-    : '';
-  return `${groupName}${rank}${count}Pro-forma ${value} against a ${bound} ${hard}.${parts}`;
-}
-
-interface Tally {
-  total: number;
-  over: number;
-  near: number;
-  within: number;
-  na: number;
-}
-
-function PortfolioNode({ fund, childrenOf, depth, selectedId, collapsed, countsFor, onToggle, onSelect }: {
-  fund: ComplianceFundRef;
-  childrenOf: Map<string, ComplianceFundRef[]>;
-  depth: number;
-  selectedId: string | null;
-  collapsed: Set<string>;
-  countsFor: (id: string) => Tally;
-  onToggle: (id: string) => void;
-  onSelect: (id: string) => void;
-}) {
-  const children = childrenOf.get(fund.fundId) || [];
-  const open = !collapsed.has(fund.fundId);
-  const atLimit = countsFor(fund.fundId).over > 0;
-  const label = depth > 0 ? fund.fundName.replace(/^[^:]+:\s*/, '') : fund.fundName;
-  return (
-    <div className="dc-branch" role="treeitem" aria-expanded={children.length ? open : undefined} aria-selected={selectedId === fund.fundId}>
-      <div className={`dc-row${selectedId === fund.fundId ? ' on' : ''}`}>
-        {children.length ? (
-          <button type="button" className="dc-twist" aria-label={open ? `Collapse ${label}` : `Expand ${label}`} aria-expanded={open} onClick={() => onToggle(fund.fundId)}>{open ? '▾' : '▸'}</button>
-        ) : (
-          <span className="dc-twist" aria-hidden="true" />
-        )}
-        <button type="button" className="dc-node" aria-pressed={selectedId === fund.fundId} onClick={() => onSelect(fund.fundId)}>
-          <b>{label}</b>
-          {atLimit && <span className="dc-limit"><i className="dc-sq breach" /> At limit</span>}
-        </button>
-      </div>
-      {children.length > 0 && open && (
-        <div className="dc-kids" role="group" style={{ marginLeft: 14 + depth * 4 }}>
-          {children.map((child) => (
-            <PortfolioNode
-              key={child.fundId}
-              fund={child}
-              childrenOf={childrenOf}
-              depth={depth + 1}
-              selectedId={selectedId}
-              collapsed={collapsed}
-              countsFor={countsFor}
-              onToggle={onToggle}
-              onSelect={onSelect}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function tally(results: FundResult[], directionFor: (result: FundResult) => string | null | undefined): Tally {
-  const counts: Tally = { total: results.length, over: 0, near: 0, within: 0, na: 0 };
-  for (const result of results) counts[reading(result, directionFor(result)).bucket] += 1;
-  return counts;
-}
-
-const SCORE = `
-  mutation ScoreDealCompliance($dealId: ID!, $asOfDate: Date, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
-    scoreDealCompliance(dealId: $dealId, asOfDate: $asOfDate, holds: $holds, adjustments: $adjustments) {
+const HYPO = `
+  mutation RunDealHypo($dealId: ID!, $asOfDate: Date, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
+    runDealHypo(dealId: $dealId, asOfDate: $asOfDate, holds: $holds, adjustments: $adjustments) {
+      scenarioCode asOfDate ranAt
       rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode }
-      results { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
+      before { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
+      after { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
+      allocations { fundId fundName parentFundId level amount }
       errors { message }
     }
   }
 `;
 
-type ScoreAdjustment = { fundId: string; trancheId: string; type: string; amount?: number | null; reason?: string | null; note?: string | null };
+type HypoAdjustment = { fundId: string; trancheId: string; type: string; amount?: number | null; reason?: string | null; note?: string | null; saved?: boolean };
 
-export interface DealComplianceScore {
-  board: Board | null;
-  loading: boolean;
-  error: string;
+export interface DealHypoRun {
+  scenarioCode: string | null;
+  asOfDate: string | null;
+  ranAt: string;
+  rules: FundRule[];
+  before: FundResult[];
+  after: FundResult[];
+  allocations: Array<{ fundId: string; fundName: string; parentFundId?: string | null; level: string; amount: number }>;
 }
 
-export function useDealComplianceScore({
+export interface DealHypo {
+  run: DealHypoRun | null;
+  running: boolean;
+  error: string;
+  /** The holds or adjustments changed after the last run started. */
+  stale: boolean;
+  start: () => void;
+}
+
+/**
+ * A Hypo run on request. It tests the allocation as shown: the holds and
+ * adjustments are sent as they are. Nothing runs when the deal opens, and the
+ * deal's saved allocation is never written.
+ */
+export function useDealHypo({
   dealId,
   asOfDate,
   holds,
   adjustments,
-  enabled = true,
 }: {
   dealId: string;
   asOfDate?: string | null;
   holds: Record<string, number>;
-  adjustments: ScoreAdjustment[];
-  enabled?: boolean;
-}): DealComplianceScore {
-  const [board, setBoard] = useState<Board | null>(null);
-  const [loading, setLoading] = useState(enabled);
+  adjustments: HypoAdjustment[];
+}): DealHypo {
+  const [run, setRun] = useState<DealHypoRun | null>(null);
+  const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
-  const holdKey = JSON.stringify(holds);
-  const adjustmentKey = JSON.stringify(adjustments);
+  const [ranKey, setRanKey] = useState<string | null>(null);
+  const request = useRef(0);
+  const key = JSON.stringify([asOfDate || null, holds, adjustments]);
 
-  useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-    setLoading(true);
-    const timer = window.setTimeout(() => {
-      setError('');
-      const holdList = Object.entries(holds).map(([trancheId, holdPct]) => ({ trancheId, holdPct }));
-      const adjustmentList = adjustments.map((item) => ({
+  const start = useCallback(() => {
+    const id = ++request.current;
+    setRunning(true);
+    setError('');
+    setRanKey(key);
+    graphqlMutation<{ runDealHypo: DealHypoRun & { errors: Array<{ message: string }> } }>(HYPO, {
+      dealId,
+      asOfDate: asOfDate || null,
+      holds: Object.entries(holds).map(([trancheId, holdPct]) => ({ trancheId, holdPct })),
+      adjustments: adjustments.map((item) => ({
         fundId: item.fundId,
         trancheId: item.trancheId,
         type: item.type,
         amount: item.amount,
         reasonCode: item.reason,
         note: item.note,
-      }));
-      graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>(SCORE, {
-        dealId,
-        asOfDate: asOfDate || null,
-        holds: holdList,
-        adjustments: adjustmentList,
-      }).then((result) => {
-        if (cancelled) return;
-        const scored = result.data?.scoreDealCompliance;
-        const message = result.error?.message || scored?.errors?.[0]?.message;
-        if (!scored) {
-          setError(message || 'Could not score this allocation');
-          return;
-        }
-        setBoard({ rules: scored.rules, results: scored.results });
-        if (!scored.results.length && message) setError(message);
-      }).catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not score this allocation');
-      }).finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    }, 400);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [dealId, asOfDate, holdKey, adjustmentKey, enabled]);
-
-  return { board, loading, error };
-}
-
-function childrenOfFunds(funds: Array<{ fundId: string; parentFundId?: string | null }>) {
-  const ids = new Set(funds.map((fund) => fund.fundId));
-  const children = new Map<string, Array<{ fundId: string }>>();
-  for (const fund of funds) {
-    if (!fund.parentFundId || !ids.has(fund.parentFundId)) continue;
-    const list = children.get(fund.parentFundId) || [];
-    list.push({ fundId: fund.fundId });
-    children.set(fund.parentFundId, list);
-  }
-  return children;
-}
-
-export function ComplianceGaugeList({
-  fundId,
-  funds,
-  score,
-}: {
-  fundId: string;
-  funds: Array<{ fundId: string; fundName: string; parentFundId?: string | null }>;
-  score: DealComplianceScore;
-}) {
-  const [openId, setOpenId] = useState<string | null>(null);
-  const rules = useMemo(() => new Map((score.board?.rules || []).map((rule) => [rule.id, rule])), [score.board]);
-  const rows = useMemo(() => {
-    const byFund = new Map<string, FundResult[]>();
-    for (const result of score.board?.results || []) {
-      const list = byFund.get(result.anchorEntityId) || [];
-      list.push(result);
-      byFund.set(result.anchorEntityId, list);
-    }
-    const visible = resultsForAssignedRules(fundId, byFund, childrenOfFunds(funds));
-    visible.sort((left, right) => {
-      const leftUse = utilisation(left, left.limitDirection || rules.get(left.ruleId)?.limitDirection);
-      const rightUse = utilisation(right, right.limitDirection || rules.get(right.ruleId)?.limitDirection);
-      return (rightUse ?? -1) - (leftUse ?? -1);
-    });
-    return visible;
-  }, [score.board, fundId, funds, rules]);
-
-  if (score.loading && rows.length === 0) return <p className="da-note">Scoring this allocation against the fund's limits.</p>;
-  if (!rows.length) return <p className="da-note">{score.error || 'No compliance limits are assigned to this fund.'}</p>;
-
-  return (
-    <>
-      {score.loading && <p className="da-note">Updating the pro-forma for this deal.</p>}
-      {rows.map((result) => {
-        const rule = rules.get(result.ruleId);
-        if (!rule) return null;
-        const view = reading(result, result.limitDirection || rule.limitDirection);
-        const ratio = utilisation(result, result.limitDirection || rule.limitDirection) ?? 0;
-        const owner = result.anchorEntityId === fundId
-          ? ''
-          : funds.find((fund) => fund.fundId === result.anchorEntityId)?.fundName.replace(/^[^:]+:\s*/, '') || '';
-        const group = result.groupByValue ? `${GROUP_LABEL[rule.groupByAttributeCode || ''] || 'Group'} ${result.groupByValue}` : '';
-        const open = openId === result.id;
-        const sections = detailSections(rule, result);
-        return (
-          <div key={result.id} className={`da-rule${open ? ' open' : ''}`}>
-            <button
-              type="button"
-              className="da-rulehead"
-              aria-expanded={open}
-              onClick={() => setOpenId(open ? null : result.id)}
-            >
-              <span className="da-ruleline">
-                <span className="da-twist" aria-hidden="true">{open ? '▾' : '▸'}</span>
-                <b>
-                  <span className="da-rulename">{rule.ruleName}</span>
-                  {(group || owner) && <span className="da-rulegroup">{[group, owner && `(${owner})`].filter(Boolean).join(' ')}</span>}
-                </b>
-                <span className={`da-st ${view.tone}`}>{view.label}</span>
-              </span>
-              <span className={`da-gauge ${view.tone}`}><i style={{ width: `${Math.min(100, ratio * 100)}%` }} /></span>
-            </button>
-            {open && (
-              <div className="da-ruledetail">
-                {sections.map((section) => (
-                  <div key={section.label}><span>{section.label}</span><b>{section.value}</b></div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </>
-  );
-}
-
-export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds, score }: {
-  dealId: string;
-  asOfDate?: string | null;
-  holds: Record<string, number>;
-  adjustments: ScoreAdjustment[];
-  funds: ComplianceFundRef[];
-  score?: DealComplianceScore;
-}) {
-  const own = useDealComplianceScore({ dealId, asOfDate, holds, adjustments, enabled: !score });
-  const board = score?.board ?? own.board;
-  const loading = score?.loading ?? own.loading;
-  const error = score?.error ?? own.error;
-  const [selectedId, setSelectedId] = useState<string | null>(funds.find((fund) => fund.level === 'PORTFOLIO')?.fundId || funds[0]?.fundId || null);
-  const [query, setQuery] = useState('');
-  const [category, setCategory] = useState('ALL');
-  const [sort, setSort] = useState<SortKey>('utilisation');
-  const [bucket, setBucket] = useState<Bucket>('all');
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-
-  const branches = useMemo(() => {
-    const ids = new Set(funds.map((fund) => fund.fundId));
-    const children = new Map<string, ComplianceFundRef[]>();
-    const roots: ComplianceFundRef[] = [];
-    for (const fund of funds) {
-      if (fund.parentFundId && ids.has(fund.parentFundId)) {
-        const list = children.get(fund.parentFundId) || [];
-        list.push(fund);
-        children.set(fund.parentFundId, list);
-      } else {
-        roots.push(fund);
+        saved: item.saved,
+      })),
+    }).then((result) => {
+      if (id !== request.current) return;
+      const data = result.data?.runDealHypo;
+      const message = result.error?.message || data?.errors?.[0]?.message;
+      if (!data || (!data.after.length && message)) {
+        setError(message || 'The Hypo run did not finish.');
+        return;
       }
-    }
-    return { roots, children };
-  }, [funds]);
+      setRun(data);
+      if (message) setError(message);
+    }).catch((err: unknown) => {
+      if (id === request.current) setError(err instanceof Error ? err.message : 'The Hypo run did not finish.');
+    }).finally(() => {
+      if (id === request.current) setRunning(false);
+    });
+  }, [adjustments, asOfDate, dealId, holds, key]);
 
-  const fundIds = useMemo(() => new Set(funds.map((fund) => fund.fundId)), [funds]);
-  const rules = useMemo(() => new Map((board?.rules || []).map((rule) => [rule.id, rule])), [board]);
-  const byFund = useMemo(() => {
-    const grouped = new Map<string, FundResult[]>();
-    for (const result of board?.results || []) {
-      if (!fundIds.has(result.anchorEntityId)) continue;
-      const list = grouped.get(result.anchorEntityId) || [];
-      list.push(result);
-      grouped.set(result.anchorEntityId, list);
-    }
-    return grouped;
-  }, [board, fundIds]);
+  return { run, running, error, stale: Boolean(run && ranKey !== null && ranKey !== key), start };
+}
 
-  const dealResults = useMemo(
-    () => dealCheckResults(funds, byFund, branches.children),
-    [funds, byFund, branches.children],
+const FILTERS: Array<{ key: HypoFilter; label: string }> = [
+  { key: 'changed', label: 'Rules that changed' },
+  { key: 'breaches', label: 'Breaches' },
+  { key: 'all', label: 'All rules' },
+];
+
+const CHANGE_TONE: Record<string, string> = {
+  new_breach: 'breach',
+  worse: 'near',
+  added: 'na',
+  moved: 'na',
+  dropped: 'na',
+  better: 'ok',
+  cleared: 'ok',
+  same: 'na',
+};
+
+function shortName(fund: ComplianceFundRef, depth: number): string {
+  return depth > 0 ? fund.fundName.replace(/^[^:]+:\s*/, '') : fund.fundName;
+}
+
+function whenRan(value: string): string {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return value;
+  return new Date(parsed).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+function StatusCell({ result, rule }: { result: FundResult | null; rule: FundRule }) {
+  if (!result) return <td className="num dh-none" colSpan={1}>Not tested</td>;
+  const view = reading(result, result.limitDirection || rule.limitDirection);
+  return (
+    <td className="num">
+      <span className="dh-val">{formatMeasure(result.computedValue, rule.resultUnit)}</span>
+      <span className={`da-st ${view.tone}`}>{view.label}</span>
+    </td>
   );
-  const directionFor = (result: FundResult) => result.limitDirection || rules.get(result.ruleId)?.limitDirection;
-  const dealTally = tally(dealResults, directionFor);
-  const selected = funds.find((fund) => fund.fundId === selectedId) || funds[0] || null;
-  const selectedResults = selected ? resultsForFund(selected.fundId, byFund, branches.children) : [];
-  const selectedTally = tally(selectedResults, directionFor);
+}
 
-  const categories = useMemo(() => {
-    const codes = new Set<string>();
-    for (const result of selectedResults) {
-      const rule = rules.get(result.ruleId);
-      if (rule) codes.add(rule.ruleCategory);
-    }
-    return [...codes].sort();
-  }, [selectedResults, rules]);
+export function DealCompliance({ funds, hypo }: {
+  funds: ComplianceFundRef[];
+  hypo: DealHypo;
+}) {
+  const [filter, setFilter] = useState<HypoFilter>('changed');
+  const run = hypo.run;
+  const rules = useMemo(() => new Map((run?.rules || []).map((rule) => [rule.id, rule])), [run]);
+  const fundIds = useMemo(() => new Set(funds.map((fund) => fund.fundId)), [funds]);
+  const lines = useMemo(() => (run
+    ? pairHypoResults(
+      run.before.filter((result) => fundIds.has(result.anchorEntityId) && rules.has(result.ruleId)),
+      run.after.filter((result) => fundIds.has(result.anchorEntityId) && rules.has(result.ruleId)),
+      (ruleId) => rules.get(ruleId)?.limitDirection,
+    )
+    : []), [run, rules, fundIds]);
+  const tally = useMemo(() => tallyHypo(lines), [lines]);
+  const groups = useMemo(() => groupHypoLines(filterHypoLines(lines, filter), funds), [lines, filter, funds]);
+  const allocated = useMemo(() => new Map((run?.allocations || []).map((row) => [row.fundId, row.amount])), [run]);
 
-  const rows = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const visible = selectedResults.filter((result) => {
-      const rule = rules.get(result.ruleId);
-      if (!rule) return false;
-      if (bucket !== 'all' && reading(result, rule.limitDirection).bucket !== bucket) return false;
-      if (category !== 'ALL' && rule.ruleCategory !== category) return false;
-      if (!needle) return true;
-      const haystack = `${rule.ruleName} ${rule.ruleCode} ${result.groupByValue || ''} ${CATEGORY[rule.ruleCategory] || rule.ruleCategory}`.toLowerCase();
-      return haystack.includes(needle);
-    });
-    visible.sort((left, right) => {
-      const leftRule = rules.get(left.ruleId);
-      const rightRule = rules.get(right.ruleId);
-      if (sort === 'name') return (leftRule?.ruleName || '').localeCompare(rightRule?.ruleName || '');
-      if (sort === 'status') return (STATUS_RANK[left.status] ?? 9) - (STATUS_RANK[right.status] ?? 9);
-      const leftUse = utilisation(left, leftRule?.limitDirection);
-      const rightUse = utilisation(right, rightRule?.limitDirection);
-      return (rightUse ?? -1) - (leftUse ?? -1);
-    });
-    return visible;
-  }, [selectedResults, rules, query, category, bucket, sort]);
+  const describe = (line: HypoLine) => {
+    const rule = rules.get(line.ruleId)!;
+    const side = line.after || line.before;
+    return {
+      rule: rule.ruleName,
+      group: line.groupByValue,
+      limit: side?.hardLimitValue ?? side?.softLimitValue ?? null,
+      unit: rule.resultUnit || null,
+      before: line.before?.computedValue ?? null,
+      beforeStatus: line.before?.status ?? null,
+      after: line.after?.computedValue ?? null,
+      afterStatus: line.after?.status ?? null,
+      delta: line.delta,
+      change: CHANGE_LABEL[line.change],
+    };
+  };
 
+  // The assistant sees the changed rules for every fund, the story the tab opens on.
+  const changedGroups = useMemo(() => groupHypoLines(filterHypoLines(lines, 'changed'), funds), [lines, funds]);
+  let budget = 120;
   usePublishTab('compliance', {
     label: 'Compliance',
-    purpose: 'How this deal scores against each compliance rule, pro forma, for the fund selected in the tab.',
-    howToRead: 'tally counts the rules across the deal. rules lists the selected fund only. value is the rule\'s computed pro forma figure and hardLimit its limit.',
-    data: {
-      tally: dealTally,
-      selectedFund: selected?.fundName || null,
-      rules: rows.slice(0, 80).map((result) => {
-        const rule = rules.get(result.ruleId);
-        return {
-          fund: selected?.fundName || null,
-          rule: rule?.ruleName || result.ruleId,
-          category: rule?.ruleCategory || null,
-          status: result.status,
-          value: result.computedValue ?? null,
-          hardLimit: result.hardLimitValue ?? null,
-          group: result.groupByValue || null,
-        };
+    purpose: 'What a Hypo run of this allocation does to each fund\'s compliance rules: the result before the deal, after it, and the change.',
+    howToRead: 'A Hypo run is started by the user and tests the allocation as shown, without saving it. before is the book without this deal; after is the book with the Hypo allocation. delta is after minus before in the rule\'s unit: percentage points for PERCENTAGE rules, dollars for CURRENCY. A status of HARD_BREACH is over the limit, SOFT_BREACH over the soft limit. changedRules lists only rules whose value or status moved, grouped by fund; a sleeve is a sub-portfolio of the portfolio above it, and its results are its own, not part of the portfolio row. stale means the allocation was edited after the run, so the figures are for an earlier allocation.',
+    data: run ? {
+      ranAt: run.ranAt,
+      asOfDate: run.asOfDate,
+      stale: hypo.stale,
+      tally,
+      changedRules: changedGroups.flatMap((group) => {
+        if (budget <= 0) return [];
+        const rows = group.lines.slice(0, budget).map(describe);
+        budget -= rows.length;
+        return [{
+          fund: group.fund.fundName,
+          level: group.fund.level,
+          allocated: allocated.get(group.fund.fundId) ?? null,
+          rules: rows,
+        }];
       }),
-    },
+    } : null,
   });
 
   return (
     <section className="da-sec dc">
       <div className="dc-top">
-        <h2>Pre-trade checks</h2>
-        <span className="dc-signed">Not signed</span>
-      </div>
-      {error && <div className="xp-error">{error}</div>}
-      <div className="dc-kpis">
         <div>
-          <span>Checks run</span>
-          <b>{loading ? '—' : dealTally.total}</b>
-          <small>{funds.length} portfolio{funds.length === 1 ? '' : 's'}</small>
+          <h2>Hypo compliance test</h2>
+          <p className="da-note">
+            Tests the allocation as shown against every rule on these funds, before and after the deal. Nothing is saved.
+          </p>
         </div>
-        <div>
-          <span>Within limit</span>
-          <b>{loading ? '—' : dealTally.within}</b>
-        </div>
-        <div>
-          <span>Near or at limit</span>
-          <b className={dealTally.near ? 'near' : ''}>{loading ? '—' : dealTally.near}</b>
-          <small>Watch list</small>
-        </div>
-        <div>
-          <span>Breaches</span>
-          <b className={dealTally.over ? 'breach' : ''}>{loading ? '—' : dealTally.over}</b>
-          <small>{dealTally.over ? 'At or over the limit' : 'None'}</small>
-        </div>
-        <div>
-          <span>Exceptions pending</span>
-          <b>0</b>
-          <small>No waiver register</small>
-        </div>
-      </div>
-
-      <div className="dc-layout">
-        <div>
-          <div className="dc-kicker">Portfolio</div>
-          <div className="dc-tree" role="tree" aria-label="Portfolios">
-            {branches.roots.map((fund) => (
-              <PortfolioNode
-                key={fund.fundId}
-                fund={fund}
-                childrenOf={branches.children}
-                depth={0}
-                selectedId={selected?.fundId || null}
-                collapsed={collapsed}
-                countsFor={(id) => tally(resultsForFund(id, byFund, branches.children), directionFor)}
-                onToggle={(id) => setCollapsed((current) => {
-                  const next = new Set(current);
-                  if (next.has(id)) next.delete(id);
-                  else next.add(id);
-                  return next;
-                })}
-                onSelect={(id) => { setSelectedId(id); setBucket('all'); }}
-              />
-            ))}
-          </div>
-        </div>
-
-        <div>
-          {selected && (
-            <>
-              <h3 className="dc-title">{selected.fundName}</h3>
-              <p className="da-note">
-                {`${selectedTally.total} ${selectedTally.total === 1 ? 'check' : 'checks'}: ${selectedTally.within} within limit, ${selectedTally.near} near the limit, ${selectedTally.over} at or over the limit${selectedTally.na ? `, ${selectedTally.na} not applicable` : ''}`}
-              </p>
-            </>
+        <div className="dh-run">
+          {run && (
+            <span className={`dh-ran${hypo.stale ? ' stale' : ''}`}>
+              {hypo.stale ? 'Allocation changed since the run at ' : 'Ran at '}{whenRan(run.ranAt)}
+            </span>
           )}
-          <div className="dc-tools">
-            <input type="search" value={query} placeholder="Search rules" aria-label="Search rules" onChange={(event) => setQuery(event.target.value)} />
-            <select aria-label="Category" value={category} onChange={(event) => setCategory(event.target.value)}>
-              <option value="ALL">All categories</option>
-              {categories.map((code) => <option key={code} value={code}>{CATEGORY[code] || code}</option>)}
-            </select>
-            <select aria-label="Sort checks" value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
-              <option value="utilisation">Sort by utilisation</option>
-              <option value="status">Sort by status</option>
-              <option value="name">Sort by rule</option>
-            </select>
+          <button type="button" className="btn btn-primary" disabled={hypo.running} onClick={hypo.start}>
+            {hypo.running ? 'Running Hypo…' : run ? 'Run Hypo again' : 'Run Hypo'}
+          </button>
+        </div>
+      </div>
+      {hypo.error && <div className="xp-error">{hypo.error}</div>}
+
+      {!run ? (
+        <div className="xp-empty">
+          {hypo.running
+            ? 'Scoring the book without this deal, then with the Hypo allocation…'
+            : 'Run Hypo to see each fund\'s rules before and after this allocation.'}
+        </div>
+      ) : (
+        <>
+          <div className="dc-kpis">
+            <div><span>Checks</span><b>{tally.checks}</b><small>{funds.length} portfolio{funds.length === 1 ? '' : 's'}</small></div>
+            <div><span>Changed</span><b>{tally.changed}</b><small>Value or status moved</small></div>
+            <div><span>New breaches</span><b className={tally.newBreaches ? 'breach' : ''}>{tally.newBreaches}</b><small>Within before, over after</small></div>
+            <div><span>Breaches after</span><b className={tally.breachesAfter ? 'breach' : ''}>{tally.breachesAfter}</b><small>Including ones already over</small></div>
+            <div><span>Cleared</span><b>{tally.cleared}</b><small>Over before, within after</small></div>
           </div>
-          <div className="dc-chips" role="tablist" aria-label="Filter by status">
-            {([
-              ['all', 'All', selectedTally.total],
-              ['over', 'At limit', selectedTally.over],
-              ['near', 'Near limit', selectedTally.near],
-              ['within', 'Within limit', selectedTally.within],
-              ['na', 'Not applicable', selectedTally.na],
-            ] as const).map(([key, label, count]) => (
-              <button key={key} type="button" className="btn btn-sm" aria-pressed={bucket === key} onClick={() => setBucket(key)}>{label} {count}</button>
+
+          <div className="dh-filter" role="radiogroup" aria-label="Rules to show">
+            {FILTERS.map((option) => (
+              <label key={option.key} className={filter === option.key ? 'on' : ''}>
+                <input
+                  type="radio"
+                  name="dh-filter"
+                  value={option.key}
+                  checked={filter === option.key}
+                  onChange={() => setFilter(option.key)}
+                />
+                {option.label}
+                <span className="dh-count">
+                  {option.key === 'changed' ? tally.changed : option.key === 'breaches' ? filterHypoLines(lines, 'breaches').length : tally.checks}
+                </span>
+              </label>
             ))}
           </div>
 
-          {loading && !board ? <div className="xp-empty">Scoring the book and this allocation…</div> : (
-            <div className="dc-tablewrap">
-              <table className="dc-table">
-                <thead>
-                  <tr>
-                    <th>Rule</th>
-                    <th>Category</th>
-                    <th className="num">Limit</th>
-                    <th className="num">Pro-forma</th>
-                    <th>Utilisation</th>
-                    <th>Status</th>
+          <div className="dc-tablewrap">
+            <table className="dc-table dh-table">
+              <thead>
+                <tr>
+                  <th>Rule</th>
+                  <th className="num">Limit</th>
+                  <th className="num">Before</th>
+                  <th className="num">After</th>
+                  <th className="num">Change</th>
+                </tr>
+              </thead>
+              {groups.map((group) => (
+                <tbody key={group.fund.fundId}>
+                  <tr className={`dh-fund depth-${Math.min(group.depth, 2)}`}>
+                    <th colSpan={5} scope="rowgroup">
+                      <span>{shortName(group.fund, group.depth)}</span>
+                      {allocated.has(group.fund.fundId) && (
+                        <small>{millions(allocated.get(group.fund.fundId) || 0)} in the Hypo allocation</small>
+                      )}
+                    </th>
                   </tr>
-                </thead>
-                <tbody>
-                  {rows.map((result) => {
-                    const rule = rules.get(result.ruleId);
+                  {group.lines.map((line) => {
+                    const rule = rules.get(line.ruleId);
                     if (!rule) return null;
-                    const ratio = utilisation(result, rule.limitDirection);
-                    const place = reading(result, rule.limitDirection);
-                    const owner = result.anchorEntityId === selected?.fundId
-                      ? ''
-                      : funds.find((fund) => fund.fundId === result.anchorEntityId)?.fundName;
+                    const side = line.after || line.before;
+                    const groupLabel = line.groupByValue ? `${GROUP_LABEL[rule.groupByAttributeCode || ''] || 'Group'} ${line.groupByValue}` : '';
                     return (
-                      <tr key={result.id}>
+                      <tr key={line.key} className={isBreach(line.after?.status) ? 'dh-over' : ''}>
                         <td className="dc-rule">
                           <b><Link href={`/admin/compliance/${encodeURIComponent(rule.ruleCode)}`}>{rule.ruleName}</Link></b>
-                          <small>{owner ? `${owner}. ` : ''}{explain(rule, result)}</small>
+                          <small>{[groupLabel, CATEGORY[rule.ruleCategory] || rule.ruleCategory].filter(Boolean).join(' · ')}</small>
                         </td>
-                        <td>{CATEGORY[rule.ruleCategory] || rule.ruleCategory}</td>
-                        <td className="num">{formatMeasure(result.hardLimitValue ?? result.softLimitValue, rule.resultUnit)}</td>
-                        <td className="num">{formatMeasure(result.computedValue, rule.resultUnit)}</td>
-                        <td>
-                          <div className="dc-util">
-                            <div className={`da-gauge ${place.tone}`}><i style={{ width: `${Math.min(100, Math.max(0, (ratio || 0) * 100))}%` }} /></div>
-                            <span>{ratio == null ? '—' : `${Math.round(ratio * 100)}%`}</span>
-                          </div>
+                        <td className="num">{formatMeasure(side?.hardLimitValue ?? side?.softLimitValue, rule.resultUnit)}</td>
+                        <StatusCell result={line.before} rule={rule} />
+                        <StatusCell result={line.after} rule={rule} />
+                        <td className="num">
+                          <span className="dh-val">{formatDelta(line.delta, rule.resultUnit)}</span>
+                          <span className={`da-st ${CHANGE_TONE[line.change]}`}>{CHANGE_LABEL[line.change]}</span>
                         </td>
-                        <td><span className={`da-st ${place.tone}`}>{place.label}</span></td>
                       </tr>
                     );
                   })}
-                  {!rows.length && (
-                    <tr><td colSpan={6} className="dc-empty">{selectedResults.length ? 'No checks match this filter.' : 'This portfolio has no compliance results.'}</td></tr>
-                  )}
                 </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
+              ))}
+              {!groups.length && (
+                <tbody>
+                  <tr>
+                    <td colSpan={5} className="dc-empty">
+                      {filter === 'changed' ? 'This allocation does not move any rule.' : filter === 'breaches' ? 'No rule is over its limit, before or after.' : 'No compliance results.'}
+                    </td>
+                  </tr>
+                </tbody>
+              )}
+            </table>
+          </div>
+        </>
+      )}
     </section>
   );
 }

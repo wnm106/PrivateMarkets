@@ -1,6 +1,7 @@
 'use client';
 
-import { AgentsAtWork } from '@/components/home/AgentsAtWork';
+import { AgentsAtWork, useAgentsBoard } from '@/components/home/AgentsAtWork';
+import { usePublishPageData } from '@/lib/view-context';
 import { HomeComposer } from '@/components/home/HomeComposer';
 import { HOME_SCOPE_KEY, UNIVERSE_QUERY, isNarrowed, narrowNeedsYou, parseScope, universeLabel, type HomeScope, type Universe } from '@/lib/home-universe';
 import Link from 'next/link';
@@ -12,9 +13,12 @@ import { isUnauthenticatedGraphqlError } from '@/lib/safe-next-path';
 import {
   HOME_MODULES,
   ROLE_LABEL,
+  agentLine,
   greeting,
   groupNeedsYou,
   headline,
+  heroLead,
+  homePageData,
   homeRole,
   pinnedPlaces,
   summarize,
@@ -30,7 +34,7 @@ import {
   BriefView,
   FocusTiles,
   FollowingModule,
-  NeedsYouBoard,
+  NeedsYouQueue,
   PlacesModule,
   SetupCard,
   useBrief,
@@ -181,7 +185,21 @@ export function HomeView({ user, places }: { user: HomeUser; places: HomePlace[]
   const canSave = layout?.canSave === true;
 
   const summary = useMemo(() => (needsYou ? summarize(needsYou.items, needsYou.urgentExceptionCount) : null), [needsYou]);
-  const firstStep = useMemo(() => (needsYou ? groupNeedsYou(needsYou.items)[0] || null : null), [needsYou]);
+  const allGroups = useMemo(() => (needsYou ? groupNeedsYou(needsYou.items) : null), [needsYou]);
+  const firstStep = allGroups?.[0] || null;
+  const lead = useMemo(() => (allGroups ? heroLead(allGroups) : null), [allGroups]);
+  const agents = useAgentsBoard(runsStarted, narrowed);
+
+  // The assistant reads what this page says, the same way the page says it.
+  usePublishPageData(
+    homePageData({
+      headline: lead ? `${lead.lead}${lead.start ? ` — start with ${lead.start}` : ''}.` : 'Loading',
+      scope: universe?.hasAny ? (narrowed ? 'mine' : 'all') : null,
+      groups: allGroups,
+      hiddenReviews: narrowed ? needsYou?.hiddenReviews ?? 0 : 0,
+      agents: agentLine(agents.board),
+    }),
+  );
 
   const setModule = (code: HomeModuleCode, show: boolean) =>
     save({ hiddenModules: toggleModule(user, layout?.hiddenModules, code, show), pinnedPlaces: layout?.pinnedPlaces ?? null });
@@ -212,64 +230,96 @@ export function HomeView({ user, places }: { user: HomeUser; places: HomePlace[]
     follows.length === 0 &&
     !followsProblem;
 
-  const renderModule = (code: HomeModuleCode) => {
-    if (needsSetup && code === 'following') return null;
-    if (needsSetup && code === 'brief') {
-      return (
-        <section key="setup" className="home-panel home-module home-module-setup" aria-label="Make this page yours">
-          <SetupCard hasFollows={false} briefOn={false} hasPins={layout?.pinnedPlaces != null} />
-        </section>
-      );
-    }
+  const shows = (code: HomeModuleCode) => modules.includes(code);
+
+  /** One titled panel. Customize adds a way to hide it. */
+  const panel = (code: HomeModuleCode, body: React.ReactNode, options: { id?: string; title?: string; aside?: React.ReactNode; className?: string } = {}) => {
     const def = HOME_MODULES.find((module) => module.code === code)!;
     const link = MODULE_LINKS[code];
     return (
-      <section key={code} className={`home-panel home-module home-module-${code}`} aria-label={def.title}>
-        <div className="home-section-title">
-          <h2>{def.title}</h2>
-          <span>
+      <section key={code} id={options.id} className={`hx-panel hx-panel-${code}${options.className ? ` ${options.className}` : ''}`} aria-label={options.title || def.title}>
+        <div className="hx-panel-head">
+          <h2>{options.title || def.title}</h2>
+          <span className="hx-panel-tools">
+            {options.aside}
             {link && <Link href={link.href}>{link.label}</Link>}
             {customizing && canSave && (
-              <>
-                {link && ' · '}
-                <button type="button" className="home-link-button" onClick={() => setModule(code, false)}>Hide</button>
-              </>
+              <button type="button" className="home-link-button" onClick={() => setModule(code, false)}>Hide</button>
             )}
           </span>
         </div>
-        {code === 'needs-you' && <NeedsYouBoard items={needsYou?.items ?? null} reviews={needsYou?.reviews} />}
-        {code === 'agents' && <AgentsAtWork refreshKey={runsStarted} mine={narrowed} />}
-        {code === 'brief' &&
-          (briefProblem ? <div className="home-empty">{briefProblem}</div> : brief ? <BriefView brief={brief} /> : <div className="home-empty">Loading your brief…</div>)}
-        {code === 'places' && <PlacesModule places={pinned} customizing={customizing && canSave} onUnpin={(key) => setPin(key, false)} />}
-        {code === 'following' && <FollowingModule follows={follows} problem={followsProblem} />}
-        {code === 'data-health' && <DataHealthModule />}
+        {body}
       </section>
     );
   };
 
+  const scopeSwitch = universe?.hasAny ? (
+    <span className="hx-scope" role="group" aria-label="What this page shows" title={narrowed ? `Reviews and runs for ${universeLabel(universe)}, and anything assigned to you.` : 'Every review and run you can see.'}>
+      <button type="button" className={`hx-scope-option${narrowed ? ' is-on' : ''}`} aria-pressed={narrowed} onClick={() => chooseScope('mine')}>
+        My records
+      </button>
+      <button type="button" className={`hx-scope-option${narrowed ? '' : ' is-on'}`} aria-pressed={!narrowed} onClick={() => chooseScope('all')}>
+        Everything
+      </button>
+    </span>
+  ) : null;
+
+  const railModules = (['agents', 'following', 'data-health'] as const).filter((code) => shows(code) && !(needsSetup && code === 'following'));
+  const mainModules = (['needs-you', 'brief'] as const).filter((code) => shows(code) && !(needsSetup && code === 'brief'));
+  const waitingCount = allGroups?.length ?? 0;
+
   return (
-    <div className="view-fade home">
-      <header className="home-hero home-hero-row">
-        <div className="home-hero-text">
-          <p className="home-date">{now?.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) || ' '}</p>
-          <h1 className="home-title">{now ? greeting(now, me?.displayName) : ' '}</h1>
-          <p className="home-headline">{summary ? headline(summary) : 'Checking what is waiting on you…'}</p>
-          {firstStep && (
-            <Link href={firstStep.href} className="btn btn-primary home-next">
-              {firstStep.kind === 'review' ? 'Start reviewing' : firstStep.lane === 'decide' ? 'Open' : 'Look at'}: {firstStep.title} →
-            </Link>
-          )}
+    <div className="view-fade home hx">
+      <header className="hx-hero">
+        <div className="hx-hero-text">
+          <p className="hx-eyebrow">
+            {now?.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }) || ' '}
+            <span aria-hidden> · </span>Your briefing
+          </p>
+          <h1 className="hx-title">
+            {now ? greeting(now, me?.displayName) : ' '}.{' '}
+            <span className="hx-title-lead">
+              {lead ? (
+                <>
+                  {lead.lead}
+                  {lead.start && (
+                    <>
+                      {' '}— start with <em>{lead.start}</em>
+                    </>
+                  )}
+                  .
+                </>
+              ) : (
+                'Getting your briefing ready…'
+              )}
+            </span>
+          </h1>
+          <p className="hx-lede">
+            {summary ? headline(summary) : ''} {agents.board || agents.problem ? agentLine(agents.board) : ''}
+          </p>
+          <div className="hx-hero-actions">
+            {firstStep && (
+              <Link href={firstStep.href} className="btn btn-primary hx-cta">
+                {firstStep.lane === 'decide' ? 'Start reviewing' : 'See what broke'} <span aria-hidden>→</span>
+              </Link>
+            )}
+            {waitingCount > 1 && shows('needs-you') && (
+              <a href="#needs-you" className="btn hx-cta-secondary">
+                See all {waitingCount}
+              </a>
+            )}
+            <button
+              type="button"
+              className={`btn btn-sm hx-customize${customizing ? ' btn-primary' : ''}`}
+              onClick={() => setCustomizing((value) => !value)}
+              aria-expanded={customizing}
+              disabled={!layout}
+            >
+              {customizing ? 'Done' : 'Customize'}
+            </button>
+          </div>
         </div>
-        <button
-          type="button"
-          className={`btn btn-sm${customizing ? ' btn-primary' : ''}`}
-          onClick={() => setCustomizing((value) => !value)}
-          aria-expanded={customizing}
-          disabled={!layout}
-        >
-          {customizing ? 'Done' : 'Customize'}
-        </button>
+        {shows('needs-you') && <FocusTiles summary={summary} showExceptions={role === 'data-ops'} />}
       </header>
 
       {customizing && layout && (
@@ -326,33 +376,17 @@ export function HomeView({ user, places }: { user: HomeUser; places: HomePlace[]
 
       <HomeComposer summary={summary} onStarted={() => setRunsStarted((count) => count + 1)} />
 
-      {universe?.hasAny && (
-        <div className="home-scope" role="group" aria-label="What this page shows">
-          <div className="home-scope-switch">
-            <button type="button" className={`home-scope-option${narrowed ? ' is-on' : ''}`} aria-pressed={narrowed} onClick={() => chooseScope('mine')}>
-              My records
-            </button>
-            <button type="button" className={`home-scope-option${narrowed ? '' : ' is-on'}`} aria-pressed={!narrowed} onClick={() => chooseScope('all')}>
-              Everything
-            </button>
-          </div>
-          <span className="home-muted">
-            {narrowed
-              ? `Showing reviews and runs for ${universeLabel(universe)}, and anything assigned to you.`
-              : 'Showing every review and run you can see.'}
-            {narrowed && needsYou && needsYou.hiddenReviews > 0 && (
-              <>
-                {' '}
-                <button type="button" className="home-link-button" onClick={() => chooseScope('all')}>
-                  {needsYou.hiddenReviews} other review{needsYou.hiddenReviews === 1 ? '' : 's'} hidden
-                </button>
-              </>
+      {shows('places') && (
+        <section className="hx-jump" aria-label="Jump back in">
+          <div className="hx-section-label">
+            <h2>Jump back in</h2>
+            {customizing && canSave && (
+              <button type="button" className="home-link-button" onClick={() => setModule('places', false)}>Hide</button>
             )}
-          </span>
-        </div>
+          </div>
+          <PlacesModule places={pinned} customizing={customizing && canSave} onUnpin={(key) => setPin(key, false)} />
+        </section>
       )}
-
-      {modules.includes('needs-you') && <FocusTiles summary={summary} showExceptions={role === 'data-ops'} />}
 
       {!layout ? (
         <div className="home-empty">Loading your home page…</div>
@@ -362,7 +396,53 @@ export function HomeView({ user, places }: { user: HomeUser; places: HomePlace[]
           <button type="button" className="home-link-button" onClick={() => setCustomizing(true)}>Customize</button> to bring some back.
         </div>
       ) : (
-        <div className="home-modules">{modules.map(renderModule)}</div>
+        <div className={`hx-grid${mainModules.length === 0 && !needsSetup ? ' is-single' : ''}${railModules.length === 0 ? ' is-single' : ''}`}>
+          {(mainModules.length > 0 || needsSetup) && (
+            <div className="hx-main">
+              {shows('needs-you') &&
+                panel(
+                  'needs-you',
+                  <NeedsYouQueue
+                    items={needsYou?.items ?? null}
+                    reviews={needsYou?.reviews}
+                    hiddenReviews={narrowed ? needsYou?.hiddenReviews ?? 0 : 0}
+                    onShowEverything={() => chooseScope('all')}
+                  />,
+                  { id: 'needs-you', aside: scopeSwitch },
+                )}
+              {/* An empty brief and an empty follow list are one setup checklist, where the brief would be. */}
+              {needsSetup && (
+                <section className="hx-panel hx-panel-setup" aria-label="Make this page yours">
+                  <SetupCard hasFollows={false} briefOn={false} hasPins={layout?.pinnedPlaces != null} />
+                </section>
+              )}
+              {mainModules.includes('brief') &&
+                panel(
+                  'brief',
+                  briefProblem ? <div className="home-empty">{briefProblem}</div> : brief ? <BriefView brief={brief} /> : <div className="home-empty">Loading your brief…</div>,
+                )}
+            </div>
+          )}
+          {railModules.length > 0 && (
+            <aside className="hx-rail" aria-label="Around you">
+              {railModules.map((code) => {
+                if (code === 'agents') {
+                  const live = (agents.board?.running ?? 0) > 0;
+                  return panel(code, <AgentsAtWork board={agents.board} problem={agents.problem} mine={narrowed} />, {
+                    aside: (
+                      <span className={`hx-live${live ? ' is-live' : ''}`}>
+                        <span className="hx-dot" aria-hidden />
+                        {live ? `${agents.board?.running} running` : agents.board?.waiting ? `${agents.board.waiting} paused for review` : 'idle'}
+                      </span>
+                    ),
+                  });
+                }
+                if (code === 'following') return panel(code, <FollowingModule follows={follows} problem={followsProblem} />);
+                return panel(code, <DataHealthModule />);
+              })}
+            </aside>
+          )}
+        </div>
       )}
     </div>
   );

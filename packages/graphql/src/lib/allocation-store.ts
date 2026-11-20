@@ -52,6 +52,32 @@ export interface AllocationDraft {
   clientId: string | null;
   facts: AllocationFacts;
   faces: Record<string, TrancheFace>;
+  /** Where each fund stands on each rule the deal's securities would worsen. */
+  capacities: CapacityReading[];
+}
+
+/**
+ * One fund's standing on one compliance rule and group that this deal would
+ * worsen, read from the booked book (hypothetical positions left out). The
+ * deal surface shows the current figure, the room and the pro forma figure
+ * from this without writing positions.
+ */
+export interface CapacityReading {
+  fundId: string;
+  ruleCode: string;
+  ruleName: string;
+  groupValue: string | null;
+  /** The deal's tranches this rule counts. */
+  trancheIds: string[];
+  /** The amount this fund can add before the rule's hard limit, in dollars. */
+  room: number;
+  numerator: number | null;
+  denominator: number | null;
+  hardLimit: number | null;
+  softLimit: number | null;
+  resultUnit: string | null;
+  /** The new position also enters the denominator (a share of the fund's own book). */
+  denominatorGrows: boolean;
 }
 
 export interface LoadedTranche {
@@ -102,6 +128,7 @@ export interface AllocationPreview extends AllocationResult {
   dealName: string;
   facts: AllocationFacts;
   adjustments: AllocationAdjustment[];
+  capacities: CapacityReading[];
 }
 
 type ValueRow = {
@@ -335,10 +362,10 @@ export async function loadAllocationDraft(
     || left.name.localeCompare(right.name)
   ));
 
+  const everyInstrument = [...new Set(tranches.map((tranche) => tranche.instrumentType))];
   const sleeve = (id: string, parentAllowed: string[]): AllocationSleeve | null => {
     const row = funds.find((fund) => fund.id === id);
     if (!row) return null;
-    const ownAllowed = list(read(values, id, def('FUND_ALLOWED_INSTRUMENT_TYPES')));
     return {
       id,
       name: row.entity_name,
@@ -347,8 +374,8 @@ export async function loadAllocationDraft(
       undrawn: numeric(read(values, id, def('FUND_UNDRAWN_COMMITMENTS'))) || 0,
       line: numeric(read(values, id, def('FUND_CREDIT_LINE_HEADROOM'))) || 0,
       reserve: numeric(read(values, id, def('FUND_PIPELINE_RESERVE'))) || 0,
-      allowed: ownAllowed.length ? ownAllowed : parentAllowed,
-      denyNote: text(read(values, id, def('FUND_MANDATE_NOTE'))),
+      allowed: parentAllowed,
+      denyNote: '',
     };
   };
 
@@ -359,7 +386,10 @@ export async function loadAllocationDraft(
     if (!allocationEligible(fund.id)) continue;
     const parentId = parentOf.get(fund.id);
     if (parentId && allocationEligible(parentId)) continue;
-    const allowed = list(read(values, fund.id, def('FUND_ALLOWED_INSTRUMENT_TYPES')));
+    // Which instruments a fund may hold is a compliance rule (Permitted instrument
+    // types, a 0 limit on the instrument), applied through its capacity. No list
+    // on the fund decides it.
+    const allowed = everyInstrument;
     const issuerLimit = numeric(read(values, fund.id, def('FUND_SINGLE_ISSUER_LIMIT_PCT')));
     const childIds = (childrenOf.get(fund.id) || []).filter((id) => allocationEligible(id));
     const sleeves = childIds.map((id) => sleeve(id, allowed)).filter((item): item is AllocationSleeve => Boolean(item));
@@ -379,12 +409,19 @@ export async function loadAllocationDraft(
       sponsorExposure: 0,
       unfundedExposure: 0,
       allowed,
-      denyNote: text(read(values, fund.id, def('FUND_MANDATE_NOTE'))),
+      denyNote: '',
       sleeves,
     });
   }
   portfolios.sort((left, right) => right.nav - left.nav || left.name.localeCompare(right.name));
-  await attachComplianceCapacity(supabase, portfolios, loadedTranches, deal.entity_code, asOf);
+  const capacities = await attachComplianceCapacity(
+    supabase,
+    portfolios,
+    loadedTranches,
+    new Set(tranches.filter((tranche) => tranche.unfunded).map((tranche) => tranche.id)),
+    deal.entity_code,
+    asOf,
+  );
 
   const positions: LoadedPosition[] = [];
   const storedAdjustments: AllocationAdjustment[] = [];
@@ -472,6 +509,7 @@ export async function loadAllocationDraft(
       closeDate: text(read(values, dealId, def('DEAL_TARGET_CLOSE_DATE'))),
     },
     faces,
+    capacities,
   };
 }
 
@@ -482,6 +520,20 @@ interface CapacityRow {
   rule_name: string;
   capacity: number | string | null;
   group_value: string | null;
+  /** What the rule sums. A rule on unfunded or funded amounts covers only those tranches. */
+  numerator_code?: string | null;
+  numerator?: number | string | null;
+  denominator?: number | string | null;
+  hard_limit?: number | string | null;
+  soft_limit?: number | string | null;
+  result_unit?: string | null;
+  denominator_grows?: boolean | null;
+}
+
+function numberOrNull(value: number | string | null | undefined): number | null {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /**
@@ -492,9 +544,10 @@ async function attachComplianceCapacity(
   supabase: SupabaseClient,
   portfolios: AllocationPortfolio[],
   tranches: LoadedTranche[],
+  unfundedTranches: ReadonlySet<string>,
   dealCode: string,
   asOf: string,
-) {
+): Promise<CapacityReading[]> {
   const fundIds = [
     ...portfolios.map((portfolio) => portfolio.id),
     ...portfolios.flatMap((portfolio) => portfolio.sleeves.map((sleeve) => sleeve.id)),
@@ -515,7 +568,7 @@ async function attachComplianceCapacity(
   };
   if (!fundIds.length || !securityIds.length) {
     empty();
-    return;
+    return [];
   }
   const { data, error } = await supabase.schema('compliance').rpc('fund_security_capacities', {
     p_fund_ids: fundIds,
@@ -526,11 +579,18 @@ async function attachComplianceCapacity(
   });
   if (error) throw new Error(error.message);
   const rows = (data || []) as CapacityRow[];
+  // Tranches of one security share it, but a rule on unfunded commitments is not
+  // worsened by the funded tranche, and a rule on funded par not by the unfunded one.
+  const trancheScope = (row: CapacityRow) => (tranchesForSecurity.get(row.security_id) || []).filter((trancheId) => {
+    if (row.numerator_code === 'UNFUNDED_COMMITMENT_AMOUNT') return unfundedTranches.has(trancheId);
+    if (row.numerator_code === 'FUNDED_PAR_AMOUNT') return !unfundedTranches.has(trancheId);
+    return true;
+  });
   const poolsFor = (fundId: string): AllocationCapacityPool[] => {
     const grouped = new Map<string, AllocationCapacityPool>();
     for (const row of rows) {
       if (row.fund_id !== fundId) continue;
-      const trancheIds = tranchesForSecurity.get(row.security_id) || [];
+      const trancheIds = trancheScope(row);
       if (!trancheIds.length) continue;
       const capacity = Number(row.capacity);
       if (!Number.isFinite(capacity)) continue;
@@ -541,6 +601,8 @@ async function attachComplianceCapacity(
           trancheIds: [...trancheIds],
           capacity,
           ruleName: row.rule_name || row.rule_code,
+          hardLimit: numberOrNull(row.hard_limit),
+          groupValue: row.group_value && row.group_value !== '__ALL__' && row.group_value !== row.rule_code ? row.group_value : null,
         });
       } else {
         existing.capacity = Math.min(existing.capacity, capacity);
@@ -555,6 +617,37 @@ async function attachComplianceCapacity(
     portfolio.capacityPools = poolsFor(portfolio.id);
     for (const sleeve of portfolio.sleeves) sleeve.capacityPools = poolsFor(sleeve.id);
   }
+
+  // One reading per fund, rule and group. Securities in one group share its room.
+  const readings = new Map<string, CapacityReading>();
+  for (const row of rows) {
+    const trancheIds = trancheScope(row);
+    const room = Number(row.capacity);
+    if (!trancheIds.length || !Number.isFinite(room)) continue;
+    const key = `${row.fund_id}|${row.rule_code}|${row.group_value ?? ''}`;
+    const existing = readings.get(key);
+    if (existing) {
+      existing.room = Math.min(existing.room, room);
+      for (const trancheId of trancheIds) if (!existing.trancheIds.includes(trancheId)) existing.trancheIds.push(trancheId);
+      continue;
+    }
+    const group = row.group_value && row.group_value !== '__ALL__' && row.group_value !== row.rule_code ? row.group_value : null;
+    readings.set(key, {
+      fundId: row.fund_id,
+      ruleCode: row.rule_code,
+      ruleName: row.rule_name || row.rule_code,
+      groupValue: group,
+      trancheIds: [...trancheIds],
+      room,
+      numerator: numberOrNull(row.numerator),
+      denominator: numberOrNull(row.denominator),
+      hardLimit: numberOrNull(row.hard_limit),
+      softLimit: numberOrNull(row.soft_limit),
+      resultUnit: row.result_unit || null,
+      denominatorGrows: Boolean(row.denominator_grows),
+    });
+  }
+  return [...readings.values()];
 }
 
 export function previewFromDraft(draft: AllocationDraft): AllocationPreview {
@@ -593,6 +686,7 @@ export function previewFromDraft(draft: AllocationDraft): AllocationPreview {
     facts: draft.facts,
     ...draft.facts,
     adjustments: draft.request.adjustments || [],
+    capacities: draft.capacities,
   };
 }
 
@@ -630,22 +724,136 @@ async function sourceId(supabase: SupabaseClient, code: string): Promise<string>
   return data.id;
 }
 
-async function writeValue(
-  supabase: SupabaseClient,
-  input: {
-    entityId: string;
-    attributeId: string;
-    sourceId: string;
-    text: string;
-    numeric: number | null;
-    boolean: boolean | null;
-    asOf: string;
-    userId: string | null;
-    precedence: number;
-    manual: boolean;
-    reason: string | null;
-  },
-) {
+interface WriteInput {
+  entityId: string;
+  attributeId: string;
+  sourceId: string;
+  text: string;
+  numeric: number | null;
+  boolean: boolean | null;
+  asOf: string;
+  userId: string | null;
+  precedence: number;
+  manual: boolean;
+  reason: string | null;
+}
+
+interface OpenValue {
+  entity_id: string;
+  attribute_id: string;
+  source_id: string;
+  golden_value: string | null;
+  golden_value_numeric: number | string | null;
+  golden_value_boolean: boolean | null;
+  valid_from: string | null;
+  valid_to: string | null;
+  is_manual_override: boolean | null;
+  override_reason: string | null;
+}
+
+function ledgerKey(entityId: string, attributeId: string, sourceId: string): string {
+  return `${entityId}|${attributeId}|${sourceId}`;
+}
+
+function sameNumber(left: number | string | null | undefined, right: number | null): boolean {
+  if (left == null || left === '') return right == null;
+  if (right == null) return false;
+  return Math.abs(Number(left) - right) < 1e-6;
+}
+
+/**
+ * The open values of the allocation positions, read once. A write that would
+ * store the value already there is skipped, and a close with nothing open is
+ * not sent. Scoring an unchanged allocation then writes nothing.
+ */
+class PositionLedger {
+  private open = new Map<string, OpenValue[]>();
+  private known = new Set<string>();
+
+  constructor(private supabase: SupabaseClient) {}
+
+  async preload(entityIds: string[], sourceIds: string[]) {
+    const ids = [...new Set(entityIds)];
+    for (let index = 0; index < ids.length; index += 100) {
+      const slice = ids.slice(index, index + 100);
+      const { data, error } = await this.supabase
+        .from('entity_attribute_values')
+        .select('entity_id, attribute_id, source_id, golden_value, golden_value_numeric, golden_value_boolean, valid_from, valid_to, is_manual_override, override_reason')
+        .in('entity_id', slice)
+        .in('source_id', sourceIds)
+        .eq('system_to', OPEN_SYSTEM);
+      if (error) throw new Error(error.message);
+      for (const id of slice) this.known.add(id);
+      for (const row of (data || []) as OpenValue[]) {
+        const key = ledgerKey(row.entity_id, row.attribute_id, row.source_id);
+        const list = this.open.get(key) || [];
+        list.push(row);
+        this.open.set(key, list);
+      }
+    }
+  }
+
+  private unchanged(input: WriteInput): boolean {
+    if (!this.known.has(input.entityId)) return false;
+    const rows = this.open.get(ledgerKey(input.entityId, input.attributeId, input.sourceId)) || [];
+    if (rows.length !== 1) return false;
+    const row = rows[0];
+    const from = (row.valid_from || '').slice(0, 10);
+    const to = (row.valid_to || '').slice(0, 10);
+    return (row.golden_value ?? '') === input.text
+      && sameNumber(row.golden_value_numeric, input.numeric)
+      && (row.golden_value_boolean ?? null) === input.boolean
+      && Boolean(row.is_manual_override) === input.manual
+      && (row.override_reason || null) === (input.reason || null)
+      && Boolean(from) && from <= input.asOf
+      && (!to || to > input.asOf);
+  }
+
+  async write(input: WriteInput) {
+    if (this.unchanged(input)) return;
+    await writeValue(this.supabase, input);
+    if (this.known.has(input.entityId)) {
+      this.open.set(ledgerKey(input.entityId, input.attributeId, input.sourceId), [{
+        entity_id: input.entityId,
+        attribute_id: input.attributeId,
+        source_id: input.sourceId,
+        golden_value: input.text,
+        golden_value_numeric: input.numeric,
+        golden_value_boolean: input.boolean,
+        valid_from: input.asOf,
+        valid_to: null,
+        is_manual_override: input.manual,
+        override_reason: input.reason,
+      }]);
+    }
+  }
+
+  async close(entityId: string, attributeId: string, sourceId: string, asOf: string) {
+    const key = ledgerKey(entityId, attributeId, sourceId);
+    if (this.known.has(entityId) && !(this.open.get(key) || []).length) return;
+    await closeValue(this.supabase, entityId, attributeId, sourceId, asOf);
+    if (this.known.has(entityId)) this.open.delete(key);
+  }
+
+  knows(entityId: string): boolean {
+    return this.known.has(entityId);
+  }
+}
+
+/** Runs the tasks with at most `limit` in flight, and rejects on the first failure. */
+async function inParallel<T>(items: T[], limit: number, task: (item: T) => Promise<void>) {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next];
+      next += 1;
+      await task(item);
+    }
+  });
+  await Promise.all(workers);
+}
+
+async function writeValue(supabase: SupabaseClient, input: WriteInput) {
   const { error: closeError } = await supabase
     .from('entity_attribute_values')
     .update({ valid_to: input.asOf, system_to: new Date().toISOString() })
@@ -692,24 +900,62 @@ export async function commitAllocation(
   supabase: SupabaseClient,
   draft: AllocationDraft,
   userId: string | null,
-  options?: { proposalsOnly?: boolean },
+  options?: {
+    proposalsOnly?: boolean;
+    /**
+     * Write the sleeve amounts as positions of their own under this scenario code,
+     * for a Hypo run. The saved allocation is not touched: its positions carry the
+     * deal code, and these carry the Hypo code, so neither reads the other.
+     */
+    scenarioCode?: string;
+  },
 ): Promise<AllocationPreview> {
   const preview = previewFromDraft(draft);
-  const defs = await attributeDefs(supabase);
-  const engine = await sourceId(supabase, 'ALLOCATION_ENGINE');
-  const manual = await sourceId(supabase, 'MANUAL');
-  const { data: template, error: templateError } = await supabase
-    .from('domain_templates')
-    .select('id')
-    .eq('template_code', 'POSITION_STANDARD')
-    .maybeSingle();
+  const hypo = options?.scenarioCode || null;
+  const proposalsOnly = Boolean(options?.proposalsOnly || hypo);
+  const [defs, engine, manual, templateRead, relationshipRead] = await Promise.all([
+    attributeDefs(supabase),
+    sourceId(supabase, 'ALLOCATION_ENGINE'),
+    sourceId(supabase, 'MANUAL'),
+    supabase.from('domain_templates').select('id').eq('template_code', 'POSITION_STANDARD').maybeSingle(),
+    supabase
+      .from('relationship_types')
+      .select('relationship_code, relationship_name')
+      .in('relationship_code', ['POSITION_FUND', 'POSITION_SECURITY', 'POSITION_TRANCHE']),
+  ]);
+  const { data: template, error: templateError } = templateRead;
   if (templateError) throw new Error(templateError.message);
-
-  const { data: relationshipTypes, error: relationshipError } = await supabase
-    .from('relationship_types')
-    .select('relationship_code, relationship_name')
-    .in('relationship_code', ['POSITION_FUND', 'POSITION_SECURITY', 'POSITION_TRANCHE']);
+  const { data: relationshipTypes, error: relationshipError } = relationshipRead;
   if (relationshipError) throw new Error(relationshipError.message);
+  const trancheById = new Map(draft.tranches.map((tranche) => [tranche.id, tranche]));
+  const positionCode = (fundId: string, trancheId: string, suffix: string) => (
+    `ALLOC-${slug(trancheById.get(trancheId)?.code || trancheId).slice(0, 28)}-${fundId.replace(/-/g, '').slice(0, 12)}-${suffix}`
+  );
+  const parents = new Set(preview.rows.map((row) => row.parentFundId).filter((id): id is string => !!id));
+
+  // A Hypo run keeps one position per sleeve and tranche, found by its code.
+  const existing = new Map<string, string>();
+  if (hypo) {
+    const codes = new Map<string, string>();
+    for (const row of preview.rows) {
+      if (parents.has(row.fundId)) continue;
+      for (const cell of row.cells) codes.set(positionCode(row.fundId, cell.trancheId, 'H'), `${row.fundId}|${cell.trancheId}|PROPOSAL`);
+    }
+    const list = [...codes.keys()];
+    for (let index = 0; index < list.length; index += 100) {
+      const { data, error } = await supabase
+        .from('master_entities')
+        .select('id, entity_code')
+        .in('entity_code', list.slice(index, index + 100));
+      if (error) throw new Error(error.message);
+      for (const row of data || []) existing.set(codes.get(row.entity_code)!, row.id);
+    }
+  } else {
+    for (const position of draft.positions) existing.set(`${position.fundId}|${position.trancheId}|${position.role}`, position.id);
+  }
+
+  const ledger = new PositionLedger(supabase);
+  await ledger.preload([...existing.values()], [engine, manual]);
   const relationshipName = new Map((relationshipTypes || []).map((row) => [row.relationship_code, row.relationship_name]));
 
   const requireDef = (code: string) => {
@@ -743,7 +989,7 @@ export async function commitAllocation(
     reason: string | null,
   ) => {
     const def = requireDef(code);
-    await writeValue(supabase, {
+    await ledger.write({
       entityId,
       attributeId: def.id,
       sourceId: source,
@@ -758,31 +1004,29 @@ export async function commitAllocation(
     });
   };
 
-  if (!options?.proposalsOnly) {
+  if (!proposalsOnly) {
     for (const tranche of preview.tranches) {
       await put(tranche.id, 'TRANCHE_HOLD_PCT', String(tranche.holdPct), tranche.holdPct, null, manual, true, 'Allocation hold');
     }
   }
 
-  const trancheById = new Map(draft.tranches.map((tranche) => [tranche.id, tranche]));
-  const existing = new Map(draft.positions.map((position) => [`${position.fundId}|${position.trancheId}|${position.role}`, position]));
   const written = new Set<string>();
 
   const ensurePosition = async (fundId: string, fundName: string, trancheId: string, role: 'PROPOSAL' | 'LOCK') => {
     const key = `${fundId}|${trancheId}|${role}`;
     const found = existing.get(key);
     if (found) {
-      written.add(found.id);
-      return found.id;
+      written.add(found);
+      return found;
     }
     const tranche = trancheById.get(trancheId);
-    const code = `ALLOC-${slug(tranche?.code || trancheId).slice(0, 28)}-${fundId.replace(/-/g, '').slice(0, 12)}-${role === 'LOCK' ? 'L' : 'P'}`;
+    const code = positionCode(fundId, trancheId, hypo ? 'H' : role === 'LOCK' ? 'L' : 'P');
     const { data: created, error } = await supabase.from('master_entities').upsert({
       entity_code: code,
       entity_name: `${draft.dealName}: ${fundName}`,
       domain_code: 'POSITION',
       template_id: template?.id ?? null,
-      description: role === 'LOCK' ? 'Portfolio allocation lock' : 'Proposed allocation',
+      description: hypo ? 'Hypo allocation for a compliance test' : role === 'LOCK' ? 'Portfolio allocation lock' : 'Proposed allocation',
       client_id: draft.clientId,
       created_by: userId,
     }, { onConflict: 'entity_code' }).select('id').single();
@@ -804,29 +1048,36 @@ export async function commitAllocation(
       if (linkError && linkError.code !== '23505' && !/duplicate key/.test(linkError.message || '')) throw new Error(linkError.message);
     }
     written.add(created.id);
+    // An upsert on an existing code returns a position that may hold values, so only a
+    // position this draft did not know is read as empty.
+    if (!ledger.knows(created.id)) await ledger.preload([created.id], [engine, manual]);
     return created.id as string;
   };
 
   // Saved amounts are re-written as the proposal, not stamped as manual overrides.
-  const adjustments = (draft.request.adjustments || []).filter((item) => !item.saved);
+  // A Hypo position holds the final amount on the engine source alone.
+  const adjustments = hypo ? [] : (draft.request.adjustments || []).filter((item) => !item.saved);
   const adjustmentFor = (fundId: string, trancheId: string) => (
     adjustments.find((item) => item.fundId === fundId && (item.trancheId === trancheId || item.trancheId === '*')) || null
   );
 
-  const parents = new Set(preview.rows.map((row) => row.parentFundId).filter((id): id is string => !!id));
-  for (const row of preview.rows) {
-    for (const cell of row.cells) {
+  const cells = preview.rows.flatMap((row) => row.cells.map((cell) => ({ row, cell })));
+  // Each cell writes its own position, so cells run side by side. Writes inside one
+  // position stay in order, because the manual value must follow the engine value.
+  await inParallel(cells, 8, async ({ row, cell }) => {
+    {
       const adjustment = adjustmentFor(row.fundId, cell.trancheId);
       // A parent total is the sum of its sleeves. Writing it again would double count
       // once the compliance rule rolls child funds into the parent.
-      if (options?.proposalsOnly && parents.has(row.fundId)) continue;
-      const role = options?.proposalsOnly ? 'PROPOSAL' : (row.level === 'PORTFOLIO' ? 'LOCK' : 'PROPOSAL');
-      if (role === 'LOCK' && !adjustment) continue;
-      if (role === 'PROPOSAL' && !cell.eligible && cell.amount === 0 && !adjustment) continue;
+      if (proposalsOnly && parents.has(row.fundId)) return;
+      const role = proposalsOnly ? 'PROPOSAL' : (row.level === 'PORTFOLIO' ? 'LOCK' : 'PROPOSAL');
+      if (role === 'LOCK' && !adjustment) return;
+      // A Hypo position is written even at zero, so an amount from an earlier run does not linger.
+      if (!hypo && role === 'PROPOSAL' && !cell.eligible && cell.amount === 0 && !adjustment) return;
       const positionId = await ensurePosition(row.fundId, row.fundName, cell.trancheId, role);
       const amount = cell.amount;
       await maybePut(positionId, 'POSITION_IS_HYPOTHETICAL', 'true', null, true, engine, false, null);
-      await maybePut(positionId, 'POSITION_SCENARIO_CODE', draft.dealCode, null, null, engine, false, null);
+      await maybePut(positionId, 'POSITION_SCENARIO_CODE', hypo || draft.dealCode, null, null, engine, false, null);
       await maybePut(positionId, 'POSITION_ALLOCATION_ROLE', role, null, null, engine, false, null);
       await maybePut(positionId, 'POSITION_ALLOCATION_SYSTEM_AMOUNT', String(cell.systemAmount), cell.systemAmount, null, engine, false, null);
       await put(positionId, 'MARKET_VALUE', String(amount), amount, null, engine, false, null);
@@ -842,17 +1093,18 @@ export async function commitAllocation(
         if (reason) await put(positionId, 'POSITION_ALLOCATION_REASON', reason, null, null, manual, true, reason);
         if (adjustment.note) await put(positionId, 'POSITION_ALLOCATION_NOTE', adjustment.note, null, null, manual, true, reason || null);
       } else {
-        await closeValue(supabase, positionId, requireDef('POSITION_ALLOCATION_ADJUSTMENT').id, manual, draft.asOf);
-        await closeValue(supabase, positionId, requireDef('MARKET_VALUE').id, manual, draft.asOf);
+        await ledger.close(positionId, requireDef('POSITION_ALLOCATION_ADJUSTMENT').id, manual, draft.asOf);
+        await ledger.close(positionId, requireDef('MARKET_VALUE').id, manual, draft.asOf);
       }
     }
-  }
+  });
 
-  for (const position of draft.positions) {
-    if (written.has(position.id)) continue;
-    if (options?.proposalsOnly && position.role === 'LOCK') continue;
+  const stale = hypo ? [] : draft.positions.filter((position) => (
+    !written.has(position.id) && !(proposalsOnly && position.role === 'LOCK')
+  ));
+  await inParallel(stale, 8, async (position) => {
     await put(position.id, 'MARKET_VALUE', '0', 0, null, engine, false, null);
-  }
+  });
 
   return preview;
 }

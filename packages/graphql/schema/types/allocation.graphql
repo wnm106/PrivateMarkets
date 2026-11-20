@@ -98,7 +98,29 @@ type AllocationPreview {
   tranches: [AllocationTrancheResult!]!
   rows: [AllocationRow!]!
   adjustments: [AllocationAdjustmentView!]!
+  # Where each fund stands on each compliance rule this deal would worsen.
+  capacities: [AllocationCapacity!]!
   errors: [MutationError!]!
+}
+
+# One fund's standing on one compliance rule and group that the deal's
+# securities would worsen, read from the booked book (hypothetical positions
+# left out). current is numerator / denominator, or numerator for an amount
+# rule. room is what the fund can add before the hard limit; when
+# denominatorGrows the new position counts in the denominator too.
+type AllocationCapacity {
+  fundId: ID!
+  ruleCode: String!
+  ruleName: String!
+  groupValue: String
+  trancheIds: [ID!]!
+  room: Float!
+  numerator: Float
+  denominator: Float
+  hardLimit: Float
+  softLimit: Float
+  resultUnit: String
+  denominatorGrows: Boolean!
 }
 
 type IcMemoPoint {

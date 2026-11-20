@@ -173,8 +173,21 @@ export function GlobalSearch() {
           {status === 'ready' && hits.length === 0 && <div className="topbar-search-note">No entities match.</div>}
           {rows.map((row) => {
             if (row.kind === 'label') {
+              const href = domainHref(row.domainCode);
               return (
-                <div key={row.label} className="topbar-search-group" role="presentation">{row.label}</div>
+                <Link
+                  key={`group-${row.domainCode}`}
+                  href={href}
+                  className="topbar-search-group"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    router.push(href);
+                    closeSearch();
+                  }}
+                >
+                  {row.label}
+                </Link>
               );
             }
             const captionText = matchCaption(row.hit);
@@ -209,7 +222,7 @@ export function GlobalSearch() {
 }
 
 type SearchRow =
-  | { kind: 'label'; label: string }
+  | { kind: 'label'; label: string; domainCode: string }
   | { kind: 'hit'; hit: SearchHit; index: number };
 
 function groupHits(hits: SearchHit[]): SearchRow[] {
@@ -229,10 +242,11 @@ function groupHits(hits: SearchHit[]): SearchRow[] {
   let last = '';
   let index = 0;
   for (const hit of ordered) {
+    const domainCode = (hit.domainCode || '').toUpperCase();
     const label = hit.domainName || 'Record';
-    if (label !== last) {
-      rows.push({ kind: 'label', label });
-      last = label;
+    if (domainCode !== last) {
+      rows.push({ kind: 'label', label, domainCode });
+      last = domainCode;
     }
     rows.push({ kind: 'hit', hit, index });
     index += 1;

@@ -224,6 +224,19 @@ export const CLEAR_MANUAL_OVERRIDE_MUTATION = `
   }
 `;
 
+export const DELETE_ATTRIBUTE_VERSION_MUTATION = `
+  mutation DeleteAttributeVersion($input: DeleteAttributeVersionInput!) {
+    deleteAttributeVersion(input: $input) {
+      success
+      errors {
+        field
+        message
+        code
+      }
+    }
+  }
+`;
+
 export const DELETE_COMPETING_SOURCE_MUTATION = `
   mutation DeleteCompetingSource($input: DeleteCompetingSourceInput!) {
     deleteCompetingSource(input: $input) {
@@ -285,6 +298,8 @@ export const ATTRIBUTE_REGISTER_QUERY = `
       weightAttributeCode
       numericPrecision
       referenceListCode
+      referenceListLevel
+      controllingAttributeCode
       defaultPrecedenceChain
       clientId
       clientName
@@ -436,14 +451,17 @@ export const DOMAIN_TEMPLATES_QUERY = `
 export const ENTITY_ACTIVITY_QUERY = `
   query EntityActivity($entityId: ID!, $knowledgeDate: DateTime, $attributeCode: String, $limit: Int) {
     entityActivity(entityId: $entityId, knowledgeDate: $knowledgeDate, attributeCode: $attributeCode, limit: $limit) {
+      id
       attributeCode
       attributeName
       value
       updatedAt
       updatedBy
       sourceName
+      sourceCode
       validFrom
       validTo
+      current
     }
   }
 `;
@@ -2710,6 +2728,8 @@ export const REFERENCE_LIST_DETAIL_QUERY = `
         displayOrder
         isActive
         synonyms
+        parentValueCode
+        level
       }
       createdAt
       updatedAt

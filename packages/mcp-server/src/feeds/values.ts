@@ -3,6 +3,26 @@ export interface ListValueRow {
   value_code: string;
   value_label: string;
   synonyms: string[] | null;
+  /** Depth in a tree list. Null for flat lists. */
+  level?: number | null;
+  /** Code of the value this one sits under, in a tree list. */
+  parent_code?: string | null;
+}
+
+/** The key a list is indexed under for one level of a tree list. */
+export function listLevelKey(listCode: string, level: number | null | undefined): string {
+  return level ? `${listCode}#${level}` : listCode;
+}
+
+/** Each list's parent code for every value code. */
+export function indexListParents(rows: ListValueRow[]): Map<string, Map<string, string | null>> {
+  const parents = new Map<string, Map<string, string | null>>();
+  for (const row of rows) {
+    if (row.level == null && !row.parent_code) continue;
+    if (!parents.has(row.list_code)) parents.set(row.list_code, new Map());
+    parents.get(row.list_code)!.set(row.value_code, row.parent_code ?? null);
+  }
+  return parents;
 }
 
 export interface NormalizedValue {
@@ -36,11 +56,16 @@ export function indexReferenceLists(rows: ListValueRow[]): Map<string, Map<strin
       canonicalCode: row.value_code,
       canonicalLabel: row.value_label,
     };
-    for (const synonym of row.synonyms || []) {
-      put(row.list_code, synonym, { ...canonical, matchType: 'synonym' }, rankOf.synonym);
+    // A tree list is also indexed by level: "Energy" is both a GICS sector and an
+    // industry group, and a field on one level must match within that level.
+    const keys = row.level ? [row.list_code, listLevelKey(row.list_code, row.level)] : [row.list_code];
+    for (const listKey of keys) {
+      for (const synonym of row.synonyms || []) {
+        put(listKey, synonym, { ...canonical, matchType: 'synonym' }, rankOf.synonym);
+      }
+      put(listKey, row.value_label, { ...canonical, matchType: 'exact_label' }, rankOf.exact_label);
+      put(listKey, row.value_code, { ...canonical, matchType: 'exact_code' }, rankOf.exact_code);
     }
-    put(row.list_code, row.value_label, { ...canonical, matchType: 'exact_label' }, rankOf.exact_label);
-    put(row.list_code, row.value_code, { ...canonical, matchType: 'exact_code' }, rankOf.exact_code);
   }
 
   const result = new Map<string, Map<string, NormalizedValue>>();

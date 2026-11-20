@@ -1,9 +1,10 @@
 'use client';
 
 import Image from 'next/image';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { sendGeminiMessage, ChatMessage, ChatContext } from '@/lib/gemini';
-import { markdownToHtml } from '@/lib/markdown';
+import { followInternalLink, markdownToHtml } from '@/lib/markdown';
 import { CHAT_VOICES, readStoredChatVoice } from '@/lib/chat-voice';
 import { useTemporalStore } from '@/lib/store';
 import {
@@ -102,6 +103,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const chatVoice = useTemporalStore((state) => state.chatVoice);
   const setChatVoice = useTemporalStore((state) => state.setChatVoice);
 
+  const router = useRouter();
   const [messages, setMessages] = useState<PanelMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -725,6 +727,8 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
       {/* Messages */}
       <div
         className={`chat-messages ${dragActive ? 'drag-active' : ''}`}
+        // A citation or record link in an answer opens in the app; the chat stays open.
+        onClick={(e) => followInternalLink(e, (href) => router.push(href))}
         onDragOver={(e) => {
           e.preventDefault();
           setDragActive(true);

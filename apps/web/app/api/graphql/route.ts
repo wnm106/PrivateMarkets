@@ -2,7 +2,46 @@ import { createYoga } from 'graphql-yoga';
 import { createClient } from '@supabase/supabase-js';
 import { schema } from '@tapestrai/graphql';
 import { NextRequest } from 'next/server';
+import { accessTokenFromCookieHeader, supabaseProjectRef } from '@/lib/auth-token';
 // GraphQL route.
+
+const CAPACITY_EXAMPLE = `# Investment capacity for one security in one fund.
+# Fill in the variables below, then press Run.
+query InvestmentCapacity($fund: ID!, $security: String, $asOf: Date!) {
+  investmentCapacity(anchorEntityId: $fund, securityCode: $security, asOfDate: $asOf) {
+    capacityPar
+    bindingRuleCode
+    bindingGroup
+    lines {
+      ruleCode
+      ruleName
+      groupByValue
+      baselineValue
+      limitValue
+      nativeHeadroom
+      capacityPar
+      binding
+    }
+    errors { message code }
+  }
+}
+`;
+
+// GraphiQL at GET /api/graphql, in development only. It fills the
+// Authorization header from the signed-in session cookie, so queries run as
+// that user under Row Level Security. Production serves no explorer.
+function graphiqlOptions(request: Request) {
+  if (process.env.NODE_ENV === 'production') return false;
+  const token = accessTokenFromCookieHeader(request.headers.get('cookie') || '', supabaseProjectRef());
+  const headers = JSON.stringify(token ? { Authorization: `Bearer ${token}` } : {}, null, 2);
+  return {
+    title: 'TapestrAI GraphQL',
+    defaultQuery: CAPACITY_EXAMPLE,
+    headers,
+    defaultHeaders: headers,
+    shouldPersistHeaders: false,
+  };
+}
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -12,6 +51,7 @@ const yoga = createYoga({
   schema,
   graphqlEndpoint: '/api/graphql',
   landingPage: false,
+  graphiql: graphiqlOptions,
   maskedErrors: false,
   cors: {
     origin: '*',

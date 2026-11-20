@@ -2,6 +2,7 @@ import { Context } from '../context';
 import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePosition, storedRuleLabel } from '../lib/attribute-sequence';
 import { knowledgeCutoff, loadOnReadValues, mergeOnReadLineage } from '../lib/on-read-values';
 import { dirtyAttributeCodes } from './calculation';
+import { planSourceVersion, planVersionDelete } from '../lib/source-version';
 
 const OPEN_SYSTEM_TO = '9999-12-31 23:59:59';
 
@@ -51,6 +52,64 @@ async function attachAttributeSources(context: Context, rows: any[]) {
       source_name: source?.source_name,
     };
   }).filter((row) => row.attribute_code && row.source_code);
+}
+
+/** A stored version written again over new valid dates, as a fresh system-time row. */
+function versionCopy(current: any, validFrom: string, validTo: string, now: string, userId: string | null | undefined) {
+  return {
+    entity_id: current.entity_id,
+    attribute_id: current.attribute_id,
+    source_id: current.source_id,
+    golden_value: current.golden_value,
+    golden_value_jsonb: current.golden_value_jsonb,
+    golden_value_numeric: current.golden_value_numeric,
+    golden_value_date: current.golden_value_date,
+    golden_value_timestamp: current.golden_value_timestamp,
+    golden_value_boolean: current.golden_value_boolean,
+    valid_from: validFrom,
+    valid_to: validTo,
+    system_from: now,
+    system_to: OPEN_SYSTEM_TO,
+    precedence_rank: current.precedence_rank,
+    confidence_score: current.confidence_score,
+    is_manual_override: current.is_manual_override,
+    override_reason: current.override_reason,
+    metadata: current.metadata,
+    last_received_at: current.last_received_at,
+    created_by: userId ?? current.created_by,
+  };
+}
+
+/**
+ * Removes one current version. The same source's version that ends the day before it runs on
+ * over the removed days, so the prior value resumes. Both changes are new system-time rows, so a
+ * knowledge date before now still sees what was there.
+ */
+async function removeVersion(context: Context, current: any, now: string) {
+  const { data: siblings, error: siblingError } = await context.supabase
+    .from('entity_attribute_values')
+    .select('*')
+    .eq('entity_id', current.entity_id)
+    .eq('attribute_id', current.attribute_id)
+    .eq('source_id', current.source_id)
+    .eq('system_to', OPEN_SYSTEM_TO);
+  if (siblingError) throw siblingError;
+
+  const plan = planVersionDelete(siblings || [], current);
+  const closing = [current.id, ...(plan.extend ? [plan.extend.id] : [])];
+  const { error: closeError } = await context.supabase
+    .from('entity_attribute_values')
+    .update({ system_to: now })
+    .in('id', closing);
+  if (closeError) throw closeError;
+
+  if (plan.extend) {
+    const { error: insertError } = await context.supabase
+      .from('entity_attribute_values')
+      .insert(versionCopy(plan.extend, dateOnly(plan.extend.valid_from), plan.extendTo, now, context.user?.id));
+    if (insertError) throw insertError;
+  }
+  return plan;
 }
 
 export const lineageResolvers = {
@@ -133,7 +192,7 @@ export const lineageResolvers = {
       const limit = Math.min(Math.max(args.limit ?? 40, 1), 100);
       let query = context.supabase
         .from('entity_attribute_values')
-        .select('attribute_id, source_id, golden_value, system_from, created_by, valid_from, valid_to')
+        .select('id, attribute_id, source_id, golden_value, system_from, system_to, created_by, valid_from, valid_to')
         .eq('entity_id', args.entityId);
       if (args.attributeCode) {
         const { data: attributes, error: attributeError } = await context.supabase
@@ -167,14 +226,19 @@ export const lineageResolvers = {
 
       return rows
         .map((row) => ({
+          id: row.id,
           attributeCode: row.attribute_code,
           attributeName: row.attribute_name || row.attribute_code,
           value: row.golden_value,
           updatedAt: row.system_from,
           updatedBy: (row.created_by && names.get(row.created_by)) || (row.created_by ? 'Unknown user' : 'System'),
           sourceName: row.source_name || null,
+          sourceCode: row.source_code || null,
           validFrom: dateOnly(row.valid_from),
           validTo: dateOnly(row.valid_to),
+          current: knownAt
+            ? new Date(row.system_to).getTime() > new Date(knownAt).getTime()
+            : String(row.system_to).startsWith('9999'),
         }))
         .sort((a, b) => {
           const byTime = String(b.updatedAt).localeCompare(String(a.updatedAt));
@@ -371,19 +435,32 @@ export const lineageResolvers = {
         if (sourceLookupError || !sourceRow) throw sourceLookupError || new Error('Source not found');
 
         // A new value for this source versions that source only. Other sources stay current.
-        const { error: expireError } = await context.supabase
+        // Close the rows it replaces in system time and write their earlier days again, so a
+        // future-dated change leaves today's value in place. A value already scheduled later stays.
+        const { data: currentRows, error: currentError } = await context.supabase
           .from('entity_attribute_values')
-          .update({
-            valid_to: validFrom,
-            system_to: now,
-          })
+          .select('*')
           .eq('entity_id', input.entityId)
           .eq('attribute_id', attrDef.id)
           .eq('source_id', sourceRow.id)
-          .eq('valid_to', '9999-12-31')
-          .eq('system_to', '9999-12-31 23:59:59');
+          .gte('valid_to', validFrom)
+          .eq('system_to', OPEN_SYSTEM_TO);
+        if (currentError) throw currentError;
 
-        if (expireError) throw expireError;
+        const plan = planSourceVersion(currentRows || [], validFrom);
+        for (const current of plan.close) {
+          const { error: closeError } = await context.supabase
+            .from('entity_attribute_values')
+            .update({ system_to: now })
+            .eq('id', current.id);
+          if (closeError) throw closeError;
+        }
+        for (const { row: current, validTo } of plan.keepBefore) {
+          const { error: sliceError } = await context.supabase
+            .from('entity_attribute_values')
+            .insert(versionCopy(current, dateOnly(current.valid_from), validTo, now, current.created_by));
+          if (sliceError) throw sliceError;
+        }
 
         const { data, error } = await context.supabase
           .from('entity_attribute_values')
@@ -393,9 +470,9 @@ export const lineageResolvers = {
             source_id: sourceRow.id,
             golden_value: input.value,
             valid_from: validFrom,
-            valid_to: '9999-12-31',
+            valid_to: plan.newValidTo,
             system_from: now,
-            system_to: '9999-12-31 23:59:59',
+            system_to: OPEN_SYSTEM_TO,
             precedence_rank: sourceRow.precedence_rank ?? attrDef.default_precedence_rank,
             is_manual_override: sourceRow.source_code === 'MANUAL',
             created_by: userId,
@@ -439,6 +516,13 @@ export const lineageResolvers = {
         if (currentError) throw currentError;
         if (!current) throw new Error('No current source value covers that as-of date');
 
+        // A value that starts on this date is removed outright, and the source's prior value resumes.
+        if (dateOnly(current.valid_from) >= asOf) {
+          await removeVersion(context, current, now);
+          await refreshEntityCalculations(context, input.entityId);
+          return { success: true, errors: [] };
+        }
+
         // Close what we believe right now. A knowledge date before this moment still sees the value.
         const { error: closeError } = await context.supabase
           .from('entity_attribute_values')
@@ -451,28 +535,9 @@ export const lineageResolvers = {
         if (started < asOf) {
           const ended = dayBefore(asOf);
           if (ended >= started) {
-            const { error: insertError } = await context.supabase.from('entity_attribute_values').insert({
-              entity_id: current.entity_id,
-              attribute_id: current.attribute_id,
-              source_id: current.source_id,
-              golden_value: current.golden_value,
-              golden_value_jsonb: current.golden_value_jsonb,
-              golden_value_numeric: current.golden_value_numeric,
-              golden_value_date: current.golden_value_date,
-              golden_value_timestamp: current.golden_value_timestamp,
-              golden_value_boolean: current.golden_value_boolean,
-              valid_from: started,
-              valid_to: ended,
-              system_from: now,
-              system_to: OPEN_SYSTEM_TO,
-              precedence_rank: current.precedence_rank,
-              confidence_score: current.confidence_score,
-              is_manual_override: current.is_manual_override,
-              override_reason: current.override_reason,
-              metadata: current.metadata,
-              last_received_at: current.last_received_at,
-              created_by: context.user?.id,
-            });
+            const { error: insertError } = await context.supabase
+              .from('entity_attribute_values')
+              .insert(versionCopy(current, started, ended, now, context.user?.id));
             if (insertError) throw insertError;
           }
         }
@@ -482,6 +547,27 @@ export const lineageResolvers = {
         return { success: true, errors: [] };
       } catch (error: any) {
         return { success: false, errors: [{ field: '', message: error.message, code: 'DELETE_SOURCE_FAILED' }] };
+      }
+    },
+
+    deleteAttributeVersion: async (_: any, args: { input: { entityId: string; versionId: string } }, context: Context) => {
+      const now = new Date().toISOString();
+      try {
+        const { data: current, error: currentError } = await context.supabase
+          .from('entity_attribute_values')
+          .select('*')
+          .eq('id', args.input.versionId)
+          .eq('entity_id', args.input.entityId)
+          .eq('system_to', OPEN_SYSTEM_TO)
+          .maybeSingle();
+        if (currentError) throw currentError;
+        if (!current) throw new Error('That version was already replaced or deleted. Reload the timeline.');
+
+        await removeVersion(context, current, now);
+        await refreshEntityCalculations(context, args.input.entityId);
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        return { success: false, errors: [{ field: '', message: error.message, code: 'DELETE_VERSION_FAILED' }] };
       }
     },
 

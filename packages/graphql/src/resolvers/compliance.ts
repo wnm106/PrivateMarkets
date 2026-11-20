@@ -1,7 +1,6 @@
 import { Context } from '../context';
 import { ComplianceEngine, getComplianceEngine } from '../lib/compliance-engine';
-import { commitAllocation, loadAllocationDraft, type AllocationHold } from '../lib/allocation-store';
-import type { AllocationAdjustment } from '../lib/allocation-engine';
+import { runDealHypo, type DealScoreArgs } from '../lib/deal-hypo';
 import {
   matchPopulationEntity,
   targetsAlongPath,
@@ -11,7 +10,6 @@ import {
   conditionExpressionReads,
 } from '../lib/compliance-population';
 import { parseFundBoardResultPayload, selectLatestFundResults } from '../lib/fund-board-results';
-import { DEAL_SURFACE_RULE_CODES, dealSurfaceResults, rulesToScore } from '../lib/deal-compliance';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
 // through `.schema('compliance')` first (same convention as tenancy.ts /
@@ -313,7 +311,8 @@ export const complianceResolvers = {
             hard_limit_value: input.hardLimitValue,
             hard_limit_attribute_code: input.hardLimitAttributeCode,
             soft_limit_factor: input.softLimitFactor,
-            consolidate_descendants: consolidateDescendants ?? false,
+            // A parent fund's limits measure the aggregate, so a new rule rolls its child funds up.
+            consolidate_descendants: consolidateDescendants ?? true,
             default_source_scope: input.defaultSourceScope || 'GOLDEN',
             metadata: input.metadata || {},
             created_by: context.user?.id,
@@ -474,134 +473,43 @@ export const complianceResolvers = {
       }
     },
 
-    scoreDealCompliance: async (_: any, args: { dealId: string; asOfDate?: string | null; holds?: any[] | null; adjustments?: any[] | null }, context: Context) => {
+    scoreDealCompliance: async (_: any, args: DealScoreArgs, context: Context) => {
       try {
-        const holds: AllocationHold[] | null = args.holds
-          ? args.holds.map((item) => ({ trancheId: item.trancheId, holdPct: Number(item.holdPct) }))
-          : null;
-        const adjustments: AllocationAdjustment[] | null = args.adjustments
-          ? args.adjustments.map((item) => ({
-            fundId: item.fundId,
-            trancheId: item.trancheId,
-            type: item.type === 'exclude' ? 'exclude' : 'override',
-            amount: item.amount == null ? undefined : Number(item.amount),
-            reason: item.reasonCode || undefined,
-            note: item.note || undefined,
-          }))
-          : null;
-        // Proposed positions are engine rows, not a user edit. The caller's JWT
-        // cannot insert them under the entity RLS policies, so the sync uses the
-        // service role. The rule itself still runs as the compliance function.
-        const writer = context.supabaseAdmin || context.supabase;
-        const draft = await loadAllocationDraft(writer, args.dealId, args.asOfDate, holds, adjustments);
-        const preview = await commitAllocation(writer, draft, context.user?.id ?? null, { proposalsOnly: true });
-        const fundIds = new Set(preview.rows.map((row) => row.fundId));
-
-        // Pro forma rules are inactive on purpose, so a platform-wide job skips
-        // them. Enrolled rules are the ones with a limit assigned to a fund on
-        // this deal. Reading through the service role keeps a user policy from
-        // hiding an inactive rule.
-        const compliance = writer.schema('compliance');
-        const fundList = [...fundIds];
-        const { data: thresholdRows, error: thresholdError } = fundList.length
-          ? await compliance
-            .from('rule_thresholds')
-            .select('rule_id, entity_id, group_value, rank_from, applies, valid_from, valid_to')
-            .in('entity_id', fundList)
-          : { data: [], error: null };
-        if (thresholdError) throw new Error(thresholdError.message);
-        const enrolledIds = [...new Set((thresholdRows || []).map((row) => row.rule_id))];
-        const { data: surfaceRows, error: surfaceError } = await compliance
-          .from('rules')
-          .select('*')
-          .in('rule_code', [...DEAL_SURFACE_RULE_CODES]);
-        if (surfaceError) throw new Error(surfaceError.message);
-        const { data: enrolledRows, error: enrolledError } = enrolledIds.length
-          ? await compliance.from('rules').select('*').in('id', enrolledIds)
-          : { data: [], error: null };
-        if (enrolledError) throw new Error(enrolledError.message);
-        const ruleById = new Map<string, any>();
-        for (const row of [...(surfaceRows || []), ...(enrolledRows || [])]) ruleById.set(row.id, row);
-        const plans = rulesToScore([...ruleById.values()], thresholdRows || [], fundIds, draft.asOf);
-        if (!plans.length) throw new Error('No compliance rules with limits are assigned to the funds on this deal.');
-        const ruleIds = plans.map((plan) => plan.rule.id);
-        const { data: versionRows, error: versionError } = await compliance
-          .from('rule_versions')
-          .select('*')
-          .in('rule_id', ruleIds)
-          .eq('is_active', true);
-        if (versionError) throw new Error(versionError.message);
-        const versionByRule = new Map<string, any>();
-        for (const version of versionRows || []) {
-          const current = versionByRule.get(version.rule_id);
-          if (!current || version.version_number > current.version_number) versionByRule.set(version.rule_id, version);
-        }
-
-        const engine = getComplianceEngine(writer);
-        const results: any[] = [];
-        const failures: string[] = [];
-        const settled = await Promise.allSettled(plans.map(async (plan) => {
-          const scored = await engine.evaluateRulesForFunds({
-            ruleCode: plan.rule.rule_code,
-            asOfDate: draft.asOf,
-            scenarioCode: draft.dealCode,
-            triggeredBy: context.user?.id,
-            anchorEntityIds: plan.anchorIds,
-            // The anchor list is already the set of funds with a limit. Pro
-            // forma rules have no enrollment row, and a rank band has no
-            // separate "this test applies" row, so the enrollment skip is off.
-            ignoreEnrollment: plan.ignoreEnrollment,
-          });
-          return scored;
-        }));
-        settled.forEach((outcome, index) => {
-          if (outcome.status === 'fulfilled') {
-            results.push(...outcome.value);
-            return;
-          }
-          const reason = outcome.reason;
-          const message = reason instanceof Error ? reason.message : String(reason);
-          failures.push(`${plans[index].rule.rule_name}: ${message}`);
-        });
-        if (!results.length && failures.length) throw new Error(failures[0]);
-
-        const { data: scenarioAttribute } = await writer
-          .from('attribute_register')
-          .select('id')
-          .eq('attribute_code', 'POSITION_SCENARIO_CODE')
-          .maybeSingle();
-        const { data: scenarioRows } = scenarioAttribute
-          ? await writer
-            .from('entity_attribute_values')
-            .select('entity_id')
-            .eq('attribute_id', scenarioAttribute.id)
-            .eq('golden_value', draft.dealCode)
-            .gte('system_to', new Date().toISOString())
-          : { data: [] };
-        const proposalIds = new Set((scenarioRows || []).map((row) => row.entity_id));
-        const impacted = dealSurfaceResults(results, fundIds, proposalIds);
-
-        return {
-          rules: plans.map(({ rule: row }) => {
-            const version = versionByRule.get(row.id);
-            return {
-              id: row.id,
-              ruleCode: row.rule_code,
-              ruleName: row.rule_name,
-              ruleCategory: row.rule_category,
-              resultUnit: version?.result_unit || null,
-              limitDirection: version?.limit_direction || null,
-              groupByAttributeCode: version?.group_by_attribute_code || null,
-              consolidateDescendants: Boolean(version?.consolidate_descendants),
-              isActive: row.is_active,
-            };
-          }),
-          results: impacted,
-          errors: failures.map((message) => ({ field: 'general', message, code: 'EVALUATE_FAILED' })),
-        };
+        // Scored as a Hypo run, so a score never rewrites the deal's saved allocation.
+        const run = await runDealHypo(context, args, false);
+        return { rules: run.rules, results: run.surfaceResults, errors: run.errors };
       } catch (error: any) {
         console.error('Error scoring deal compliance:', error);
         return { rules: [], results: [], errors: [{ field: 'general', message: error.message, code: 'EVALUATE_FAILED' }] };
+      }
+    },
+
+    runDealHypo: async (_: any, args: DealScoreArgs, context: Context) => {
+      const ranAt = new Date().toISOString();
+      try {
+        const run = await runDealHypo(context, args, true);
+        return {
+          scenarioCode: run.scenarioCode,
+          asOfDate: run.asOfDate,
+          ranAt,
+          rules: run.rules,
+          before: run.before,
+          after: run.after,
+          allocations: run.allocations,
+          errors: run.errors,
+        };
+      } catch (error: any) {
+        console.error('Error running the Hypo compliance test:', error);
+        return {
+          scenarioCode: null,
+          asOfDate: null,
+          ranAt,
+          rules: [],
+          before: [],
+          after: [],
+          allocations: [],
+          errors: [{ field: 'general', message: error.message, code: 'HYPO_FAILED' }],
+        };
       }
     },
   },

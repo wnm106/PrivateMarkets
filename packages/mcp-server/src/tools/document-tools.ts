@@ -19,10 +19,22 @@ function citation(title: string, heading: string | null, clause: string | null, 
   return [title, [heading, clause].filter(Boolean).join(' '), page ? `page ${page}` : null].filter(Boolean).join(', ');
 }
 
+/**
+ * Where a passage sits in the app: the document page opens at that passage.
+ * The chat writes a citation as [citation](href) so the reader can check it.
+ */
+export function passageHref(documentId: string, charStart?: number | null): string {
+  return charStart == null || !Number.isFinite(Number(charStart))
+    ? `/documents/${documentId}`
+    : `/documents/${documentId}?at=${Number(charStart)}`;
+}
+
+const CITE_AS_LINK = ' Write each citation as a markdown link to its href, [citation](href), so the reader can open the passage. Never make up an href.';
+
 const searchDocumentsTool: ToolDefinition = {
   name: 'search_documents',
   description:
-    'Find passages in stored documents (credit agreements, fund agreements, side letters) by meaning and by words. Ask in plain language: "financial covenants", "how is Applicable Margin defined", "what triggers an event of default". Each result has quote, the exact words of the document, and citation, where they sit. Quote the words and give the citation in the answer; do not restate a clause from memory. A table or list may also have description, a sentence written to say what it holds: use it to understand the passage, never quote it as the document. Narrow with entityIds (documents about a record), typeCodes, documentIds, or tags from list_documents (for example "kind:definition" for defined terms, "section:NEGATIVE_COVENANTS" for one template section). All tags given must be on a passage.',
+    'Find passages in stored documents (credit agreements, fund agreements, side letters) by meaning and by words. Ask in plain language: "financial covenants", "how is Applicable Margin defined", "what triggers an event of default". Each result has quote, the exact words of the document, and citation, where they sit. Quote the words and give the citation in the answer; do not restate a clause from memory.' + CITE_AS_LINK + ' A table or list may also have description, a sentence written to say what it holds: use it to understand the passage, never quote it as the document. Narrow with entityIds (documents about a record), typeCodes, documentIds, or tags from list_documents (for example "kind:definition" for defined terms, "section:NEGATIVE_COVENANTS" for one template section). All tags given must be on a passage.',
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -52,6 +64,7 @@ const searchDocumentsTool: ToolDefinition = {
       passages: hits.map((hit) => ({
         quote: hit.text,
         citation: citation(hit.documentTitle, hit.sectionHeading || hit.parentHeading, hit.clause, hit.page),
+        href: passageHref(hit.documentId, hit.charStart),
         ...(hit.summary ? { description: hit.summary } : {}),
         documentId: hit.documentId,
         documentTitle: hit.documentTitle,
@@ -91,6 +104,7 @@ const listDocumentsTool: ToolDefinition = {
       return {
         documentId: document.id,
         title: document.title,
+        href: passageHref(String(document.id)),
         type: document.type_code,
         date: document.document_date,
         status: document.status,
@@ -114,6 +128,7 @@ const listDocumentsTool: ToolDefinition = {
       documents: ((documents.data as Row[] | null) || []).map((document) => ({
         documentId: document.id,
         title: document.title,
+        href: passageHref(String(document.id)),
         type: document.type_code,
         date: document.document_date,
         status: document.status,
@@ -128,7 +143,7 @@ const listDocumentsTool: ToolDefinition = {
 const getDocumentSectionTool: ToolDefinition = {
   name: 'get_document_section',
   description:
-    'The full text of one heading of a document, in order, as passages with their exact words. Use after search_documents or list_documents when a whole section is needed, such as every negative covenant. sectionId comes from those tools. A top heading returns everything under it. Long sections come in pages: pass offset to read on.',
+    'The full text of one heading of a document, in order, as passages with their exact words. Use after search_documents or list_documents when a whole section is needed, such as every negative covenant. sectionId comes from those tools. A top heading returns everything under it. Long sections come in pages: pass offset to read on.' + CITE_AS_LINK,
   category: 'domain-read',
   inputSchema: {
     type: 'object',
@@ -159,6 +174,7 @@ const getDocumentSectionTool: ToolDefinition = {
       passages: rows.slice(0, pageSize).map((row) => ({
         quote: row.text,
         citation: citation(title, (row.locator?.path || []).slice(-1)[0] || section.heading, row.locator?.clause || null, row.locator?.page ?? null),
+        href: passageHref(String(args.documentId), row.char_start ?? null),
         ...(row.summary ? { description: row.summary } : {}),
         kind: row.kind,
       })),

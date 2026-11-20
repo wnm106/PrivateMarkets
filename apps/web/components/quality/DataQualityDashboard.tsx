@@ -708,29 +708,6 @@ export function DataQualityDashboard({
         </div>
       )}
 
-      <header className="da-ribbon">
-        <div className="da-title">
-          <span className="da-chip">{entityId ? 'Record' : fixedDomain ? domainLabel(fixedDomain) : 'Book'}</span>
-          <h1>Data quality</h1>
-          <p>
-            {entityId
-              ? 'Availability, rule results, and how those measures moved for this record.'
-              : fixedDomain
-                ? `Availability, rule results, and how those measures moved across every ${domainLabel(fixedDomain)}.`
-                : 'Availability, rule results, and how those measures moved since the prior date.'}
-          </p>
-        </div>
-        <div className="da-facts">
-          <div className="da-fact big"><span>Availability</span><strong>{loading && !summary ? '—' : formatPercent(summary?.availabilityPercent)}</strong></div>
-          <div className="da-fact"><span>Quality</span><strong>{loading && !summary ? '—' : formatPercent(summary?.qualityPercent)}</strong></div>
-          <div className="da-fact"><span>Failing checks</span><strong>{summary ? summary.failingChecks.toLocaleString() : '—'}</strong></div>
-        </div>
-        <div className="da-holdbox">
-          <div className="da-holdtop"><span>Required values populated</span><b>{loading && !summary ? '—' : formatPercent(summary?.availabilityPercent)}</b></div>
-          <div className="da-bar"><i style={{ width: `${Math.min(100, summary?.availabilityPercent ?? 0)}%` }} /></div>
-          <p>{summary ? `${summary.populatedSlots.toLocaleString()} of ${summary.requiredSlots.toLocaleString()} required values.` : 'Loading required values.'}</p>
-        </div>
-      </header>
       <div className="da-sechead">
         <p>{comparing ? `Comparing ${formatDay(fromDate)} to ${formatDay(toDate)}` : `As of ${formatDay(toDate)}`}</p>
         <div className="page-actions">
@@ -2448,15 +2425,20 @@ function EntityTable({ rows, limit, attributeCode, attributeName, asOf, onDone, 
         {bulkMessage && <span className="dq-sub">{bulkMessage}</span>}
       </div>
       {matching.length === 0 && <div className="dq-empty">No entities match that search.</div>}
+      {shown.length > 0 && (
+        <div className="dq-fix-row dq-fix-head" aria-hidden="true">
+          <span />
+          <span>Entity</span>
+          <span>{attributeName}</span>
+        </div>
+      )}
       {shown.map((entity) => (
-        <div className="dq-case dq-case-row dq-case-pick" key={entity.id}>
-          <label className="dq-pick">
-            <input type="checkbox" checked={selected.has(entity.id)} onChange={() => toggleOne(entity.id)} aria-label={`Select ${entity.entityName}`} />
-            <span>
-              <Link href={entityHref(entity.domainCode, entity.id)}>{entity.entityName}</Link>
-              <span className="dq-sub">{attributeName} is required and blank</span>
-            </span>
-          </label>
+        <div className="dq-fix-row" key={entity.id}>
+          <input type="checkbox" checked={selected.has(entity.id)} onChange={() => toggleOne(entity.id)} aria-label={`Select ${entity.entityName}`} />
+          <span className="dq-fix-name">
+            <Link href={entityHref(entity.domainCode, entity.id)}>{entity.entityName}</Link>
+            <span className="dq-sub">Required and blank</span>
+          </span>
           <ResolveForm
             entityId={entity.id}
             attributeCode={attributeCode}

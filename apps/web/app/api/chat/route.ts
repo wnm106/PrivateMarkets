@@ -190,6 +190,9 @@ async function loadAttachments(
 }
 
 /** House vocabulary. It applies on every page, with or without the screen data. */
+/** How the chat panel renders links and formulas, so answers use forms it can show and route. */
+const LINKS_AND_FORMULAS = `\n\n## Links and formulas\n- Cite a document passage as a markdown link to the href the document tools return: [Credit Agreement, 1.1 Defined Terms, page 18](/documents/...?at=...). Never write an href yourself.\n- Link a record you name when a tool gave you its id and domain code: [Acme Fund III](entity:FUND/<id>). The app opens the record's page. Do not link a record whose id you do not have.\n- Write a formula in LaTeX between $$ and $$ on a line of its own, or between \\( and \\) inside a sentence. Never use a single $ for math: in this app it means money.\n- Headings go no deeper than ###.`;
+
 const DOMAIN_GLOSSARY = `\n\n## House terms\n- A portfolio is a top-level fund. A sub-portfolio is a sleeve of a portfolio, linked to it by FUND_PARENT, and its sub-portfolios sum to it. A fund with no children is its own portfolio.\n- Report allocations, positions, exposure and holdings by portfolio unless the user asks for sub-portfolios or a breakdown. Positions and proposed allocations are stored at the sub-portfolio level, so roll them up to the parent through FUND_PARENT before reporting, and never list a sub-portfolio as if it were a portfolio or add it to its parent's total.\n- When you roll up, you may name the sub-portfolios under each portfolio in a short parenthetical if it helps.`;
 
 const TODAY = () => new Date().toISOString().slice(0, 10);
@@ -359,7 +362,7 @@ export async function POST(request: NextRequest) {
       : null;
 
     const profile = getContextProfile(skill?.toolContext ?? toolContext);
-    let systemInstruction = profile.systemInstruction + chatVoiceInstruction(voice) + DOMAIN_GLOSSARY + screenContextBlock(context);
+    let systemInstruction = profile.systemInstruction + chatVoiceInstruction(voice) + DOMAIN_GLOSSARY + LINKS_AND_FORMULAS + screenContextBlock(context);
 
     // Report designer: give the model the current draft and the query format up front.
     if (profile.name === 'report-designer') {

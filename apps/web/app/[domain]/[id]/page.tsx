@@ -125,6 +125,8 @@ export default function DynamicEntityDetailPage() {
   }, [knowledgeDate]);
 
   useEffect(() => {
+    // A later As Of or Knowledge date replaces this load. Its answers must not land on top.
+    let stale = false;
     const fetchEntity = async () => {
       setLoading(true);
       setError(null);
@@ -135,8 +137,10 @@ export default function DynamicEntityDetailPage() {
       try {
         const { data, error: queryError } = await graphqlQuery<{ entity: EntityData }, { id?: string; entityCode?: string; asOfDate: string; knowledgeDate: string }>(
           ENTITY_QUERY,
-          variables
+          variables,
+          'network-only',
         );
+        if (stale) return;
 
         if (queryError) {
           setError(queryError.message || 'Failed to fetch entity');
@@ -146,8 +150,10 @@ export default function DynamicEntityDetailPage() {
           if (data.entity.id) {
             const lineageResult = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
               FIELD_LINEAGE_QUERY,
-              { entityId: data.entity.id, asOfDate, knowledgeDate }
+              { entityId: data.entity.id, asOfDate, knowledgeDate },
+              'network-only',
             );
+            if (stale) return;
             if (lineageResult.error || !lineageResult.data?.fieldLineage) {
               setLineageData([]);
               setLineageLoaded(false);
@@ -156,6 +162,7 @@ export default function DynamicEntityDetailPage() {
               setLineageLoaded(true);
             }
             await loadActivity(data.entity.id);
+            if (stale) return;
           }
 
           const entityDomainCode = data.entity.domainCode;
@@ -166,6 +173,7 @@ export default function DynamicEntityDetailPage() {
             ATTRIBUTE_REGISTER_QUERY,
             { domainCode: entityDomainCode }
           );
+          if (stale) return;
           if (attrResult.data?.attributeRegister) {
             const mappedAttributes: TemplateAttribute[] = attrResult.data.attributeRegister
               .filter((a) => a.isVisible !== false)
@@ -188,15 +196,16 @@ export default function DynamicEntityDetailPage() {
           setError('Entity not found');
         }
       } catch (err: any) {
-        setError(err.message || 'Unexpected error');
+        if (!stale) setError(err.message || 'Unexpected error');
       } finally {
-        setLoading(false);
+        if (!stale) setLoading(false);
       }
     };
 
     if (id) {
       fetchEntity();
     }
+    return () => { stale = true; };
   }, [id, asOfDate, knowledgeDate, loadActivity]);
 
   const handleRename = async (entityName: string) => {
@@ -258,22 +267,32 @@ export default function DynamicEntityDetailPage() {
     } catch (err) { console.error('Failed to update source:', err); }
   };
 
-  const handleValueChange = async (attributeCode: string, newValue: string) => {
+  // Sends only the fields that changed. The server stores every attribute it is
+  // sent as a new value, so sending the whole record would save each one again.
+  const handleValuesChange = async (changes: Record<string, string>) => {
     if (!entity) throw new Error('Record is still loading');
-    const existingAttr = entity.attributes[attributeCode];
-    const updatedAttributes = {
-      ...entity.attributes,
-      [attributeCode]: { ...(typeof existingAttr === 'object' ? existingAttr : { value: existingAttr }), value: newValue, sourceCode: 'MANUAL' },
-    };
+    const codes = Object.keys(changes);
+    if (codes.length === 0) return;
+    const sent = Object.fromEntries(codes.map((code) => [code, { value: changes[code], sourceCode: 'MANUAL' }]));
     const result = await graphqlMutation<{ updateEntity: { errors: Array<{ message: string }> } }, { input: { id: string; attributes: Record<string, unknown>; asOfDate: string } }>(
       UPDATE_ENTITY_MUTATION,
-      { input: { id: entity.id, attributes: updatedAttributes, asOfDate } },
+      { input: { id: entity.id, attributes: sent, asOfDate } },
     );
     const saveError = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
     if (saveError) throw new Error(saveError);
-    setEntity({ ...entity, attributes: updatedAttributes });
+    setEntity((current) => {
+      if (!current || current.id !== entity.id) return current;
+      const attributes = { ...current.attributes };
+      for (const code of codes) {
+        const existing = attributes[code];
+        attributes[code] = { ...(existing && typeof existing === 'object' ? existing : { value: existing }), value: changes[code], source_code: 'MANUAL' };
+      }
+      return { ...current, attributes };
+    });
     await refreshLineage(entity.id);
   };
+
+  const handleValueChange = (attributeCode: string, newValue: string) => handleValuesChange({ [attributeCode]: newValue });
 
   const handleAddSourceValue = async (attributeCode: string, source: SourceKey, value: string) => {
     if (!entity) throw new Error('Record is still loading');
@@ -474,8 +493,10 @@ export default function DynamicEntityDetailPage() {
             onAddAttribute={handleAddAttribute}
             onSourceChange={handleSourceChange}
             onValueChange={handleValueChange}
+            onValuesChange={handleValuesChange}
             onAddSourceValue={handleAddSourceValue}
             onDeleteSourceValue={handleDeleteSourceValue}
+            onReload={() => (entity?.id ? refreshLineage(entity.id) : undefined)}
             asOfDate={asOfDate}
             lineageLoaded={lineageLoaded}
           />

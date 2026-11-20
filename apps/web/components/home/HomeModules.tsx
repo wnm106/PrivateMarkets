@@ -8,6 +8,7 @@ import { markdownToHtml } from '@/lib/markdown';
 import { cardOrder } from '@/lib/home-decisions';
 import { DecisionCards } from '@/components/home/DecisionCards';
 import {
+  KIND_LABEL,
   groupNeedsYou,
   needsYouItems,
   relativeTime,
@@ -136,7 +137,7 @@ export function useNeedsYou(userId: string | null, follows: HomeFollow[] | null,
 }
 
 // ---------------------------------------------------------------------------
-// Focus tiles: the counts at the top of the page
+// At a glance: the counts beside the briefing
 // ---------------------------------------------------------------------------
 
 interface Tile {
@@ -154,25 +155,33 @@ export function FocusTiles({ summary, showExceptions }: { summary: HomeSummary |
       key: 'reviews',
       label: 'To review',
       value: summary?.reviews ?? 0,
-      sub: summary?.proposedChanges ? `${summary.proposedChanges} proposed changes` : 'Workflow proposals',
-      href: '#home-decide',
+      sub: summary?.proposedChanges ? `${summary.proposedChanges} proposed changes` : 'Agent proposals',
+      href: '#needs-you',
       tone: 'decide',
     },
-    { key: 'files', label: 'Files waiting', value: summary?.filesWaiting ?? 0, sub: 'Need a mapping or a check', href: '#home-decide', tone: 'decide' },
-    { key: 'failures', label: 'Failed', value: summary?.failures ?? 0, sub: 'Runs, jobs, and files', href: '#home-fix', tone: 'fix' },
+    { key: 'files', label: 'Files waiting', value: summary?.filesWaiting ?? 0, sub: 'Need a mapping or a check', href: '#needs-you', tone: 'decide' },
+    { key: 'failures', label: 'Failed', value: summary?.failures ?? 0, sub: 'Runs, jobs and files', href: '#needs-you', tone: 'fix' },
   ];
   if (showExceptions) {
     tiles.push({ key: 'exceptions', label: 'Urgent exceptions', value: summary?.urgentExceptions ?? 0, sub: 'High and critical, open', href: '/quality', tone: 'critical' });
   }
   return (
-    <div className="home-focus" style={{ '--tiles': tiles.length } as React.CSSProperties}>
+    <div className="hx-glance" aria-label="At a glance">
       {tiles.map((tile) => {
         const active = (summary ? tile.value : 0) > 0;
         return (
-          <a key={tile.key} href={tile.href} className={`home-focus-tile tone-${tile.tone}${active ? ' is-active' : ''}`}>
-            <span className="home-focus-label">{tile.label}</span>
-            <span className="home-focus-value">{summary ? tile.value : '—'}</span>
-            <span className="home-focus-sub">{active ? tile.sub : summary ? 'All clear' : ' '}</span>
+          <a key={tile.key} href={tile.href} className={`hx-glance-tile tone-${tile.tone}${active ? ' is-active' : ''}`}>
+            <span className="hx-glance-label">{tile.label}</span>
+            <span className="hx-glance-value">{summary ? tile.value : '—'}</span>
+            <span className="hx-glance-sub">
+              {active ? tile.sub : summary ? (
+                <>
+                  <span className="hx-glance-ok" aria-hidden>✓</span> All clear
+                </>
+              ) : (
+                ' '
+              )}
+            </span>
           </a>
         );
       })}
@@ -181,13 +190,10 @@ export function FocusTiles({ summary, showExceptions }: { summary: HomeSummary |
 }
 
 // ---------------------------------------------------------------------------
-// Needs you: two lanes of grouped rows
+// Needs you: one queue, most urgent first, filtered by Decide or Fix
 // ---------------------------------------------------------------------------
 
-const LANES: Array<{ lane: NeedsYouLane; title: string; hint: string; empty: string }> = [
-  { lane: 'decide', title: 'Decide', hint: 'Proposals and files waiting on your call', empty: 'No decisions waiting.' },
-  { lane: 'fix', title: 'Fix', hint: 'Things that broke and need a hand', empty: 'Nothing is broken.' },
-];
+type QueueFilter = 'all' | NeedsYouLane;
 
 function groupMeta(group: NeedsYouGroup) {
   const parts: string[] = [];
@@ -203,78 +209,65 @@ function groupMeta(group: NeedsYouGroup) {
   return parts.join(' · ');
 }
 
+function tagTone(group: NeedsYouGroup) {
+  if (group.urgency === 'critical') return 'tone-critical';
+  return group.lane === 'decide' ? 'tone-decide' : 'tone-fix';
+}
+
 function GroupRow({ group }: { group: NeedsYouGroup }) {
   const [open, setOpen] = useState(false);
   const latest = group.items[0];
   const detail = group.kind === 'review' ? latest.title : latest.detail;
   return (
-    <li className={`home-group urgency-${group.urgency}`}>
-      <div className="home-group-main">
-        <div className="home-group-text">
-          <div className="home-group-title">{group.title}</div>
-          <div className="home-group-meta">{groupMeta(group)}</div>
-          {detail && <div className="home-group-detail" title={detail}>{detail}</div>}
-        </div>
-        <Link href={group.href} className={`btn btn-sm${group.lane === 'decide' ? ' btn-primary' : ''}`}>{group.action}</Link>
-      </div>
-      {group.count > 1 && (
-        <>
-          <button type="button" className="home-link-button home-group-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-            {open ? 'Hide' : `Show all ${group.count}`}
-          </button>
-          {open && (
-            <ul className="home-group-items">
-              {group.items.map((item) => (
-                <li key={item.id}>
-                  <Link href={item.href}>{item.kind === 'review' ? item.detail : item.detail || item.title}</Link>
-                  <time className="home-muted">{relativeTime(item.at)}</time>
-                </li>
-              ))}
-            </ul>
+    <li className={`hx-row lane-${group.lane} urgency-${group.urgency}`}>
+      <div className="hx-row-main">
+        <div className="hx-row-text">
+          <div className="hx-row-meta">
+            <span className={`hx-tag ${tagTone(group)}`}>{KIND_LABEL[group.kind]}</span>
+            <span>{groupMeta(group)}</span>
+          </div>
+          <div className="hx-row-title">{group.title}</div>
+          {detail && <div className="hx-row-detail" title={detail}>{detail}</div>}
+          {group.count > 1 && (
+            <button type="button" className="home-link-button hx-row-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+              {open ? 'Hide' : `Show all ${group.count}`}
+            </button>
           )}
-        </>
+        </div>
+        <Link href={group.href} className={`btn btn-sm${group.lane === 'decide' || group.urgency === 'critical' ? ' btn-primary' : ''}`}>{group.action}</Link>
+      </div>
+      {open && (
+        <ul className="hx-row-items">
+          {group.items.map((item) => (
+            <li key={item.id}>
+              <Link href={item.href}>{item.kind === 'review' ? item.detail : item.detail || item.title}</Link>
+              <time className="home-muted">{relativeTime(item.at)}</time>
+            </li>
+          ))}
+        </ul>
       )}
     </li>
   );
 }
 
-const LANE_LIMIT = 4;
+const QUEUE_LIMIT = 6;
 
-function Lane({ lane, title, hint, empty, groups }: { lane: NeedsYouLane; title: string; hint: string; empty: string; groups: NeedsYouGroup[] }) {
+/** How many reviews are shown as cards. The rest stay in the list. */
+const CARD_LIMIT = 3;
+
+export function NeedsYouQueue({
+  items,
+  reviews,
+  hiddenReviews = 0,
+  onShowEverything,
+}: {
+  items: NeedsYouItem[] | null;
+  reviews?: ReviewSource[];
+  hiddenReviews?: number;
+  onShowEverything?: () => void;
+}) {
+  const [filter, setFilter] = useState<QueueFilter>('all');
   const [showAll, setShowAll] = useState(false);
-  const shown = showAll ? groups : groups.slice(0, LANE_LIMIT);
-  return (
-    <div className={`home-lane lane-${lane}`} id={`home-${lane}`}>
-      <div className="home-lane-head">
-        <h3>
-          {title}
-          {groups.length > 0 && <span className="home-lane-count">{groups.reduce((sum, group) => sum + group.count, 0)}</span>}
-        </h3>
-        <span className="home-muted">{hint}</span>
-      </div>
-      {groups.length === 0 ? (
-        <div className="home-lane-empty">
-          <span className="home-clear-mark" aria-hidden>✓</span>
-          {empty}
-        </div>
-      ) : (
-        <ul className="home-groups">
-          {shown.map((group) => <GroupRow key={group.key} group={group} />)}
-        </ul>
-      )}
-      {groups.length > LANE_LIMIT && (
-        <button type="button" className="home-link-button" onClick={() => setShowAll((value) => !value)}>
-          {showAll ? 'Show fewer' : `Show ${groups.length - LANE_LIMIT} more`}
-        </button>
-      )}
-    </div>
-  );
-}
-
-/** How many reviews are shown as cards. The rest stay in the Decide lane. */
-const CARD_LIMIT = 4;
-
-export function NeedsYouBoard({ items, reviews }: { items: NeedsYouItem[] | null; reviews?: ReviewSource[] }) {
   const cardIds = useMemo(() => cardOrder(reviews || [], CARD_LIMIT).map((review) => review.id), [reviews]);
   // A review shown as a card is not listed again below. One whose card could not load stays listed.
   const [carded, setCarded] = useState<string[]>([]);
@@ -283,18 +276,74 @@ export function NeedsYouBoard({ items, reviews }: { items: NeedsYouItem[] | null
     const hidden = new Set(carded.map((id) => `review-${id}`));
     return groupNeedsYou(items.filter((item) => !hidden.has(item.id)));
   }, [items, carded]);
+
   if (!items) return <div className="home-empty">Checking what is waiting on you…</div>;
+
+  const count = (lane: NeedsYouLane) =>
+    groups.filter((group) => group.lane === lane).reduce((sum, group) => sum + group.count, 0) + (lane === 'decide' ? carded.length : 0);
+  const filters: Array<{ key: QueueFilter; label: string; count: number }> = [
+    { key: 'all', label: 'All', count: count('decide') + count('fix') },
+    { key: 'decide', label: 'Decide', count: count('decide') },
+    { key: 'fix', label: 'Fix', count: count('fix') },
+  ];
+  const visible = filter === 'all' ? groups : groups.filter((group) => group.lane === filter);
+  const shown = showAll ? visible : visible.slice(0, QUEUE_LIMIT);
+  const empty = filters[0].count === 0;
+
   return (
-    <>
-      <DecisionCards reviewIds={cardIds} onShown={setCarded} />
-      <div className="home-lanes">
-        {LANES.map((lane) => (
-          <Lane key={lane.lane} {...lane} groups={groups.filter((group) => group.lane === lane.lane)} />
-        ))}
+    <div className="hx-queue">
+      {!empty && (
+        <div className="hx-filter" role="group" aria-label="Show">
+          {filters.map((entry) => (
+            <button
+              key={entry.key}
+              type="button"
+              className={`hx-filter-option${filter === entry.key ? ' is-on' : ''}`}
+              aria-pressed={filter === entry.key}
+              onClick={() => setFilter(entry.key)}
+            >
+              {entry.label} <span className="hx-filter-count">{entry.count}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div hidden={filter === 'fix'}>
+        <DecisionCards reviewIds={cardIds} onShown={setCarded} />
       </div>
-    </>
+
+      {empty ? (
+        <div className="hx-clear">
+          <span className="hx-clear-mark" aria-hidden>✓</span>
+          <div>
+            <strong>You’re all caught up.</strong>
+            <p>Nothing is waiting on your decision and nothing is broken. Your agents will bring anything new back here.</p>
+          </div>
+        </div>
+      ) : visible.length === 0 && (filter === 'fix' || carded.length === 0) ? (
+        <p className="hx-quiet hx-queue-empty">{filter === 'fix' ? 'Nothing is broken.' : 'No other decisions waiting.'}</p>
+      ) : (
+        <ul className="hx-rows">
+          {shown.map((group) => <GroupRow key={group.key} group={group} />)}
+        </ul>
+      )}
+
+      {visible.length > QUEUE_LIMIT && (
+        <button type="button" className="home-link-button hx-queue-more" onClick={() => setShowAll((value) => !value)}>
+          {showAll ? 'Show fewer' : `Show ${visible.length - QUEUE_LIMIT} more`}
+        </button>
+      )}
+
+      {hiddenReviews > 0 && onShowEverything && (
+        <div className="hx-queue-note">
+          {hiddenReviews} review{hiddenReviews === 1 ? ' is' : 's are'} on records outside yours.{' '}
+          <button type="button" className="home-link-button" onClick={onShowEverything}>Show everything</button>
+        </div>
+      )}
+    </div>
   );
 }
+
 
 // ---------------------------------------------------------------------------
 // Your brief
@@ -424,15 +473,15 @@ export function PlacesModule({ places, onUnpin, customizing }: { places: HomePla
     return <div className="home-empty">Nothing pinned. Use Customize to pin the surfaces you work in.</div>;
   }
   return (
-    <div className="home-places">
+    <div className="hx-places">
       {places.map((place) => (
-        <div key={place.key} className="home-place">
-          <Link href={place.href} className="home-place-link">
-            <span className="home-place-mark" aria-hidden>{place.title.charAt(0)}</span>
-            <span className="home-place-text">
-              <span className="home-place-title">{place.title}</span>
-              {place.description && <span className="home-place-desc">{place.description}</span>}
+        <div key={place.key} className="hx-place">
+          <Link href={place.href} className="hx-place-link">
+            <span className="hx-place-title">
+              {place.title}
+              <span className="hx-place-arrow" aria-hidden>→</span>
             </span>
+            {place.description && <span className="hx-place-desc">{place.description}</span>}
           </Link>
           {customizing && (
             <button type="button" className="home-place-unpin" onClick={() => onUnpin(place.key)} aria-label={`Unpin ${place.title}`} title="Unpin">

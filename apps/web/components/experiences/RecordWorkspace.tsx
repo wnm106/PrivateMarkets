@@ -14,6 +14,7 @@ import { AllocationBoard } from '@/components/allocation/AllocationBoard';
 import { CovenantTest } from '@/components/covenants/CovenantTest';
 import type { DataQuerySpec, ReportParameter } from '@/lib/reporting';
 import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
+import { RecordValuesProvider } from '@/components/forms/RecordValues';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 import {
   attributeText,
@@ -342,29 +343,28 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
     if (result.data?.entity) remember(result.data.entity);
   };
 
-  const saveAttribute = async (entity: EntityData, attributeCode: string, value: string) => {
+  const saveAttributes = async (entity: EntityData, changes: Record<string, string>) => {
     setSaveError(null);
+    const codes = Object.keys(changes);
+    if (codes.length === 0) return;
     const result = await graphqlMutation<
       { updateEntity: { errors: Array<{ message: string }> } },
       { input: { id: string; attributes: Record<string, string>; asOfDate?: string | null } }
-    >(UPDATE_ENTITY_MUTATION, { input: { id: entity.id, attributes: { [attributeCode]: value }, asOfDate } });
+    >(UPDATE_ENTITY_MUTATION, { input: { id: entity.id, attributes: changes, asOfDate } });
     const message = result.error?.message || result.data?.updateEntity?.errors?.[0]?.message;
     if (message) {
       setSaveError(message);
       return;
     }
-    const existing = entity.attributes?.[attributeCode];
-    remember({
-      ...entity,
-      attributes: {
-        ...entity.attributes,
-        [attributeCode]: {
-          ...(existing && typeof existing === 'object' ? existing : {}),
-          value,
-        },
-      },
-    });
+    const attributes = { ...entity.attributes };
+    for (const code of codes) {
+      const existing = attributes[code];
+      attributes[code] = { ...(existing && typeof existing === 'object' ? existing : {}), value: changes[code] };
+    }
+    remember({ ...entity, attributes });
   };
+
+  const saveAttribute = (entity: EntityData, attributeCode: string, value: string) => saveAttributes(entity, { [attributeCode]: value });
 
   const reloadAnchor = async () => {
     const entity = await loadAnchor();
@@ -524,6 +524,7 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
               asOfDate={asOfDate}
               recordHref={recordHref}
               onSave={saveAttribute}
+              onSaveMany={saveAttributes}
               onReload={reloadEntity}
               onLink={linkRelated}
               onAdd={addRelated}
@@ -548,6 +549,7 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
           asOfDate={asOfDate}
           recordHref={recordHref}
           onSave={saveAttribute}
+          onSaveMany={saveAttributes}
           onReload={reloadEntity}
           onLink={linkRelated}
           onAdd={addRelated}
@@ -555,6 +557,16 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
       )}
     </div>
   );
+}
+
+/** Each field's value on a record, for fields that depend on another. */
+function recordValuesOf(entity: EntityData): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const code of Object.keys(entity.attributes || {})) {
+    const text = attributeText(entity.attributes?.[code]);
+    if (text) values[code] = text;
+  }
+  return values;
 }
 
 function SectionBody({
@@ -566,6 +578,7 @@ function SectionBody({
   asOfDate,
   recordHref,
   onSave,
+  onSaveMany,
   onReload,
   onLink,
   onAdd,
@@ -578,6 +591,7 @@ function SectionBody({
   asOfDate?: string;
   recordHref: (ref: RelatedRef) => string;
   onSave: (entity: EntityData, attributeCode: string, value: string) => Promise<void>;
+  onSaveMany?: (entity: EntityData, changes: Record<string, string>) => Promise<void>;
   onReload: (id: string) => Promise<void>;
   onLink: (section: ExperienceSection, otherId: string) => Promise<void>;
   onAdd: (section: ExperienceSection, name: string) => Promise<void>;
@@ -656,21 +670,28 @@ function SectionBody({
         <LinkPicker section={section} onLink={onLink} onAdd={onAdd} />
       )}
       {section.relationshipCode && refs.length > 0 && !target && <div className="xp-empty">Loading {section.title.toLowerCase()}…</div>}
-      {target && groupFields(fields).map((group) => (
-        <div key={group.section}>
-          <div className="xp-group">{group.section}</div>
-          {group.fields.map((field) => (
-            <AttributeEditor
-              key={field.attributeCode}
-              entity={target}
-              field={field}
-              value={attributeText(target.attributes?.[field.attributeCode])}
-              onSave={(value) => onSave(target, field.attributeCode, value)}
-              onReload={onReload}
-            />
+      {target && (
+        <RecordValuesProvider
+          values={recordValuesOf(target)}
+          saveMany={onSaveMany ? (changes) => onSaveMany(target, changes) : undefined}
+        >
+          {groupFields(fields).map((group) => (
+            <div key={group.section}>
+              <div className="xp-group">{group.section}</div>
+              {group.fields.map((field) => (
+                <AttributeEditor
+                  key={field.attributeCode}
+                  entity={target}
+                  field={field}
+                  value={attributeText(target.attributes?.[field.attributeCode])}
+                  onSave={(value) => onSave(target, field.attributeCode, value)}
+                  onReload={onReload}
+                />
+              ))}
+            </div>
           ))}
-        </div>
-      ))}
+        </RecordValuesProvider>
+      )}
       {target && catalog && fields.length === 0 && <div className="xp-empty">No visible attributes for this entity yet. Add one to the attribute register and it will show up here.</div>}
     </section>
   );
