@@ -47,4 +47,5 @@ export function LivePage({ route }: { route: RouteChatContext }) {
     entityId: route.entityId,
   });
   usePublishPageData(reading?.data ?? { path: pathname, title: route.page });
+  return null;
 }
