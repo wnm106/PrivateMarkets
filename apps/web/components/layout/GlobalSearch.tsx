@@ -1,6 +1,7 @@
 'use client';
 
 import { domainHref } from '@/lib/domain-routes';
+import { entityTypeName } from '@/lib/entity-groups';
 import { graphqlQuery } from '@/lib/graphql';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -173,8 +174,21 @@ export function GlobalSearch() {
           {status === 'ready' && hits.length === 0 && <div className="topbar-search-note">No entities match.</div>}
           {rows.map((row) => {
             if (row.kind === 'label') {
+              const href = domainHref(row.domainCode);
               return (
-                <div key={row.label} className="topbar-search-group" role="presentation">{row.label}</div>
+                <Link
+                  key={`type-${row.domainCode}`}
+                  href={href}
+                  className="topbar-search-group"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    router.push(href);
+                    closeSearch();
+                  }}
+                >
+                  {row.label}
+                </Link>
               );
             }
             const captionText = matchCaption(row.hit);
@@ -209,7 +223,7 @@ export function GlobalSearch() {
 }
 
 type SearchRow =
-  | { kind: 'label'; label: string }
+  | { kind: 'label'; label: string; domainCode: string }
   | { kind: 'hit'; hit: SearchHit; index: number };
 
 function groupHits(hits: SearchHit[]): SearchRow[] {
@@ -222,6 +236,7 @@ function groupHits(hits: SearchHit[]): SearchRow[] {
   const ordered = [...byId.values()].sort((a, b) => (
     a.depth - b.depth
     || a.domainName.localeCompare(b.domainName)
+    || a.domainCode.localeCompare(b.domainCode)
     || a.entityName.localeCompare(b.entityName, undefined, { sensitivity: 'base' })
     || a.id.localeCompare(b.id)
   ));
@@ -229,10 +244,10 @@ function groupHits(hits: SearchHit[]): SearchRow[] {
   let last = '';
   let index = 0;
   for (const hit of ordered) {
-    const label = hit.domainName || 'Record';
-    if (label !== last) {
-      rows.push({ kind: 'label', label });
-      last = label;
+    const code = hit.domainCode || '';
+    if (code !== last) {
+      rows.push({ kind: 'label', label: entityTypeName(code, hit.domainName), domainCode: code });
+      last = code;
     }
     rows.push({ kind: 'hit', hit, index });
     index += 1;

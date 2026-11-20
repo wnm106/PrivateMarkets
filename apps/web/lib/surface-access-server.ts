@@ -1,4 +1,5 @@
 import { supabaseServerClient } from '@/lib/supabase-server';
+import { OPEN_SCOPE, parseModuleScope, moduleAllowsSurface, type ModuleScope } from '@/lib/client-modules';
 import { SURFACES } from '@/lib/surface-registry';
 import { surfaceNavLinks, type SurfaceNavLink } from '@/lib/surface-links';
 
@@ -39,12 +40,29 @@ export async function loadSurfaceUser(): Promise<SurfaceUser | null> {
   };
 }
 
-/** Mounted surfaces this caller may open, for the sidebar. Empty when signed out. */
-export async function loadSurfaceNavLinks(): Promise<SurfaceNavLink[]> {
-  const user = await loadSurfaceUser();
-  if (!user) return [];
-  return surfaceNavLinks(
-    SURFACES.map((entry) => entry.manifest),
-    user,
-  );
+/** Surfaces and tools for this session. A missing function leaves the full catalog in place. */
+export async function loadModuleScope(): Promise<ModuleScope> {
+  const supabase = await supabaseServerClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) return OPEN_SCOPE;
+  const { data, error } = await supabase.schema('tenancy').rpc('module_scope');
+  if (error) return OPEN_SCOPE;
+  return parseModuleScope(data);
+}
+
+export interface AppNav {
+  surfaceLinks: SurfaceNavLink[];
+  /** Null when the session uses the full catalog. */
+  enabledToolHrefs: string[] | null;
+}
+
+/** Mounted surfaces and tools this caller may open. Empty surfaces when signed out. */
+export async function loadAppNav(): Promise<AppNav> {
+  const [user, scope] = await Promise.all([loadSurfaceUser(), loadModuleScope()]);
+  if (!user) return { surfaceLinks: [], enabledToolHrefs: null };
+  const manifests = SURFACES.map((entry) => entry.manifest).filter((manifest) => moduleAllowsSurface(scope, manifest.code));
+  return {
+    surfaceLinks: surfaceNavLinks(manifests, user),
+    enabledToolHrefs: scope.restricted ? [...scope.tools] : null,
+  };
 }

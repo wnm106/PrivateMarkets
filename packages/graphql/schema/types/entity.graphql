@@ -281,6 +281,7 @@ input CreateDomainTypeInput {
   groupCode: String
   parentDomainCode: String
   isCore: Boolean
+  enabledForSearch: Boolean
 }
 
 type CreateDomainTypeResult {
@@ -383,6 +384,7 @@ type DomainTypeRecord {
   clientName: String
   isCore: Boolean!
   displayOrder: Int!
+  enabledForSearch: Boolean!
   parentDomainCode: String
   group: DomainGroup
   ownedAttributeCount: Int!
@@ -407,6 +409,7 @@ input UpdateDomainTypeInput {
   parentDomainCode: String
   isCore: Boolean
   displayOrder: Int
+  enabledForSearch: Boolean
 }
 
 type UpdateDomainTypeResult {

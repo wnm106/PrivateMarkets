@@ -16,20 +16,26 @@ const CODES = [
   'FUND_TOTAL_COMMITMENTS', 'FUND_COMMITMENTS_CLOSED', 'FUND_INVESTMENT_PERIOD_END',
   'FUND_TARGET_CALLED_PCT', 'FUND_GROSS_IRR', 'FUND_FEE_DRAG_PTS', 'FUND_EXPENSE_DRAG_PTS',
   'FUND_CARRY_DRAG_PTS', 'FUND_UNFUNDED_BORROWER_COMMITMENTS', 'FUND_LIQUIDITY_COVERAGE_MIN',
-  'FUND_SECTOR_LIMIT_PCT', 'FUND_ISSUER_LIMIT_PCT',
   'INVESTOR_TYPE', 'COMMITMENT_AMOUNT', 'COMMITMENT_STATUS', 'COMMITMENT_PAST_DUE',
   'ACTIVITY_DATE', 'ACTIVITY_KIND', 'ACTIVITY_AMOUNT', 'ACTIVITY_STATUS', 'ACTIVITY_OUTSTANDING', 'ACTIVITY_NOTICE',
   'STATEMENT_PERIOD_END', 'STATEMENT_PERIOD_LABEL', 'STATEMENT_TOLERANCE_PCT', 'STATEMENT_CERTIFIED',
   'STATEMENT_ACCEPTED_LINES',
   'PLAN_QUARTER_END', 'PLAN_CALLED_PCT', 'PLAN_NAV', 'PLAN_CALL_AMOUNT', 'PLAN_ORDER',
   'FACILITY_COMMITMENT', 'FACILITY_DRAWN', 'FACILITY_BORROWING_BASE', 'FACILITY_MATURITY',
-  'LIMIT_DIMENSION', 'LIMIT_KEY', 'LIMIT_PCT',
   'FORECAST_QUARTER_END', 'FORECAST_ORDER', 'FORECAST_INTEREST', 'FORECAST_REPAYMENTS',
   'FORECAST_NEW_FUNDINGS', 'FORECAST_FEES', 'FORECAST_DISTRIBUTIONS', 'FORECAST_CAPITAL_CALLS', 'FORECAST_FACILITY_PAYDOWN',
   'POSITION_STRATEGY', 'POSITION_COST', 'MARKET_VALUE', 'POSITION_INCOME', 'POSITION_REALIZED_GAIN',
   'POSITION_GROSS_IRR', 'POSITION_MARK', 'POSITION_AGENT_MARK', 'POSITION_COUPON', 'POSITION_LEVERAGE',
   'POSITION_IS_FLOATING', 'POSITION_MARK_RESOLVED', 'POSITION_IS_HYPOTHETICAL', 'SECTOR',
+  'ISSUER_LEGAL_NAME',
 ] as const;
+
+/** Share-of-book tests whose thresholds are the concentration limits. */
+export const EXPOSURE_RULE_CODES = {
+  strategy: 'FUND_STRATEGY_BOOK_PCT',
+  sector: 'FUND_SECTOR_BOOK_PCT',
+  issuer: 'FUND_ISSUER_BOOK_PCT',
+} as const;
 
 const FUND_STRATEGY: Record<string, string> = {
   DIRECT_LENDING: 'Direct lending',
@@ -282,7 +288,28 @@ interface ExposureBar {
   sharePct: number | null;
   limitPct: number | null;
   status: string;
-  limitId: string | null;
+  ruleId: string | null;
+  ruleCode: string | null;
+  thresholdId: string | null;
+}
+
+export interface ExposureThreshold {
+  id: string;
+  entityId: string | null;
+  groupValue: string | null;
+  rankFrom: number | null;
+  rankTo: number | null;
+  soft: number | null;
+  hard: number | null;
+  applies: boolean;
+  validFrom: string;
+  validTo: string;
+}
+
+export interface ExposureLimitPick {
+  limitPct: number | null;
+  softPct: number | null;
+  thresholdId: string | null;
 }
 
 export function asOfDate(value: unknown): string {
@@ -367,11 +394,57 @@ function markStatus(mark: number | null, agent: number | null, resolved: boolean
   return resolved ? 'RESOLVED' : 'REVIEW';
 }
 
-function exposureStatus(share: number | null, limit: number | null): string {
-  if (share == null || limit == null || limit <= 0) return 'OK';
-  const ratio = share / limit;
-  if (ratio >= 1) return 'OVER';
-  if (ratio >= 0.85) return 'NEAR';
+function dayOn(value: string, asOf: string, side: 'from' | 'to'): boolean {
+  const day = (value || (side === 'from' ? '0001-01-01' : '9999-12-31')).slice(0, 10);
+  return side === 'from' ? day <= asOf : day >= asOf;
+}
+
+/**
+ * The limit a compliance rule would use for one group: the fund's own row
+ * before a rule default, a named group before a rank band, and a rank band
+ * before the plain limit. A blank fund row keeps the rule's own numbers.
+ * The returned threshold id is only the fund's row for this exact group,
+ * which is the row an edit of that name should update.
+ */
+export function resolveExposureLimit(
+  rows: ExposureThreshold[],
+  fundId: string,
+  group: string,
+  rank: number,
+  fallback: { soft: number | null; hard: number | null },
+  asOf: string,
+): ExposureLimitPick {
+  const candidates = rows.filter((row) => {
+    if (!dayOn(row.validFrom, asOf, 'from') || !dayOn(row.validTo, asOf, 'to')) return false;
+    if (row.entityId && row.entityId !== fundId) return false;
+    if (row.groupValue && row.groupValue !== group) return false;
+    if (row.rankFrom == null) return true;
+    if (rank < row.rankFrom) return false;
+    return row.rankTo == null || rank <= row.rankTo;
+  });
+  candidates.sort((a, b) => {
+    const entity = (a.entityId === fundId ? 0 : 1) - (b.entityId === fundId ? 0 : 1);
+    if (entity) return entity;
+    const grouped = (a.groupValue ? 0 : 1) - (b.groupValue ? 0 : 1);
+    if (grouped) return grouped;
+    return (a.rankFrom != null ? 0 : 1) - (b.rankFrom != null ? 0 : 1);
+  });
+  const picked = candidates[0];
+  if (!picked || !picked.applies) return { limitPct: null, softPct: null, thresholdId: null };
+  const blank = picked.soft == null && picked.hard == null;
+  const specific = picked.entityId === fundId && picked.groupValue === group && picked.rankFrom == null;
+  return {
+    limitPct: blank ? fallback.hard : picked.hard,
+    softPct: blank ? fallback.soft : picked.soft,
+    thresholdId: specific ? picked.id : null,
+  };
+}
+
+export function exposureStatus(share: number | null, hard: number | null, soft: number | null = null): string {
+  if (share == null || hard == null || hard <= 0) return 'OK';
+  if (share >= hard) return 'OVER';
+  const warn = soft != null && soft > 0 ? soft : hard * 0.85;
+  if (share >= warn) return 'NEAR';
   return 'OK';
 }
 
@@ -427,6 +500,73 @@ export async function links(
   return ((data || []) as Rel[]).filter((row) => inForce(row, asOf, knowledge));
 }
 
+interface ExposureRule {
+  id: string;
+  code: string;
+  fallback: { soft: number | null; hard: number | null };
+  thresholds: ExposureThreshold[];
+}
+
+async function loadExposureRules(
+  supabase: SupabaseClient,
+  fundId: string,
+  asOf: string,
+  knowledge: string,
+): Promise<Map<string, ExposureRule>> {
+  const out = new Map<string, ExposureRule>();
+  const codes = Object.values(EXPOSURE_RULE_CODES);
+  const compliance = supabase.schema('compliance');
+  const { data: rules, error } = await compliance.from('rules').select('id, rule_code').in('rule_code', codes);
+  if (error) throw new Error(error.message);
+  const ids = (rules || []).map((rule) => rule.id as string);
+  if (!ids.length) return out;
+  const { data: versions, error: versionError } = await compliance
+    .from('rule_versions')
+    .select('rule_id, version_number, hard_limit_value, soft_limit_value, valid_from, valid_to, system_from, system_to, is_active')
+    .in('rule_id', ids);
+  if (versionError) throw new Error(versionError.message);
+  const { data: thresholds, error: thresholdError } = await compliance
+    .from('rule_thresholds')
+    .select('id, rule_id, entity_id, group_value, rank_from, rank_to, soft_limit_value, hard_limit_value, applies, valid_from, valid_to')
+    .in('rule_id', ids)
+    .or(`entity_id.is.null,entity_id.eq.${fundId}`);
+  if (thresholdError) throw new Error(thresholdError.message);
+  const known = new Date(knowledge).getTime();
+  for (const rule of rules || []) {
+    const version = (versions || [])
+      .filter((row) => row.rule_id === rule.id && row.is_active !== false)
+      .filter((row) => dayOn(String(row.valid_from || ''), asOf, 'from') && dayOn(String(row.valid_to || ''), asOf, 'to'))
+      .filter((row) => {
+        const from = row.system_from ? new Date(row.system_from).getTime() : 0;
+        const to = row.system_to ? new Date(row.system_to).getTime() : Number.POSITIVE_INFINITY;
+        return from <= known && to >= known;
+      })
+      .sort((a, b) => Number(b.version_number) - Number(a.version_number))[0];
+    const numberOrNull = (value: unknown) => (value == null || value === '' ? null : Number(value));
+    out.set(rule.rule_code, {
+      id: rule.id,
+      code: rule.rule_code,
+      fallback: {
+        hard: numberOrNull(version?.hard_limit_value),
+        soft: numberOrNull(version?.soft_limit_value),
+      },
+      thresholds: (thresholds || []).filter((row) => row.rule_id === rule.id).map((row) => ({
+        id: row.id,
+        entityId: row.entity_id,
+        groupValue: row.group_value,
+        rankFrom: row.rank_from == null ? null : Number(row.rank_from),
+        rankTo: row.rank_to == null ? null : Number(row.rank_to),
+        soft: numberOrNull(row.soft_limit_value),
+        hard: numberOrNull(row.hard_limit_value),
+        applies: row.applies !== false,
+        validFrom: String(row.valid_from || ''),
+        validTo: String(row.valid_to || ''),
+      })),
+    });
+  }
+  return out;
+}
+
 export async function loadEntities(supabase: SupabaseClient, ids: string[]): Promise<EntityRow[]> {
   if (!ids.length) return [];
   const { data, error } = await supabase.from('master_entities').select('id, entity_code, entity_name').in('id', ids);
@@ -458,7 +598,6 @@ export async function loadFundSurface(
   const planRels = await links(supabase, 'PLAN_FUND', 'child_entity_id', [fund.id], ...tie);
   const facilityRels = await links(supabase, 'FACILITY_FUND', 'child_entity_id', [fund.id], ...tie);
   const forecastRels = await links(supabase, 'FORECAST_FUND', 'child_entity_id', [fund.id], ...tie);
-  const limitRels = await links(supabase, 'LIMIT_FUND', 'child_entity_id', [fund.id], ...tie);
   const positionRels = await links(supabase, 'POSITION_FUND', 'child_entity_id', [fund.id], ...tie);
 
   const commitmentIds = commitmentRels.map((row) => row.parent_entity_id);
@@ -467,7 +606,6 @@ export async function loadFundSurface(
   const planIds = planRels.map((row) => row.parent_entity_id);
   const facilityIds = facilityRels.map((row) => row.parent_entity_id);
   const forecastIds = forecastRels.map((row) => row.parent_entity_id);
-  const limitIds = limitRels.map((row) => row.parent_entity_id);
   const positionIds = positionRels.map((row) => row.parent_entity_id);
 
   const investorRels = await links(supabase, 'COMMITMENT_INVESTOR', 'parent_entity_id', commitmentIds, asOf, knowledge);
@@ -483,14 +621,14 @@ export async function loadFundSurface(
 
   const rows = await loadEntities(supabase, [
     ...commitmentIds, ...activityIds, ...statementIds, ...planIds, ...facilityIds,
-    ...forecastIds, ...limitIds, ...positionIds, ...investorIds, ...issuerIds,
+    ...forecastIds, ...positionIds, ...investorIds, ...issuerIds,
   ]);
   const named = new Map(rows.map((row) => [row.id, row]));
 
   const defs = await attributeDefs(supabase);
   const values = await valuesFor(supabase, [
     fund.id, ...commitmentIds, ...activityIds, ...statementIds, ...planIds, ...facilityIds,
-    ...forecastIds, ...limitIds, ...positionIds, ...investorIds, ...issuerIds,
+    ...forecastIds, ...positionIds, ...investorIds, ...issuerIds,
   ], defs, asOf, knowledge);
   const def = (code: string) => defs.get(code);
   const n = (id: string, code: string) => numeric(read(values, id, def(code)));
@@ -511,8 +649,6 @@ export async function loadFundSurface(
   const targetCalledPct = num(n(fund.id, 'FUND_TARGET_CALLED_PCT') ?? 90);
   const unfundedBorrower = num(n(fund.id, 'FUND_UNFUNDED_BORROWER_COMMITMENTS'));
   const liquidityMin = num(n(fund.id, 'FUND_LIQUIDITY_COVERAGE_MIN') ?? 1.25);
-  const sectorLimit = n(fund.id, 'FUND_SECTOR_LIMIT_PCT');
-  const issuerLimit = n(fund.id, 'FUND_ISSUER_LIMIT_PCT');
   const investmentPeriodEnd = t(fund.id, 'FUND_INVESTMENT_PERIOD_END');
   const strategyCode = t(fund.id, 'FUND_STRATEGY');
 
@@ -651,6 +787,7 @@ export async function loadFundSurface(
         strategy: POSITION_STRATEGY[strategy] || strategy || '—',
         sector: t(issuerId, 'SECTOR') || '—',
         issuer: named.get(issuerId)?.entity_name || '—',
+        issuerKey: t(issuerId, 'ISSUER_LEGAL_NAME') || named.get(issuerId)?.entity_name || '—',
         issuerId: issuerId || null,
         cost,
         fairValue,
@@ -682,40 +819,38 @@ export async function loadFundSurface(
     ? live.reduce((sum, item) => sum + item.fairValue * num(item.mark), 0) / investmentsFairValue
     : null;
 
-  const limits = limitIds.map((id) => ({
-    id,
-    dimension: t(id, 'LIMIT_DIMENSION'),
-    key: t(id, 'LIMIT_KEY'),
-    pct: n(id, 'LIMIT_PCT'),
-  }));
-  const limitFor = (dimension: string, key: string) => (
-    limits.find((item) => item.dimension === dimension && item.key === key) || null
-  );
-  const bars = (dimension: 'strategy' | 'sector' | 'issuer', fallback: number | null): ExposureBar[] => {
+  const exposureRules = await loadExposureRules(supabase, fund.id, asOf, knowledge);
+  const bars = (dimension: 'strategy' | 'sector' | 'issuer'): ExposureBar[] => {
+    const rule = exposureRules.get(EXPOSURE_RULE_CODES[dimension]);
     const grouped = new Map<string, { label: string; amount: number }>();
     for (const position of live) {
-      const key = dimension === 'strategy' ? position.strategyCode : dimension === 'sector' ? position.sector : position.issuer;
-      const label = dimension === 'strategy' ? position.strategy : key;
+      const key = dimension === 'strategy' ? position.strategyCode : dimension === 'sector' ? position.sector : position.issuerKey;
+      const label = dimension === 'strategy' ? position.strategy : dimension === 'issuer' ? position.issuer : key;
       const current = grouped.get(key) || { label, amount: 0 };
       current.amount += position.fairValue;
       grouped.set(key, current);
     }
     return [...grouped.entries()]
-      .map(([key, value]) => {
-        const sharePct = investmentsFairValue ? value.amount / investmentsFairValue * 100 : null;
-        const specific = limitFor(dimension.toUpperCase(), key);
-        const limitPct = specific?.pct ?? fallback;
+      .map(([key, value]) => ({
+        key,
+        label: value.label,
+        amount: value.amount,
+        sharePct: investmentsFairValue ? value.amount / investmentsFairValue * 100 : null,
+      }))
+      .sort((a, b) => b.amount - a.amount || a.key.localeCompare(b.key))
+      .map((bar, index) => {
+        const pick = rule
+          ? resolveExposureLimit(rule.thresholds, fund.id, bar.key, index + 1, rule.fallback, asOf)
+          : { limitPct: null, softPct: null, thresholdId: null };
         return {
-          key,
-          label: value.label,
-          amount: value.amount,
-          sharePct,
-          limitPct,
-          status: exposureStatus(sharePct, limitPct),
-          limitId: specific?.id || null,
+          ...bar,
+          limitPct: pick.limitPct,
+          status: exposureStatus(bar.sharePct, pick.limitPct, pick.softPct),
+          ruleId: rule?.id || null,
+          ruleCode: rule?.code || null,
+          thresholdId: pick.thresholdId,
         };
-      })
-      .sort((a, b) => b.amount - a.amount);
+      });
   };
 
   const statementChoices = statementIds.map((id) => ({
@@ -935,15 +1070,15 @@ export async function loadFundSurface(
     })),
     statements,
     marks,
-    positions: positions.map(({ agent: _agent, resolved: _resolved, hypothetical: _hypothetical, code: _code, ...position }) => position),
+    positions: positions.map(({ agent: _agent, resolved: _resolved, hypothetical: _hypothetical, code: _code, issuerKey: _issuerKey, ...position }) => position),
     forecastLabels: forecastComputed.map((item) => item.label),
     forecastRows,
     investors,
     investorTypes,
     exposure: {
-      strategy: bars('strategy', 60),
-      sector: bars('sector', sectorLimit),
-      issuer: bars('issuer', issuerLimit),
+      strategy: bars('strategy'),
+      sector: bars('sector'),
+      issuer: bars('issuer'),
     },
     pacing: {
       calledPct,

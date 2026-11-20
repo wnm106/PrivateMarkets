@@ -451,6 +451,7 @@ export default function DynamicEntityDetailPage() {
         accentColor={domainConfig.color}
         onRename={handleRename}
         mergeHref={`/merge?entity=${entity.id}`}
+        entityId={entity.id}
       />
 
       {(
@@ -484,7 +485,7 @@ export default function DynamicEntityDetailPage() {
         <div>
           <EntityAccessPanel entityId={entity.id} />
           <SourceContributionPanel sources={sourceContributions} />
-          <ActiveConflictsPanel conflicts={conflicts} entityId={id} />
+          <ActiveConflictsPanel conflicts={conflicts} entityId={entity.id} />
           <ActivityFeedPanel activities={activities} />
         </div>
       </div>

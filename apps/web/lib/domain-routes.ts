@@ -28,7 +28,6 @@ const DOMAIN_ROUTES: Record<string, string> = {
   NAV_LINE: 'nav-lines',
   CREDIT_FACILITY: 'credit-facilities',
   CASH_FORECAST: 'cash-forecasts',
-  EXPOSURE_LIMIT: 'exposure-limits',
   PRICE: 'prices',
   POSITION: 'positions',
   CASH_FLOW: 'cash_flows',

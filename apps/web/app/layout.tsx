@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { Inter, IBM_Plex_Mono } from 'next/font/google';
 import { AppChrome } from '@/components/layout/AppChrome';
 import { AuthSync } from '@/components/auth/AuthSync';
-import { loadSurfaceNavLinks } from '@/lib/surface-access-server';
+import { loadAppNav } from '@/lib/surface-access-server';
 import '../styles/globals.css';
 
 // Single UI face: Inter has tabular numerals and stays legible at 11-13px in dense grids.
@@ -30,12 +30,12 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const surfaceLinks = await loadSurfaceNavLinks();
+  const nav = await loadAppNav();
   return (
     <html lang="en" className={`${inter.variable} ${ibmPlexMono.variable}`}>
       <body>
         <AuthSync />
-        <AppChrome surfaceLinks={surfaceLinks}>{children}</AppChrome>
+        <AppChrome surfaceLinks={nav.surfaceLinks} enabledToolHrefs={nav.enabledToolHrefs}>{children}</AppChrome>
       </body>
     </html>
   );

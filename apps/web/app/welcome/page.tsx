@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import type { Metadata } from 'next';
+import { RECORD_CUBE_HTML } from '@/components/welcome/record-cube-html';
 
 export const metadata: Metadata = {
   title: 'tapestr.ai - One source of truth for private markets data',
@@ -66,7 +67,7 @@ const STEPS = [
 const PILLARS = [
   { big: 'Field-level', small: 'lineage on every attribute' },
   { big: 'Bi-temporal', small: 'history, restatements & as-of views' },
-  { big: 'Multi-tenant', small: 'client isolation with role-based access' },
+  { big: 'User-adaptive', small: 'an interface that adapts to each persona and workflow' },
   { big: 'AI-native', small: 'assistant, reports & narratives' },
 ];
 
@@ -255,6 +256,13 @@ export default function WelcomePage() {
               </div>
             ))}
           </div>
+          <iframe
+            title="One record, every dimension: the same record across sources and Front, Middle and Back Office"
+            srcDoc={RECORD_CUBE_HTML}
+            sandbox="allow-scripts"
+            loading="lazy"
+            className="mt-4 mx-auto block w-full max-w-5xl h-[420px] sm:h-[520px] md:h-[600px] border-0 bg-transparent"
+          />
         </div>
       </section>
 

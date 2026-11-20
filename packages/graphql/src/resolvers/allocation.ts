@@ -34,7 +34,15 @@ async function build(
   holdInput: any[] | null | undefined,
   adjustmentInput: any[] | null | undefined,
 ): Promise<AllocationPreview> {
-  const draft = await loadAllocationDraft(context.supabase, dealId, asOfDate, holds(holdInput), adjustments(adjustmentInput));
+  const savedBook = holdInput == null && adjustmentInput == null;
+  const draft = await loadAllocationDraft(
+    context.supabase,
+    dealId,
+    asOfDate,
+    holds(holdInput),
+    adjustments(adjustmentInput),
+    savedBook ? { capacities: false } : undefined,
+  );
   return previewFromDraft(draft);
 }
 

@@ -66,6 +66,7 @@ export const tenancyResolvers = {
 
       const isTenantAdmin = profile?.is_tenant_admin ?? false;
       const access = collectAccess(roleRows, isTenantAdmin);
+      const modules = await moduleCodesByClient(context);
 
       return {
         id: context.user.id,
@@ -74,7 +75,7 @@ export const tenancyResolvers = {
         isTenantAdmin,
         canAccessAdmin: access.canAccessAdmin,
         canManageEntityAccess: access.canManageEntityAccess,
-        clients: (clientUsers || []).map((row: any) => mapClient(row.client)).filter(Boolean),
+        clients: (clientUsers || []).map((row: any) => mapClient(row.client, modules.get(row.client?.id) ?? [])).filter(Boolean),
         impersonating: impersonation
           ? {
               id: impersonation.id,
@@ -88,15 +89,30 @@ export const tenancyResolvers = {
     },
 
     clients: async (_: any, __: any, context: Context) => {
-      const { data, error } = await tn(context).from('clients').select('*').order('client_name');
+      const [{ data, error }, modules] = await Promise.all([
+        tn(context).from('clients').select('*').order('client_name'),
+        moduleCodesByClient(context),
+      ]);
       if (error) throw error;
-      return (data || []).map(mapClient);
+      return (data || []).map((row: any) => mapClient(row, modules.get(row.id) ?? []));
     },
 
     client: async (_: any, args: { id: string }, context: Context) => {
-      const { data, error } = await tn(context).from('clients').select('*').eq('id', args.id).maybeSingle();
+      const [{ data, error }, modules] = await Promise.all([
+        tn(context).from('clients').select('*').eq('id', args.id).maybeSingle(),
+        moduleCodesByClient(context),
+      ]);
       if (error) throw error;
-      return data ? mapClient(data) : null;
+      return data ? mapClient(data, modules.get(data.id) ?? []) : null;
+    },
+
+    clientModuleCatalog: async (_: any, __: any, context: Context) => {
+      const { data, error } = await tn(context)
+        .from('module_catalog')
+        .select('module_code, module_name, description, display_order, domain_codes, surface_codes, workflow_codes, tool_hrefs')
+        .order('display_order');
+      if (error) throw error;
+      return (data || []).map(mapModule);
     },
 
     clientUsers: async (_: any, args: { clientId: string }, context: Context) => {
@@ -216,15 +232,37 @@ export const tenancyResolvers = {
   Mutation: {
     createClient: async (_: any, args: { input: any }, context: Context) => {
       try {
-        const { error } = await tn(context).rpc('provision_client', {
+        const { data: clientId, error } = await tn(context).rpc('provision_client', {
           p_client_code: args.input.clientCode,
           p_client_name: args.input.clientName,
           p_admin_user_id: null,
         });
         if (error) throw error;
+        if (args.input.curatedModules) {
+          const { error: moduleError } = await tn(context).rpc('set_client_modules', {
+            p_client_id: clientId,
+            p_curated: true,
+            p_module_codes: args.input.moduleCodes ?? [],
+          });
+          if (moduleError) throw moduleError;
+        }
         return { success: true, errors: [] };
       } catch (error: any) {
         return { success: false, errors: [{ field: 'general', message: error.message, code: 'CREATE_FAILED' }] };
+      }
+    },
+
+    setClientModules: async (_: any, args: { clientId: string; curated: boolean; moduleCodes: string[] }, context: Context) => {
+      try {
+        const { error } = await tn(context).rpc('set_client_modules', {
+          p_client_id: args.clientId,
+          p_curated: args.curated,
+          p_module_codes: args.moduleCodes ?? [],
+        });
+        if (error) throw error;
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        return { success: false, errors: [{ field: 'general', message: error.message, code: 'MODULES_FAILED' }] };
       }
     },
 
@@ -646,7 +684,7 @@ function mapIdentityProvider(row: any) {
   };
 }
 
-function mapClient(row: any) {
+function mapClient(row: any, moduleCodes: string[] = []) {
   if (!row) return null;
   return {
     id: row.id,
@@ -655,7 +693,33 @@ function mapClient(row: any) {
     isActive: row.is_active,
     isInternal: row.is_internal,
     createdAt: row.created_at,
+    curatedModules: row.curated_modules === true,
+    moduleCodes,
   };
+}
+
+function mapModule(row: any) {
+  return {
+    code: row.module_code,
+    name: row.module_name,
+    description: row.description,
+    domainCodes: row.domain_codes || [],
+    surfaceCodes: row.surface_codes || [],
+    workflowCodes: row.workflow_codes || [],
+    toolHrefs: row.tool_hrefs || [],
+  };
+}
+
+async function moduleCodesByClient(context: Context) {
+  const { data, error } = await tn(context).from('client_modules').select('client_id, module_code');
+  if (error) throw error;
+  const byClient = new Map<string, string[]>();
+  for (const row of data || []) {
+    const list = byClient.get(row.client_id) ?? [];
+    list.push(row.module_code);
+    byClient.set(row.client_id, list);
+  }
+  return byClient;
 }
 
 function mapProfile(row: any) {

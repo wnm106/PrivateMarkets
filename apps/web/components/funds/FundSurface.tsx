@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import Link from 'next/link';
-import { graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION } from '@/lib/graphql';
+import { EVALUATE_COMPLIANCE_RULE_MUTATION, graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION, UPSERT_COMPLIANCE_THRESHOLD_MUTATION } from '@/lib/graphql';
 import { domainHref } from '@/lib/domain-routes';
 import { useTemporalStore } from '@/lib/store';
 import { FUND_PANEL_KEYS, mountedPanel, tabReason, useLiveSurface } from '@/components/surfaces/useLiveSurface';
@@ -89,7 +89,17 @@ interface Surface {
   investorCount: number;
   errors: Array<{ message: string }>;
 }
-interface Bar { key: string; label: string; amount: number; sharePct: number | null; limitPct: number | null; status: string; limitId: string | null }
+interface Bar {
+  key: string;
+  label: string;
+  amount: number;
+  sharePct: number | null;
+  limitPct: number | null;
+  status: string;
+  ruleId: string | null;
+  ruleCode: string | null;
+  thresholdId: string | null;
+}
 
 const QUERY = `
   query FundSurface($fundId: ID!, $asOfDate: Date, $knowledgeDate: DateTime) {
@@ -114,7 +124,7 @@ const QUERY = `
       forecastRows { label emphasize cells { amount entityId attributeCode } }
       investors { id investorId name typeCode typeLabel commitment sharePct called unfunded distributions nav status pastDue }
       investorTypes { label amount sharePct }
-      exposure { strategy { key label amount sharePct limitPct status limitId } sector { key label amount sharePct limitPct status limitId } issuer { key label amount sharePct limitPct status limitId } }
+      exposure { strategy { key label amount sharePct limitPct status ruleId ruleCode thresholdId } sector { key label amount sharePct limitPct status ruleId ruleCode thresholdId } issuer { key label amount sharePct limitPct status ruleId ruleCode thresholdId } }
       pacing { calledPct planPct planLabel behindPts behindAmount requiredCall trailingCall }
       nextCall { id amount notice date }
       largestInvestor { name sharePct }
@@ -352,6 +362,17 @@ const cap = <T,>(rows: T[], limit: number) => rows.slice(0, limit);
  * What each tab tells the assistant, built from the one load that feeds every tab.
  * The assistant sees all of them at once, whichever tab is open. Amounts are in dollars.
  */
+function exposureStory(bar: Bar) {
+  return {
+    label: bar.label,
+    amount: bar.amount,
+    sharePct: bar.sharePct,
+    limitPct: bar.limitPct,
+    status: bar.status,
+    ruleCode: bar.ruleCode,
+  };
+}
+
 function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> {
   const navPer100 = fund.commitments ? (fund.nav / fund.commitments) * 100 : null;
   const line = (row: Line) => ({ label: row.label, administrator: row.administrator, shadow: row.shadow, variance: row.variance, variancePct: row.variancePct, status: row.status });
@@ -437,11 +458,11 @@ function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> 
     exposure: {
       label: 'Exposure',
       purpose: 'How concentrated the investments are by strategy, sector and issuer, against their limits, and the active positions behind them.',
-      howToRead: 'sharePct is the share of investments at fair value. limitPct is the concentration limit; status says whether the share is within it.',
+      howToRead: 'sharePct is the share of investments at fair value. limitPct is the hard limit from the compliance rule for that strategy, sector, or issuer (ruleCode). status is OVER above the hard limit and NEAR above the warning.',
       data: {
         activePositions: fund.activePositions, sectors: fund.sectorCount, floatingRatePct: fund.floatingRatePct,
         weightedLeverage: fund.weightedLeverage, weightedMark: fund.weightedMark, marksBelow97: fund.marksBelow,
-        byStrategy: fund.exposure.strategy, bySector: fund.exposure.sector, byIssuer: fund.exposure.issuer,
+        byStrategy: fund.exposure.strategy.map(exposureStory), bySector: fund.exposure.sector.map(exposureStory), byIssuer: fund.exposure.issuer.map(exposureStory),
         positions: cap(fund.positions.filter((position) => position.active), 80).map((position) => ({ name: position.name, sector: position.sector, issuer: position.issuer, fairValue: position.fairValue, coupon: position.coupon, leverage: position.leverage, floating: position.floating, mark: position.mark })),
       },
     },
@@ -550,6 +571,44 @@ export function FundSurface({ fundId }: { fundId: string }) {
 
   const save = (id: string, code: string, value: string) => write([{ id, code, value }]);
   const saveMoney = (id: string, code: string) => (value: string) => save(id, code, value);
+  const saveLimit = async (bar: Bar, value: string) => {
+    if (!surface || !bar.ruleId || !bar.key || bar.key === '—') return;
+    const hard = Number(value);
+    if (!Number.isFinite(hard) || hard <= 0) {
+      setError('A concentration limit is a percent greater than zero.');
+      return;
+    }
+    setNotice(null);
+    setError(null);
+    const result = await graphqlMutation<{ upsertComplianceThreshold: { errors: Array<{ message: string }> } }>(
+      UPSERT_COMPLIANCE_THRESHOLD_MUTATION,
+      {
+        input: {
+          id: bar.thresholdId,
+          ruleId: bar.ruleId,
+          entityId: surface.fundId,
+          groupValue: bar.key,
+          hardLimitValue: hard,
+          softLimitValue: Math.round(hard * 0.85 * 100) / 100,
+          limitDirection: 'MAX',
+          applies: true,
+          notes: `${bar.label} concentration limit`,
+        },
+      },
+    );
+    const message = result.error?.message || result.data?.upsertComplianceThreshold?.errors?.[0]?.message;
+    if (message) {
+      setError(message);
+      return;
+    }
+    if (bar.ruleCode) {
+      await graphqlMutation(EVALUATE_COMPLIANCE_RULE_MUTATION, {
+        input: { ruleCode: bar.ruleCode, asOfDate, entityId: surface.fundId },
+      });
+    }
+    setNotice('Saved.');
+    await load();
+  };
 
   useSurfaceNav(surface?.fundName
     ? [
@@ -1177,7 +1236,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
             <div className="da-sechead">
               <div>
                 <h2>Exposure</h2>
-                <p>Share of investments at fair value. The marker shows the concentration limit.</p>
+                <p>Share of investments at fair value. The marker is the compliance limit for that name.</p>
               </div>
               <div className="fs-seg">
                 {(['strategy', 'sector', 'issuer'] as const).map((key) => (
@@ -1197,14 +1256,9 @@ export function FundSurface({ fundId }: { fundId: string }) {
                   </div>
                   <span>
                     {dollars(bar.amount)} · {pct(bar.sharePct)} <Status status={bar.status} />
-                    {!bar.limitId && bar.limitPct != null && group !== 'strategy' && (
+                    {bar.ruleId && bar.key !== '—' && (
                       <span className="fs-gap">
-                        <Src bind={ofFund(group === 'sector' ? 'FUND_SECTOR_LIMIT_PCT' : 'FUND_ISSUER_LIMIT_PCT', group === 'sector' ? 'Sector Limit' : 'Issuer Limit')} value={pct(bar.limitPct, 0)}>{pct(bar.limitPct, 0)}</Src>
-                      </span>
-                    )}
-                    {bar.limitId && (
-                      <span className="fs-gap">
-                        <EditableValue kind="number" label={`${bar.label} limit`} bind={on(bar.limitId, 'EXPOSURE_LIMIT', 'LIMIT_PCT', 'Limit', bar.label)} value={bar.limitPct == null ? '' : String(bar.limitPct)} display={pct(bar.limitPct, 0)} onSave={(value) => save(bar.limitId!, 'LIMIT_PCT', value)} />
+                        <EditableValue kind="number" label={`${bar.label} limit`} value={bar.limitPct == null ? '' : String(bar.limitPct)} display={pct(bar.limitPct, 0)} onSave={(value) => saveLimit(bar, value)} />
                       </span>
                     )}
                   </span>
