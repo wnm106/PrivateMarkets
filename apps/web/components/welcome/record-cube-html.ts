@@ -1,11 +1,11 @@
 /**
- * Interactive 3D "one record, every dimension" graphic shown in the welcome hero.
+ * Interactive 3D "one record, every dimension" graphic shown in the welcome page's "Enterprise-grade" band.
  * Self-contained HTML rendered in a sandboxed iframe through srcDoc, so it needs no
  * public route and keeps its own styles and script away from the page.
- * Pinned to the light theme to match the welcome page.
+ * Pinned to its dark theme, on a transparent background, to sit on the dark band.
  */
 export const RECORD_CUBE_HTML = `<!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -36,6 +36,7 @@ body{background:transparent;color:var(--ink);font:15px/1.3 "Avenir Next","Centur
 .lbl{position:absolute;display:flex;white-space:nowrap;transform-origin:50% 100%;transform:translateZ(var(--G)) rotateZ(calc(-1*var(--spin))) rotateX(calc(-1*var(--tilt)));font-weight:700;line-height:1.1;transition:opacity .3s;opacity:.5;pointer-events:none}
 .lbl.on{opacity:1}
 .col{bottom:calc(100% + 6px);width:var(--cw);justify-content:center;font-size:var(--fc);color:var(--b2)}
+:root[data-theme="dark"] .col{color:#5cc8ff}
 .row{right:calc(100% + 8px);height:var(--ch);align-items:center;justify-content:flex-end;transform-origin:100% 50%;font-size:var(--fr);color:var(--navy)}
 .tag{left:calc(100% + 10px);top:0;height:100%;align-items:center;transform-origin:0 50%;transform:translateZ(var(--z)) rotateZ(calc(-1*var(--spin))) rotateX(calc(-1*var(--tilt)));opacity:1}
 .tag button{pointer-events:auto;font:inherit;font-weight:700;font-size:var(--ft);color:var(--ink);background:var(--tag);border:2px solid var(--gray);border-radius:99px;padding:.3em .75em;cursor:pointer;white-space:nowrap;box-sizing:border-box;width:var(--tpw,auto);text-align:center}

@@ -82,19 +82,63 @@ function LoginIcon() {
   );
 }
 
-/** Interactive "one record, every dimension" graphic shown in the hero. */
+/** Stylised product preview shown in the hero. */
 function ProductPreview() {
+  const rows = [
+    { f: 'Legal name', v: 'Northwind Capital Partners IV', s: 'DealCloud', c: '#0369a1' },
+    { f: 'Vintage', v: '2022', s: 'Allvue', c: '#047857' },
+    { f: 'Currency', v: 'USD', s: 'Bloomberg', c: '#c2410c' },
+    { f: 'Committed capital', v: '$1,250,000,000', s: 'Manual override', c: '#b45309' },
+    { f: 'Strategy', v: 'Senior Secured Direct Lending', s: 'WSO', c: '#6d28d9' },
+  ];
   return (
     <div className="relative mx-auto max-w-5xl">
       <div className="absolute -inset-4 rounded-[2rem] bg-gradient-to-r from-brand-blue/30 via-brand-cyan/30 to-brand-blue/30 blur-2xl" aria-hidden="true" />
       <div className="relative rounded-2xl border border-line-strong bg-white shadow-2xl overflow-hidden">
-        <iframe
-          title="One record, every dimension: the same record across sources and Front, Middle and Back Office"
-          srcDoc={RECORD_CUBE_HTML}
-          sandbox="allow-scripts"
-          loading="lazy"
-          className="block w-full h-[420px] sm:h-[520px] md:h-[600px] border-0"
-        />
+        <div className="flex items-center gap-2 px-4 py-3 bg-bg border-b border-line">
+          <span className="w-3 h-3 rounded-full bg-[#ff5f57]" />
+          <span className="w-3 h-3 rounded-full bg-[#febc2e]" />
+          <span className="w-3 h-3 rounded-full bg-[#28c840]" />
+          <span className="ml-3 text-xs text-ink-3 font-mono">app.tapestr.ai / funds / Northwind Capital Partners IV</span>
+        </div>
+        <div className="grid md:grid-cols-3 gap-0">
+          <div className="md:col-span-2 p-6 text-left">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <div className="text-xs tracking-widest text-ink-3">Golden record</div>
+                <div className="text-xl font-semibold">Northwind Capital Partners IV</div>
+              </div>
+              <span className="text-xs font-semibold text-green bg-green/10 px-2.5 py-1 rounded-full">Verified</span>
+            </div>
+            <div className="divide-y divide-line border border-line rounded-lg">
+              {rows.map((r) => (
+                <div key={r.f} className="flex items-center justify-between px-4 py-2.5 text-sm">
+                  <span className="text-ink-3 w-40">{r.f}</span>
+                  <span className="flex-1 font-medium">{r.v}</span>
+                  <span className="flex items-center gap-1.5 text-xs text-ink-2">
+                    <span className="w-2 h-2 rounded-full" style={{ background: r.c }} />
+                    {r.s}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="p-6 bg-bg border-l border-line text-left">
+            <div className="text-xs tracking-widest text-ink-3 mb-3">Data quality</div>
+            <div className="text-4xl font-display font-semibold text-brand-blue">98.4%</div>
+            <div className="mt-2 h-2 rounded-full bg-line overflow-hidden">
+              <div className="h-full w-[98%] bg-gradient-to-r from-brand-blue to-brand-cyan" />
+            </div>
+            <div className="mt-6 text-xs tracking-widest text-ink-3 mb-2">Source conflicts</div>
+            <div className="text-sm rounded-lg bg-white border border-line p-3">
+              <div className="font-medium">Committed capital</div>
+              <div className="text-ink-3 mt-1">Allvue and manual entry differ. Precedence rule applied.</div>
+            </div>
+            <div className="mt-4 text-sm rounded-lg bg-gradient-to-r from-brand-blue to-brand-cyan text-white p-3">
+              Ask tapestr.ai: &ldquo;Why does this value differ from last quarter?&rdquo;
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -212,6 +256,13 @@ export default function WelcomePage() {
               </div>
             ))}
           </div>
+          <iframe
+            title="One record, every dimension: the same record across sources and Front, Middle and Back Office"
+            srcDoc={RECORD_CUBE_HTML}
+            sandbox="allow-scripts"
+            loading="lazy"
+            className="mt-14 mx-auto block w-full max-w-5xl h-[420px] sm:h-[520px] md:h-[600px] border-0 bg-transparent"
+          />
         </div>
       </section>
 
