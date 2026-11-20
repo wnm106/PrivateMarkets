@@ -55,6 +55,31 @@ describe('nestDomainLinks', () => {
     assert.equal(rows.filter((row) => row.showGroup).length, 1);
   });
 
+  it('lists a security under its issuer, and the security schedules under the security', () => {
+    const rows = nestDomainLinks([
+      item({ code: 'ISSUER', name: 'Issuer', groupName: 'Securities & market data', groupOrder: 10, displayOrder: 10 }),
+      item({ code: 'FINANCIAL_PERIOD', name: 'Financial Period', groupName: 'Securities & market data', groupOrder: 10, displayOrder: 11, parentCode: 'ISSUER' }),
+      item({ code: 'STATEMENT_PERIOD', name: 'Statement Period', groupName: 'Securities & market data', groupOrder: 10, displayOrder: 12, parentCode: 'ISSUER' }),
+      item({ code: 'SECURITY', name: 'Security', groupName: 'Securities & market data', groupOrder: 10, displayOrder: 20, parentCode: 'ISSUER' }),
+      item({ code: 'INTEREST_CONTRACT', name: 'Contract', groupName: 'Securities & market data', groupOrder: 10, displayOrder: 21, parentCode: 'SECURITY' }),
+      item({ code: 'AMORTIZATION', name: 'Principal Schedule', groupName: 'Securities & market data', groupOrder: 10, displayOrder: 22, parentCode: 'SECURITY' }),
+      item({ code: 'FACTOR_SCHEDULE', name: 'Factor Schedule', groupName: 'Securities & market data', groupOrder: 10, displayOrder: 23, parentCode: 'SECURITY' }),
+      item({ code: 'CALL_SCHEDULE', name: 'Call Schedule', groupName: 'Securities & market data', groupOrder: 10, displayOrder: 24, parentCode: 'SECURITY' }),
+      item({ code: 'PRICE', name: 'Price', groupName: 'Securities & market data', groupOrder: 10, displayOrder: 25, parentCode: 'SECURITY' }),
+    ]);
+    assert.deepEqual(rows.map((row) => `${row.depth}:${row.domain.code}`), [
+      '0:ISSUER',
+      '1:FINANCIAL_PERIOD',
+      '1:STATEMENT_PERIOD',
+      '1:SECURITY',
+      '2:INTEREST_CONTRACT',
+      '2:AMORTIZATION',
+      '2:FACTOR_SCHEDULE',
+      '2:CALL_SCHEDULE',
+      '2:PRICE',
+    ]);
+  });
+
   it('keeps a type whose parent is in another band at the root of its own band', () => {
     const rows = nestDomainLinks([
       item({ code: 'SECURITY', name: 'Security', groupName: 'Securities & market data', groupOrder: 10, displayOrder: 20 }),

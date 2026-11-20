@@ -239,6 +239,8 @@ const SCORE = `
 
 type ScoreAdjustment = { fundId: string; trancheId: string; type: string; amount?: number | null; reason?: string | null; note?: string | null };
 
+const savedScoreRequests = new Map<string, ReturnType<typeof graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>>>();
+
 export interface DealComplianceScore {
   board: Board | null;
   loading: boolean;
@@ -251,18 +253,22 @@ export function useDealComplianceScore({
   holds,
   adjustments,
   enabled = true,
+  live = false,
 }: {
   dealId: string;
   asOfDate?: string | null;
   holds: Record<string, number>;
   adjustments: ScoreAdjustment[];
   enabled?: boolean;
+  /** False scores the saved book immediately. True rescores after the user edits the grid. */
+  live?: boolean;
 }): DealComplianceScore {
   const [board, setBoard] = useState<Board | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState('');
   const holdKey = JSON.stringify(holds);
   const adjustmentKey = JSON.stringify(adjustments);
+  const requestKey = live ? `${holdKey}|${adjustmentKey}` : 'saved';
 
   useEffect(() => {
     if (!enabled) return;
@@ -279,11 +285,23 @@ export function useDealComplianceScore({
         reasonCode: item.reason,
         note: item.note,
       }));
-      graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>(SCORE, {
-        dealId,
-        asOfDate: asOfDate || null,
-        holds: holdList,
-        adjustments: adjustmentList,
+      const savedKey = `${dealId}|${asOfDate || ''}|saved`;
+      const request = live
+        ? graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>(SCORE, {
+          dealId,
+          asOfDate: asOfDate || null,
+          holds: holdList,
+          adjustments: adjustmentList,
+        })
+        : savedScoreRequests.get(savedKey) || graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>(SCORE, {
+          dealId,
+          asOfDate: asOfDate || null,
+          holds: null,
+          adjustments: null,
+        });
+      if (!live) savedScoreRequests.set(savedKey, request);
+      request.finally(() => {
+        if (savedScoreRequests.get(savedKey) === request) savedScoreRequests.delete(savedKey);
       }).then((result) => {
         if (cancelled) return;
         const scored = result.data?.scoreDealCompliance;
@@ -299,12 +317,12 @@ export function useDealComplianceScore({
       }).finally(() => {
         if (!cancelled) setLoading(false);
       });
-    }, 400);
+    }, live ? 400 : 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [dealId, asOfDate, holdKey, adjustmentKey, enabled]);
+  }, [dealId, asOfDate, enabled, requestKey]);
 
   return { board, loading, error };
 }

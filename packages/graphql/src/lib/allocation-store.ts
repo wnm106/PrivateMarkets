@@ -220,39 +220,83 @@ async function openRelationships(supabase: SupabaseClient, code: string, column:
   return (data || []).filter((row) => isOpen(row.system_to));
 }
 
+/**
+ * Funds already holding a position on this deal, plus their portfolios.
+ * Enough to score the saved book without rebuilding the allocation.
+ */
+export async function loadDealScoreAnchors(
+  supabase: SupabaseClient,
+  dealId: string,
+  asOfInput: string | null | undefined,
+): Promise<{ asOf: string; dealCode: string; fundIds: string[] }> {
+  const asOf = asOfDate(asOfInput);
+  const { data: deal, error: dealError } = await supabase
+    .from('master_entities')
+    .select('id, entity_code')
+    .eq('id', dealId)
+    .maybeSingle();
+  if (dealError) throw new Error(dealError.message);
+  if (!deal) throw new Error('Deal not found');
+  const trancheRels = await openRelationships(supabase, 'TRANCHE_DEAL', 'child_entity_id', [deal.id]);
+  const trancheIds = trancheRels.map((row) => row.parent_entity_id);
+  const positionRels = await openRelationships(supabase, 'POSITION_TRANCHE', 'child_entity_id', trancheIds);
+  const positionIds = positionRels.map((row) => row.parent_entity_id);
+  const fundRels = await openRelationships(supabase, 'POSITION_FUND', 'parent_entity_id', positionIds);
+  const sleeveIds = [...new Set(fundRels.map((row) => row.child_entity_id))];
+  const parentRels = await openRelationships(supabase, 'FUND_PARENT', 'child_entity_id', sleeveIds);
+  const fundIds = [...new Set([...sleeveIds, ...parentRels.map((row) => row.parent_entity_id)])];
+  return { asOf, dealCode: deal.entity_code, fundIds };
+}
+
 export async function loadAllocationDraft(
   supabase: SupabaseClient,
   dealId: string,
   asOfInput: string | null | undefined,
   holds: AllocationHold[] | null | undefined,
   adjustments: AllocationAdjustment[] | null | undefined,
+  options?: { capacities?: boolean },
 ): Promise<AllocationDraft> {
   const asOf = asOfDate(asOfInput);
-  const { data: deal, error: dealError } = await supabase
-    .from('master_entities')
-    .select('id, entity_code, entity_name, client_id, domain_code')
-    .eq('id', dealId)
-    .maybeSingle();
-  if (dealError) throw new Error(dealError.message);
-  if (!deal) throw new Error('Deal not found');
-
-  const trancheRels = await openRelationships(supabase, 'TRANCHE_DEAL', 'child_entity_id', [dealId]);
-  const trancheIds = trancheRels.map((row) => row.parent_entity_id);
-  const { data: trancheRows, error: trancheError } = trancheIds.length
-    ? await supabase.from('master_entities').select('id, entity_code, entity_name').in('id', trancheIds)
-    : { data: [], error: null };
-  if (trancheError) throw new Error(trancheError.message);
-
-  const securityRels = await openRelationships(supabase, 'TRANCHE_SECURITY', 'parent_entity_id', trancheIds);
-  const securityByTranche = new Map(securityRels.map((row) => [row.parent_entity_id, row.child_entity_id]));
-
   let fundQuery = supabase.from('master_entities').select('id, entity_code, entity_name, client_id').eq('domain_code', 'FUND').eq('is_active', true);
+  const [dealResult, defs] = await Promise.all([
+    supabase
+      .from('master_entities')
+      .select('id, entity_code, entity_name, client_id, domain_code')
+      .eq('id', dealId)
+      .maybeSingle(),
+    attributeDefs(supabase),
+  ]);
+  if (dealResult.error) throw new Error(dealResult.error.message);
+  const deal = dealResult.data;
+  if (!deal) throw new Error('Deal not found');
   if (deal.client_id) fundQuery = fundQuery.eq('client_id', deal.client_id);
-  const { data: fundRows, error: fundError } = await fundQuery;
-  if (fundError) throw new Error(fundError.message);
-  const funds = fundRows || [];
+
+  const [trancheRels, issuerRels, sponsorRels, fundResult] = await Promise.all([
+    openRelationships(supabase, 'TRANCHE_DEAL', 'child_entity_id', [dealId]),
+    openRelationships(supabase, 'DEAL_ISSUER', 'parent_entity_id', [dealId]),
+    openRelationships(supabase, 'DEAL_SPONSOR', 'parent_entity_id', [dealId]),
+    fundQuery,
+  ]);
+  if (fundResult.error) throw new Error(fundResult.error.message);
+  const trancheIds = trancheRels.map((row) => row.parent_entity_id);
+  const funds = fundResult.data || [];
   const fundIds = funds.map((row) => row.id);
-  const parentRels = await openRelationships(supabase, 'FUND_PARENT', 'parent_entity_id', fundIds);
+  const namedIds = [issuerRels[0]?.child_entity_id, sponsorRels[0]?.child_entity_id].filter((id): id is string => Boolean(id));
+
+  const [trancheResult, securityRels, positionRels, parentRels, namedResult] = await Promise.all([
+    trancheIds.length
+      ? supabase.from('master_entities').select('id, entity_code, entity_name').in('id', trancheIds)
+      : Promise.resolve({ data: [] as Array<{ id: string; entity_code: string; entity_name: string }>, error: null }),
+    openRelationships(supabase, 'TRANCHE_SECURITY', 'parent_entity_id', trancheIds),
+    openRelationships(supabase, 'POSITION_TRANCHE', 'child_entity_id', trancheIds),
+    openRelationships(supabase, 'FUND_PARENT', 'parent_entity_id', fundIds),
+    namedIds.length
+      ? supabase.from('master_entities').select('id, entity_name').in('id', namedIds)
+      : Promise.resolve({ data: [] as Array<{ id: string; entity_name: string }>, error: null }),
+  ]);
+  if (trancheResult.error) throw new Error(trancheResult.error.message);
+  const trancheRows = trancheResult.data || [];
+  const securityByTranche = new Map(securityRels.map((row) => [row.parent_entity_id, row.child_entity_id]));
   const childrenOf = new Map<string, string[]>();
   const parentOf = new Map<string, string>();
   for (const rel of parentRels) {
@@ -262,25 +306,19 @@ export async function loadAllocationDraft(
     list.push(rel.child_entity_id);
     childrenOf.set(rel.parent_entity_id, list);
   }
-
-  const positionRels = await openRelationships(supabase, 'POSITION_TRANCHE', 'child_entity_id', trancheIds);
   const positionIds = positionRels.map((row) => row.parent_entity_id);
-  const fundRels = await openRelationships(supabase, 'POSITION_FUND', 'parent_entity_id', positionIds);
+  const named = new Map((namedResult.data || []).map((row) => [row.id, row.entity_name]));
+
+  const [fundRels, positionResult] = await Promise.all([
+    openRelationships(supabase, 'POSITION_FUND', 'parent_entity_id', positionIds),
+    positionIds.length
+      ? supabase.from('master_entities').select('id, entity_code').in('id', positionIds)
+      : Promise.resolve({ data: [] as Array<{ id: string; entity_code: string }>, error: null }),
+  ]);
+  if (positionResult.error) throw new Error(positionResult.error.message);
+  const positionRows = positionResult.data || [];
   const fundOfPosition = new Map(fundRels.map((row) => [row.parent_entity_id, row.child_entity_id]));
   const trancheOfPosition = new Map(positionRels.map((row) => [row.parent_entity_id, row.child_entity_id]));
-  const { data: positionRows, error: positionError } = positionIds.length
-    ? await supabase.from('master_entities').select('id, entity_code').in('id', positionIds)
-    : { data: [], error: null };
-  if (positionError) throw new Error(positionError.message);
-
-  const defs = await attributeDefs(supabase);
-  const issuerRels = await openRelationships(supabase, 'DEAL_ISSUER', 'parent_entity_id', [dealId]);
-  const sponsorRels = await openRelationships(supabase, 'DEAL_SPONSOR', 'parent_entity_id', [dealId]);
-  const namedIds = [issuerRels[0]?.child_entity_id, sponsorRels[0]?.child_entity_id].filter((id): id is string => Boolean(id));
-  const { data: namedRows } = namedIds.length
-    ? await supabase.from('master_entities').select('id, entity_name').in('id', namedIds)
-    : { data: [] as Array<{ id: string; entity_name: string }> };
-  const named = new Map((namedRows || []).map((row) => [row.id, row.entity_name]));
 
   const entityIds = [
     dealId,
@@ -384,7 +422,9 @@ export async function loadAllocationDraft(
     });
   }
   portfolios.sort((left, right) => right.nav - left.nav || left.name.localeCompare(right.name));
-  await attachComplianceCapacity(supabase, portfolios, loadedTranches, deal.entity_code, asOf);
+  if (options?.capacities !== false) {
+    await attachComplianceCapacity(supabase, portfolios, loadedTranches, deal.entity_code, asOf);
+  }
 
   const positions: LoadedPosition[] = [];
   const storedAdjustments: AllocationAdjustment[] = [];
@@ -882,9 +922,11 @@ export async function commitAllocation(
         const marketDef = requireDef('MARKET_VALUE');
         if (!options?.proposalsOnly || openValues.has(`${positionId}|${adjustmentDef.id}|${manual}`)) {
           await closeValue(supabase, positionId, adjustmentDef.id, manual, draft.asOf);
+          openValues.delete(`${positionId}|${adjustmentDef.id}|${manual}`);
         }
         if (!options?.proposalsOnly || openValues.has(`${positionId}|${marketDef.id}|${manual}`)) {
           await closeValue(supabase, positionId, marketDef.id, manual, draft.asOf);
+          openValues.delete(`${positionId}|${marketDef.id}|${manual}`);
         }
       }
     }

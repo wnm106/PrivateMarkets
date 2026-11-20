@@ -2924,9 +2924,14 @@ type FundExposureBar {
   label: String!
   amount: Float!
   sharePct: Float
+  """Hard limit from the compliance rule for this strategy, sector, or issuer, as a percent of fair value."""
   limitPct: Float
   status: String!
-  limitId: ID
+  """The compliance rule that holds this limit."""
+  ruleId: ID
+  ruleCode: String
+  """The fund's own threshold for this name. Blank when the shown limit is inherited."""
+  thresholdId: ID
 }
 
 type FundExposure {

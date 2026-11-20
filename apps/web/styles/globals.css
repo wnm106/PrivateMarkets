@@ -2872,6 +2872,10 @@
   }
 
   .pillar {
+    display: grid;
+    grid-template-rows: 26px 36px 2.7em minmax(2.9em, auto);
+    row-gap: 8px;
+    align-content: start;
     background: var(--surface);
     border: 1px solid var(--line);
     padding: 11px 13px 13px;
@@ -2886,8 +2890,9 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    min-height: 22px;
-    margin-bottom: 10px;
+    height: 26px;
+    min-height: 26px;
+    margin-bottom: 0;
   }
 
   .pillar-lbl {
@@ -2938,16 +2943,19 @@
   }
 
   .pillar-val {
+    display: flex;
+    align-items: center;
+    height: 36px;
     font-family: var(--font-ibm-plex-sans);
     font-size: 28px;
     font-weight: 500;
     color: var(--ink);
     line-height: 1;
     letter-spacing: -1px;
-    margin-bottom: 8px;
+    margin-bottom: 0;
   }
 
-  .pillar-sub { font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
+  .pillar-sub { font-size: 12px; line-height: 1.35; color: var(--ink-2); margin-bottom: 0; }
   .pillar-det { font-size: 11px; line-height: 1.45; color: var(--ink-3); }
 
   .quality-matrix {
@@ -5926,7 +5934,7 @@ a.ex-rule:hover { text-decoration: underline; }
 }
 .dq-qual { grid-template-columns: 28px 1.6fr 100px 90px 90px 52px; }
 .dq-traj { grid-template-columns: 28px 1.6fr 140px 52px; }
-.pillar-val { display: flex; align-items: center; gap: 10px; }
+.pillar-val { gap: 10px; }
 .dq-arrow {
   display: inline-flex;
   align-items: center;
@@ -11297,7 +11305,7 @@ details.rb-step[open] { overflow: visible; }
 
 /* ==========================================================================
    Home: the briefing a person sees first.
-   Hero (what needs you, what the agents did) → ask box → jump back in →
+   Hero (what needs you, what the agents did) -> ask box -> jump back in ->
    a work column (the queue, the brief) beside a rail (agents, follows, health).
    ========================================================================== */
 

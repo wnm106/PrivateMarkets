@@ -27,7 +27,7 @@ The mock keeps every figure in page script. The surface reads registered entitie
 | `NAV_LINE` | One statement row. Administrator and shadow are both stored, because the review has to show them together | `LINE_STATEMENT` |
 | `CREDIT_FACILITY` | Commitment, drawn, borrowing base, maturity. Availability is the lesser of commitment and borrowing base, minus drawn | `FACILITY_FUND` |
 | `CASH_FORECAST` | One future quarter of interest, repayments, fundings, fees, distributions, calls, and facility paydown | `FORECAST_FUND` |
-| `EXPOSURE_LIMIT` | A concentration limit for one strategy, sector, or issuer. Sector and issuer defaults live on the fund when a name has no row | `LIMIT_FUND` |
+| Concentration limit | A strategy, sector, or issuer cap. Stored as a threshold on the compliance rule that measures that share of fair value (`FUND_STRATEGY_BOOK_PCT`, `FUND_SECTOR_BOOK_PCT`, `FUND_ISSUER_BOOK_PCT`) | |
 
 Position strategy (`SENIOR_SECURED`, `UNITRANCHE`, `MEZZANINE`, `ASSET_BASED`) is its own list. It is not the instrument-type list: a unitranche and a senior secured loan are different buckets on this surface and the same instrument family in the deal model.
 
