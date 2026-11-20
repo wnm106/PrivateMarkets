@@ -189,6 +189,7 @@ export async function runAgentStep(request: AgentRequest, deps: AgentDeps): Prom
       activity: 'workflow.agent',
       // A named agent is recorded by its code, so its calls add up across workflows.
       agent: request.agent?.code || request.node.label || request.node.id,
+      subject: request.runId ? { type: 'workflow-run', id: request.runId } : null,
       metadata: { nodeId: request.node.id, nodeType: request.node.type, ...(request.agent ? { agentCode: request.agent.code, agentName: request.agent.name } : {}) },
     },
     () => executeAgentStep(request, deps),

@@ -193,6 +193,8 @@ export interface AgentRequest {
   event(type: string, summary: string, detail?: unknown): Promise<void>;
   /** The named agent the step runs as, when it names one. */
   agent?: AgentDef | null;
+  /** The workflow run, so usage adds up what the run cost. */
+  runId?: string;
 }
 
 export interface AgentResult {
@@ -305,6 +307,7 @@ async function runAgent(node: WorkflowNode, ctx: StepContext): Promise<StepOutco
 
   const result = await ctx.deps.agent({
     node,
+    runId: ctx.run.id,
     scope: ctx.scope,
     actor,
     agent,

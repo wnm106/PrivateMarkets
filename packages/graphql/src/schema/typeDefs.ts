@@ -3216,7 +3216,7 @@ type Query {
   """How each workflow did over the last days (default 30): runs, durations, review times, overdue reviews, approvals, slowest steps, commonest failure."""
   workflowAnalytics(days: Int): JSON!
   """Token use and cost of model calls this session can see. days is a rolling window (default 30, at most a year). from and to are ISO timestamps and override days. Filters match one feature, agent, user, or model."""
-  agentUsage(days: Int, from: String, to: String, feature: String, agent: String, userId: ID, model: String): JSON!
+  agentUsage(days: Int, from: String, to: String, feature: String, agent: String, userId: ID, model: String, turnId: String, conversationId: String, subjectType: String, subjectId: String): JSON!
   """One model call, including its thinking, when this session can see that client."""
   agentCall(id: ID!): JSON
   """Forms workflow steps are waiting on. status defaults to OPEN; runId keeps one run's."""

@@ -4491,6 +4491,7 @@
   }
 
   .chat-bubble {
+    position: relative;
     background: var(--bg-alt);
     color: var(--ink);
     padding: 10px 10px;
@@ -4501,6 +4502,21 @@
     overflow-wrap: anywhere;
     min-width: 0;
     max-width: 100%;
+  }
+
+  .chat-copy {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 1;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .chat-row:hover .chat-copy,
+  .chat-bubble:focus-within .chat-copy {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .chat-row.user .chat-bubble {
@@ -11682,3 +11698,68 @@ details.rb-step[open] { overflow: visible; }
   .hx-row-main > .btn { align-self: flex-start; }
   .hx-panel { padding: 16px; }
 }
+
+/* Assistant: a guided setup of what to watch and when to be told. */
+.as-note { color: var(--ink-3); font-size: 13px; margin: 2px 0 0; }
+.as-message { margin: 12px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; color: var(--ink-2); }
+.as-status { font-size: 12px; color: var(--ink-3); padding: 4px 10px; border-radius: 999px; background: var(--bg-alt); margin-right: 8px; white-space: nowrap; }
+.as-status.on { background: var(--badge-ok-bg); color: var(--badge-ok-fg); }
+.as-step { margin-top: 28px; max-width: 1100px; }
+.as-step-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+.as-step-num { flex: 0 0 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; background: var(--accent); color: #fff; }
+.as-step-num.done { background: var(--green); }
+.as-step-title { font-size: 16px; font-weight: 600; margin: 3px 0 0; }
+.as-callout { border: 1px solid var(--line); border-left: 3px solid var(--accent-2); background: var(--surface); border-radius: 8px; padding: 12px 14px; margin: 0 0 16px 40px; }
+.as-callout-title { font-size: 13px; font-weight: 600; }
+.as-group { margin: 0 0 14px 40px; }
+.as-group-name { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); margin-bottom: 6px; }
+.as-paths, .as-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.as-path, .as-preset { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); cursor: pointer; font: inherit; color: var(--ink); }
+.as-path:hover, .as-preset:hover:not(:disabled) { border-color: var(--line-strong); box-shadow: var(--shadow-md); }
+.as-path.open, .as-preset.on { border-color: var(--accent-2); box-shadow: 0 0 0 1px var(--accent-2); background: #f0fbfd; }
+.as-presets.off { opacity: 0.55; }
+.as-preset:disabled { cursor: not-allowed; }
+.as-path-name { font-size: 14px; font-weight: 600; }
+.as-path-meta { font-size: 12px; color: var(--ink-3); }
+.as-panel { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 14px 16px; margin: 0 0 14px 40px; }
+.as-panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
+.as-panel-title { font-size: 15px; font-weight: 600; }
+.as-sub { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); margin: 10px 0 4px; }
+.as-seg { display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.as-seg-label { font-size: 12px; color: var(--ink-3); padding: 0 10px; }
+.as-seg-btn { border: 0; border-left: 1px solid var(--line); background: var(--surface); padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; color: var(--ink-2); }
+.as-seg-btn.on { background: var(--accent); color: #fff; }
+.as-check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink-2); margin: 4px 0 10px; }
+.as-check.small { font-size: 12px; color: var(--ink-3); margin: 4px 0 0; }
+.as-filter { width: 100%; max-width: 420px; margin-bottom: 6px; }
+.as-list { list-style: none; margin: 0; padding: 0; }
+.as-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+.as-item:first-child { border-top: 0; }
+.as-item-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.as-item-name { font-size: 14px; }
+.as-item-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.as-tag { font-size: 12px; color: var(--ink-3); }
+.as-select { width: auto; min-width: 150px; }
+.as-following { background: var(--badge-ok-bg); color: var(--badge-ok-fg); border-color: transparent; }
+.as-search { display: flex; gap: 8px; max-width: 560px; margin-bottom: 8px; }
+.as-search .text-input { flex: 1; }
+.as-row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-top: 12px; }
+.as-field { display: flex; flex-direction: column; gap: 4px; min-width: 180px; }
+.as-label { font-size: 11px; text-transform: uppercase; color: var(--ink-3); }
+@media (max-width: 720px) {
+  .as-callout, .as-group, .as-panel { margin-left: 0; }
+  .as-item { flex-wrap: wrap; }
+}
+.as-more { border: 0; background: none; padding: 0; font: inherit; font-size: 13px; color: var(--entity-link); cursor: pointer; }
+.as-panel-inline { scroll-margin: 80px; }
+.as-group .as-panel-inline { margin: 10px 0 0; }
+.as-link { color: var(--entity-link); text-decoration: underline; }
+.as-following-group { margin: 6px 0 10px; }
+.as-sub-following { color: var(--badge-ok-fg); font-weight: 600; }
+.as-item.following { background: #ecfdf3; border-top-color: #c7ecd5; box-shadow: inset 3px 0 0 var(--green); margin: 0 -10px; padding: 8px 10px 8px 13px; }
+.as-item.following:first-child { border-radius: 6px 6px 0 0; }
+.as-item.following:last-child { border-radius: 0 0 6px 6px; }
+.as-item.following:only-child { border-radius: 6px; }
+.as-item.following .as-item-name { font-weight: 600; }
+.as-path-badge { align-self: flex-start; margin-top: 4px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--badge-ok-bg); color: var(--badge-ok-fg); }
+.as-step-num.add { background: var(--accent-2); }

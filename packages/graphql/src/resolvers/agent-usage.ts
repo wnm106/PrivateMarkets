@@ -13,6 +13,10 @@ type UsageArgs = {
   agent?: string | null;
   userId?: string | null;
   model?: string | null;
+  turnId?: string | null;
+  conversationId?: string | null;
+  subjectType?: string | null;
+  subjectId?: string | null;
 };
 
 export const agentUsageResolvers = {
@@ -26,9 +30,13 @@ export const agentUsageResolvers = {
         p_agent: args.agent || null,
         p_user_id: args.userId || null,
         p_model: args.model || null,
+        p_turn_id: args.turnId || null,
+        p_conversation_id: args.conversationId || null,
+        p_subject_type: args.subjectType || null,
+        p_subject_id: args.subjectId || null,
       });
       if (error) throw error;
-      return data ?? { totals: { calls: 0 }, byFeature: [], byAgent: [], byUser: [], byModel: [], byDay: [], calls: [] };
+      return data ?? { totals: { calls: 0 }, byFeature: [], byAgent: [], byUser: [], byModel: [], byDay: [], byTurn: [], byConversation: [], bySubject: [], calls: [] };
     },
 
     agentCall: async (_: unknown, args: { id: string }, context: Context) => {

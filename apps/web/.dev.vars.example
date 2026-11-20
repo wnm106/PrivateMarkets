@@ -1,0 +1,7 @@
+# Copy to .dev.vars for `npm run cf:preview`. Server-only secrets the Worker reads at runtime.
+NEXTJS_ENV=development
+SUPABASE_SERVICE_ROLE_KEY=
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+LLAMA_CLOUD_API_KEY=
+VOYAGE_API_KEY=

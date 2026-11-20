@@ -62,6 +62,7 @@ export async function POST(request: NextRequest) {
       agent: 'insights',
       userId: userData.user.id,
       clientId,
+      subject: payload.fundName ? { type: 'fund', id: String(payload.fundName), label: [payload.fundName, payload.periodEnd].filter(Boolean).join(' · ') } : null,
       metadata: { fundName: payload.fundName, periodEnd: payload.periodEnd },
       body: {
         systemInstruction: { parts: [{ text: INSTRUCTION }] },

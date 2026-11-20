@@ -84,7 +84,7 @@ registerNarrativeTools(toolRegistry);
 
 async function callGemini(
   body: Record<string, any>,
-  scope: { userId: string | null; clientId: string | null; agent: string | null; metadata?: Record<string, unknown> },
+  scope: { userId: string | null; clientId: string | null; agent: string | null; conversationId: string | null; metadata?: Record<string, unknown> },
   audits: AgentAudit[],
 ) {
   const { response, audit } = await invokeAgent({
@@ -95,6 +95,7 @@ async function callGemini(
     agent: scope.agent,
     userId: scope.userId,
     clientId: scope.clientId,
+    conversationId: scope.conversationId,
     metadata: scope.metadata,
     body,
   });
@@ -468,7 +469,8 @@ export async function POST(request: NextRequest) {
       userId: auth?.userId ?? null,
       clientId,
       agent: skill?.id ?? 'assistant',
-      metadata: { conversationId: conversation?.id ?? conversationId ?? null, page: context?.page ?? null },
+      conversationId: (conversation?.id ?? conversationId ?? null) as string | null,
+      metadata: { page: context?.page ?? null },
     };
 
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {

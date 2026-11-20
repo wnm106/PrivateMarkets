@@ -234,6 +234,52 @@ describe('invokeAgent', () => {
   });
 });
 
+describe('turns and subjects', () => {
+  const claudeCall = () =>
+    invokeAgent({
+      provider: 'claude',
+      model: 'claude-haiku',
+      execute: async () => ({ model: 'claude-haiku', content: [], usage: { input_tokens: 3, output_tokens: 1 } }),
+    });
+
+  it('puts every call in one request, nested ones too, in the same turn', async () => {
+    sink();
+    await runWithAgentContext(
+      { userId: 'user-6', clientId: 'client-6', feature: 'chat', activity: 'chat.turn', conversationId: 'conv-1' },
+      async () => {
+        await claudeCall();
+        await claudeCall();
+        await runWithAgentContext({ feature: 'documents', subject: { type: 'document', id: 'doc-1', label: 'Q3 letter' } }, claudeCall);
+      },
+    );
+    expect(rows).toHaveLength(3);
+    const turns = new Set(rows.map((row) => row.metadata.turnId));
+    expect(turns.size).toBe(1);
+    expect(rows.every((row) => row.metadata.conversationId === 'conv-1')).toBe(true);
+    expect(rows[2].metadata).toMatchObject({ subjectType: 'document', subjectId: 'doc-1', subjectLabel: 'Q3 letter' });
+    expect(rows[0].metadata.subjectType).toBeUndefined();
+  });
+
+  it('starts a new turn for each top-level request', async () => {
+    sink();
+    const first = await runWithAgentContext({ feature: 'chat' }, claudeCall);
+    const second = await runWithAgentContext({ feature: 'chat' }, claudeCall);
+    expect(first.audit.turnId).toBeTruthy();
+    expect(first.audit.turnId).not.toBe(second.audit.turnId);
+    expect(usageForClient([first.audit]).audits[0].turnId).toBe(first.audit.turnId);
+  });
+
+  it('keeps the turn and subject when other metadata is too large to store', async () => {
+    sink();
+    await runWithAgentContext(
+      { feature: 'feed-intake', subject: { type: 'feed', id: 'feed-9' }, metadata: { blob: 'x'.repeat(10_000) } },
+      claudeCall,
+    );
+    expect(rows[0].metadata).toMatchObject({ note: 'metadata truncated', subjectType: 'feed', subjectId: 'feed-9' });
+    expect(typeof rows[0].metadata.turnId).toBe('string');
+  });
+});
+
 describe('formatting', () => {
   it('writes small costs and token counts for the dashboard', () => {
     expect(formatUsd(0.00234)).toBe('$0.0023');

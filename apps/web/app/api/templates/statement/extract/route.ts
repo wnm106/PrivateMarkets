@@ -137,6 +137,7 @@ async function textFromImage(bytes: Buffer, mime: string, fileName: string): Pro
       feature: 'statement-extract',
       activity: 'statement.vision',
       agent: fileName,
+      subject: { type: 'file', id: fileName, label: fileName },
       body: {
         contents: [{
           parts: [
