@@ -254,7 +254,6 @@ export async function loadAllocationDraft(
   asOfInput: string | null | undefined,
   holds: AllocationHold[] | null | undefined,
   adjustments: AllocationAdjustment[] | null | undefined,
-  options?: { capacities?: boolean },
 ): Promise<AllocationDraft> {
   const asOf = asOfDate(asOfInput);
   let fundQuery = supabase.from('master_entities').select('id, entity_code, entity_name, client_id').eq('domain_code', 'FUND').eq('is_active', true);
@@ -422,9 +421,7 @@ export async function loadAllocationDraft(
     });
   }
   portfolios.sort((left, right) => right.nav - left.nav || left.name.localeCompare(right.name));
-  if (options?.capacities !== false) {
-    await attachComplianceCapacity(supabase, portfolios, loadedTranches, deal.entity_code, asOf);
-  }
+  await attachComplianceCapacity(supabase, portfolios, loadedTranches, deal.entity_code, asOf);
 
   const positions: LoadedPosition[] = [];
   const storedAdjustments: AllocationAdjustment[] = [];
