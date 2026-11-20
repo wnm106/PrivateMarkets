@@ -1,10 +1,16 @@
-import { formatAttributeDisplay } from '@/lib/attribute-display';
+import { formatAttributeDisplay, type AttributeDisplay } from '@/lib/attribute-display';
 
 const NUMERIC_TYPES = new Set(['NUMBER', 'CURRENCY', 'PERCENTAGE', 'INTEGER', 'DECIMAL', 'FLOAT', 'NUMERIC']);
 
-export function formatAttributeValue(value: string, dataType?: string): string {
+export function formatAttributeValue(value: string, dataType?: string, meta?: AttributeDisplay | null): string {
   if (!value || value === '—') return value || '—';
-  return formatAttributeDisplay(value, { dataType }) || value;
+  return formatAttributeDisplay(value, {
+    dataType: meta?.dataType || dataType,
+    displayFormat: meta?.displayFormat,
+    numericPrecision: meta?.numericPrecision,
+    unitOfMeasure: meta?.unitOfMeasure,
+    referenceDomainCode: meta?.referenceDomainCode,
+  }) || value;
 }
 
 export function isNumericAttribute(dataType?: string): boolean {
