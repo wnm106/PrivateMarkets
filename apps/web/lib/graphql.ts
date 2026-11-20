@@ -1708,6 +1708,44 @@ const dataQualityDashboardQuery = (entityRows: string) => `
       fromDate
       toDate
       domains
+      scores {
+        availabilityPassing
+        availabilityApplicable
+        qualityPassing
+        qualityApplicable
+        freshnessPassing
+        freshnessApplicable
+        consensusPassing
+        consensusApplicable
+        waivedChecks
+      }
+      entityTypeScores {
+        domainCode
+        entityCount
+        availabilityPassing
+        availabilityApplicable
+        qualityPassing
+        qualityApplicable
+        freshnessPassing
+        freshnessApplicable
+        consensusPassing
+        consensusApplicable
+        waivedChecks
+      }
+      consensusConflicts {
+        id
+        entityCode
+        entityName
+        domainCode
+        attributeCode
+        attributeName
+        goldenSourceCode
+        goldenSourceName
+        goldenValue
+        sourceCode
+        sourceName
+        value
+      }
       summary {
         entityCount
         requiredSlots
@@ -1811,6 +1849,15 @@ const DATA_QUALITY_ENTITY_ROWS = `      entities {
         qualityIntroducedCount
         overrideMatchCount
         overrideCount
+        availabilityPassing
+        availabilityApplicable
+        qualityPassing
+        qualityApplicable
+        freshnessPassing
+        freshnessApplicable
+        consensusPassing
+        consensusApplicable
+        waivedChecks
       }
 `;
 

@@ -1,6 +1,6 @@
 import { Context } from '../context';
 import { ComplianceEngine, getComplianceEngine } from '../lib/compliance-engine';
-import { commitAllocation, loadAllocationDraft, type AllocationHold } from '../lib/allocation-store';
+import { commitAllocation, loadAllocationDraft, loadDealScoreAnchors, type AllocationHold } from '../lib/allocation-store';
 import type { AllocationAdjustment } from '../lib/allocation-engine';
 import {
   matchPopulationEntity,
@@ -493,9 +493,25 @@ export const complianceResolvers = {
         // cannot insert them under the entity RLS policies, so the sync uses the
         // service role. The rule itself still runs as the compliance function.
         const writer = context.supabaseAdmin || context.supabase;
-        const draft = await loadAllocationDraft(writer, args.dealId, args.asOfDate, holds, adjustments);
-        const preview = await commitAllocation(writer, draft, context.user?.id ?? null, { proposalsOnly: true });
-        const fundIds = new Set(preview.rows.map((row) => row.fundId));
+        // The open page scores the book already saved on the deal. Rebuilding
+        // the allocation and writing every proposal first is what made the
+        // panel wait on a second full draft. An edit still syncs proposals.
+        const savedBook = holds == null && adjustments == null;
+        let dealCode: string;
+        let asOf: string;
+        let fundIds: Set<string>;
+        if (savedBook) {
+          const anchors = await loadDealScoreAnchors(writer, args.dealId, args.asOfDate);
+          dealCode = anchors.dealCode;
+          asOf = anchors.asOf;
+          fundIds = new Set(anchors.fundIds);
+        } else {
+          const draft = await loadAllocationDraft(writer, args.dealId, args.asOfDate, holds, adjustments, { capacities: false });
+          const preview = await commitAllocation(writer, draft, context.user?.id ?? null, { proposalsOnly: true });
+          dealCode = draft.dealCode;
+          asOf = draft.asOf;
+          fundIds = new Set(preview.rows.map((row) => row.fundId));
+        }
 
         // Pro forma rules are inactive on purpose, so a platform-wide job skips
         // them. Enrolled rules are the ones with a limit assigned to a fund on
@@ -522,7 +538,7 @@ export const complianceResolvers = {
         if (enrolledError) throw new Error(enrolledError.message);
         const ruleById = new Map<string, any>();
         for (const row of [...(surfaceRows || []), ...(enrolledRows || [])]) ruleById.set(row.id, row);
-        const plans = rulesToScore([...ruleById.values()], thresholdRows || [], fundIds, draft.asOf);
+        const plans = rulesToScore([...ruleById.values()], thresholdRows || [], fundIds, asOf);
         if (!plans.length) throw new Error('No compliance rules with limits are assigned to the funds on this deal.');
         const ruleIds = plans.map((plan) => plan.rule.id);
         const { data: versionRows, error: versionError } = await compliance
@@ -537,33 +553,39 @@ export const complianceResolvers = {
           if (!current || version.version_number > current.version_number) versionByRule.set(version.rule_id, version);
         }
 
-        const engine = getComplianceEngine(writer);
-        const results: any[] = [];
         const failures: string[] = [];
-        const settled = await Promise.allSettled(plans.map(async (plan) => {
-          const scored = await engine.evaluateRulesForFunds({
-            ruleCode: plan.rule.rule_code,
-            asOfDate: draft.asOf,
-            scenarioCode: draft.dealCode,
-            triggeredBy: context.user?.id,
-            anchorEntityIds: plan.anchorIds,
-            // The anchor list is already the set of funds with a limit. Pro
-            // forma rules have no enrollment row, and a rank band has no
-            // separate "this test applies" row, so the enrollment skip is off.
-            ignoreEnrollment: plan.ignoreEnrollment,
-          });
-          return scored;
-        }));
-        settled.forEach((outcome, index) => {
-          if (outcome.status === 'fulfilled') {
-            results.push(...outcome.value);
-            return;
-          }
-          const reason = outcome.reason;
-          const message = reason instanceof Error ? reason.message : String(reason);
-          failures.push(`${plans[index].rule.rule_name}: ${message}`);
+        const { data: scoredRows, error: scoreError } = await compliance.rpc('score_deal_funds', {
+          p_plans: plans.map((plan) => ({ ruleCode: plan.rule.rule_code, anchors: plan.anchorIds })),
+          p_as_of: asOf,
+          p_knowledge: new Date().toISOString(),
+          p_scenario: dealCode,
+          p_triggered_by: context.user?.id ?? null,
         });
-        if (!results.length && failures.length) throw new Error(failures[0]);
+        if (scoreError) throw new Error(scoreError.message);
+        const results = ((scoredRows || []) as any[]).map((row) => ({
+          id: row.id,
+          runId: row.run_id,
+          ruleId: row.rule_id,
+          ruleVersionId: row.rule_version_id,
+          anchorEntityId: row.anchor_entity_id,
+          groupByValue: row.group_by_value,
+          asOfDate: row.as_of_date,
+          knowledgeDate: row.knowledge_date,
+          sourceScope: row.source_scope,
+          numeratorValue: row.numerator_value,
+          denominatorValue: row.denominator_value,
+          computedValue: row.computed_value,
+          limitDirection: row.limit_direction,
+          softLimitValue: row.soft_limit_value,
+          hardLimitValue: row.hard_limit_value,
+          status: row.status,
+          breachAmount: row.breach_amount,
+          contributingEntityIds: row.contributing_entity_ids,
+          contributingCount: row.contributing_count,
+          rankPosition: row.rank_position ?? null,
+          detail: row.detail || {},
+          evaluatedAt: row.evaluated_at,
+        }));
 
         const { data: scenarioAttribute } = await writer
           .from('attribute_register')
@@ -575,7 +597,7 @@ export const complianceResolvers = {
             .from('entity_attribute_values')
             .select('entity_id')
             .eq('attribute_id', scenarioAttribute.id)
-            .eq('golden_value', draft.dealCode)
+            .eq('golden_value', dealCode)
             .gte('system_to', new Date().toISOString())
           : { data: [] };
         const proposalIds = new Set((scenarioRows || []).map((row) => row.entity_id));

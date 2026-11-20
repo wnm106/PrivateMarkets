@@ -6,6 +6,7 @@ import { ChangeSettings, readArg } from '@/components/workflows/ChangeSettings';
 import { ReviewAssignment } from '@/components/workflows/ReviewerPicker';
 import { graphqlMutation } from '@/lib/graphql';
 import { markdownToHtml } from '@/lib/markdown';
+import { reviewNextStep, summaryLead } from '@/lib/workflow-run-view';
 import { DECIDE_REVIEW, showValue, when, type MutationErrors, type ReviewView } from '@/lib/workflows';
 
 /**
@@ -39,24 +40,25 @@ function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-const LONG_SUMMARY = 700;
-
-/** The agent's summary, formatted. A long one is folded so the changes stay in view. */
+/** The agent's write-up: a short lead, with the full text a click away. */
 function AgentSummary({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
-  const long = text.length > LONG_SUMMARY;
+  const lead = useMemo(() => summaryLead(text), [text]);
   // The renderer knows three heading levels. Deeper ones are shown as the third.
   const html = useMemo(() => markdownToHtml(text.replace(/^#{4,}\s/gm, '### ')), [text]);
+  // There is more to read when the write-up runs past its first paragraph, or the lead was cut.
+  const more = /\n\s*\n/.test(text.trim()) || lead !== summaryLead(text, Infinity);
   return (
-    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
+    <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--line)' }}>
       <div style={sectionLabel}>What the agent found</div>
-      <div style={{ position: 'relative', maxHeight: long && !open ? 210 : undefined, overflow: 'hidden' }}>
+      {open ? (
         <div className="markdown-content" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 900 }} dangerouslySetInnerHTML={{ __html: html }} />
-        {long && !open && <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 44, background: 'linear-gradient(rgba(255,255,255,0), var(--surface))' }} />}
-      </div>
-      {long && (
-        <button type="button" onClick={() => setOpen(!open)} style={{ border: 'none', background: 'none', padding: 0, marginTop: 6, fontSize: 12, fontWeight: 600, color: 'var(--entity-link)', cursor: 'pointer' }}>
-          {open ? 'Show less' : 'Read the full summary'}
+      ) : (
+        <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 900 }}>{lead}</div>
+      )}
+      {more && (
+        <button type="button" onClick={() => setOpen(!open)} style={{ border: 'none', background: 'none', padding: 0, marginTop: 4, fontSize: 12, fontWeight: 600, color: 'var(--entity-link)', cursor: 'pointer' }}>
+          {open ? 'Show less' : "Read the agent's full write-up"}
         </button>
       )}
     </div>
@@ -109,7 +111,7 @@ export function ReviewPanel({ review, canManage = false, onDecided }: Props) {
   });
   /** The reviewer's changes to what a change sets, by item and setting. */
   const [edits, setEdits] = useState<Record<string, Record<string, string>>>({});
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(() => (open && review.canReview ? items.find((item) => item.needsReview)?.id || null : null));
   const [note, setNote] = useState(review.decision?.note || '');
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
@@ -203,6 +205,59 @@ export function ReviewPanel({ review, canManage = false, onDecided }: Props) {
     return item.needsReview ? { text: 'Look closely', fg: '#b45309' } : { text: 'Ready to approve', fg: 'var(--ink-3)' };
   };
 
+  const decided = items.length - undecided.length;
+  const next = canDecide ? nextNeeding() : undefined;
+  const approveConfident = () => setChoices((current) => ({ ...current, ...Object.fromEntries(confident.filter((item) => !current[item.id]).map((item) => [item.id, 'APPROVE' as Choice])) }));
+  const applyLabel = approved.length === 0 ? 'Confirm: change nothing' : `Apply ${plural(approved.length, 'approved change')}`;
+
+  /** What the person looking at this review has to do now, and the button that does it. */
+  function callToAction() {
+    const base = reviewNextStep(review);
+    let headline = base.headline;
+    let detail = base.detail;
+    if (canDecide && items.length > 0) {
+      if (next) {
+        headline = `Next: ${next.summary}`;
+        const questions = openQuestions(next).length;
+        detail = `${decided} of ${items.length} decided.${questions > 0 ? ` This one needs ${plural(questions, 'answer')} from you before it can be approved.` : next.needsReview ? ' The agent flagged this one for a close look.' : ''}`;
+      } else if (ready) {
+        headline = 'Everything is decided.';
+        detail = `${approved.length} approved, ${rejected.length} rejected. Nothing is written until you apply.`;
+      } else if (unlinked.length > 0) {
+        headline = 'An approved change needs its new list value approved too.';
+      }
+    }
+    const acting = canDecide;
+    return (
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', background: acting ? '#fff7ed' : '#f8fafc', borderLeft: `4px solid ${acting ? '#c2410c' : '#94a3b8'}`, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: acting ? '#c2410c' : '#475569' }}>{acting ? 'What you need to do' : 'Nothing for you to do'}</div>
+          <div style={{ fontSize: 14.5, fontWeight: 600, marginTop: 2 }}>{headline}</div>
+          {detail && <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{detail}</div>}
+        </div>
+        {canDecide && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {confident.some((item) => !choices[item.id]) && (
+              <button type="button" className="btn btn-sm" onClick={approveConfident}>
+                Approve the {confident.length} confident
+              </button>
+            )}
+            {next && expanded !== next.id && (
+              <button type="button" className="btn btn-primary" onClick={() => focus(next.id)}>
+                Review it now
+              </button>
+            )}
+            {(ready || items.length === 0) && (
+              <button type="button" className="btn btn-primary" disabled={saving} onClick={() => submit('APPROVED')}>
+                {saving ? 'Recording…' : items.length === 0 ? 'Approve and continue' : applyLabel}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <section style={{ border: '1px solid var(--line-strong)', borderRadius: 8, background: 'var(--surface)', overflow: 'hidden' }}>
       <header style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', background: open ? '#fffbeb' : 'var(--bg-alt)' }}>
@@ -213,12 +268,9 @@ export function ReviewPanel({ review, canManage = false, onDecided }: Props) {
         </div>
         {review.instructions && <div style={{ marginTop: 6, fontSize: 13, color: 'var(--ink-2)' }}>{review.instructions}</div>}
         <ReviewAssignment review={review} canManage={canManage} onChanged={onDecided} />
-        {open && !review.canReview && (
-          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--red)' }}>
-            You can see this review but cannot decide it. {review.blocker || 'Someone with the review permission needs to.'}
-          </div>
-        )}
       </header>
+
+      {open && callToAction()}
 
       {review.summary && <AgentSummary text={review.summary} />}
 
@@ -238,20 +290,6 @@ export function ReviewPanel({ review, canManage = false, onDecided }: Props) {
             return count > 0 ? <span key={action} style={chip(ACTION[action].fg, ACTION[action].bg)}>{count} {ACTION[action].label.toLowerCase()}{count === 1 ? '' : 's'}</span> : null;
           })}
         </div>
-        {canDecide && (
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            {confident.some((item) => !choices[item.id]) && (
-              <button type="button" className="btn btn-sm" onClick={() => setChoices((current) => ({ ...current, ...Object.fromEntries(confident.filter((item) => !current[item.id]).map((item) => [item.id, 'APPROVE' as Choice])) }))}>
-                Approve the {confident.length} confident
-              </button>
-            )}
-            {nextNeeding() && (
-              <button type="button" className="btn btn-sm btn-primary" onClick={() => focus(nextNeeding()?.id || null)}>
-                {expanded ? 'Next one needing you' : 'Walk me through what needs me'}
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
       {items.length === 0 ? (
@@ -448,9 +486,7 @@ export function ReviewPanel({ review, canManage = false, onDecided }: Props) {
                         ? `${plural(blocked.length, 'answer')} still needed`
                         : unlinked.length > 0
                           ? 'A new list value is not approved'
-                        : approved.length === 0
-                          ? 'Confirm: change nothing'
-                          : `Apply ${plural(approved.length, 'approved change')}`}
+                        : applyLabel}
               </button>
             </div>
           </div>

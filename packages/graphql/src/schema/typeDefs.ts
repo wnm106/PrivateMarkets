@@ -456,11 +456,60 @@ type StaleAttributeReport {
   attributes: [StaleAttribute!]!
 }
 
+"Check weights behind one data quality score. A zero applicable count means that dimension does not apply."
+type QualityScoreWeights {
+  availabilityPassing: Int!
+  availabilityApplicable: Int!
+  qualityPassing: Int!
+  qualityApplicable: Int!
+  freshnessPassing: Int!
+  freshnessApplicable: Int!
+  consensusPassing: Int!
+  consensusApplicable: Int!
+  "Rule failures a person has accepted. They are left out of the quality weights."
+  waivedChecks: Int!
+}
+
+type EntityTypeQualityScore {
+  domainCode: String
+  entityCount: Int!
+  availabilityPassing: Int!
+  availabilityApplicable: Int!
+  qualityPassing: Int!
+  qualityApplicable: Int!
+  freshnessPassing: Int!
+  freshnessApplicable: Int!
+  consensusPassing: Int!
+  consensusApplicable: Int!
+  waivedChecks: Int!
+}
+
+"An active source value that disagrees with the golden source for the same attribute."
+type ConsensusConflict {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  attributeCode: String!
+  attributeName: String!
+  goldenSourceCode: String!
+  goldenSourceName: String!
+  goldenValue: String
+  sourceCode: String!
+  sourceName: String!
+  value: String
+}
+
 type DataQualityDashboard {
   fromDate: Date!
   toDate: Date!
   domains: [String!]!
   summary: DataQualitySummary!
+  "Check weights for the current scope: the firm, one entity type, or one record."
+  scores: QualityScoreWeights
+  entityTypeScores: [EntityTypeQualityScore!]
+  "Active values that disagree with the golden source."
+  consensusConflicts: [ConsensusConflict!]!
   availability: [AttributeAvailability!]!
   quality: [RuleQuality!]!
   trajectory: [AttributeTrajectory!]!
@@ -675,6 +724,15 @@ type EntityQualityResult {
   qualityIntroducedCount: Int!
   overrideMatchCount: Int!
   overrideCount: Int!
+  availabilityPassing: Int!
+  availabilityApplicable: Int!
+  qualityPassing: Int!
+  qualityApplicable: Int!
+  freshnessPassing: Int!
+  freshnessApplicable: Int!
+  consensusPassing: Int!
+  consensusApplicable: Int!
+  waivedChecks: Int!
 }
 
 # File: compliance.graphql
@@ -2507,6 +2565,7 @@ input AllocationAdjustmentInput {
   amount: Float
   reasonCode: String
   note: String
+  "A position already on the books. The preview keeps it until the allocation is cleared."
   saved: Boolean
 }
 
@@ -2618,6 +2677,7 @@ type AllocationAdjustmentView {
   amount: Float
   reason: String
   note: String
+  "A position already on the books. Shown as saved, and left in place until the allocation is cleared."
   saved: Boolean
 }
 
@@ -2844,9 +2904,14 @@ type FundExposureBar {
   label: String!
   amount: Float!
   sharePct: Float
+  """Hard limit from the compliance rule for this strategy, sector, or issuer, as a percent of fair value."""
   limitPct: Float
   status: String!
-  limitId: ID
+  """The compliance rule that holds this limit."""
+  ruleId: ID
+  ruleCode: String
+  """The fund's own threshold for this name. Blank when the shown limit is inherited."""
+  thresholdId: ID
 }
 
 type FundExposure {
@@ -5275,7 +5340,6 @@ type WorkflowFormResult {
   errors: [MutationError!]!
 }
 
-"""A screen a workflow step is waiting on a person to work through."""
 type WorkflowStage {
   id: ID!
   runId: ID!

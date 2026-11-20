@@ -7,6 +7,8 @@ input AllocationAdjustmentInput {
   amount: Float
   reasonCode: String
   note: String
+  "A position already on the books. The preview keeps it until the allocation is cleared."
+  saved: Boolean
 }
 
 input AllocationHoldInput {
@@ -73,6 +75,8 @@ type AllocationAdjustmentView {
   amount: Float
   reason: String
   note: String
+  "A position already on the books. Shown as saved, and left in place until the allocation is cleared."
+  saved: Boolean
 }
 
 type AllocationPreview {

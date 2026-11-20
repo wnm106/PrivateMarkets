@@ -273,20 +273,30 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const [selected, setSelected] = useState<string | null>(null);
   const [edit, setEdit] = useState<{ fundId: string; trancheId: string; amount: string; reason: string; note: string; type: 'override' | 'exclude' } | null>(null);
   const [tab, setTab] = useState<'capital' | 'memo' | 'compliance' | 'syndicate' | 'closing' | 'servicing' | 'financials' | 'performance'>('capital');
-  const live = useLiveSurface('DEAL_PIPELINE', dealId);
   // Every tab stays mounted once warmed, so the assistant sees all of them, not only the open one.
-  const warmKeys = useMemo(() => {
-    const open = live.pages.map((page) => mountedPanel(page, DEAL_PANEL_KEYS)).filter((key): key is string => Boolean(key));
-    return (open.length ? open : [...DEAL_PANEL_KEYS]).filter((key) => key !== 'capital');
-  }, [live.pages]);
-  const warmed = useWarmTabs(warmKeys, tab);
+  const [scoreBaseline, setScoreBaseline] = useState<string | null>(null);
+  const scoreNow = `${JSON.stringify(holds)}|${JSON.stringify(adjustments)}`;
+  const liveScore = scoreBaseline != null && scoreNow !== scoreBaseline;
+  useEffect(() => {
+    if (!seeded || scoreBaseline != null) return;
+    setScoreBaseline(scoreNow);
+  }, [seeded, scoreBaseline, scoreNow]);
   const complianceScore = useDealComplianceScore({
     dealId,
     asOfDate,
     holds,
     adjustments,
-    enabled: seeded && (tab === 'capital' || warmed.has('compliance')),
+    enabled: true,
+    live: liveScore,
   });
+  const releaseTabs = seeded && (Boolean(complianceScore.board) || !complianceScore.loading);
+  const live = useLiveSurface('DEAL_PIPELINE', releaseTabs ? dealId : '');
+  const warmKeys = useMemo(() => {
+    if (!releaseTabs) return [];
+    const open = live.pages.map((page) => mountedPanel(page, DEAL_PANEL_KEYS)).filter((key): key is string => Boolean(key));
+    return (open.length ? open : [...DEAL_PANEL_KEYS]).filter((key) => key !== 'capital');
+  }, [live.pages, releaseTabs]);
+  const warmed = useWarmTabs(warmKeys, tab);
   useEffect(() => {
     if (live.pages.length === 0) return;
     const open = live.pages.filter((page) => mountedPanel(page, DEAL_PANEL_KEYS));
@@ -337,10 +347,26 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
     setLoading(false);
   }, [asOfDate, dealId]);
 
-  useEffect(() => { void load(null); }, [load]);
+  const previewGate = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${dealId}|${asOfDate || ''}`;
+    if (previewGate.current === key) return;
+    // Score first. The preview reads the same positions, and together they
+    // push the score past the database statement cap.
+    if (complianceScore.loading && !complianceScore.board) return;
+    previewGate.current = key;
+    void load(null);
+  }, [load, dealId, asOfDate, complianceScore.loading, complianceScore.board]);
 
+  const skipSeededPreview = useRef(true);
   useEffect(() => {
     if (!seeded) return;
+    // The first preview already loaded the saved book. Scoring it again, and
+    // previewing it again, was a second full pass over the same funds.
+    if (skipSeededPreview.current) {
+      skipSeededPreview.current = false;
+      return;
+    }
     const timer = window.setTimeout(() => { void load({ holds, adjustments }); }, 250);
     return () => window.clearTimeout(timer);
   }, [adjustments, holds, load, seeded]);
