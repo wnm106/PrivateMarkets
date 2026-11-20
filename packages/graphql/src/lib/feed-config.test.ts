@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanConnectionConfig, cleanFeedPath, cleanFolder, cleanRemoteFolder, codeFrom, needsSecret } from './feed-config';
+import { cleanConnectionConfig, cleanFeedPath, cleanFolder, cleanRemoteFolder, cleanSender, codeFrom, needsSecret } from './feed-config';
 
 describe('cleanFolder', () => {
   it('tidies a folder path and refuses anything that could leave it', () => {
@@ -30,7 +30,7 @@ describe('cleanConnectionConfig', () => {
     expect(() => cleanConnectionConfig('HTTP', { baseUrl: 'not an address' })).toThrow(/starting with https/);
     expect(() => cleanConnectionConfig('HTTP', { baseUrl: 'https://files.example.com/', authType: 'BASIC' })).toThrow(/user name/);
     expect(() => cleanConnectionConfig('HTTP', { baseUrl: 'https://files.example.com/', authType: 'HEADER', headerName: 'bad header' })).toThrow(/header/);
-    expect(() => cleanConnectionConfig('FTP', {})).toThrow(/STORAGE, HTTP, or SFTP/);
+    expect(() => cleanConnectionConfig('FTP', {})).toThrow(/STORAGE, HTTP, SFTP, or EMAIL/);
   });
 });
 
@@ -84,5 +84,57 @@ describe('needsSecret, cleanFeedPath, codeFrom', () => {
   it('makes a code from a name', () => {
     expect(codeFrom('Administrator NAV pack (monthly)', 'FEED')).toBe('ADMINISTRATOR_NAV_PACK_MONTHLY');
     expect(codeFrom('  ', 'FEED')).toBe('FEED');
+  });
+});
+
+describe('email connections', () => {
+  it('keeps allowed senders, file types and limits, and drops anything else', () => {
+    expect(
+      cleanConnectionConfig('EMAIL', {
+        allowedSenders: ' Ops@AdminCo.com, @fundadmin.co.uk\nops@adminco.com ',
+        fileTypes: ['XLSX', '.csv'],
+        maxPerHour: '10',
+        password: 'oops',
+      }),
+    ).toEqual({
+      allowedSenders: ['ops@adminco.com', 'fundadmin.co.uk'],
+      requireDkim: true,
+      fileTypes: ['xlsx', 'csv'],
+      maxPerHour: 10,
+      maxMessageMb: 25,
+    });
+  });
+
+  it('needs a sender, and refuses what is not an address or a domain', () => {
+    expect(() => cleanConnectionConfig('EMAIL', { allowedSenders: '' })).toThrow(/at least one sender/);
+    expect(() => cleanConnectionConfig('EMAIL', { allowedSenders: 'adminco' })).toThrow(/not an email address or a domain/);
+    expect(() => cleanConnectionConfig('EMAIL', { allowedSenders: '*@adminco.com' })).toThrow(/not an email address/);
+  });
+
+  it('never takes file types outside the safe list', () => {
+    expect(() => cleanConnectionConfig('EMAIL', { allowedSenders: 'adminco.com', fileTypes: ['xlsm'] })).toThrow(/cannot be taken/);
+    expect(() => cleanConnectionConfig('EMAIL', { allowedSenders: 'adminco.com', fileTypes: ['zip'] })).toThrow(/cannot be taken/);
+  });
+
+  it('turns the DKIM requirement off only when asked', () => {
+    expect(cleanConnectionConfig('EMAIL', { allowedSenders: 'adminco.com', requireDkim: false }).requireDkim).toBe(false);
+    expect(cleanConnectionConfig('EMAIL', { allowedSenders: 'adminco.com', requireDkim: 'yes' }).requireDkim).toBe(true);
+  });
+
+  it('keeps limits in range', () => {
+    expect(() => cleanConnectionConfig('EMAIL', { allowedSenders: 'adminco.com', maxPerHour: 0 })).toThrow(/between 1 and 500/);
+    expect(() => cleanConnectionConfig('EMAIL', { allowedSenders: 'adminco.com', maxMessageMb: 100 })).toThrow(/between 1 and 35/);
+  });
+
+  it('cleans one sender', () => {
+    expect(cleanSender('@AdminCo.com')).toBe('adminco.com');
+    expect(cleanSender('a.b+nav@x.io')).toBe('a.b+nav@x.io');
+    expect(cleanSender('x@localhost')).toBeNull();
+  });
+
+  it('has no path, needs no credential, and keeps drop folders out of the email folder', () => {
+    expect(cleanFeedPath('EMAIL', 'anything')).toBe('');
+    expect(needsSecret('EMAIL', {})).toBe(false);
+    expect(() => cleanConnectionConfig('STORAGE', { folder: '_email/x' })).toThrow(/cannot start with _email/);
   });
 });

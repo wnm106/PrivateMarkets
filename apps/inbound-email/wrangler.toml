@@ -1,0 +1,16 @@
+# Cloudflare Email Worker for inbound feed email. See docs/FEEDS.md, "Inbound email".
+#
+# Email Routing sends mail for the inbound domain to this worker with a
+# catch-all rule: Email > Email Routing > Routing rules > Catch-all > Send to a Worker.
+name = "tapestrai-inbound-email"
+main = "src/index.ts"
+compatibility_date = "2024-12-18"
+
+[vars]
+# Mail to any other domain is refused. Use a subdomain kept for this, for example in.tapestr.ai.
+INBOUND_EMAIL_DOMAIN = ""
+# SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are secrets: `wrangler secret put <NAME>`.
+# Locally, put them in apps/inbound-email/.dev.vars (gitignored).
+
+[env.production.vars]
+INBOUND_EMAIL_DOMAIN = ""

@@ -41,6 +41,7 @@ Optional settings: `WORKER_CONCURRENCY` (runs side by side, default 5), `WORKER_
 | `feed.poll` | One client | `feedId` | Files seen, loaded, duplicates, needing review, failed. See [FEEDS.md](FEEDS.md) |
 | `feed.check` | One client | none | Fails and names the feeds whose file is late |
 | `connection.check` | One client | `connectionId` | Whether the connection can be reached |
+| `email.screen` | One client | `messageId` | The verdict on one email sent to an email connection (accepted, quarantined, rejected), how many attachments were taken, and how many polls were queued. Queued when an email arrives or is released. Not put on a schedule. A quarantined email fails the run so it is seen. See [FEEDS.md](FEEDS.md#inbound-email) |
 | `loader.run` | One client | `loaderId` | Always fails: data loaders were replaced by feeds |
 | `assistant.sweep` | One client | none | How many people were due for a summary, and how many urgent notes were queued. Created when someone turns the assistant on. One per client is enough. |
 | `assistant.brief` | One client | none | Whether a summary was written, and how many changes it included. Not put on a schedule. Queued for one person by the sweep, or when they ask for a summary now. |

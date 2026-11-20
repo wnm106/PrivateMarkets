@@ -1,0 +1,18 @@
+{
+  "name": "@tapestrai/inbound-email",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Email Worker: takes mail for EMAIL feed connections and hands it to screening",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "clean": "rm -rf dist .turbo"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^1.0.0",
+    "wrangler": "^3.22.0"
+  }
+}
