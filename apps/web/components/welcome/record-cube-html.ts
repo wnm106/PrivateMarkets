@@ -41,24 +41,18 @@ body{background:transparent;color:var(--ink);font:15px/1.3 "Avenir Next","Centur
 .tag{left:calc(100% + 10px);top:0;height:100%;align-items:center;transform-origin:0 50%;transform:translateZ(var(--z)) rotateZ(calc(-1*var(--spin))) rotateX(calc(-1*var(--tilt)));opacity:1}
 .tag button{pointer-events:auto;font:inherit;font-weight:700;font-size:var(--ft);color:var(--ink);background:var(--tag);border:2px solid var(--gray);border-radius:99px;padding:.3em .75em;cursor:pointer;white-space:nowrap;box-sizing:border-box;width:var(--tpw,auto);text-align:center}
 .tag button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
-.tag button:focus-visible,#views button:focus-visible{outline:3px solid var(--b1);outline-offset:1px}
-#views{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:4px;padding:4px;border-radius:99px;background:var(--tag);border:2px solid var(--gray);z-index:2}
-#views button{font:inherit;font-weight:700;font-size:clamp(13px,2.2vw,16px);color:var(--ink);background:none;border:0;border-radius:99px;padding:.35em 1em;cursor:pointer}
-#views button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.tag button:focus-visible{outline:3px solid var(--b1);outline-offset:1px}
 #tip{position:absolute;left:16px;bottom:12px;max-width:64%;font-size:clamp(14px,2.6vw,20px);font-weight:700;pointer-events:none}
 #tip small{display:block;color:var(--mute);font-size:clamp(11px,1.8vw,14px);font-weight:500;margin-top:2px}
 #brand{position:absolute;right:16px;bottom:12px;font-size:clamp(17px,3.4vw,26px);font-weight:700;letter-spacing:-.02em;pointer-events:none}
 #brand em{font-style:normal;color:#0a8cff}
-body.ls #views{left:12px;top:10px;transform:none;flex-direction:column;border-radius:20px}
-body.ls #views button{font-size:14px;padding:.35em .9em;text-align:left}
-body.ls #tip{max-width:190px;font-size:15px}
+body.ls body.ls body.ls #tip{max-width:190px;font-size:15px}
 body.ls #tip small{font-size:11px}
 @media (prefers-reduced-motion:reduce){.ribbon::after{animation:none}.ribbon{transition:none}}
 </style>
 </head>
 <body>
 <div id="stage"><div id="scene"></div></div>
-<div id="views" role="group" aria-label="Viewing angle"><button data-v="0" aria-pressed="true">Front</button><button data-v="1" aria-pressed="false">Side</button><button data-v="2" aria-pressed="false">Back</button></div>
 <div id="tip"></div>
 <div id="brand">tapestr<em>.ai</em></div>
 <script>
@@ -119,28 +113,14 @@ function render(){
  tip.innerHTML=ENT[sel.r]+' &middot; '+SRC[sel.c]+(focus>=0?' &middot; '+TIM[focus]:'')+
   '<small>'+(focus>=0?'Showing '+TIM[focus]+' only. Tap it again for all three.':'The same record across the Front, Middle and Back Office.')+'</small>';
 }
-var vbtns=document.querySelectorAll('#views button');
-var VIEWS=[[56,0],[78,-38],[128,24]],cur={t:56,s:0},justDragged=false,anim=0;
+var cur={t:56,s:0},justDragged=false;
 function apply(){stage.style.setProperty('--tilt',cur.t+'deg');stage.style.setProperty('--spin',cur.s+'deg')}
-function mark(v){vbtns.forEach(function(b,i){b.setAttribute('aria-pressed',i===v?'true':'false')})}
-function goTo(v){
- mark(v);touched=true;cancelAnimationFrame(anim);
- var to=VIEWS[v],from={t:cur.t,s:cur.s};
- if(reduce){cur={t:to[0],s:to[1]};apply();return}
- var t0=performance.now();
- (function step(now){
-  var u=Math.min(1,(now-t0)/800),e=u<.5?2*u*u:1-Math.pow(-2*u+2,2)/2;
-  cur.t=from.t+(to[0]-from.t)*e;cur.s=from.s+(to[1]-from.s)*e;apply();
-  if(u<1)anim=requestAnimationFrame(step);
- })(t0);
-}
-vbtns.forEach(function(b,i){b.addEventListener('click',function(){goTo(i)})});
 var down=null;
 stage.addEventListener('pointerdown',function(e){if(e.target.closest('.tag'))return;down={x:e.clientX,y:e.clientY,moved:false}});
 window.addEventListener('pointermove',function(e){
  if(!down)return;var dx=e.clientX-down.x,dy=e.clientY-down.y;
  if(!down.moved&&Math.abs(dx)+Math.abs(dy)<6)return;
- if(!down.moved){down.moved=true;cancelAnimationFrame(anim);stage.classList.add('drag');mark(-1);touched=true}
+ if(!down.moved){down.moved=true;stage.classList.add('drag');touched=true}
  down.x=e.clientX;down.y=e.clientY;
  cur.s+=dx*0.4;cur.t=Math.max(15,Math.min(165,cur.t+dy*0.3));apply();
 });

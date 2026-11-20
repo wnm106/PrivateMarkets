@@ -261,7 +261,7 @@ export default function WelcomePage() {
             srcDoc={RECORD_CUBE_HTML}
             sandbox="allow-scripts"
             loading="lazy"
-            className="mt-14 mx-auto block w-full max-w-5xl h-[420px] sm:h-[520px] md:h-[600px] border-0 bg-transparent"
+            className="mt-4 mx-auto block w-full max-w-5xl h-[420px] sm:h-[520px] md:h-[600px] border-0 bg-transparent"
           />
         </div>
       </section>
