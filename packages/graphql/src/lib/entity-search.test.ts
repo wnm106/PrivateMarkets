@@ -206,6 +206,38 @@ describe('entity search catalog helpers', () => {
     expect(orphan[0].depth).toBe(0);
     expect(ilikeContainsPattern(' 100%_x ')).toBe('%100\\%\\_x%');
   });
+
+  it('leaves out an entity type that is not enabled for search, and does not use it to pull in a parent', () => {
+    const withContract = [
+      ...domains,
+      { domainCode: 'INTEREST_CONTRACT', domainName: 'Contract', parentDomainCode: 'SECURITY', enabledForSearch: false },
+    ];
+    const hits = rankEntitySearch({
+      query: 'Alpha',
+      entities: [
+        ...entities,
+        { id: 'c1', entityCode: 'C1', entityName: 'Alpha Contract', domainCode: 'INTEREST_CONTRACT', isActive: true },
+      ],
+      links: [...links, { parentEntityId: 's1', childEntityId: 'c1' }],
+      domains: withContract,
+    });
+    expect(hits.map((hit) => hit.entityName)).toContain('Alpha Fund');
+    expect(hits.some((hit) => hit.domainCode === 'INTEREST_CONTRACT')).toBe(false);
+
+    const onlyContract = rankEntitySearch({
+      query: 'Facility A',
+      entities: [
+        { id: 's1', entityCode: 'S1', entityName: 'Brightwater TLB', domainCode: 'SECURITY', isActive: true },
+        { id: 'c1', entityCode: 'C1', entityName: 'Facility A', domainCode: 'INTEREST_CONTRACT', isActive: true },
+      ],
+      links: [{ parentEntityId: 's1', childEntityId: 'c1' }],
+      domains: [
+        { domainCode: 'SECURITY', domainName: 'Security', parentDomainCode: null },
+        { domainCode: 'INTEREST_CONTRACT', domainName: 'Contract', parentDomainCode: 'SECURITY', enabledForSearch: false },
+      ],
+    });
+    expect(onlyContract).toEqual([]);
+  });
 });
 
 describe('fetchEntitySearchHits', () => {
@@ -270,6 +302,21 @@ describe('fetchEntitySearchHits', () => {
     expect(crowded.some((hit) => hit.domainCode === 'FUND')).toBe(true);
     expect(crowded.some((hit) => hit.id === 'bp')).toBe(true);
     expect(crowded.filter((hit) => hit.domainCode === 'FUND').length).toBeLessThanOrEqual(8);
+
+    const searchable = await fetchEntitySearchHits(fakeClient({
+      domain_types: [
+        { domain_code: 'FUND', domain_name: 'Fund', parent_domain_code: null, is_active: true, enabled_for_search: true },
+        { domain_code: 'INTEREST_CONTRACT', domain_name: 'Contract', parent_domain_code: 'SECURITY', is_active: true, enabled_for_search: false },
+      ],
+      master_entities: [
+        { id: 'f1', entity_code: 'F1', entity_name: 'Alpha Fund', domain_code: 'FUND', is_active: true },
+        { id: 'c1', entity_code: 'C1', entity_name: 'Alpha Contract', domain_code: 'INTEREST_CONTRACT', is_active: true },
+      ],
+      entity_relationships: [
+        { parent_entity_id: 'f1', child_entity_id: 'c1', valid_to: '9999-12-31', system_to: '9999-12-31 23:59:59' },
+      ],
+    }), 'Alpha', 20);
+    expect(searchable.map((hit) => hit.entityName)).toEqual(['Alpha Fund']);
   });
 });
 

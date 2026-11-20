@@ -81,7 +81,7 @@ export function HomeComposer({ summary, onStarted }: { summary: HomeSummary | nu
       <textarea
         className="home-composer-input"
         rows={2}
-        placeholder="Ask a question, or hand off a task"
+        placeholder={`Ask a question or hand off a task. For example: “${chips[0] || 'What changed this week?'}”`}
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
@@ -108,7 +108,7 @@ export function HomeComposer({ summary, onStarted }: { summary: HomeSummary | nu
         </label>
         <span className="home-composer-hint home-muted">{chosen.hint}</span>
         <button type="button" className="btn btn-primary" onClick={() => void send()} disabled={Boolean(problem) || sending}>
-          {sending ? 'Starting…' : workflowId ? 'Hand off' : 'Ask'}
+          {sending ? 'Starting…' : workflowId ? 'Hand off →' : 'Ask →'}
         </button>
       </div>
 
@@ -121,6 +121,7 @@ export function HomeComposer({ summary, onStarted }: { summary: HomeSummary | nu
       {sent?.kind === 'problem' && <div className="home-composer-note is-problem" role="alert">{sent.message}</div>}
 
       <div className="home-composer-chips">
+        <span className="hx-chips-label">Try</span>
         {chips.map((chip) => (
           <button key={chip} type="button" className="home-chip" onClick={() => askAssistant(chip)}>
             {chip}

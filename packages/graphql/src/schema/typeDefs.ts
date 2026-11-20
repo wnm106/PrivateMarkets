@@ -456,11 +456,60 @@ type StaleAttributeReport {
   attributes: [StaleAttribute!]!
 }
 
+"Check weights behind one data quality score. A zero applicable count means that dimension does not apply."
+type QualityScoreWeights {
+  availabilityPassing: Int!
+  availabilityApplicable: Int!
+  qualityPassing: Int!
+  qualityApplicable: Int!
+  freshnessPassing: Int!
+  freshnessApplicable: Int!
+  consensusPassing: Int!
+  consensusApplicable: Int!
+  "Rule failures a person has accepted. They are left out of the quality weights."
+  waivedChecks: Int!
+}
+
+type EntityTypeQualityScore {
+  domainCode: String
+  entityCount: Int!
+  availabilityPassing: Int!
+  availabilityApplicable: Int!
+  qualityPassing: Int!
+  qualityApplicable: Int!
+  freshnessPassing: Int!
+  freshnessApplicable: Int!
+  consensusPassing: Int!
+  consensusApplicable: Int!
+  waivedChecks: Int!
+}
+
+"An active source value that disagrees with the golden source for the same attribute."
+type ConsensusConflict {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  attributeCode: String!
+  attributeName: String!
+  goldenSourceCode: String!
+  goldenSourceName: String!
+  goldenValue: String
+  sourceCode: String!
+  sourceName: String!
+  value: String
+}
+
 type DataQualityDashboard {
   fromDate: Date!
   toDate: Date!
   domains: [String!]!
   summary: DataQualitySummary!
+  "Check weights for the current scope: the firm, one entity type, or one record."
+  scores: QualityScoreWeights
+  entityTypeScores: [EntityTypeQualityScore!]
+  "Active values that disagree with the golden source."
+  consensusConflicts: [ConsensusConflict!]!
   availability: [AttributeAvailability!]!
   quality: [RuleQuality!]!
   trajectory: [AttributeTrajectory!]!
@@ -675,6 +724,15 @@ type EntityQualityResult {
   qualityIntroducedCount: Int!
   overrideMatchCount: Int!
   overrideCount: Int!
+  availabilityPassing: Int!
+  availabilityApplicable: Int!
+  qualityPassing: Int!
+  qualityApplicable: Int!
+  freshnessPassing: Int!
+  freshnessApplicable: Int!
+  consensusPassing: Int!
+  consensusApplicable: Int!
+  waivedChecks: Int!
 }
 
 # File: compliance.graphql
@@ -1637,6 +1695,7 @@ input CreateDomainTypeInput {
   groupCode: String
   parentDomainCode: String
   isCore: Boolean
+  enabledForSearch: Boolean
 }
 
 type CreateDomainTypeResult {
@@ -1775,6 +1834,7 @@ type DomainTypeRecord {
   clientName: String
   isCore: Boolean!
   displayOrder: Int!
+  enabledForSearch: Boolean!
   parentDomainCode: String
   group: DomainGroup
   ownedAttributeCount: Int!
@@ -1799,6 +1859,7 @@ input UpdateDomainTypeInput {
   parentDomainCode: String
   isCore: Boolean
   displayOrder: Int
+  enabledForSearch: Boolean
 }
 
 type UpdateDomainTypeResult {
@@ -2040,6 +2101,20 @@ type Client {
   isActive: Boolean!
   isInternal: Boolean!
   createdAt: DateTime!
+  # When true, this client sees only the modules last saved for it.
+  curatedModules: Boolean!
+  moduleCodes: [String!]!
+}
+
+# A product area a tenant admin can turn on for a curated client.
+type ClientModule {
+  code: String!
+  name: String!
+  description: String!
+  domainCodes: [String!]!
+  surfaceCodes: [String!]!
+  workflowCodes: [String!]!
+  toolHrefs: [String!]!
 }
 
 type Role {
@@ -2137,6 +2212,9 @@ input CreateClientInput {
   clientCode: String!
   clientName: String!
   adminEmail: String
+  # Opt in to a curated experience. Omitted or false keeps the full catalog.
+  curatedModules: Boolean
+  moduleCodes: [String!]
 }
 
 input CreateRoleInput {
@@ -2507,6 +2585,7 @@ input AllocationAdjustmentInput {
   amount: Float
   reasonCode: String
   note: String
+  "A position already on the books. The preview keeps it until the allocation is cleared."
   saved: Boolean
 }
 
@@ -2618,6 +2697,7 @@ type AllocationAdjustmentView {
   amount: Float
   reason: String
   note: String
+  "A position already on the books. Shown as saved, and left in place until the allocation is cleared."
   saved: Boolean
 }
 
@@ -3162,9 +3242,7 @@ type Query {
   agentCall(id: ID!): JSON
   """Forms workflow steps are waiting on. status defaults to OPEN; runId keeps one run's."""
   workflowForms(status: String, runId: ID): [WorkflowForm!]!
-  """Stages workflow steps are waiting on. status defaults to OPEN; pass null with a runId for every stage of one run."""
   workflowStages(status: String, runId: ID): [WorkflowStage!]!
-  """The screens a Stage step can show."""
   workflowStageScreens: [WorkflowStageScreen!]!
   """The runs a run was split into, one per record: [{ id, status, input, createdAt, finishedAt, openReviews }]."""
   workflowRunChildren(runId: ID!): JSON!
@@ -3257,6 +3335,7 @@ type Query {
   me: Me!
   clients: [Client!]!
   client(id: ID!): Client
+  clientModuleCatalog: [ClientModule!]!
   clientUsers(clientId: ID!): [ClientUser!]!
   roles(clientId: ID): [Role!]!
   permissionsCatalog: [String!]!
@@ -3452,6 +3531,7 @@ type Mutation {
 
   # Tenancy mutations
   createClient(input: CreateClientInput!): MutationResult!
+  setClientModules(clientId: ID!, curated: Boolean!, moduleCodes: [String!]!): MutationResult!
   createRole(input: CreateRoleInput!): MutationResult!
   inviteUser(input: InviteUserInput!): MutationResult!
   assignRole(input: AssignRoleInput!): MutationResult!
@@ -3536,7 +3616,6 @@ type Mutation {
   saveNotificationSettings(emailEnabled: Boolean!, slackWebhookUrl: String): NotificationSettingsResult!
   """Answers a form, or declines it. The run goes on down the submitted or declined path."""
   submitWorkflowForm(id: ID!, outcome: String!, answers: JSON, note: String): WorkflowFormResult!
-  """Leaves a stage with one of its outcomes. The run goes on down that outcome's path, or hands the stage back when it does not hold up."""
   completeWorkflowStage(id: ID!, outcome: String!, result: JSON): WorkflowStageResult!
   """Answers a form by its private link. Needs no sign-in. The link stops working once used."""
   submitWorkflowPortalForm(token: String!, outcome: String!, answers: JSON, note: String): MutationResult!
@@ -5275,26 +5354,20 @@ type WorkflowFormResult {
   errors: [MutationError!]!
 }
 
-"""A screen a workflow step is waiting on a person to work through."""
 type WorkflowStage {
   id: ID!
   runId: ID!
   nodeId: String!
   workflowName: String
-  """The screen's code, such as load.map or load.quality."""
   screen: String!
   title: String!
   instructions: String
-  """What the run gives the screen."""
   args: JSON!
   outcomes: [String!]!
-  """The outcomes this person may choose."""
   allowedOutcomes: [String!]!
-  """OPEN, DONE, or CANCELLED."""
   status: String!
   outcome: String
   result: JSON
-  """Why the stage was handed back to the person, when it was."""
   returnedReason: String
   assignees: JSON!
   canAct: Boolean!
@@ -5315,7 +5388,6 @@ type WorkflowStageScreen {
   label: String!
   description: String!
   outcomes: [String!]!
-  """[{ key, label, help }]"""
   args: JSON!
 }
 

@@ -475,3 +475,86 @@ export function greeting(now: Date, name: string | null | undefined) {
   const first = (name || '').trim().split(/\s+/)[0];
   return first ? `${part}, ${first}` : part;
 }
+
+// ---------------------------------------------------------------------------
+// The briefing at the top of the page
+// ---------------------------------------------------------------------------
+
+/** The opening line after the greeting: how much is waiting and where to start. */
+export function heroLead(groups: readonly NeedsYouGroup[]): { lead: string; start: string | null } {
+  if (groups.length === 0) return { lead: 'Nothing is waiting on you.', start: null };
+  const count = groups.length;
+  const words = ['', 'One thing needs', 'Two things need', 'Three things need', 'Four things need', 'Five things need', 'Six things need'];
+  const lead = count < words.length ? `${words[count]} you` : `${count} things need you`;
+  return { lead, start: groups[0].title };
+}
+
+/** What the agents report, enough of it to say what they did. */
+export interface AgentsSummary {
+  running: number;
+  waiting: number;
+  finished: ReadonlyArray<{ outcome: 'done' | 'failed' }>;
+}
+
+/** One or two sentences on what the agents did and are doing. */
+export function agentLine(board: AgentsSummary | null): string {
+  if (!board) return 'Checking what your agents are doing…';
+  const done = board.finished.filter((item) => item.outcome === 'done').length;
+  const failed = board.finished.length - done;
+  const sentences: string[] = [];
+  if (board.finished.length > 0) {
+    sentences.push(`In the last day your agents finished ${plural(done, 'run')}${failed ? ` and ${failed} stopped with an error` : ''}.`);
+  }
+  // `running` counts runs moving or queued; `waiting` counts runs paused on a person.
+  const now: string[] = [];
+  if (board.running > 0) now.push(`${plural(board.running, 'run')} ${board.running === 1 ? 'is' : 'are'} in progress`);
+  if (board.waiting > 0) now.push(`${plural(board.waiting, 'run')} ${board.waiting === 1 ? 'is' : 'are'} paused for a review`);
+  if (now.length) sentences.push(`${now.join(' and ')}.`.replace(/^./, (first) => first.toUpperCase()));
+  if (!sentences.length) return 'Your agents are idle. Hand them a task below and they will bring back what they find.';
+  return sentences.join(' ');
+}
+
+/** The short tag on a row in the queue. */
+export const KIND_LABEL: Record<NeedsYouKind, string> = {
+  review: 'Review',
+  'file-review': 'File',
+  'file-failed': 'File failed',
+  'job-failed': 'Job failed',
+  'run-failed': 'Run failed',
+  exception: 'Exception',
+  'urgent-exceptions': 'Exceptions',
+};
+
+/** What the home page tells the assistant it is showing. */
+export function homePageData(input: {
+  headline: string;
+  scope: 'mine' | 'all' | null;
+  groups: readonly NeedsYouGroup[] | null;
+  hiddenReviews: number;
+  agents: string;
+}): Record<string, unknown> {
+  return {
+    page: 'Home',
+    purpose: 'The briefing a person sees first: what is waiting on them, what their agents did, and where to go next.',
+    howToRead: 'Decide items are proposals or files waiting on a call. Fix items are things that broke. Rows are ordered most urgent first, then newest.',
+    headline: input.headline,
+    scope: input.scope === 'mine' ? 'Narrowed to the records this person follows or is responsible for' : 'Everything this person can see',
+    waiting: input.groups
+      ? {
+          decide: input.groups.filter((group) => group.lane === 'decide').reduce((sum, group) => sum + group.count, 0),
+          fix: input.groups.filter((group) => group.lane === 'fix').reduce((sum, group) => sum + group.count, 0),
+          hiddenReviews: input.hiddenReviews,
+          items: input.groups.slice(0, 40).map((group) => ({
+            lane: group.lane,
+            kind: KIND_LABEL[group.kind],
+            urgency: group.urgency,
+            title: group.title,
+            count: group.count,
+            detail: group.items[0]?.detail || null,
+            action: group.action,
+          })),
+        }
+      : null,
+    agents: input.agents,
+  };
+}

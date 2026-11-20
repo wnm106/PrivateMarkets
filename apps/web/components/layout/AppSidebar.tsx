@@ -7,6 +7,7 @@ import { graphqlQuery } from '@/lib/graphql';
 import { nestDomainLinks } from '@/lib/domain-nav';
 import { domainHref } from '@/lib/domain-routes';
 import { SKILL_NAV } from '@/lib/skill-catalog';
+import { filterByTools } from '@/lib/client-modules';
 import { omitSurfacesFromTools, surfaceLinkActive, type SurfaceNavLink } from '@/lib/surface-links';
 import { BrandLogo } from './BrandLogo';
 import { UserMenu } from './UserMenu';
@@ -214,9 +215,19 @@ function NavIcon({ name }: { name: string }) {
   }
 }
 
-export function AppSidebar({ surfaceLinks = [] }: { surfaceLinks?: SurfaceNavLink[] }) {
+export function AppSidebar({
+  surfaceLinks = [],
+  enabledToolHrefs = null,
+}: {
+  surfaceLinks?: SurfaceNavLink[];
+  enabledToolHrefs?: readonly string[] | null;
+}) {
   const pathname = usePathname() || '/';
-  const tools = useMemo(() => omitSurfacesFromTools(TOOLS, surfaceLinks), [surfaceLinks]);
+  const tools = useMemo(() => {
+    const visible = omitSurfacesFromTools(TOOLS, surfaceLinks);
+    if (!enabledToolHrefs) return visible;
+    return filterByTools(visible, { restricted: true, surfaces: [], tools: enabledToolHrefs });
+  }, [surfaceLinks, enabledToolHrefs]);
   const [collapsed, setCollapsed] = useState(false);
   const [openSection, setOpenSection] = useState<NavSection | null>('domains');
   const [domains, setDomains] = useState<DomainLink[]>([]);
@@ -434,6 +445,7 @@ export function AppSidebar({ surfaceLinks = [] }: { surfaceLinks?: SurfaceNavLin
           </div>
         )}
 
+        {(enabledToolHrefs === null || enabledToolHrefs.includes('/quality')) && (
         <Link
           href="/quality"
           className={`sidebar-link ${navActive(pathname, '/quality') ? 'active' : ''}`}
@@ -446,6 +458,7 @@ export function AppSidebar({ surfaceLinks = [] }: { surfaceLinks?: SurfaceNavLin
             <span className={collapsed ? 'sidebar-dot' : 'sidebar-badge'}>{collapsed ? '' : openExceptions.toLocaleString()}</span>
           )}
         </Link>
+        )}
 
         <div className="sidebar-tools">
           <button

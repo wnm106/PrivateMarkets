@@ -18,9 +18,12 @@ const BARE_PATHS = ['/welcome', '/login', '/no-access', '/portal'];
 export function AppChrome({
   children,
   surfaceLinks = [],
+  enabledToolHrefs = null,
 }: {
   children: React.ReactNode;
   surfaceLinks?: SurfaceNavLink[];
+  /** Null keeps every tool. A list is the curated client's saved tools. */
+  enabledToolHrefs?: readonly string[] | null;
 }) {
   const pathname = usePathname() || '/';
   const routeContext = useMemo(() => routeChatContext(pathname), [pathname]);
@@ -34,7 +37,7 @@ export function AppChrome({
       {/* The assistant is a flex sibling of the page content, so opening it
           compresses the page rather than overlaying it. */}
       <div className="app-shell">
-        <AppSidebar surfaceLinks={surfaceLinks} />
+        <AppSidebar surfaceLinks={surfaceLinks} enabledToolHrefs={enabledToolHrefs} />
         <div className="app-shell-main">
           <TopBar />
           {/* Before the page, so a page that publishes its own data stays in front. */}

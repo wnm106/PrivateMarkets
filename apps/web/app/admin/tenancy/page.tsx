@@ -10,6 +10,8 @@ import {
   ROLES_QUERY,
   PERMISSIONS_CATALOG_QUERY,
   CREATE_CLIENT_MUTATION,
+  CLIENT_MODULE_CATALOG_QUERY,
+  SET_CLIENT_MODULES_MUTATION,
   CREATE_ROLE_MUTATION,
   INVITE_USER_MUTATION,
   ASSIGN_ROLE_MUTATION,
@@ -20,6 +22,7 @@ import {
 } from '@/lib/graphql';
 import { EntityRoleAccess, type AccessGrant } from '@/components/security/EntityRoleAccess';
 import { ClientAuthentication } from '@/components/admin/ClientAuthentication';
+import { experienceLabel, ModuleChoices, type ClientModuleOption } from '@/components/admin/ClientExperience';
 
 interface Client {
   id: string;
@@ -27,6 +30,8 @@ interface Client {
   clientName: string;
   isActive: boolean;
   isInternal: boolean;
+  curatedModules: boolean;
+  moduleCodes: string[];
 }
 interface Role {
   id: string;
@@ -155,21 +160,111 @@ function ClientsTab({ clients, onChanged, onError, canProvision }: { clients: Cl
   const [clientCode, setClientCode] = useState('');
   const [clientName, setClientName] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
+  const [curated, setCurated] = useState(false);
+  const [selectedModules, setSelectedModules] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [modules, setModules] = useState<ClientModuleOption[]>([]);
+  const [experienceClientId, setExperienceClientId] = useState('');
+  const [experienceCurated, setExperienceCurated] = useState(false);
+  const [experienceModules, setExperienceModules] = useState<string[]>([]);
+  const [experienceSaving, setExperienceSaving] = useState(false);
+  const pendingCode = useRef('');
+
+  useEffect(() => {
+    if (!canProvision) return;
+    graphqlClient.query(CLIENT_MODULE_CATALOG_QUERY, {}, { requestPolicy: 'network-only' }).toPromise().then((result) => {
+      if (result.error) onError(result.error.message);
+      setModules(result.data?.clientModuleCatalog ?? []);
+    });
+  }, [canProvision]);
+
+  const columns = useMemo<ColDef[]>(() => [
+    ...CLIENT_COLUMNS,
+    {
+      colId: 'experience',
+      headerName: 'Experience',
+      flex: 1.2,
+      minWidth: 180,
+      valueGetter: (params) => experienceLabel(!!params.data?.curatedModules, params.data?.moduleCodes ?? [], modules),
+    },
+  ], [modules]);
+
+  const applyExperience = (client: Client | undefined) => {
+    if (!client) return;
+    setExperienceClientId(client.id);
+    setExperienceCurated(client.curatedModules);
+    setExperienceModules(client.moduleCodes ?? []);
+  };
+
+  useEffect(() => {
+    if (!canProvision || clients.length === 0) return;
+    if (pendingCode.current) {
+      const created = clients.find((client) => client.clientCode === pendingCode.current);
+      if (created) {
+        pendingCode.current = '';
+        applyExperience(created);
+        return;
+      }
+    }
+    if (experienceClientId && clients.some((client) => client.id === experienceClientId)) return;
+    applyExperience(clients.find((client) => !client.isInternal) ?? clients[0]);
+  }, [canProvision, clients, experienceClientId]);
+
+  const toggleCreateModule = (code: string, on: boolean) => {
+    setSelectedModules((current) => on ? [...current, code] : current.filter((item) => item !== code));
+  };
+
+  const toggleExperienceModule = (code: string, on: boolean) => {
+    setExperienceModules((current) => on ? [...current, code] : current.filter((item) => item !== code));
+  };
 
   const handleCreate = async () => {
     setSaving(true);
     try {
+      const code = clientCode.toUpperCase();
       const result = await graphqlClient
-        .mutation(CREATE_CLIENT_MUTATION, { input: { clientCode: clientCode.toUpperCase(), clientName, adminEmail: adminEmail || null } })
+        .mutation(CREATE_CLIENT_MUTATION, {
+          input: {
+            clientCode: code,
+            clientName,
+            adminEmail: adminEmail || null,
+            curatedModules: curated,
+            moduleCodes: curated ? selectedModules : [],
+          },
+        })
         .toPromise();
       if (result.error) { onError(result.error.message); return; }
       if (!result.data?.createClient?.success) { onError(result.data?.createClient?.errors?.[0]?.message ?? 'Failed to create client'); return; }
       setShowForm(false);
       setClientCode(''); setClientName(''); setAdminEmail('');
+      setCurated(false);
+      setSelectedModules([]);
+      pendingCode.current = code;
+      setExperienceClientId('');
       onChanged();
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSaveExperience = async () => {
+    if (!experienceClientId) return;
+    setExperienceSaving(true);
+    onError(null);
+    try {
+      const result = await graphqlClient.mutation(SET_CLIENT_MODULES_MUTATION, {
+        clientId: experienceClientId,
+        curated: experienceCurated,
+        moduleCodes: experienceCurated ? experienceModules : [],
+      }).toPromise();
+      if (result.error) { onError(result.error.message); return; }
+      if (!result.data?.setClientModules?.success) {
+        onError(result.data?.setClientModules?.errors?.[0]?.message ?? 'Could not save this client\'s experience');
+        return;
+      }
+      onChanged();
+    } finally {
+      setExperienceSaving(false);
     }
   };
 
@@ -177,8 +272,8 @@ function ClientsTab({ clients, onChanged, onError, canProvision }: { clients: Cl
     <div>
       {canProvision && (
       <div className="flex justify-end mb-4">
-        <button onClick={() => setShowForm(!showForm)} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-[13px]">
-          + Add Client
+        <button type="button" onClick={() => setShowForm(!showForm)} className="btn">
+          {showForm ? 'Close' : 'Add client'}
         </button>
       </div>
       )}
@@ -190,8 +285,18 @@ function ClientsTab({ clients, onChanged, onError, canProvision }: { clients: Cl
             <input placeholder="Client name" value={clientName} onChange={(e) => setClientName(e.target.value)} className="px-3 py-2 border rounded" />
           </div>
           <input placeholder="First admin's email (optional)" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} className="w-full px-3 py-2 border rounded" />
-          <button disabled={saving || !clientCode || !clientName} onClick={handleCreate} className="px-4 py-2 bg-blue-600 text-white rounded disabled:bg-gray-300 text-[13px]">
-            Create
+          <label className="flex items-start gap-2 text-[13px] text-gray-800">
+            <input type="checkbox" className="mt-1" checked={curated} onChange={(e) => setCurated(e.target.checked)} />
+            <span>
+              <span className="font-medium">Curated experience</span>
+              <span className="block text-[12px] text-gray-600">Starts with nothing on. Choose the areas this client can use. New areas stay off until you save them here.</span>
+            </span>
+          </label>
+          {curated && (
+            <ModuleChoices modules={modules} selected={selectedModules} onToggle={toggleCreateModule} />
+          )}
+          <button type="button" disabled={saving || !clientCode || !clientName} onClick={handleCreate} className="btn btn-primary disabled:opacity-50">
+            {saving ? 'Creating…' : 'Create'}
           </button>
         </div>
       )}
@@ -199,12 +304,42 @@ function ClientsTab({ clients, onChanged, onError, canProvision }: { clients: Cl
       <div className="bg-white rounded-lg shadow overflow-x-auto">
         <AppGrid
           rows={clients}
-          columns={CLIENT_COLUMNS}
+          columns={columns}
           getRowId={(row) => row.id}
           autoHeight
           emptyMessage="No clients yet"
         />
       </div>
+
+      {canProvision && clients.length > 0 && (
+        <div className="bg-white rounded-lg shadow p-4 mt-4 space-y-3">
+          <div>
+            <div className="text-[13px] font-medium text-gray-900">Client experience</div>
+            <p className="text-[12px] text-gray-600 mt-1">
+              A curated client uses only the areas you save. Saving copies those areas as they are defined today, so anything added to the product later stays off until you save again.
+            </p>
+          </div>
+          <select
+            value={experienceClientId}
+            onChange={(event) => applyExperience(clients.find((client) => client.id === event.target.value))}
+            className="px-3 py-2 border rounded text-[13px]"
+          >
+            {clients.map((client) => (
+              <option key={client.id} value={client.id}>{client.clientName}</option>
+            ))}
+          </select>
+          <label className="flex items-center gap-2 text-[13px] text-gray-800">
+            <input type="checkbox" checked={experienceCurated} onChange={(event) => setExperienceCurated(event.target.checked)} />
+            Curated experience
+          </label>
+          {experienceCurated && (
+            <ModuleChoices modules={modules} selected={experienceModules} onToggle={toggleExperienceModule} />
+          )}
+          <button type="button" disabled={experienceSaving || !experienceClientId} onClick={handleSaveExperience} className="btn btn-primary disabled:opacity-50">
+            {experienceSaving ? 'Saving…' : 'Save experience'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
