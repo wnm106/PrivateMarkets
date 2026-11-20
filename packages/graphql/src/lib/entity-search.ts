@@ -14,6 +14,8 @@ export interface SearchDomainRow {
   domainCode: string;
   domainName: string;
   parentDomainCode?: string | null;
+  /** False hides this entity type from search. Omitted means the type is searchable. */
+  enabledForSearch?: boolean;
 }
 
 export interface SearchLinkRow {
@@ -77,6 +79,8 @@ export function domainDepth(code: string, parentOf: ReadonlyMap<string, string |
 /**
  * Rank entities whose own name, a stored alias, a related entity name, or a parent
  * entity name contains the query. Records in parent domains come before records in child domains.
+ * Entity types with enabledForSearch set to false are left out, and a hidden record
+ * cannot pull a searchable record in through a relationship.
  */
 export function rankEntitySearch(input: {
   query: string;
@@ -89,10 +93,12 @@ export function rankEntitySearch(input: {
   if (query.length < MIN_QUERY) return [];
   const limit = clampLimit(input.limit);
 
-  const known = new Set(input.domains.map((domain) => domain.domainCode.toUpperCase()));
+  const hidden = hiddenDomainCodes(input.domains);
+  const catalog = input.domains.filter((domain) => !hidden.has(domain.domainCode.toUpperCase()));
+  const known = new Set(catalog.map((domain) => domain.domainCode.toUpperCase()));
   const parentOf = new Map<string, string | null>();
   const domainNames = new Map<string, string>();
-  for (const domain of input.domains) {
+  for (const domain of catalog) {
     const code = domain.domainCode.toUpperCase();
     const parent = (domain.parentDomainCode || '').toUpperCase();
     parentOf.set(code, parent && known.has(parent) ? parent : null);
@@ -100,7 +106,12 @@ export function rankEntitySearch(input: {
   }
 
   const entities = dedupeEntities(
-    input.entities.filter((entity) => entity.isActive !== false && entity.id && entity.entityName),
+    input.entities.filter((entity) => (
+      entity.isActive !== false
+      && entity.id
+      && entity.entityName
+      && !hidden.has(entity.domainCode.toUpperCase())
+    )),
   );
   const byId = new Map(entities.map((entity) => [entity.id.toLowerCase(), entity]));
   const ownNameHits = new Set(
@@ -218,7 +229,7 @@ export async function fetchEntitySearchHits(
 
   const domainResult = await supabase
     .from('domain_types')
-    .select('domain_code, domain_name, parent_domain_code')
+    .select('domain_code, domain_name, parent_domain_code, enabled_for_search')
     .eq('is_active', true);
   if (domainResult.error) throw new Error(domainResult.error.message);
 
@@ -226,6 +237,7 @@ export async function fetchEntitySearchHits(
     domainCode: String(row.domain_code || ''),
     domainName: String(row.domain_name || row.domain_code || ''),
     parentDomainCode: row.parent_domain_code ? String(row.parent_domain_code) : null,
+    enabledForSearch: row.enabled_for_search !== false,
   })).filter((domain) => domain.domainCode);
 
   const named = await loadNamesByDomain(supabase, text);
@@ -429,4 +441,13 @@ function dedupeEntities(entities: readonly SearchEntityRow[]): SearchEntityRow[]
 
 function unique(ids: readonly string[]): string[] {
   return [...new Set(ids.filter(Boolean))];
+}
+
+/** Entity types explicitly turned off for search. A missing flag stays searchable. */
+function hiddenDomainCodes(domains: readonly SearchDomainRow[]): Set<string> {
+  return new Set(
+    domains
+      .filter((domain) => domain.enabledForSearch === false)
+      .map((domain) => domain.domainCode.toUpperCase()),
+  );
 }

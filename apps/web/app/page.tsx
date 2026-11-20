@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation';
 import { HomeView } from '@/components/home/HomeView';
 import type { HomePlace } from '@/lib/home';
-import { loadSurfaceUser } from '@/lib/surface-access-server';
+import { filterByTools, moduleAllowsSurface } from '@/lib/client-modules';
+import { loadModuleScope, loadSurfaceUser } from '@/lib/surface-access-server';
 import { eligibleManifests } from '@/lib/surface-links';
 import { SURFACES } from '@/lib/surface-registry';
 
@@ -18,11 +19,14 @@ const PAGES: readonly HomePlace[] = [
 ];
 
 export default async function HomePage() {
-  const user = await loadSurfaceUser();
+  const [user, scope] = await Promise.all([loadSurfaceUser(), loadModuleScope()]);
   if (!user) redirect('/login?redirectedFrom=%2F');
 
   // A surface the person may not open is never offered, the same as /s/<code>.
-  const surfaces: HomePlace[] = eligibleManifests(SURFACES.map((entry) => entry.manifest), user).map((manifest) => ({
+  const surfaces: HomePlace[] = eligibleManifests(
+    SURFACES.map((entry) => entry.manifest).filter((manifest) => moduleAllowsSurface(scope, manifest.code)),
+    user,
+  ).map((manifest) => ({
     key: `s:${manifest.code}`,
     title: manifest.title,
     description: manifest.description || '',
@@ -32,7 +36,7 @@ export default async function HomePage() {
 
   // A page that a mounted surface has replaced (same title) is offered once, as the surface.
   const titles = new Set(surfaces.map((place) => place.title.toLowerCase()));
-  const pages = PAGES.filter((page) => !titles.has(page.title.toLowerCase()));
+  const pages = filterByTools(PAGES.filter((page) => !titles.has(page.title.toLowerCase())), scope);
 
   return <HomeView user={{ permissions: user.permissions, isTenantAdmin: user.isTenantAdmin }} places={[...surfaces, ...pages]} />;
 }

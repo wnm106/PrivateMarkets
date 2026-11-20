@@ -60,6 +60,7 @@ function Card({ card }: { card: DecisionCard }) {
     <li className={`home-decision${card.overdue ? ' is-overdue' : ''}`}>
       <div className="home-decision-text">
         <div className="home-decision-from">
+          <span className={`hx-tag ${card.overdue ? 'tone-critical' : 'tone-decide'}`}>{card.overdue ? 'Overdue' : 'Decision'}</span>
           <span className="home-decision-agent">{card.from}</span>
           <span className="home-muted">
             {relativeTime(card.createdAt)}
@@ -129,13 +130,6 @@ export function DecisionCards({ reviewIds, onShown }: { reviewIds: string[]; onS
   if (!cards || cards.length === 0) return null;
   return (
     <div className="home-decisions">
-      <div className="home-lane-head">
-        <h3>
-          Needs your decision
-          <span className="home-lane-count">{cards.length}</span>
-        </h3>
-        <span className="home-muted">Approve here when every change is ready. Otherwise open it.</span>
-      </div>
       <ul className="home-decision-list">
         {cards.map((card) => (
           <Card key={card.id} card={card} />

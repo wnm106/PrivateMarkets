@@ -215,6 +215,16 @@ export const UPDATE_ATTRIBUTE_VALUE_MUTATION = `
   }
 `;
 
+export const SUBMIT_MANUAL_OVERRIDE_MUTATION = `
+  mutation SubmitManualOverride($input: ManualOverrideInput!) {
+    submitManualOverride(input: $input) {
+      success
+      goldenValueId
+      errors { field message code }
+    }
+  }
+`;
+
 export const CLEAR_MANUAL_OVERRIDE_MUTATION = `
   mutation ClearManualOverride($input: ClearManualOverrideInput!) {
     clearManualOverride(input: $input) {
@@ -761,6 +771,7 @@ export const DOMAIN_CATALOG_QUERY = `
       clientName
       isCore
       displayOrder
+      enabledForSearch
       parentDomainCode
       ownedAttributeCount
       sharedAttributeCount
@@ -1708,6 +1719,44 @@ const dataQualityDashboardQuery = (entityRows: string) => `
       fromDate
       toDate
       domains
+      scores {
+        availabilityPassing
+        availabilityApplicable
+        qualityPassing
+        qualityApplicable
+        freshnessPassing
+        freshnessApplicable
+        consensusPassing
+        consensusApplicable
+        waivedChecks
+      }
+      entityTypeScores {
+        domainCode
+        entityCount
+        availabilityPassing
+        availabilityApplicable
+        qualityPassing
+        qualityApplicable
+        freshnessPassing
+        freshnessApplicable
+        consensusPassing
+        consensusApplicable
+        waivedChecks
+      }
+      consensusConflicts {
+        id
+        entityCode
+        entityName
+        domainCode
+        attributeCode
+        attributeName
+        goldenSourceCode
+        goldenSourceName
+        goldenValue
+        sourceCode
+        sourceName
+        value
+      }
       summary {
         entityCount
         requiredSlots
@@ -1811,6 +1860,15 @@ const DATA_QUALITY_ENTITY_ROWS = `      entities {
         qualityIntroducedCount
         overrideMatchCount
         overrideCount
+        availabilityPassing
+        availabilityApplicable
+        qualityPassing
+        qualityApplicable
+        freshnessPassing
+        freshnessApplicable
+        consensusPassing
+        consensusApplicable
+        waivedChecks
       }
 `;
 
@@ -2434,6 +2492,31 @@ export const CLIENTS_QUERY = `
       isActive
       isInternal
       createdAt
+      curatedModules
+      moduleCodes
+    }
+  }
+`;
+
+export const CLIENT_MODULE_CATALOG_QUERY = `
+  query ClientModuleCatalog {
+    clientModuleCatalog {
+      code
+      name
+      description
+      domainCodes
+      surfaceCodes
+      workflowCodes
+      toolHrefs
+    }
+  }
+`;
+
+export const SET_CLIENT_MODULES_MUTATION = `
+  mutation SetClientModules($clientId: ID!, $curated: Boolean!, $moduleCodes: [String!]!) {
+    setClientModules(clientId: $clientId, curated: $curated, moduleCodes: $moduleCodes) {
+      success
+      errors { field message code }
     }
   }
 `;

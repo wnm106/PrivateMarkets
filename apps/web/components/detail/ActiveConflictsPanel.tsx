@@ -41,7 +41,7 @@ export function ActiveConflictsPanel({ conflicts, entityId }: ActiveConflictsPan
           <div className="det">{c.description}</div>
         </div>
       ))}
-      <Link href="/resolve">
+      <Link href={entityId ? `/resolve?entity=${entityId}` : '/resolve'}>
         <button className="btn btn-sm" style={{ width: '100%', marginTop: '12px', textAlign: 'center' }}>
           Resolve All →
         </button>

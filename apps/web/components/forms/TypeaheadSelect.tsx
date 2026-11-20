@@ -9,6 +9,7 @@ export interface TypeaheadOption {
   group?: string;
   hint?: string; // right-aligned secondary text, e.g. the data type
   search?: string; // extra text matched when typing, e.g. the attribute code
+  depth?: number; // indent under a parent, matching a nested directory
 }
 
 interface TypeaheadSelectProps {
@@ -20,11 +21,12 @@ interface TypeaheadSelectProps {
   error?: boolean;
   loading?: boolean;
   clearable?: boolean;
+  id?: string;
 }
 
 // A dropdown that is also a search box: click or focus to see the full list,
 // type to narrow it, arrow keys and Enter to pick.
-export function TypeaheadSelect({ options, value, onChange, placeholder = 'Select...', disabled, error, loading, clearable }: TypeaheadSelectProps) {
+export function TypeaheadSelect({ options, value, onChange, placeholder = 'Select...', disabled, error, loading, clearable, id }: TypeaheadSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -90,6 +92,7 @@ export function TypeaheadSelect({ options, value, onChange, placeholder = 'Selec
       }}
     >
       <input
+        id={id}
         className={`text-input ts-input ${error ? 'error' : ''}`}
         role="combobox"
         aria-expanded={open}
@@ -127,6 +130,7 @@ export function TypeaheadSelect({ options, value, onChange, placeholder = 'Selec
                   aria-selected={o.value === value}
                   data-active={i === active}
                   className={`ts-opt ${i === active ? 'active' : ''} ${o.value === value ? 'sel' : ''}`}
+                  style={o.depth ? { paddingLeft: 22 + o.depth * 16 } : undefined}
                   onMouseEnter={() => setActive(i)}
                   onMouseDown={(e) => { e.preventDefault(); pick(o); }}
                 >

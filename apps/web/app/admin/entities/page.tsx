@@ -28,6 +28,7 @@ interface DomainType {
   clientId?: string | null;
   clientName?: string | null;
   isCore: boolean;
+  enabledForSearch: boolean;
   displayOrder: number;
   parentDomainCode?: string | null;
   ownedAttributeCount: number;
@@ -360,6 +361,7 @@ function CreateDomainModal({
     groupCode: groups[0]?.groupCode || '',
     parentDomainCode: '',
     isCore: false,
+    enabledForSearch: true,
   });
 
   const parents = domains.filter((domain) => domain.group?.groupCode === formData.groupCode);
@@ -374,6 +376,7 @@ function CreateDomainModal({
       groupCode: formData.groupCode || null,
       parentDomainCode: formData.parentDomainCode || null,
       isCore: formData.isCore,
+      enabledForSearch: formData.enabledForSearch,
     });
   };
 
@@ -460,6 +463,7 @@ function CreateDomainModal({
                   ...prev,
                   groupCode,
                   parentDomainCode: '',
+                  enabledForSearch: true,
                 }))}
                 onCreated={onGroupCreated}
               />
@@ -468,7 +472,11 @@ function CreateDomainModal({
                 <select
                   className="text-input"
                   value={formData.parentDomainCode}
-                  onChange={(event) => setFormData((prev) => ({ ...prev, parentDomainCode: event.target.value }))}
+                  onChange={(event) => setFormData((prev) => ({
+                    ...prev,
+                    parentDomainCode: event.target.value,
+                    enabledForSearch: event.target.value === '',
+                  }))}
                 >
                   <option value="">Top of the group</option>
                   {parents.map((domain) => (
@@ -484,6 +492,19 @@ function CreateDomainModal({
                 />
                 Core entity
               </label>
+              <div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input
+                    type="checkbox"
+                    checked={formData.enabledForSearch}
+                    onChange={(event) => setFormData((prev) => ({ ...prev, enabledForSearch: event.target.checked }))}
+                  />
+                  Enabled for Search
+                </label>
+                <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '4px', marginLeft: '24px' }}>
+                  On for a main type, such as a fund or a deal. A type that sits under another type starts off.
+                </div>
+              </div>
               <SchemaScopeField
                 value={formData.clientId}
                 onChange={(clientId) => setFormData(prev => ({ ...prev, clientId }))}

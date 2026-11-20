@@ -696,6 +696,38 @@ export async function commitAllocation(
 ): Promise<AllocationPreview> {
   const preview = previewFromDraft(draft);
   const defs = await attributeDefs(supabase);
+  const openValues = new Map<string, { text: string | null; numeric: number | null }>();
+  if (options?.proposalsOnly) {
+    const positionIds = draft.positions.map((position) => position.id);
+    const attributeIds = [...defs.values()].map((def) => def.id);
+    if (positionIds.length && attributeIds.length) {
+      const { data: openRows, error: openError } = await supabase
+        .from('entity_attribute_values')
+        .select('entity_id, attribute_id, source_id, golden_value, golden_value_numeric')
+        .in('entity_id', positionIds)
+        .in('attribute_id', attributeIds)
+        .eq('system_to', OPEN_SYSTEM);
+      if (openError) throw new Error(openError.message);
+      for (const row of openRows || []) {
+        openValues.set(`${row.entity_id}|${row.attribute_id}|${row.source_id}`, {
+          text: row.golden_value == null ? null : String(row.golden_value),
+          numeric: row.golden_value_numeric == null ? null : Number(row.golden_value_numeric),
+        });
+      }
+    }
+  }
+  const alreadyStored = (
+    entityId: string,
+    attributeId: string,
+    source: string,
+    text: string,
+    numeric: number | null,
+  ) => {
+    const row = openValues.get(`${entityId}|${attributeId}|${source}`);
+    if (!row) return false;
+    if (numeric != null && row.numeric != null) return Math.abs(row.numeric - numeric) < 1e-6;
+    return (row.text ?? '') === text && (numeric == null) === (row.numeric == null);
+  };
   const engine = await sourceId(supabase, 'ALLOCATION_ENGINE');
   const manual = await sourceId(supabase, 'MANUAL');
   const { data: template, error: templateError } = await supabase
@@ -743,6 +775,7 @@ export async function commitAllocation(
     reason: string | null,
   ) => {
     const def = requireDef(code);
+    if (options?.proposalsOnly && alreadyStored(entityId, def.id, source, value, numericValue)) return;
     await writeValue(supabase, {
       entityId,
       attributeId: def.id,
@@ -756,6 +789,9 @@ export async function commitAllocation(
       manual: isManual,
       reason,
     });
+    if (options?.proposalsOnly) {
+      openValues.set(`${entityId}|${def.id}|${source}`, { text: value, numeric: numericValue });
+    }
   };
 
   if (!options?.proposalsOnly) {
@@ -842,8 +878,14 @@ export async function commitAllocation(
         if (reason) await put(positionId, 'POSITION_ALLOCATION_REASON', reason, null, null, manual, true, reason);
         if (adjustment.note) await put(positionId, 'POSITION_ALLOCATION_NOTE', adjustment.note, null, null, manual, true, reason || null);
       } else {
-        await closeValue(supabase, positionId, requireDef('POSITION_ALLOCATION_ADJUSTMENT').id, manual, draft.asOf);
-        await closeValue(supabase, positionId, requireDef('MARKET_VALUE').id, manual, draft.asOf);
+        const adjustmentDef = requireDef('POSITION_ALLOCATION_ADJUSTMENT');
+        const marketDef = requireDef('MARKET_VALUE');
+        if (!options?.proposalsOnly || openValues.has(`${positionId}|${adjustmentDef.id}|${manual}`)) {
+          await closeValue(supabase, positionId, adjustmentDef.id, manual, draft.asOf);
+        }
+        if (!options?.proposalsOnly || openValues.has(`${positionId}|${marketDef.id}|${manual}`)) {
+          await closeValue(supabase, positionId, marketDef.id, manual, draft.asOf);
+        }
       }
     }
   }

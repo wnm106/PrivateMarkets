@@ -19,7 +19,7 @@ function normalizeChainVersion(value: unknown): number {
 }
 
 const DOMAIN_TYPE_COLUMNS =
-  'id, domain_code, domain_name, description, is_active, created_at, updated_at, client_id, group_id, parent_domain_code, is_core, display_order';
+  'id, domain_code, domain_name, description, is_active, created_at, updated_at, client_id, group_id, parent_domain_code, is_core, display_order, enabled_for_search';
 
 type CatalogCounts = {
   shared: number;
@@ -60,6 +60,7 @@ function mapDomainRow(row: any, group: ReturnType<typeof mapGroup>) {
     clientId: row.client_id ?? null,
     isCore: Boolean(row.is_core),
     displayOrder: row.display_order ?? 0,
+    enabledForSearch: row.enabled_for_search !== false,
     parentDomainCode: row.parent_domain_code ?? null,
     group,
   };
@@ -1479,6 +1480,7 @@ export const entityResolvers = {
             group_id: groupId,
             parent_domain_code: parentCode,
             is_core: Boolean(input.isCore),
+            enabled_for_search: input.enabledForSearch !== false,
             display_order: displayOrder,
           })
           .select(DOMAIN_TYPE_COLUMNS)
@@ -1516,6 +1518,7 @@ export const entityResolvers = {
         if (input.description !== undefined) updateData.description = input.description;
         if (input.isActive !== undefined) updateData.is_active = input.isActive;
         if (input.isCore !== undefined) updateData.is_core = input.isCore;
+        if (input.enabledForSearch !== undefined) updateData.enabled_for_search = input.enabledForSearch;
         if (input.displayOrder !== undefined) updateData.display_order = input.displayOrder;
 
         let groupId = current.group_id as string | null;

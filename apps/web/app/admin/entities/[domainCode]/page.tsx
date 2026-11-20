@@ -69,6 +69,7 @@ interface DomainType {
   clientId?: string | null;
   clientName?: string | null;
   isCore?: boolean;
+  enabledForSearch?: boolean;
   displayOrder?: number;
   parentDomainCode?: string | null;
   group?: DomainGroup | null;
@@ -853,6 +854,19 @@ export default function EntityTypeDetailPage() {
               <div className="page-title">{domain.domainName}</div>
               <span className="mono" style={{ fontSize: '12px', color: 'var(--ink-3)' }}>{domain.domainCode}</span>
               <SchemaScopeBadge clientId={domain.clientId} clientName={domain.clientName} />
+              {domain.enabledForSearch === false && (
+                <span style={{
+                  fontSize: '11px',
+                  padding: '2px 8px',
+                  background: 'var(--bg-alt)',
+                  color: 'var(--ink-3)',
+                  fontWeight: 600,
+                  textTransform: 'none',
+                  letterSpacing: 0,
+                }}>
+                  Not in search
+                </span>
+              )}
               {!domain.isActive && (
                 <span style={{
                   fontSize: '11px',
@@ -1510,6 +1524,7 @@ function EditDomainModal({
     groupCode: string | null;
     parentDomainCode: string | null;
     isCore: boolean;
+    enabledForSearch: boolean;
   }) => void;
 }) {
   const listed = domain.group && !groups.some((group) => group.groupCode === domain.group?.groupCode)
@@ -1523,6 +1538,7 @@ function EditDomainModal({
     groupCode: domain.group?.groupCode || '',
     parentDomainCode: domain.parentDomainCode || '',
     isCore: Boolean(domain.isCore),
+    enabledForSearch: domain.enabledForSearch !== false,
   });
   const parents = domains.filter((item) =>
     item.domainCode !== domain.domainCode
@@ -1539,6 +1555,7 @@ function EditDomainModal({
       groupCode: formData.groupCode || null,
       parentDomainCode: formData.parentDomainCode || null,
       isCore: formData.isCore,
+      enabledForSearch: formData.enabledForSearch,
     });
   };
 
@@ -1663,6 +1680,19 @@ function EditDomainModal({
                 />
                 Core entity
               </label>
+              <div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input
+                    type="checkbox"
+                    checked={formData.enabledForSearch}
+                    onChange={(event) => setFormData((prev) => ({ ...prev, enabledForSearch: event.target.checked }))}
+                  />
+                  Enabled for Search
+                </label>
+                <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '4px', marginLeft: '24px' }}>
+                  Records of this type show up in search and in the assistant when someone follows a record.
+                </div>
+              </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <input
                   type="checkbox"

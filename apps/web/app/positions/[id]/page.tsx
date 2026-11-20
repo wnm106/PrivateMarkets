@@ -326,10 +326,10 @@ export default function PositionDetailPage() {
   }
   return (
     <div className="view-fade">
-      <GoldenRecordHeader id={entity.entityCode} name={entity.entityName} type={entity.templateName || entity.domainName || 'Position'} status={entity.isActive ? 'Active' : 'Inactive'} lastReviewed={lastReviewedText} quality={qualityScore} conflicts={conflicts.length} entityPath={`/positions/${id}`} listPath="/positions" listLabel="Positions" accentColor={domainConfig.color} onRename={canRename ? handleRename : undefined} mergeHref={isMasterEntity ? `/merge?entity=${entity.id}` : undefined} />
+      <GoldenRecordHeader id={entity.entityCode} name={entity.entityName} type={entity.templateName || entity.domainName || 'Position'} status={entity.isActive ? 'Active' : 'Inactive'} lastReviewed={lastReviewedText} quality={qualityScore} conflicts={conflicts.length} entityPath={`/positions/${id}`} listPath="/positions" listLabel="Positions" accentColor={domainConfig.color} onRename={canRename ? handleRename : undefined} mergeHref={isMasterEntity ? `/merge?entity=${entity.id}` : undefined} entityId={entity.id} />
       <div className="detail-layout">
         <div><GoldenRecordSections entity={entity} templateAttributes={templateAttributes} lineageData={lineageData} lineageLoaded={lineageLoaded} asOfDate={asOfDate} onAddAttribute={handleAddAttribute} onSourceChange={handleSourceChange} onValueChange={handleValueChange} onAddSourceValue={handleAddSourceValue} onDeleteSourceValue={handleDeleteSourceValue} /></div>
-        <div><EntityAccessPanel entityId={entity.id} /><SourceContributionPanel sources={sourceContributions} /><ActiveConflictsPanel conflicts={conflicts} entityId={id} /><ActivityFeedPanel activities={activities} /></div>
+        <div><EntityAccessPanel entityId={entity.id} /><SourceContributionPanel sources={sourceContributions} /><ActiveConflictsPanel conflicts={conflicts} entityId={entity.id} /><ActivityFeedPanel activities={activities} /></div>
       </div>
     </div>
   );
