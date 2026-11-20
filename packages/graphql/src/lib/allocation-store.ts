@@ -8,6 +8,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { endGoldenValue, writeGoldenValue } from './golden-write';
 import {
   allocate,
   type AllocationAdjustment,
@@ -19,7 +20,6 @@ import {
   type AllocationTranche,
 } from './allocation-engine';
 
-const OPEN_SYSTEM = '9999-12-31 23:59:59';
 
 const VALUE_CODES = [
   'TRANCHE_SIZE', 'TRANCHE_HOLD_PCT', 'TRANCHE_IS_UNFUNDED', 'TRANCHE_IS_EQUITY_LINKED', 'TRANCHE_RANK',
@@ -630,6 +630,11 @@ async function sourceId(supabase: SupabaseClient, code: string): Promise<string>
   return data.id;
 }
 
+/**
+ * One source's value from the as-of date until that source's next later value,
+ * through golden_master.write_value: earlier dates and earlier knowledge dates
+ * keep their values. Who wrote it comes from the session.
+ */
 async function writeValue(
   supabase: SupabaseClient,
   input: {
@@ -640,37 +645,28 @@ async function writeValue(
     numeric: number | null;
     boolean: boolean | null;
     asOf: string;
-    userId: string | null;
     precedence: number;
     manual: boolean;
     reason: string | null;
   },
 ) {
-  const { error: closeError } = await supabase
-    .from('entity_attribute_values')
-    .update({ valid_to: input.asOf, system_to: new Date().toISOString() })
-    .eq('entity_id', input.entityId)
-    .eq('attribute_id', input.attributeId)
-    .eq('source_id', input.sourceId)
-    .eq('system_to', OPEN_SYSTEM);
-  if (closeError) throw new Error(closeError.message);
-
-  const { error } = await supabase.from('entity_attribute_values').insert({
-    entity_id: input.entityId,
-    attribute_id: input.attributeId,
-    source_id: input.sourceId,
-    golden_value: input.text,
-    golden_value_numeric: input.numeric,
-    golden_value_boolean: input.boolean,
-    valid_from: input.asOf,
-    precedence_rank: input.precedence,
-    is_manual_override: input.manual,
-    override_reason: input.reason,
-    created_by: input.userId,
+  await writeGoldenValue(supabase, {
+    entityId: input.entityId,
+    attributeId: input.attributeId,
+    sourceId: input.sourceId,
+    validFrom: input.asOf,
+    value: {
+      golden_value: input.text,
+      golden_value_numeric: input.numeric,
+      golden_value_boolean: input.boolean,
+      precedence_rank: input.precedence,
+      is_manual_override: input.manual,
+      override_reason: input.reason,
+    },
   });
-  if (error) throw new Error(error.message);
 }
 
+/** This source has no value from the as-of date on. Its value before that date stays. */
 async function closeValue(
   supabase: SupabaseClient,
   entityId: string,
@@ -678,14 +674,7 @@ async function closeValue(
   sourceId: string,
   asOf: string,
 ) {
-  const { error } = await supabase
-    .from('entity_attribute_values')
-    .update({ valid_to: asOf, system_to: new Date().toISOString() })
-    .eq('entity_id', entityId)
-    .eq('attribute_id', attributeId)
-    .eq('source_id', sourceId)
-    .eq('system_to', OPEN_SYSTEM);
-  if (error) throw new Error(error.message);
+  await endGoldenValue(supabase, { entityId, attributeId, sourceId, from: asOf });
 }
 
 interface PositionScaffold {
@@ -815,7 +804,6 @@ export async function commitAllocation(
       numeric: numericValue,
       boolean: booleanValue,
       asOf: draft.asOf,
-      userId,
       precedence: def.precedence,
       manual: isManual,
       reason,
@@ -1081,7 +1069,6 @@ export async function stageAllocationWhatIf(
             numeric: null,
             boolean: flagValue,
             asOf: draft.asOf,
-            userId,
             precedence: def.precedence,
             manual: false,
             reason: null,

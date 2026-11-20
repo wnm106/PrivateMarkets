@@ -413,8 +413,8 @@ const createComplianceRuleVersion: ToolDefinition = {
       validFrom: { type: 'string', description: 'Valid-time start date (YYYY-MM-DD). Defaults to today.' },
       validTo: { type: 'string', description: 'Valid-time end date (YYYY-MM-DD). NULL = open-ended.' },
       baseDomainCode: { type: 'string', description: 'Domain code of base entities to aggregate' },
-      baseRollupPath: { type: 'array', items: { type: 'object', properties: { relationshipCode: { type: 'string' }, direction: { type: 'string', enum: ['UP', 'DOWN'] }, maxHops: { type: 'number' }, includeEndpoints: { type: 'boolean' } } }, description: 'Hops from anchor to base. Empty = single-record.' },
-      groupByPath: { type: 'array', items: { type: 'object', properties: { relationshipCode: { type: 'string' }, direction: { type: 'string', enum: ['UP', 'DOWN'] }, maxHops: { type: 'number' }, includeEndpoints: { type: 'boolean' } } }, description: 'Hops from base to group-by entity.' },
+      baseRollupPath: { type: 'array', items: { type: 'object', properties: { relationshipCode: { type: 'string' }, direction: { type: 'string', enum: ['UP', 'DOWN'] }, recursive: { type: 'boolean', description: 'Follow the relationship any number of times' }, maxHops: { type: 'number', description: 'More than 1 is stored as recursive' }, includeEndpoints: { type: 'boolean' } } }, description: 'Hops from anchor to base. Empty = single-record.' },
+      groupByPath: { type: 'array', items: { type: 'object', properties: { relationshipCode: { type: 'string' }, direction: { type: 'string', enum: ['UP', 'DOWN'] }, recursive: { type: 'boolean', description: 'Follow the relationship any number of times' }, maxHops: { type: 'number', description: 'More than 1 is stored as recursive' }, includeEndpoints: { type: 'boolean' } } }, description: 'Hops from base to group-by entity.' },
       groupByAttributeCode: { type: 'string', description: 'Attribute to group by (e.g. "INDUSTRY")' },
       numeratorAttributeCode: { type: 'string', description: 'Attribute for numerator (e.g. "MARKET_VALUE")' },
       numeratorAggregation: { type: 'string', enum: ['SUM', 'COUNT', 'AVG', 'MAX', 'MIN', 'VALUE'] },
@@ -467,30 +467,32 @@ const createComplianceRuleVersion: ToolDefinition = {
     }
     if (!ruleId) throw new Error('Must provide ruleId or ruleCode');
 
-    const { data: maxVersion } = await cx(supabase)
-      .from('rule_versions').select('version_number')
-      .eq('rule_id', ruleId).order('version_number', { ascending: false }).limit(1).maybeSingle();
-    const nextVersion = (maxVersion?.version_number || 0) + 1;
+    // Hops in the form the rule engine reads: relationship_code, direction, recursive.
+    const hops = (path: unknown) => (Array.isArray(path) ? path : []).map((hop: any) => ({
+      relationship_code: hop?.relationshipCode ?? hop?.relationship_code,
+      direction: hop?.direction === 'DOWN' ? 'DOWN' : 'UP',
+      recursive: hop?.recursive === true || Number(hop?.maxHops) > 1,
+    }));
 
+    // Columns that are NOT NULL take their defaults when the caller leaves them out.
     const versionPayload: Record<string, any> = {
-      rule_id: ruleId, version_number: nextVersion,
       change_reason: args.changeReason || null,
       valid_from: args.validFrom || new Date().toISOString().slice(0, 10),
-      valid_to: args.validTo || null,
+      valid_to: args.validTo || '9999-12-31',
       base_domain_code: args.baseDomainCode,
-      base_rollup_path: args.baseRollupPath ? JSON.stringify(args.baseRollupPath) : '[]',
-      group_by_path: args.groupByPath ? JSON.stringify(args.groupByPath) : '[]',
+      base_rollup_path: hops(args.baseRollupPath),
+      group_by_path: hops(args.groupByPath),
       group_by_attribute_code: args.groupByAttributeCode || null,
       numerator_attribute_code: args.numeratorAttributeCode,
       numerator_aggregation: args.numeratorAggregation,
-      numerator_dimension: args.numeratorDimension || null,
+      numerator_dimension: args.numeratorDimension || {},
       denominator_attribute_code: args.denominatorAttributeCode || null,
       denominator_aggregation: args.denominatorAggregation || null,
-      denominator_dimension: args.denominatorDimension || null,
+      denominator_dimension: args.denominatorDimension || {},
       denominator_scope: args.denominatorScope || 'SAME_GROUP',
       denominator_source: args.denominatorSource || 'BASE',
       denominator_constant_value: args.denominatorConstantValue ?? null,
-      group_by_dimension: args.groupByDimension || null,
+      group_by_dimension: args.groupByDimension || {},
       result_transform: args.resultTransform || 'NONE',
       result_unit: args.resultUnit || 'PERCENTAGE',
       hard_limit_attribute_code: args.hardLimitAttributeCode || null,
@@ -501,28 +503,36 @@ const createComplianceRuleVersion: ToolDefinition = {
       default_source_scope: args.defaultSourceScope || 'GOLDEN',
       is_active: true,
     };
+    const conditionRows = (args.conditions || []).map((c: any, index: number) => ({
+      applies_to: c.appliesTo,
+      condition_group: c.conditionGroup, condition_order: c.conditionOrder ?? index + 1,
+      attribute_code: c.attributeCode, attribute_dimension: c.attributeDimension || {},
+      operator: c.operator,
+      value: c.value !== undefined ? (typeof c.value === 'object' ? JSON.stringify(c.value) : c.value) : null,
+      compare_attribute_code: c.compareAttributeCode || null,
+      compare_dimension: c.compareDimension || {},
+      logic_operator: c.logicOperator || 'AND',
+    }));
+
+    // One transaction takes the next version number and saves the version with its
+    // conditions, or saves nothing. The live version stays in effect until validFrom.
+    const { data: versionId, error: saveError } = await cx(supabase).rpc('create_rule_version', {
+      p_rule_id: ruleId,
+      p_version: versionPayload,
+      p_conditions: conditionRows,
+      p_measure_lines: [],
+    });
+    if (saveError) throw saveError;
+    if (!versionId) throw new Error('The rule version was not saved.');
 
     const { data: version, error: versionError } = await cx(supabase)
-      .from('rule_versions').insert(versionPayload).select().single();
+      .from('rule_versions').select('*').eq('id', versionId).single();
     if (versionError) throw versionError;
-
-    const createdConditions: any[] = [];
-    if (args.conditions && args.conditions.length > 0) {
-      const conditionRows = args.conditions.map((c: any) => ({
-        rule_version_id: version.id, applies_to: c.appliesTo,
-        condition_group: c.conditionGroup, condition_order: c.conditionOrder || 0,
-        attribute_code: c.attributeCode, attribute_dimension: c.attributeDimension || null,
-        operator: c.operator,
-        value: c.value !== undefined ? (typeof c.value === 'object' ? JSON.stringify(c.value) : c.value) : null,
-        compare_attribute_code: c.compareAttributeCode || null,
-        compare_dimension: c.compareDimension || null,
-        logic_operator: c.logicOperator || 'AND',
-      }));
-      const { data: conditions, error: condError } = await cx(supabase)
-        .from('rule_conditions').insert(conditionRows).select();
-      if (condError) throw condError;
-      createdConditions.push(...(conditions || []));
-    }
+    const { data: conditions, error: condError } = await cx(supabase)
+      .from('rule_conditions').select('*').eq('rule_version_id', versionId).is('measure_line_id', null)
+      .order('condition_group').order('condition_order');
+    if (condError) throw condError;
+    const createdConditions: any[] = conditions || [];
 
     return {
       version: {

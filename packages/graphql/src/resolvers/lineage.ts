@@ -3,6 +3,7 @@ import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePos
 import { knowledgeCutoff, loadOnReadValues, mergeOnReadLineage } from '../lib/on-read-values';
 import { dirtyAttributeCodes } from './calculation';
 import { requireIsoDate } from '../lib/input-guards';
+import { writeGoldenValue } from '../lib/golden-write';
 
 const OPEN_SYSTEM_TO = '9999-12-31 23:59:59';
 
@@ -226,7 +227,6 @@ export const lineageResolvers = {
   Mutation: {
     updateAttribute: async (_: any, args: { input: any }, context: Context) => {
       const { input } = args;
-      const userId = context.user?.id;
       
       try {
         const { data: attrDef } = await context.supabase
@@ -237,36 +237,22 @@ export const lineageResolvers = {
         
         if (!attrDef) throw new Error(`Attribute not found: ${input.attributeCode}`);
         
-        // Replace only this source. The preference trigger keeps the other sources and stamps the winner.
-        await context.supabase
-          .from('entity_attribute_values')
-          .update({ system_to: new Date().toISOString() })
-          .eq('entity_id', input.entityId)
-          .eq('attribute_id', attrDef.id)
-          .eq('source_id', input.sourceId)
-          .eq('valid_to', '9999-12-31')
-          .eq('system_to', '9999-12-31 23:59:59');
-        
-        // Insert new golden record
-        const { data, error } = await context.supabase
-          .from('entity_attribute_values')
-          .insert({
-            entity_id: input.entityId,
-            attribute_id: attrDef.id,
-            source_id: input.sourceId,
+        // Replace only this source, from validFrom until its next later value. Earlier dates
+        // keep their value. The preference trigger keeps the other sources and stamps the winner.
+        const goldenValueId = await writeGoldenValue(context.supabase, {
+          entityId: input.entityId,
+          attributeId: attrDef.id,
+          sourceId: input.sourceId,
+          validFrom: input.validFrom,
+          value: {
             golden_value: input.value,
-            valid_from: input.validFrom,
             precedence_rank: input.isOverride ? 1 : attrDef.default_precedence_rank,
             is_manual_override: input.isOverride || false,
-            override_reason: input.overrideReason,
-            created_by: userId,
-          })
-          .select()
-          .single();
+            override_reason: input.overrideReason ?? null,
+          },
+        });
         
-        if (error) throw error;
-        
-        return { success: true, goldenValueId: data.id, errors: [] };
+        return { success: true, goldenValueId, errors: [] };
       } catch (error: any) {
         return { success: false, goldenValueId: null, errors: [{ field: '', message: error.message, code: 'UPDATE_FAILED' }] };
       }
@@ -295,7 +281,6 @@ export const lineageResolvers = {
     
     submitManualOverride: async (_: any, args: { input: any }, context: Context) => {
       const { input } = args;
-      const userId = context.user?.id;
       
       try {
         const { data: attrDef } = await context.supabase
@@ -306,46 +291,30 @@ export const lineageResolvers = {
         
         if (!attrDef) throw new Error(`Attribute not found: ${input.attributeCode}`);
         
-        const { data: manualSource } = await context.supabase
+        const { data: manualSource, error: sourceError } = await context.supabase
           .schema('entity_instances')
           .from('source_registry')
           .select('id')
           .eq('source_code', 'MANUAL')
           .single();
+        if (sourceError || !manualSource?.id) throw sourceError || new Error('Manual source is not registered');
         
-        // Replace only the manual source. Precedence is resolved and stored by the database trigger.
-        await context.supabase
-          .from('entity_attribute_values')
-          .update({ system_to: new Date().toISOString() })
-          .eq('entity_id', input.entityId)
-          .eq('attribute_id', attrDef.id)
-          .eq('source_id', manualSource?.id)
-          .eq('valid_to', '9999-12-31')
-          .eq('system_to', '9999-12-31 23:59:59');
-        
-        // Insert override
-        const { data, error } = await context.supabase
-          .from('entity_attribute_values')
-          .insert({
-            entity_id: input.entityId,
-            attribute_id: attrDef.id,
-            source_id: manualSource?.id,
+        // Replace only the manual source, from validFrom until its next later value.
+        // Precedence is resolved and stored by the database trigger.
+        const goldenValueId = await writeGoldenValue(context.supabase, {
+          entityId: input.entityId,
+          attributeId: attrDef.id,
+          sourceId: manualSource.id,
+          validFrom: input.validFrom || new Date().toISOString().split('T')[0],
+          value: {
             golden_value: input.value,
-            valid_from: input.validFrom || new Date().toISOString().split('T')[0],
-            valid_to: '9999-12-31',
-            system_from: new Date().toISOString(),
-            system_to: '9999-12-31 23:59:59',
             precedence_rank: 1,
             is_manual_override: true,
-            override_reason: input.overrideReason,
-            created_by: userId,
-          })
-          .select()
-          .single();
+            override_reason: input.overrideReason ?? null,
+          },
+        });
         
-        if (error) throw error;
-        
-        return { success: true, goldenValueId: data.id, errors: [] };
+        return { success: true, goldenValueId, errors: [] };
       } catch (error: any) {
         return { success: false, goldenValueId: null, errors: [{ field: '', message: error.message, code: 'OVERRIDE_FAILED' }] };
       }
@@ -353,7 +322,6 @@ export const lineageResolvers = {
     
     addCompetingSource: async (_: any, args: { input: any }, context: Context) => {
       const { input } = args;
-      const userId = context.user?.id;
       
       try {
         const { data: attrDef } = await context.supabase
@@ -365,7 +333,6 @@ export const lineageResolvers = {
         if (!attrDef) throw new Error(`Attribute not found: ${input.attributeCode}`);
 
         const validFrom = input.validFrom || new Date().toISOString().split('T')[0];
-        const now = new Date().toISOString();
 
         const { data: sourceRow, error: sourceLookupError } = await context.supabase
           .schema('entity_instances')
@@ -375,44 +342,23 @@ export const lineageResolvers = {
           .single();
         if (sourceLookupError || !sourceRow) throw sourceLookupError || new Error('Source not found');
 
-        // A new value for this source versions that source only. Other sources stay current.
-        const { error: expireError } = await context.supabase
-          .from('entity_attribute_values')
-          .update({
-            valid_to: validFrom,
-            system_to: now,
-          })
-          .eq('entity_id', input.entityId)
-          .eq('attribute_id', attrDef.id)
-          .eq('source_id', sourceRow.id)
-          .eq('valid_to', '9999-12-31')
-          .eq('system_to', '9999-12-31 23:59:59');
-
-        if (expireError) throw expireError;
-
-        const { data, error } = await context.supabase
-          .from('entity_attribute_values')
-          .insert({
-            entity_id: input.entityId,
-            attribute_id: attrDef.id,
-            source_id: sourceRow.id,
+        // A new value for this source versions that source only, from validFrom until its
+        // next later value. Other sources stay current and earlier dates keep their value.
+        const attributeValueId = await writeGoldenValue(context.supabase, {
+          entityId: input.entityId,
+          attributeId: attrDef.id,
+          sourceId: sourceRow.id,
+          validFrom,
+          value: {
             golden_value: input.value,
-            valid_from: validFrom,
-            valid_to: '9999-12-31',
-            system_from: now,
-            system_to: '9999-12-31 23:59:59',
             precedence_rank: sourceRow.precedence_rank ?? attrDef.default_precedence_rank,
             is_manual_override: sourceRow.source_code === 'MANUAL',
-            created_by: userId,
-          })
-          .select()
-          .single();
-
-        if (error) throw error;
+          },
+        });
 
         await refreshEntityCalculations(context, input.entityId);
 
-        return { success: true, attributeValueId: data.id, errors: [] };
+        return { success: true, attributeValueId, errors: [] };
       } catch (error: any) {
         return { success: false, attributeValueId: null, errors: [{ field: '', message: error.message, code: 'ADD_SOURCE_FAILED' }] };
       }

@@ -13,6 +13,7 @@ import {
   type LineRef,
   type StoredValue,
 } from '../lib/reconciliation';
+import { writeGoldenValue } from '../lib/golden-write';
 
 const err = (message: string, code = 'RECONCILIATION_FAILED', field = '') => ({ field, message, code });
 
@@ -278,7 +279,7 @@ async function relatedLines(context: Context, anchorId: string, relationshipCode
   }));
 }
 
-async function applyOverride(context: Context, entityId: string, attributeCode: string, value: string, asOf: string, reason: string) {
+export async function applyOverride(context: Context, entityId: string, attributeCode: string, value: string, asOf: string, reason: string) {
   const { data: attribute, error: attributeError } = await context.supabase
     .from('attribute_register')
     .select('id, default_precedence_rank')
@@ -294,34 +295,21 @@ async function applyOverride(context: Context, entityId: string, attributeCode: 
     .maybeSingle();
   if (sourceError || !manual) throw sourceError || new Error('Manual source is not registered');
 
-  const now = new Date().toISOString();
-  const { error: expireError } = await context.supabase
-    .from('entity_attribute_values')
-    .update({ system_to: now })
-    .eq('entity_id', entityId)
-    .eq('attribute_id', attribute.id)
-    .eq('source_id', manual.id)
-    .gte('valid_to', asOf)
-    .gt('system_to', now);
-  if (expireError) throw expireError;
-
+  // The manual value from asOf until the next later manual value. Dates before asOf keep theirs.
   const numeric = Number(value.replace(/,/g, ''));
-  const { error } = await context.supabase.from('entity_attribute_values').insert({
-    entity_id: entityId,
-    attribute_id: attribute.id,
-    source_id: manual.id,
-    golden_value: value,
-    golden_value_numeric: Number.isFinite(numeric) ? numeric : null,
-    valid_from: asOf,
-    valid_to: '9999-12-31',
-    system_from: now,
-    system_to: '9999-12-31 23:59:59',
-    precedence_rank: 1,
-    is_manual_override: true,
-    override_reason: reason,
-    created_by: context.user?.id || null,
+  await writeGoldenValue(context.supabase, {
+    entityId,
+    attributeId: attribute.id,
+    sourceId: manual.id,
+    validFrom: asOf,
+    value: {
+      golden_value: value,
+      golden_value_numeric: Number.isFinite(numeric) ? numeric : null,
+      precedence_rank: 1,
+      is_manual_override: true,
+      override_reason: reason,
+    },
   });
-  if (error) throw error;
 }
 
 export const reconciliationResolvers = {
