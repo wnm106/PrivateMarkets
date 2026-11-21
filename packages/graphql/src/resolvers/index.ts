@@ -34,6 +34,7 @@ import { agentUsageResolvers } from './agent-usage';
 import { responsibilityResolvers } from './responsibilities';
 import { agentResolvers } from './agents';
 import { covenantResolvers } from './covenants';
+import { excelResolvers } from './excel';
 
 export const resolvers = {
   Query: {
@@ -84,6 +85,7 @@ export const resolvers = {
     ...agentResolvers.Query,
     ...covenantResolvers.Query,
     ...agentUsageResolvers.Query,
+    ...excelResolvers.Query,
   },
   
   Mutation: {
@@ -128,6 +130,7 @@ export const resolvers = {
     ...responsibilityResolvers.Mutation,
     ...agentResolvers.Mutation,
     ...covenantResolvers.Mutation,
+    ...excelResolvers.Mutation,
   },
   
   Subscription: {},

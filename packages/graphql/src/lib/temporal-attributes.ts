@@ -32,6 +32,63 @@ export function needsTemporalRead(asOfDate: unknown, knowledgeDate: unknown): bo
   return Number.isFinite(parsed) && parsed < Date.now() - 1000;
 }
 
+/** One winning value: the row that resolves an attribute on a record at an as-of date and knowledge time. */
+export interface WinningValueRow {
+  entity_id: string;
+  attribute_id: string;
+  source_id: string | null;
+  golden_value: string | null;
+  golden_value_numeric: number | string | null;
+  golden_value_date: string | null;
+  golden_value_timestamp: string | null;
+  valid_from: string | null;
+  valid_to: string | null;
+}
+
+/**
+ * The winning value of each attribute on each record, as of a date and a knowledge time.
+ * `golden_master.winning_attribute_values` decides the winner; this only batches the call.
+ */
+export async function loadWinningValues(
+  supabase: TemporalClient,
+  entityIds: readonly string[],
+  attributeIds: readonly string[],
+  asOfDate: unknown,
+  knowledgeDate: unknown,
+): Promise<WinningValueRow[]> {
+  const ids = [...new Set(entityIds.filter(Boolean))];
+  const attributes = [...new Set(attributeIds.filter(Boolean))];
+  if (!ids.length || !attributes.length) return [];
+  const asOf = calendarDay(asOfDate);
+  const knowledge = knowledgeInstant(knowledgeDate);
+  const rows: WinningValueRow[] = [];
+  for (let index = 0; index < ids.length; index += 20) {
+    const slice = ids.slice(index, index + 20);
+    const { data, error: rpcError } = await supabase.schema('golden_master').rpc('winning_attribute_values', {
+      p_entity_ids: slice,
+      p_attribute_ids: attributes,
+      p_as_of: asOf,
+      p_knowledge: knowledge,
+      p_require_text: false,
+    });
+    if (rpcError) throw rpcError;
+    for (const row of (data || []) as Array<Record<string, unknown>>) {
+      rows.push({
+        entity_id: String(row.entity_id),
+        attribute_id: String(row.attribute_id),
+        source_id: row.source_id == null ? null : String(row.source_id),
+        golden_value: row.golden_value == null ? null : String(row.golden_value),
+        golden_value_numeric: (row.golden_value_numeric ?? null) as number | string | null,
+        golden_value_date: row.golden_value_date == null ? null : String(row.golden_value_date),
+        golden_value_timestamp: row.golden_value_timestamp == null ? null : String(row.golden_value_timestamp),
+        valid_from: row.valid_from == null ? null : String(row.valid_from),
+        valid_to: row.valid_to == null ? null : String(row.valid_to),
+      });
+    }
+  }
+  return rows;
+}
+
 export async function overlayTemporalAttributes(
   supabase: TemporalClient,
   nodes: Array<{ id: string; attributes: Record<string, unknown> }>,
@@ -52,34 +109,21 @@ export async function overlayTemporalAttributes(
     return;
   }
 
-  const asOf = calendarDay(asOfDate);
-  const knowledge = knowledgeInstant(knowledgeDate);
   const byEntity = new Map<string, Record<string, unknown>>();
-  for (let index = 0; index < ids.length; index += 20) {
-    const slice = ids.slice(index, index + 20);
-    const { data, error: rpcError } = await supabase.schema('golden_master').rpc('winning_attribute_values', {
-      p_entity_ids: slice,
-      p_attribute_ids: attributeIds,
-      p_as_of: asOf,
-      p_knowledge: knowledge,
-      p_require_text: false,
-    });
-    if (rpcError) throw rpcError;
-    for (const row of (data || []) as Array<Record<string, unknown>>) {
-      const code = codeOf.get(String(row.attribute_id));
-      if (!code) continue;
-      const bag = byEntity.get(String(row.entity_id)) || {};
-      bag[code] = {
-        value: row.golden_value,
-        value_numeric: row.golden_value_numeric,
-        value_date: row.golden_value_date,
-        value_timestamp: row.golden_value_timestamp,
-        source_id: row.source_id,
-        valid_from: row.valid_from,
-        valid_to: row.valid_to,
-      };
-      byEntity.set(String(row.entity_id), bag);
-    }
+  for (const row of await loadWinningValues(supabase, ids, attributeIds, asOfDate, knowledgeDate)) {
+    const code = codeOf.get(row.attribute_id);
+    if (!code) continue;
+    const bag = byEntity.get(row.entity_id) || {};
+    bag[code] = {
+      value: row.golden_value,
+      value_numeric: row.golden_value_numeric,
+      value_date: row.golden_value_date,
+      value_timestamp: row.golden_value_timestamp,
+      source_id: row.source_id,
+      valid_from: row.valid_from,
+      valid_to: row.valid_to,
+    };
+    byEntity.set(row.entity_id, bag);
   }
   for (const node of nodes) node.attributes = byEntity.get(node.id) || {};
 }

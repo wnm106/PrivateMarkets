@@ -2,9 +2,9 @@ import { Context } from '../context';
 import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePosition, storedRuleLabel } from '../lib/attribute-sequence';
 import { knowledgeCutoff, loadOnReadValues, mergeOnReadLineage } from '../lib/on-read-values';
 import { dirtyAttributeCodes } from './calculation';
-import { planSourceVersion, planVersionDelete } from '../lib/source-version';
+import { planVersionDelete } from '../lib/source-version';
+import { ManualOverrideError, OPEN_SYSTEM_TO, refreshCalculations, versionCopy, writeManualOverride, writeSourceVersion } from '../lib/source-write';
 
-const OPEN_SYSTEM_TO = '9999-12-31 23:59:59';
 
 function dateOnly(value: string): string {
   return String(value).slice(0, 10);
@@ -17,16 +17,9 @@ function dayBefore(isoDate: string): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Refresh calculations for the record that just changed. The shared queue can
- *  hold a job for every position, and draining it in this request times out. */
+/** Refresh calculations for the record that just changed (lib/source-write.ts). */
 async function refreshEntityCalculations(context: Context, entityId: string) {
-  const { error } = await context.supabase.rpc('process_entity_calculated_attributes', {
-    p_entity_id: entityId,
-    p_limit: 20,
-  });
-  if (error) {
-    console.error('Calculated attributes were not refreshed:', error.message);
-  }
+  await refreshCalculations(context.supabase, entityId);
 }
 
 async function attachAttributeSources(context: Context, rows: any[]) {
@@ -55,31 +48,6 @@ async function attachAttributeSources(context: Context, rows: any[]) {
 }
 
 /** A stored version written again over new valid dates, as a fresh system-time row. */
-function versionCopy(current: any, validFrom: string, validTo: string, now: string, userId: string | null | undefined) {
-  return {
-    entity_id: current.entity_id,
-    attribute_id: current.attribute_id,
-    source_id: current.source_id,
-    golden_value: current.golden_value,
-    golden_value_jsonb: current.golden_value_jsonb,
-    golden_value_numeric: current.golden_value_numeric,
-    golden_value_date: current.golden_value_date,
-    golden_value_timestamp: current.golden_value_timestamp,
-    golden_value_boolean: current.golden_value_boolean,
-    valid_from: validFrom,
-    valid_to: validTo,
-    system_from: now,
-    system_to: OPEN_SYSTEM_TO,
-    precedence_rank: current.precedence_rank,
-    confidence_score: current.confidence_score,
-    is_manual_override: current.is_manual_override,
-    override_reason: current.override_reason,
-    metadata: current.metadata,
-    last_received_at: current.last_received_at,
-    created_by: userId ?? current.created_by,
-  };
-}
-
 /**
  * Removes one current version. The same source's version that ends the day before it runs on
  * over the removed days, so the prior value resumes. Both changes are new system-time rows, so a
@@ -354,59 +322,29 @@ export const lineageResolvers = {
     
     submitManualOverride: async (_: any, args: { input: any }, context: Context) => {
       const { input } = args;
-      const userId = context.user?.id;
-      
       try {
-        const { data: attrDef } = await context.supabase
+        const { data: attrDef, error: attrError } = await context.supabase
           .from('attribute_register')
-          .select('*')
+          .select('id, data_type')
           .eq('attribute_code', input.attributeCode)
-          .single();
-        
+          .maybeSingle();
+        if (attrError) throw attrError;
         if (!attrDef) throw new Error(`Attribute not found: ${input.attributeCode}`);
-        
-        const { data: manualSource } = await context.supabase
-          .schema('entity_instances')
-          .from('source_registry')
-          .select('id')
-          .eq('source_code', 'MANUAL')
-          .single();
-        
-        // Replace only the manual source. Precedence is resolved and stored by the database trigger.
-        await context.supabase
-          .from('entity_attribute_values')
-          .update({ system_to: new Date().toISOString() })
-          .eq('entity_id', input.entityId)
-          .eq('attribute_id', attrDef.id)
-          .eq('source_id', manualSource?.id)
-          .eq('valid_to', '9999-12-31')
-          .eq('system_to', '9999-12-31 23:59:59');
-        
-        // Insert override
-        const { data, error } = await context.supabase
-          .from('entity_attribute_values')
-          .insert({
-            entity_id: input.entityId,
-            attribute_id: attrDef.id,
-            source_id: manualSource?.id,
-            golden_value: input.value,
-            valid_from: input.validFrom || new Date().toISOString().split('T')[0],
-            valid_to: '9999-12-31',
-            system_from: new Date().toISOString(),
-            system_to: '9999-12-31 23:59:59',
-            precedence_rank: 1,
-            is_manual_override: true,
-            override_reason: input.overrideReason,
-            created_by: userId,
-          })
-          .select()
-          .single();
-        
-        if (error) throw error;
-        
-        return { success: true, goldenValueId: data.id, errors: [] };
+
+        // The same writer chat, workflows and Excel use (lib/source-write.ts).
+        const written = await writeManualOverride(context.supabase, {
+          entityId: input.entityId,
+          attribute: attrDef,
+          value: input.value,
+          validFrom: input.validFrom,
+          reason: input.overrideReason,
+          userId: context.user?.id,
+        });
+        await refreshEntityCalculations(context, input.entityId);
+        return { success: true, goldenValueId: written.id, errors: [] };
       } catch (error: any) {
-        return { success: false, goldenValueId: null, errors: [{ field: '', message: error.message, code: 'OVERRIDE_FAILED' }] };
+        const code = error instanceof ManualOverrideError ? error.code : 'OVERRIDE_FAILED';
+        return { success: false, goldenValueId: null, errors: [{ field: '', message: error.message, code }] };
       }
     },
     
@@ -424,7 +362,6 @@ export const lineageResolvers = {
         if (!attrDef) throw new Error(`Attribute not found: ${input.attributeCode}`);
 
         const validFrom = input.validFrom || new Date().toISOString().split('T')[0];
-        const now = new Date().toISOString();
 
         const { data: sourceRow, error: sourceLookupError } = await context.supabase
           .schema('entity_instances')
@@ -435,52 +372,16 @@ export const lineageResolvers = {
         if (sourceLookupError || !sourceRow) throw sourceLookupError || new Error('Source not found');
 
         // A new value for this source versions that source only. Other sources stay current.
-        // Close the rows it replaces in system time and write their earlier days again, so a
-        // future-dated change leaves today's value in place. A value already scheduled later stays.
-        const { data: currentRows, error: currentError } = await context.supabase
-          .from('entity_attribute_values')
-          .select('*')
-          .eq('entity_id', input.entityId)
-          .eq('attribute_id', attrDef.id)
-          .eq('source_id', sourceRow.id)
-          .gte('valid_to', validFrom)
-          .eq('system_to', OPEN_SYSTEM_TO);
-        if (currentError) throw currentError;
-
-        const plan = planSourceVersion(currentRows || [], validFrom);
-        for (const current of plan.close) {
-          const { error: closeError } = await context.supabase
-            .from('entity_attribute_values')
-            .update({ system_to: now })
-            .eq('id', current.id);
-          if (closeError) throw closeError;
-        }
-        for (const { row: current, validTo } of plan.keepBefore) {
-          const { error: sliceError } = await context.supabase
-            .from('entity_attribute_values')
-            .insert(versionCopy(current, dateOnly(current.valid_from), validTo, now, current.created_by));
-          if (sliceError) throw sliceError;
-        }
-
-        const { data, error } = await context.supabase
-          .from('entity_attribute_values')
-          .insert({
-            entity_id: input.entityId,
-            attribute_id: attrDef.id,
-            source_id: sourceRow.id,
-            golden_value: input.value,
-            valid_from: validFrom,
-            valid_to: plan.newValidTo,
-            system_from: now,
-            system_to: OPEN_SYSTEM_TO,
-            precedence_rank: sourceRow.precedence_rank ?? attrDef.default_precedence_rank,
-            is_manual_override: sourceRow.source_code === 'MANUAL',
-            created_by: userId,
-          })
-          .select()
-          .single();
-
-        if (error) throw error;
+        const data = await writeSourceVersion(context.supabase, {
+          entityId: input.entityId,
+          attributeId: attrDef.id,
+          sourceId: sourceRow.id,
+          validFrom,
+          stored: { golden_value: input.value, golden_value_numeric: null, golden_value_date: null },
+          precedenceRank: sourceRow.precedence_rank ?? attrDef.default_precedence_rank,
+          isManualOverride: sourceRow.source_code === 'MANUAL',
+          userId,
+        });
 
         await refreshEntityCalculations(context, input.entityId);
 

@@ -1,0 +1,127 @@
+:root {
+  --bg: #ffffff;
+  --surface: #f6f8fb;
+  --ink: #1b2430;
+  --ink-2: #4a5566;
+  --ink-3: #6b7686;
+  --line: #d9dee6;
+  --accent: #1f6fd1;
+  --accent-ink: #ffffff;
+  --error: #b42318;
+  --error-bg: #fdecea;
+  --focus: #1f6fd1;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1f1f;
+    --surface: #2a2b2e;
+    --ink: #eef1f5;
+    --ink-2: #c3cad4;
+    --ink-3: #9aa4b2;
+    --line: #3c3f45;
+    --accent: #5aa2ff;
+    --accent-ink: #0b1220;
+    --error: #ff8a80;
+    --error-bg: #3a1d1b;
+    --focus: #5aa2ff;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.45 "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+}
+main { padding: 12px 14px 24px; }
+.loading { color: var(--ink-3); }
+header { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+h1 { margin: 0; font-size: 16px; font-weight: 600; }
+h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.account { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.account .who { margin: 0; color: var(--ink-2); flex: 1 1 160px; }
+.status { margin: 8px 0 0; min-height: 1em; color: var(--ink-3); }
+.status.error { color: var(--error); }
+section { margin-top: 14px; }
+label { display: flex; align-items: center; gap: 6px; margin: 12px 0 4px; font-weight: 600; }
+.step {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 700;
+}
+.optional { font-weight: 400; color: var(--ink-3); }
+input {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg); color: var(--ink); font: inherit;
+}
+input:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.asof-row { display: flex; gap: 6px; }
+.asof-row input[type="text"] { flex: 1; min-width: 0; }
+.date-picker { width: 36px; padding: 4px; flex: none; color: transparent; cursor: pointer; }
+.date-picker::-webkit-datetime-edit { display: none; }
+.date-picker::-webkit-calendar-picker-indicator { margin: 0 auto; cursor: pointer; }
+.picked { margin: 3px 0 0; color: var(--ink-3); font-size: 12px; min-height: 0; }
+.picked:empty { display: none; }
+.results { list-style: none; margin: 4px 0 0; padding: 0; max-height: 220px; overflow-y: auto; border-radius: 4px; }
+.results:empty { display: none; }
+.results li + li { border-top: 1px solid var(--line); }
+.results .empty, .results .divider { padding: 6px 8px; color: var(--ink-3); font-size: 12px; }
+.results .divider { background: var(--surface); font-weight: 600; }
+.choice {
+  display: grid; grid-template-columns: auto 1fr; column-gap: 8px; width: 100%; text-align: left;
+  padding: 6px 8px; border: 0; background: var(--surface); color: var(--ink); cursor: pointer; font: inherit;
+}
+.choice:hover { background: var(--line); }
+.choice.muted { opacity: 0.75; }
+.choice .code { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 12px; font-weight: 600; }
+.choice .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.choice .detail { grid-column: 1 / -1; color: var(--ink-3); font-size: 11px; }
+.preview { margin-top: 14px; padding: 8px; background: var(--surface); border-radius: 4px; }
+.formula { display: block; font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.value { margin: 6px 0 0; font-variant-numeric: tabular-nums; }
+.value:empty { display: none; }
+.value.muted { color: var(--ink-3); }
+.value.error { color: var(--error); }
+.actions { display: flex; gap: 8px; margin-top: 10px; }
+button {
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg);
+  color: var(--ink); font: inherit; cursor: pointer;
+}
+button:hover { background: var(--surface); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.primary:hover { filter: brightness(1.08); background: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+.selection {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  margin-top: 14px; padding: 8px; border: 1px dashed var(--line); border-radius: 4px;
+}
+.selection[hidden] { display: none; }
+.workbook { border-top: 1px solid var(--line); padding-top: 12px; }
+.help { color: var(--ink-3); font-size: 12px; }
+code { font-family: Consolas, "SF Mono", Menlo, monospace; }
+.overrides { border-top: 1px solid var(--line); padding-top: 12px; }
+.override-editor[hidden] { display: none; }
+.override-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.override-line { padding: 8px; background: var(--surface); border-radius: 4px; display: flex; flex-direction: column; gap: 4px; }
+.override-head { display: flex; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+.override-head .code, .override-problems .code { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 12px; }
+.override-now { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.override-inputs { display: flex; gap: 6px; align-items: center; }
+.override-inputs input:first-child { flex: 1 1 auto; min-width: 0; }
+.override-inputs input:last-child { flex: 0 0 104px; }
+.override-from { color: var(--ink-3); font-size: 12px; }
+.override-status { font-size: 12px; min-height: 0; }
+.override-status:empty { display: none; }
+.override-status.ready { color: var(--accent); }
+.override-status.ok { color: #1a7f37; }
+.override-status.muted { color: var(--ink-3); }
+.override-status.error { color: var(--error); }
+.override-problems { margin: 8px 0 0; padding-left: 18px; color: var(--ink-3); font-size: 12px; }
+.override-problems:empty { display: none; }
+.override-summary { margin: 8px 0 0; color: var(--ink-2); }
+.override-summary:empty { display: none; }
+textarea {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg); color: var(--ink); font: inherit; resize: vertical;
+}
+@media (prefers-color-scheme: dark) { .override-status.ok { color: #57d68d; } }

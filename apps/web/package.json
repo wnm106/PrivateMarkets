@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "npm --prefix ../excel-addin run build",
     "dev": "next dev",
+    "prebuild": "npm --prefix ../excel-addin run build",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

@@ -123,7 +123,8 @@ export async function middleware(request: NextRequest) {
       return withSessionCookies(NextResponse.redirect(redirectUrl), response);
     }
     const needsMfa = Boolean(decision?.mfa_required && decision.mfa_satisfied === false);
-    if (needsMfa && !pathname.startsWith('/login/mfa') && !pathname.startsWith('/api/auth/')) {
+    // The Excel sign-in page checks the step-up for its own session (lib/session-store.ts).
+    if (needsMfa && !pathname.startsWith('/login/mfa') && !pathname.startsWith('/api/auth/') && !pathname.startsWith('/excel/')) {
       if (pathname.startsWith('/api/')) {
         return NextResponse.json({ error: 'Multi-factor authentication is required.' }, { status: 403 });
       }
