@@ -1,11 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ReviewPanel } from '@/components/workflows/ReviewPanel';
 import { FORMS_QUERY, FormCard, type FormView } from '@/components/workflows/RunForms';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { checkRecords, checklistSummary, progressText, runChecklist, type CheckProgress, type CheckState, type Checklist, type ChecklistItem } from '@/lib/workflow-checklist';
 import type { RunDecisionsView } from '@/lib/workflow-run-view';
+import { refreshTasks } from '@/lib/tasks';
 import { COMPLETE_STAGE, RUN_STAGES_QUERY, type StageView } from '@/lib/workflow-stages';
 import { assigneeText, dueText, when, type RunDetail } from '@/lib/workflows';
 import { STAGE_COMPONENTS } from './stages';
@@ -191,11 +192,25 @@ export function RunChecklist({ run, decisions, onChanged }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState<string | null>(null);
 
-  // When the open decision changes, the list moves on to it.
-  const currentId = checklist.current?.nodeId || null;
+  // A task opened from the inbox or a notice names its decision in the link.
   useEffect(() => {
-    setPicked(null);
+    const wanted = new URLSearchParams(window.location.search).get('decision');
+    if (wanted) setPicked(wanted);
+  }, []);
+
+  // When the open decision moves on, so does the list. Not when it first loads, so a decision named in the link stays open.
+  const currentId = checklist.current?.nodeId || null;
+  const lastCurrent = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastCurrent.current !== null && lastCurrent.current !== currentId) setPicked(null);
+    lastCurrent.current = currentId;
   }, [currentId]);
+
+  // Finishing a decision changes the person's task count everywhere at once.
+  const changed = () => {
+    refreshTasks();
+    onChanged();
+  };
 
   const reachable = (item: ChecklistItem) => Boolean(item.recordId);
   const selected =
@@ -212,7 +227,7 @@ export function RunChecklist({ run, decisions, onChanged }: Props) {
       const problem = failed?.message || data?.completeWorkflowStage.errors[0]?.message;
       if (problem) throw new Error(problem);
       await decisions.reload();
-      onChanged();
+      changed();
     } catch (err: any) {
       setError(err?.message || 'The stage could not be finished');
       throw err;
@@ -243,7 +258,7 @@ export function RunChecklist({ run, decisions, onChanged }: Props) {
       return (
         <>
           {heading}
-          <ReviewPanel key={review.id} review={review} canManage={run.canManage === true} onDecided={onChanged} onProgress={(next) => report(review.id, next)} />
+          <ReviewPanel key={review.id} review={review} canManage={run.canManage === true} onDecided={changed} onProgress={(next) => report(review.id, next)} />
         </>
       );
     }
@@ -262,7 +277,7 @@ export function RunChecklist({ run, decisions, onChanged }: Props) {
             onAnswered={() => {
               setFormOpen(null);
               void decisions.reload();
-              onChanged();
+              changed();
             }}
           />
         </>

@@ -3313,6 +3313,11 @@ type Query {
   """Forms workflow steps are waiting on. status defaults to OPEN; runId keeps one run's."""
   workflowForms(status: String, runId: ID): [WorkflowForm!]!
   workflowStages(status: String, runId: ID): [WorkflowStage!]!
+  """
+  Every open decision in a workflow run that you can act on now (a review to decide, a form to answer, a screen to work),
+  overdue first, with the counts. withPlace adds each one's number on its run's checklist.
+  """
+  myTasks(withPlace: Boolean): WorkflowTaskList!
   workflowStageScreens: [WorkflowStageScreen!]!
   """The runs a run was split into, one per record: [{ id, status, input, createdAt, finishedAt, openReviews }]."""
   workflowRunChildren(runId: ID!): JSON!
@@ -5462,6 +5467,40 @@ type WorkflowStage {
   completedAt: DateTime
   dueAt: DateTime
   createdAt: DateTime!
+}
+
+"""One open decision in a workflow run."""
+type WorkflowTask {
+  id: ID!
+  """review, form, or stage."""
+  kind: String!
+  runId: ID!
+  nodeId: String!
+  title: String!
+  workflowName: String
+  about: String
+  detail: String!
+  createdAt: DateTime!
+  dueAt: DateTime
+  overdue: Boolean!
+  canAct: Boolean!
+  blocker: String
+  waitingOn: String
+  """Its number on the run's checklist, and the run's total. Null unless asked for with withPlace."""
+  place: Int
+  placeOf: Int
+  """The decision that approves a review as proposed, when every change is ready. Null otherwise."""
+  approveAll: JSON
+  approvalsLeft: Int!
+}
+
+type WorkflowTaskList {
+  total: Int!
+  overdue: Int!
+  dueSoon: Int!
+  waitingOnOthers: Int!
+  tasks: [WorkflowTask!]!
+  waiting: [WorkflowTask!]!
 }
 
 type WorkflowStageResult {

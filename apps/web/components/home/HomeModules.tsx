@@ -22,6 +22,7 @@ import {
   type NeedsYouLane,
   type ReviewSource,
   type WorkflowRunSource,
+  type WorkflowStepSource,
 } from '@/lib/home';
 
 export interface HomeFollow {
@@ -53,7 +54,7 @@ export function followHref(follow: HomeFollow): string | null {
 async function loadSources(follows: HomeFollow[], includeClientWide: boolean) {
   const followedIds = follows.filter((follow) => follow.subjectType === 'ENTITY' && follow.subjectId).map((follow) => follow.subjectId as string);
 
-  const [reviews, files, jobs, runs, followed, urgent] = await Promise.all([
+  const [reviews, files, jobs, runs, followed, urgent, tasks] = await Promise.all([
     graphqlQuery<{ workflowReviews: ReviewSource[] }>(
       `query { workflowReviews(status: "OPEN") { id runId title workflowName itemCount canReview createdAt dueAt overdue } }`,
       {},
@@ -97,10 +98,17 @@ async function loadSources(follows: HomeFollow[], includeClientWide: boolean) {
           'network-only',
         )
       : Promise.resolve({ data: undefined }),
+    // Forms and screens come from the person's tasks, the same list the top bar counts.
+    graphqlQuery<{ myTasks: { tasks: Array<WorkflowStepSource & { kind: string }> } }>(
+      `query { myTasks { tasks { id kind runId nodeId title workflowName detail canAct createdAt dueAt overdue } } }`,
+      {},
+      'network-only',
+    ),
   ]);
 
   return {
     reviews: reviews.data?.workflowReviews,
+    workflowSteps: (tasks.data?.myTasks.tasks || []).filter((task): task is WorkflowStepSource => task.kind === 'form' || task.kind === 'stage'),
     files: files.data?.receivedFiles,
     jobs: jobs.data?.jobRuns,
     workflowRuns: runs.data?.workflowRuns,
@@ -154,8 +162,8 @@ export function FocusTiles({ summary, showExceptions }: { summary: HomeSummary |
     {
       key: 'reviews',
       label: 'To review',
-      value: summary?.reviews ?? 0,
-      sub: summary?.proposedChanges ? `${summary.proposedChanges} proposed changes` : 'Agent proposals',
+      value: (summary?.reviews ?? 0) + (summary?.steps ?? 0),
+      sub: [summary?.proposedChanges ? `${summary.proposedChanges} proposed changes` : '', summary?.steps ? `${summary.steps} ${summary.steps === 1 ? 'form or screen' : 'forms and screens'}` : ''].filter(Boolean).join(', ') || 'Agent proposals',
       href: '#needs-you',
       tone: 'decide',
     },

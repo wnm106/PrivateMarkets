@@ -22,7 +22,8 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 | Review notices | `supabase/migrations/20261117020000_workflow_review_notices.sql`, `packages/worker/src/assistant.ts` | Telling people a review is waiting or overdue |
 | Approvals, delivery | `supabase/migrations/20261117040000_workflow_review_approvals.sql`, `20261117050000_notification_delivery.sql`, `packages/worker/src/notify.ts` | More than one approval, handing an overdue review on, and sending notices by email and Slack |
 | Stages | `supabase/migrations/20261119120000_workflow_stages.sql`, `packages/graphql/src/lib/workflow-screens.ts`, `apps/web/components/workflows/stages` | A step that shows one screen and waits, and the screens it can show |
-| Checklist | `apps/web/lib/workflow-checklist.ts`, `apps/web/components/workflows/RunChecklist.tsx` | Every decision a run needs, numbered in order, and the screen for the open one |
+| Checklist | `packages/graphql/src/lib/workflow-checklist.ts`, `apps/web/components/workflows/RunChecklist.tsx` | Every decision a run needs, numbered in order, and the screen for the open one |
+| Tasks | `packages/graphql/src/lib/workflow-tasks.ts`, `apps/web/lib/tasks.ts`, `apps/web/components/layout/TaskCenter.tsx` | The decisions waiting on you, counted once, in the top bar, the inbox, the sidebar and the tab |
 | Forms, split runs, outbound | `supabase/migrations/20261117070000_workflow_forms_and_outbound.sql`, `packages/worker/src/workflow/outbound.ts`, `apps/web/app/portal` | Ask for information, the portal, one run per record, Call a connection, Send a message |
 | Analytics | `supabase/migrations/20261117080000_workflow_analytics.sql`, `apps/web/app/workflows/analytics` | How each workflow is doing |
 | Triggers | `supabase/migrations/20261117030000_workflow_triggers.sql`, `apps/web/components/workflows/WorkflowTriggers.tsx` | Starting a workflow when a feed event arrives or a data quality scan finds new failures |
@@ -328,6 +329,19 @@ A review opened before this was added keeps the rules it was opened under: open 
 
 ### Telling people
 
+**Your tasks.** A task is a decision in a run that you can act on now: a review you can decide, a form you can answer, a screen you can work. Each is one point on its run's checklist, however many changes it holds. `myTasks` counts them in one place (`packages/graphql/src/lib/workflow-tasks.ts`), so every place in the app shows the same number:
+
+| Where | What it shows |
+|---|---|
+| **Tasks** in the top bar | How many tasks are yours, red when any is overdue. It opens the inbox |
+| The inbox | Your tasks, overdue first, then the soonest due, then the longest waiting. Each says what it is, which workflow, its place on the run's checklist ("Decision 2 of 3"), what it holds, and when it is due. A task new since you last opened the inbox is marked New. A review whose every change is ready can be approved there. Below, the decisions you can see that someone else has to make |
+| Workflows in the sidebar | The same count. When the tools are folded away, it shows on Tools |
+| The browser tab | The count in front of the page title, "(3) Home" |
+| A note in the corner | When a task arrives while you are in the app, unless you are already on its run. It closes itself after ten seconds |
+| Needs you on the home page | Reviews, and now forms and screens |
+
+A task opens its run on that decision (`/workflows/runs/<run>?decision=<step>`). The count is read every minute while the tab is in view, when you come back to it, and as soon as you finish a decision. It clears only when the work is done, not when the task is seen.
+
 Nobody has to watch the list. A review is announced as a note in each person's assistant briefing (the Briefing chat), with a link to the run. It goes to whoever can decide the review, whether or not they follow anything or have turned the assistant on.
 
 | When | Who is told |
@@ -560,7 +574,8 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 - Stages for proposed new fields and a drafted template. Three screens exist: understanding a file, mapping it, and checking staged values.
 - Choosing the stored record a file's values load onto. The Understand screen links the document to a record; the loader still matches values by code, identifier and name.
 - Starting a guided run when a file arrives by a feed. It is started by hand from Load data.
-- Stages on the home page's Needs you list and in review notices. An open stage shows on its run's page.
+- Notices for forms and screens. They are in the Tasks inbox and on Needs you, but are not sent to the briefing, by email or to Slack, and are not chased when overdue.
+- Choosing how you are told: a digest, quiet hours, or browser notifications.
 - Screens for more kinds of change. Reconciliation changes have their own; a proposed new field, list value, alias or template is still decided in the general table.
 - Performance review. There is no read tool for returns or attribution, so no view or section for them.
 - The checklist on the home page and in the hub. It is on the run's page.
