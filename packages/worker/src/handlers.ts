@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { jobScopeProblem, jobType } from '@tapestrai/graphql/src/lib/job-types';
 import { mapFileLoader } from './feed-loader';
 import { notifyDeliverHandler } from './notify';
 import { assistantBriefHandler, assistantSweepHandler, assistantWatchHandler, workflowReviewsDueHandler } from './assistant';
@@ -131,20 +132,35 @@ export function complianceEvaluateHandler(supabase: SupabaseClient, now: () => D
 /**
  * Data loaders were replaced by feeds (see feeds.ts). A loader run fails with
  * that message and marks the loader, so the screen never shows a load that did not happen.
+ *
+ * A loader has no client: the table is shared by every client, and row security
+ * lets only a tenant admin change it. The worker's key is not held to row
+ * security, so the same rule is applied here. The loader is marked only when a
+ * tenant admin queued the run. Anyone else's run fails with the same message
+ * and leaves the shared row as it was.
  */
 export function loaderRunHandler(supabase: SupabaseClient, now: () => Date = () => new Date()): JobHandler {
   return async (run) => {
     const loaderId = typeof run.payload.loaderId === 'string' ? run.payload.loaderId : '';
     if (!loaderId) throw new JobError('The job has no loaderId.');
     const reason = 'Data loaders were replaced by feeds. Set this file up under Admin, Feeds.';
-    const { error } = await supabase
-      .schema('entity_instances')
-      .from('data_loaders')
-      .update({ loader_status: 'FAILED', last_run_at: now().toISOString(), last_run_result: { runId: run.id, error: reason } })
-      .eq('id', loaderId);
-    if (error) throw new Error(error.message);
+    if (run.requestedBy && (await isTenantAdmin(supabase, run.requestedBy))) {
+      const { error } = await supabase
+        .schema('entity_instances')
+        .from('data_loaders')
+        .update({ loader_status: 'FAILED', last_run_at: now().toISOString(), last_run_result: { runId: run.id, error: reason } })
+        .eq('id', loaderId);
+      if (error) throw new Error(error.message);
+    }
     throw new JobError(reason);
   };
+}
+
+/** Whether this person is active platform staff now. workflow_worker_person answers for any client, or none. */
+async function isTenantAdmin(supabase: SupabaseClient, userId: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('workflow_worker_person', { p_user_id: userId, p_client_id: null, p_permissions: [] });
+  if (error) throw new Error(error.message);
+  return (data as { tenantAdmin?: boolean } | null)?.tenantAdmin === true;
 }
 
 /** A database refusal that another attempt cannot change: no owner, or the owner lost access. */
@@ -198,8 +214,31 @@ function connectorOptions() {
   return { allowPrivate: process.env.FEED_ALLOW_PRIVATE_HOSTS === 'true' };
 }
 
+/**
+ * Holds a run to the rule the API applies when a job is queued: a platform job
+ * has no client and is queued by platform staff, and a client job has a client.
+ * job_enqueue can be called without the API, by anyone who may manage jobs for
+ * a client, so a run can reach the worker that the API would have refused.
+ *
+ * A platform job reads or writes every client, so it is not run when it names
+ * a client, or when the person behind it is not platform staff now. A platform
+ * run with no person behind it was queued by the system (a migration's
+ * schedule, or a database trigger) and runs.
+ */
+export function scoped(supabase: SupabaseClient, handler: JobHandler): JobHandler {
+  return async (run, job) => {
+    const problem = jobScopeProblem(run.jobType, run.clientId);
+    if (problem) throw new JobError(problem);
+    const type = jobType(run.jobType);
+    if (type?.scope === 'PLATFORM' && run.requestedBy && !(await isTenantAdmin(supabase, run.requestedBy))) {
+      throw new JobError(`${type.label} is a platform job, and the person it runs for is not platform staff.`);
+    }
+    return handler(run, job);
+  };
+}
+
 export function buildHandlers(supabase: SupabaseClient): Record<string, JobHandler> {
-  return {
+  const handlers: Record<string, JobHandler> = {
     'dq.scan': dqScanHandler(supabase),
     'stale.scan': staleScanHandler(supabase),
     'calc.process': calcProcessHandler(supabase),
@@ -219,4 +258,5 @@ export function buildHandlers(supabase: SupabaseClient): Record<string, JobHandl
     'workflow.start': workflowStartHandler(supabase),
     'workflow.triggers': workflowTriggersHandler(supabase),
   };
+  return Object.fromEntries(Object.entries(handlers).map(([code, handler]) => [code, scoped(supabase, handler)]));
 }

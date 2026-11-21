@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { listBatches, stageImportInstance } from '@/lib/feeds/load-batches';
-import { canPromoteLoads, feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
+import { canPromoteLoads, feedClientId, requireFeedUser, requireFeedWriter } from '@/lib/feeds/require-user';
 import type { ColumnAssignment } from '@/lib/feeds/suggest';
 import type { EntityResolutionDecision } from '@tapestrai/mcp-server/src/feeds/types';
 
@@ -24,10 +24,9 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
 
 /** Stage the file: keep what a load would do, and check it. Writes nothing to live records. */
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
-  const user = await requireFeedUser();
-  if (!user) return NextResponse.json({ error: 'Sign in to load a file' }, { status: 401 });
-  const clientId = await feedClientId();
-  if (!clientId) return NextResponse.json({ error: 'Choose a client before loading the file' }, { status: 400 });
+  const who = await requireFeedWriter();
+  if ('error' in who) return who.error;
+  const { user, clientId } = who;
   const { id } = await context.params;
   const body = await request.json().catch(() => ({}));
   try {

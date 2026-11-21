@@ -1,7 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { gzipSync } from 'node:zlib';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  assertPublicAddress,
   fillDateTokens,
+  isPublicAddress,
+  pinnedLookup,
+  pinnedRequest,
+  publicAddresses,
+  publicFetch,
   httpConnector,
   matchesPattern,
   mediaTypeFor,
@@ -61,23 +68,141 @@ describe('file helpers', () => {
   });
 });
 
-describe('assertPublicAddress', () => {
+describe('isPublicAddress', () => {
+  it('accepts public IPv4 and global IPv6, however IPv4 is carried', () => {
+    for (const address of ['93.184.216.34', '8.8.8.8', '2606:2800:220:1:248:1893:25c8:1946', '2001:4860:4860::8888', '::ffff:93.184.216.34', '::ffff:5db8:d822', '64:ff9b::5db8:d822', '2002:5db8:d822::1']) {
+      expect(isPublicAddress(address), address).toBe(true);
+    }
+  });
+
+  it('refuses every address that is not a host on the public internet', () => {
+    const refused = [
+      // IPv4: this network, private, carrier NAT, loopback, link-local (cloud metadata), protocol, benchmarking, documentation, 6to4 relay, multicast, reserved, broadcast
+      '0.0.0.0', '0.1.2.3', '10.0.0.5', '100.64.0.1', '100.127.255.254', '127.0.0.1', '127.8.9.10', '169.254.169.254', '172.16.0.1', '172.31.255.254',
+      '192.0.0.8', '192.0.2.1', '192.88.99.1', '192.168.1.10', '198.18.0.1', '198.19.255.254', '198.51.100.7', '203.0.113.9', '224.0.0.1', '239.255.255.250',
+      '240.0.0.1', '255.255.255.255',
+      // IPv6: unspecified, loopback, unique-local, link-local (with a zone too), multicast, documentation, discard, site-local
+      '::', '::1', 'fc00::1', 'fd12:3456::1', 'fe80::1', 'fe80::1%eth0', 'febf::1', 'ff02::1', '2001:db8::1', '100::1', 'fec0::1',
+      // IPv4 carried in IPv6: mapped (dotted and hex), compatible, NAT64, 6to4, Teredo, translated
+      '::ffff:127.0.0.1', '::ffff:7f00:1', '::ffff:10.0.0.1', '::ffff:a9fe:a9fe', '::ffff:169.254.169.254', '::127.0.0.1', '::7f00:1', '::a00:5',
+      '64:ff9b::7f00:1', '64:ff9b::a9fe:a9fe', '64:ff9b::10.0.0.5', '64:ff9b:1::1', '2002:7f00:1::1', '2002:a9fe:a9fe::', '2002:c0a8:101::5',
+      '2001:0:4136:e378:8000:63bf:80ff:fffe', '2001:0:7f00:1::1', '::ffff:0:7f00:1',
+      // Not an address at all
+      'localhost', '', '127.1', '2130706433',
+    ];
+    for (const address of refused) expect(isPublicAddress(address), address).toBe(false);
+  });
+});
+
+describe('publicAddresses and publicFetch', () => {
   const resolveTo = (...addresses: string[]) => ({ resolve: async () => addresses });
 
-  it('accepts a public https host', async () => {
-    await expect(assertPublicAddress(new URL('https://files.example.com/x'), resolveTo('93.184.216.34'))).resolves.toBeUndefined();
+  it('returns the addresses a public host may be reached at', async () => {
+    expect(await publicAddresses('files.example.com', resolveTo('93.184.216.34', '2606:2800:220:1:248:1893:25c8:1946'))).toEqual(['93.184.216.34', '2606:2800:220:1:248:1893:25c8:1946']);
   });
 
-  it('refuses http, private, loopback and link-local addresses', async () => {
-    await expect(assertPublicAddress(new URL('http://files.example.com/x'), resolveTo('93.184.216.34'))).rejects.toThrow(/https/);
-    for (const address of ['10.0.0.5', '172.20.1.1', '192.168.1.10', '127.0.0.1', '169.254.169.254', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1']) {
-      await expect(assertPublicAddress(new URL('https://internal.example.com/x'), resolveTo(address))).rejects.toThrow(/not a public address/);
+  it('refuses a private, loopback or link-local host, and one where any address is private', async () => {
+    for (const address of ['10.0.0.5', '172.20.1.1', '192.168.1.10', '127.0.0.1', '169.254.169.254', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '::ffff:7f00:1']) {
+      await expect(publicAddresses('internal.example.com', resolveTo(address))).rejects.toThrow(/not a public address/);
     }
-    await expect(assertPublicAddress(new URL('https://169.254.169.254/latest/meta-data'))).rejects.toThrow(/not a public address/);
+    await expect(publicAddresses('mixed.example.com', resolveTo('93.184.216.34', '10.0.0.1'))).rejects.toThrow(/not a public address/);
+    await expect(publicAddresses('empty.example.com', resolveTo())).rejects.toThrow(/not a public address/);
   });
 
-  it('refuses a host where any address is private', async () => {
-    await expect(assertPublicAddress(new URL('https://mixed.example.com/x'), resolveTo('93.184.216.34', '10.0.0.1'))).rejects.toThrow(/not a public address/);
+  it('refuses addresses written straight into the URL, however they are written', async () => {
+    const fetchImpl = (async () => new Response('should not be reached')) as typeof fetch;
+    for (const address of [
+      'https://[::ffff:127.0.0.1]/',
+      'https://[::ffff:169.254.169.254]/latest/meta-data/',
+      'https://[::ffff:10.0.0.5]:8443/',
+      'https://[64:ff9b::a9fe:a9fe]/',
+      'https://[::127.0.0.1]/',
+      'https://127.0.0.1/',
+      'https://[::1]/',
+      'https://169.254.169.254/latest/meta-data',
+      'https://2130706433/',
+      'https://0x7f.1/',
+      'https://[2002:7f00:1::1]/',
+    ]) {
+      await expect(publicFetch(new URL(address), { method: 'GET', headers: {}, redirect: 'error' }, { fetchImpl }), address).rejects.toThrow(/not a public address/);
+    }
+    await expect(publicFetch(new URL('http://files.example.com/x'), { method: 'GET', headers: {}, redirect: 'error' }, { ...resolveTo('93.184.216.34'), fetchImpl })).rejects.toThrow(/https/);
+  });
+
+  it('looks the name up once, whatever it would answer the next time', async () => {
+    let lookups = 0;
+    // A name that answers with a public address first and a private one after: DNS rebinding.
+    const resolve = async () => (lookups++ === 0 ? ['93.184.216.34'] : ['127.0.0.1']);
+    const fetchImpl = (async () => new Response('ok')) as typeof fetch;
+    await publicFetch(new URL('https://rebind.example/x'), { method: 'GET', headers: {}, redirect: 'error' }, { resolve, fetchImpl });
+    expect(lookups).toBe(1);
+  });
+
+  it('answers a connection\'s lookup with the checked addresses only', () => {
+    const lookup = pinnedLookup(['93.184.216.34', '2606:2800:220:1:248:1893:25c8:1946']);
+    const answers: unknown[] = [];
+    lookup('rebind.example', { all: true }, (_error, addresses) => answers.push(addresses));
+    lookup('rebind.example', {}, (_error, address, family) => answers.push([address, family]));
+    expect(answers).toEqual([
+      [{ address: '93.184.216.34', family: 4 }, { address: '2606:2800:220:1:248:1893:25c8:1946', family: 6 }],
+      ['93.184.216.34', 4],
+    ]);
+  });
+});
+
+describe('pinnedRequest', () => {
+  let server: Server;
+  let port = 0;
+  const seen: Array<{ url?: string; host?: string }> = [];
+
+  beforeAll(async () => {
+    server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      seen.push({ url: request.url, host: request.headers.host });
+      if (request.url === '/moved') {
+        response.writeHead(302, { location: 'http://169.254.169.254/' });
+        response.end();
+      } else if (request.url === '/zipped') {
+        response.writeHead(200, { 'content-encoding': 'gzip', 'content-type': 'text/csv' });
+        response.end(gzipSync('a,b\n1,2\n'));
+      } else if (request.url === '/large') {
+        response.writeHead(200);
+        response.end(Buffer.alloc(64 * 1024, 120));
+      } else {
+        response.writeHead(200, { 'content-type': 'text/plain' });
+        response.end(`hello ${request.method}`);
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as AddressInfo).port;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const get = (path: string, extra: Partial<Parameters<typeof pinnedRequest>[1]> = {}) =>
+    // .invalid never resolves, so reaching the server at all shows the name was not looked up.
+    pinnedRequest(new URL(`http://files.invalid:${port}${path}`), { method: 'GET', headers: {}, redirect: 'error', ...extra }, ['127.0.0.1']);
+
+  it('connects to the checked address and never looks the name up', async () => {
+    const response = await get('/file');
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('hello GET');
+    expect(seen.at(-1)).toEqual({ url: '/file', host: `files.invalid:${port}` });
+  });
+
+  it('refuses a redirect, or hands it back when asked to', async () => {
+    await expect(get('/moved')).rejects.toThrow(/redirect, which is not followed/);
+    const manual = await get('/moved', { redirect: 'manual' });
+    expect(manual.status).toBe(302);
+  });
+
+  it('decodes a compressed reply and stops reading past the limit', async () => {
+    const zipped = await get('/zipped');
+    expect(await zipped.text()).toBe('a,b\n1,2\n');
+    expect(zipped.headers.get('content-encoding')).toBeNull();
+    const large = await get('/large', { maxBytes: 1000 });
+    expect((await large.arrayBuffer()).byteLength).toBeLessThan(64 * 1024);
   });
 });
 
@@ -284,7 +409,8 @@ describe('sftpConnector', () => {
     expect(fetched?.mediaType).toBe('text/csv');
     expect(await connector.fetch({ name: 'gone.csv', ref: '/outbound/nav/gone.csv' })).toBeNull();
     expect(server.sessions()).toBe(1);
-    expect(server.calls[0]).toEqual(['connect', expect.objectContaining({ host: 'sftp.example.com', port: 22, username: 'feeds', password: 'pw' })]);
+    // The address that was checked, not the name, which could answer differently by the time the session connects.
+    expect(server.calls[0]).toEqual(['connect', expect.objectContaining({ host: '93.184.216.34', port: 22, username: 'feeds', password: 'pw' })]);
     await connector.close?.();
     expect(server.calls.at(-1)).toEqual(['end']);
   });

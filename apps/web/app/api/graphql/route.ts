@@ -1,6 +1,6 @@
 import { createYoga } from 'graphql-yoga';
 import { createClient } from '@supabase/supabase-js';
-import { schema } from '@tapestrai/graphql';
+import { schema, useQueryLimits } from '@tapestrai/graphql';
 import { NextRequest } from 'next/server';
 import { accessTokenFromCookieHeader, supabaseProjectRef } from '@/lib/auth-token';
 // GraphQL route.
@@ -52,7 +52,10 @@ const yoga = createYoga({
   graphqlEndpoint: '/api/graphql',
   landingPage: false,
   graphiql: graphiqlOptions,
+  // Left off: many resolvers throw plain errors whose messages the pages show.
   maskedErrors: false,
+  // Depth and alias limits, checked before a query runs.
+  plugins: [useQueryLimits()],
   cors: {
     origin: '*',
     credentials: true,

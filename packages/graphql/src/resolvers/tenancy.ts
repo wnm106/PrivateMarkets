@@ -8,6 +8,7 @@ import {
   toIdentityProviderRow,
   type IdentityProviderKind,
 } from '../lib/enterprise-sso';
+import { requireUuid } from '../lib/input-guards';
 
 // Always the caller's JWT. The service role bypasses row level security, so
 // tenancy reads and writes go through `supabase` and Postgres policies.
@@ -28,6 +29,36 @@ function collectAccess(roleRows: any[] | null, isTenantAdmin: boolean) {
   const canManageEntityAccess = isTenantAdmin || permissionCodes.has('entity_access.manage');
   const canAccessAdmin = isTenantAdmin || ADMIN_PERMISSIONS.some((code) => permissionCodes.has(code));
   return { canAccessAdmin, canManageEntityAccess };
+}
+
+/** Refuses a role that belongs to a different client. A role with no client is shared by all. */
+async function assertRolesForClient(context: Context, clientId: string, roleIds: string[]) {
+  const ids = [...new Set(roleIds)];
+  if (!ids.length) return;
+  ids.forEach((id) => requireUuid(id, 'roleId'));
+  const { data, error } = await tn(context).from('roles').select('id, client_id').in('id', ids);
+  if (error) throw error;
+  const found = new Map((data || []).map((row: any) => [row.id, row.client_id ?? null]));
+  for (const id of ids) {
+    if (!found.has(id)) throw new Error('That role was not found.');
+    const owner = found.get(id);
+    if (owner !== null && owner !== clientId) throw new Error('That role belongs to a different client.');
+  }
+}
+
+/** Finds an existing account by email. listUsers returns one page at a time. */
+async function findUserIdByEmail(admin: NonNullable<Context['supabaseAdmin']>, email: string): Promise<string | null> {
+  const wanted = email.trim().toLowerCase();
+  const perPage = 1000;
+  for (let page = 1; page <= 1000; page += 1) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+    const users = data?.users || [];
+    const match = users.find((user) => user.email?.toLowerCase() === wanted);
+    if (match) return match.id;
+    if (users.length < perPage) return null;
+  }
+  return null;
 }
 
 async function callerMayInvite(context: Context, clientId: string) {
@@ -148,7 +179,8 @@ export const tenancyResolvers = {
 
     roles: async (_: any, args: { clientId?: string }, context: Context) => {
       let query = tn(context).from('roles').select('*, role_permissions(permission:permissions(permission_code))');
-      query = args.clientId ? query.or(`client_id.is.null,client_id.eq.${args.clientId}`) : query;
+      // The id goes into a filter string, so it must be an id and nothing else.
+      query = args.clientId ? query.or(`client_id.is.null,client_id.eq.${requireUuid(args.clientId, 'clientId')}`) : query;
       const { data, error } = await query.order('role_name');
       if (error) throw error;
       return (data || []).map(mapRole);
@@ -302,9 +334,11 @@ export const tenancyResolvers = {
     inviteUser: async (_: any, args: { input: any }, context: Context) => {
       try {
         if (!context.user) throw new Error('Not authenticated');
+        requireUuid(args.input.clientId, 'clientId');
         if (!(await callerMayInvite(context, args.input.clientId))) {
           throw new Error('Not allowed to invite users');
         }
+        await assertRolesForClient(context, args.input.clientId, args.input.roleIds || []);
         if (!context.supabaseAdmin) {
           throw new Error('User invitation requires SUPABASE_SERVICE_ROLE_KEY to be configured on the server');
         }
@@ -321,11 +355,10 @@ export const tenancyResolvers = {
         let userId: string | null = null;
         const { data: invited, error: inviteError } = await context.supabaseAdmin.auth.admin.inviteUserByEmail(args.input.email);
         if (inviteError) {
-          // Already-registered users return an error here; look them up instead.
-          const { data: existing } = await context.supabaseAdmin.auth.admin.listUsers();
-          const match = existing?.users?.find((u) => u.email?.toLowerCase() === args.input.email.toLowerCase());
-          if (!match) throw inviteError;
-          userId = match.id;
+          // Already-registered users return an error here; look them up instead, on every page.
+          const existingId = await findUserIdByEmail(context.supabaseAdmin, String(args.input.email || ''));
+          if (!existingId) throw inviteError;
+          userId = existingId;
         } else {
           userId = invited.user?.id ?? null;
         }
@@ -357,6 +390,8 @@ export const tenancyResolvers = {
 
     assignRole: async (_: any, args: { input: any }, context: Context) => {
       try {
+        requireUuid(args.input.clientId, 'clientId');
+        await assertRolesForClient(context, args.input.clientId, [args.input.roleId]);
         const { error } = await tn(context)
           .from('user_roles')
           .upsert(
@@ -372,13 +407,16 @@ export const tenancyResolvers = {
 
     revokeRole: async (_: any, args: { clientId: string; userId: string; roleId: string }, context: Context) => {
       try {
-        const { error } = await tn(context)
+        // Row level security hides rows the caller may not change, so a refused delete removes nothing and returns no error.
+        const { data, error } = await tn(context)
           .from('user_roles')
           .delete()
           .eq('client_id', args.clientId)
           .eq('user_id', args.userId)
-          .eq('role_id', args.roleId);
+          .eq('role_id', args.roleId)
+          .select('id');
         if (error) throw error;
+        if (!data?.length) throw new Error('No role was removed. The person may not hold it, or you may not manage roles for this client.');
         return { success: true, errors: [] };
       } catch (error: any) {
         return { success: false, errors: [{ field: 'general', message: error.message, code: 'REVOKE_FAILED' }] };
@@ -387,8 +425,14 @@ export const tenancyResolvers = {
 
     deactivateClientUser: async (_: any, args: { clientId: string; userId: string }, context: Context) => {
       try {
-        const { error } = await tn(context).from('client_users').update({ is_active: false }).eq('client_id', args.clientId).eq('user_id', args.userId);
+        const { data, error } = await tn(context)
+          .from('client_users')
+          .update({ is_active: false })
+          .eq('client_id', args.clientId)
+          .eq('user_id', args.userId)
+          .select('id');
         if (error) throw error;
+        if (!data?.length) throw new Error('No one was deactivated. The person may not be in this client, or you may not manage its users.');
         return { success: true, errors: [] };
       } catch (error: any) {
         return { success: false, errors: [{ field: 'general', message: error.message, code: 'DEACTIVATE_FAILED' }] };
@@ -436,8 +480,9 @@ export const tenancyResolvers = {
 
     revokeEntityAccess: async (_: any, args: { id: string }, context: Context) => {
       try {
-        const { error } = await tn(context).from('entity_grants').delete().eq('id', args.id);
+        const { data, error } = await tn(context).from('entity_grants').delete().eq('id', args.id).select('id');
         if (error) throw error;
+        if (!data?.length) throw new Error('No access was removed. The grant may be gone, or you may not manage access to this record.');
         return { success: true, errors: [] };
       } catch (error: any) {
         return { success: false, errors: [{ field: 'general', message: error.message, code: 'REVOKE_FAILED' }] };

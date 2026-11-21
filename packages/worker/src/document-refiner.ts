@@ -62,6 +62,8 @@ export interface RefinerOptions {
   /** Who the model calls are recorded against in agent usage. */
   clientId?: string | null;
   userId?: string | null;
+  /** Aborts when the job has lost its run. No further passage is sent to the model. */
+  signal?: AbortSignal;
 }
 
 export function claudeRefiner(options: RefinerOptions = {}): Refiner {
@@ -96,7 +98,7 @@ export function claudeRefiner(options: RefinerOptions = {}): Refiner {
     let next = 0;
     let fatal: Error | null = null;
     const work = async () => {
-      while (next < requests.length && !fatal) {
+      while (next < requests.length && !fatal && !options.signal?.aborted) {
         const request = requests[next];
         next += 1;
         try {

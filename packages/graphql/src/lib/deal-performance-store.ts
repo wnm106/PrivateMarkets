@@ -9,6 +9,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadAllocationDraft, previewFromDraft } from './allocation-store';
+import { endGoldenValue, writeGoldenValue } from './golden-write';
 import { projectPerformance, type PerformanceCase, type PerformanceFees, type PerformanceInput } from './deal-performance';
 import { heldShare, spreadFromPricing } from './servicing-schedule';
 
@@ -257,7 +258,8 @@ export async function storeDealPerformance(
   supabase: SupabaseClient,
   dealId: string,
   asOfInput: string | null | undefined,
-  userId: string | null,
+  // Kept for callers. Who wrote each value now comes from the session (guard_value_rows).
+  _userId: string | null,
 ): Promise<{ asOf: string; written: number; closed: number; unchanged: number }> {
   const run = await runDealPerformance(supabase, dealId, asOfInput);
   const values = run.model ? performanceValues(dealId, run.model) : [];
@@ -271,13 +273,18 @@ export async function storeDealPerformance(
   if (sourceError || !source?.id) throw new Error(sourceError?.message || `${PERFORMANCE_SOURCE} source is not registered`);
 
   const entityIds = [dealId, ...run.trancheIds];
+  // The value each output has on the run's date: the row write_value would replace.
   const { data: open, error: openError } = await supabase
     .from('entity_attribute_values')
     .select('id, entity_id, attribute_id, golden_value')
     .in('entity_id', entityIds)
     .in('attribute_id', [...ids.values()])
     .eq('source_id', source.id)
-    .eq('system_to', OPEN_SYSTEM);
+    .eq('system_to', OPEN_SYSTEM)
+    .is('period_grain', null)
+    .is('statement_basis', null)
+    .lte('valid_from', run.asOf)
+    .gte('valid_to', run.asOf);
   if (openError) throw new Error(openError.message);
   const current = new Map((open || []).map((row) => [`${row.entity_id}|${row.attribute_id}`, row]));
 
@@ -288,7 +295,6 @@ export async function storeDealPerformance(
         amortizationRate: run.input.amortizationRate, fees: run.input.fees,
       }
     : null;
-  const stamp = new Date().toISOString();
   let written = 0;
   let unchanged = 0;
   const kept = new Set<string>();
@@ -298,31 +304,28 @@ export async function storeDealPerformance(
     kept.add(key);
     const existing = current.get(key);
     if (existing && existing.golden_value === value.text) { unchanged += 1; continue; }
-    if (existing) {
-      const { error } = await supabase.from('entity_attribute_values').update({ valid_to: run.asOf, system_to: stamp }).eq('id', existing.id);
-      if (error) throw new Error(error.message);
-    }
-    const { error } = await supabase.from('entity_attribute_values').insert({
-      entity_id: value.entityId,
-      attribute_id: attributeId,
-      source_id: source.id,
-      golden_value: value.text,
-      golden_value_numeric: value.numeric,
-      golden_value_date: value.date,
-      valid_from: run.asOf,
-      precedence_rank: source.precedence_rank ?? 100,
-      is_manual_override: false,
-      created_by: userId,
-      metadata: { model: 'deal-performance', inputs },
+    // From the run's date until the next later run's value. Earlier dates keep theirs.
+    await writeGoldenValue(supabase, {
+      entityId: value.entityId,
+      attributeId,
+      sourceId: source.id,
+      validFrom: run.asOf,
+      value: {
+        golden_value: value.text,
+        golden_value_numeric: value.numeric,
+        golden_value_date: value.date,
+        precedence_rank: source.precedence_rank ?? 100,
+        is_manual_override: false,
+        metadata: { model: 'deal-performance', inputs },
+      },
     });
-    if (error) throw new Error(error.message);
     written += 1;
   }
   let closed = 0;
   for (const [key, row] of current) {
     if (kept.has(key)) continue;
-    const { error } = await supabase.from('entity_attribute_values').update({ valid_to: run.asOf, system_to: stamp }).eq('id', row.id);
-    if (error) throw new Error(error.message);
+    // The model no longer produces this output: it has no value from the run's date.
+    await endGoldenValue(supabase, { entityId: row.entity_id, attributeId: row.attribute_id, sourceId: source.id, from: run.asOf });
     closed += 1;
   }
   return { asOf: run.asOf, written, closed, unchanged };

@@ -32,6 +32,22 @@ END $$;
 COMMENT ON COLUMN metadata_register.relationship_types.template_from_side IS
   'Stored side whose record chooses the template for the records on the other side. NULL means no inheritance.';
 
+-- Same guard as 20261013145919: a view that still exposes updated_at (00055's
+-- SELECT * over a table that has it) cannot be replaced by the listed columns,
+-- so it is dropped first and comes back with the schema's default grants. The
+-- view 20261013145919 leaves behind has no updated_at, so this normally does
+-- nothing and the view is replaced in place.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = to_regclass('public.relationship_types')
+      AND attname = 'updated_at' AND attnum > 0 AND NOT attisdropped
+  ) THEN
+    DROP VIEW public.relationship_types;
+  END IF;
+END $$;
+
 -- The public view lists its columns, so the new one is appended.
 CREATE OR REPLACE VIEW public.relationship_types AS
 SELECT

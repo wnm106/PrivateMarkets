@@ -1,5 +1,6 @@
 import { prepareRunInput, runSetupOf, type RunSetup } from '@tapestrai/graphql/src/lib/workflow-filters';
 import { asGraph } from '@tapestrai/graphql/src/lib/workflow-graph';
+import { sessionClientIds } from '../feeds/session-client';
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
 
@@ -11,14 +12,6 @@ import { ToolDefinition } from '../lib/types';
 
 type Row = Record<string, any>;
 
-async function currentClientId(supabase: any): Promise<string | null> {
-  const { data, error } = await supabase.schema('tenancy').rpc('current_client_ids');
-  if (error || !Array.isArray(data) || data.length === 0) return null;
-  const first = data[0];
-  if (typeof first === 'string') return first;
-  const value = first && typeof first === 'object' ? Object.values(first)[0] : null;
-  return typeof value === 'string' ? value : null;
-}
 
 async function setupOf(supabase: any, workflowId: string, version: number | null): Promise<RunSetup | null> {
   if (!version) return null;
@@ -64,8 +57,11 @@ const startWorkflowRun: ToolDefinition = {
   },
   execute: async (args, supabase) => {
     if (args.input != null && (typeof args.input !== 'object' || Array.isArray(args.input))) throw new Error('input must be an object');
-    const clientId = await currentClientId(supabase);
-    if (!clientId) throw new Error('Choose a client before starting a run.');
+    // A run belongs to one client. Someone in several is refused, not started in whichever came first.
+    const clientIds = await sessionClientIds(supabase);
+    if (clientIds.length === 0) throw new Error('Choose a client before starting a run.');
+    if (clientIds.length > 1) throw new Error('Your account belongs to more than one client, so the client this run is for cannot be told. Nothing was started.');
+    const clientId = clientIds[0];
     const { data: current, error: currentError } = await supabase.rpc('workflow_get', { p_id: args.workflowId, p_version: null });
     if (currentError) throw currentError;
     if (!current) throw new Error('That workflow was not found.');

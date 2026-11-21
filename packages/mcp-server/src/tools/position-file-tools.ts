@@ -1,11 +1,18 @@
 /**
  * Position file instance queue.
  * Stores the uploaded file, suggests column mappings, and reprocesses the stored rows.
+ *
+ * The functions these tools call write with the service role, so each tool that
+ * writes first asks the database, as the caller, whether they may: requireLoadWrite
+ * (entity.write) for anything that stores or changes a file or a staged batch,
+ * requireLoadPromote (load.promote) for anything that writes live records:
+ * promoting or reverting a batch, and loading a file without staging it. A tool
+ * that only reads asks which client the caller is in.
  */
 
 import type { JSONSchema7 } from 'json-schema';
 import { withSupabaseCaller } from '../agent/harness';
-import { sessionClientId } from '../feeds/session-client';
+import { requireLoadPromote, requireLoadWrite, sessionClientId } from '../feeds/session-client';
 import { ToolRegistry } from '../lib/tool-registry.js';
 import { ToolDefinition } from '../lib/types.js';
 import {
@@ -17,7 +24,6 @@ import {
   saveImportInstance,
 } from '../feeds/import-instances';
 import { getImportTables, loadImportTable, previewImportTable } from '../feeds/pack-tables';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { userIdOf } from '../agent/harness';
 import { indexImportFile, understandImportFile } from '../feeds/import-document';
 import {
@@ -124,7 +130,7 @@ const createPositionFileImportTool: ToolDefinition = {
     const mediaType = fileName.toLowerCase().endsWith('.csv')
       ? 'text/csv'
       : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    const clientId = await sessionClientId(supabase);
+    const clientId = await requireLoadWrite(supabase);
     return withSupabaseCaller(supabase, clientId, { feature: 'feed-intake', activity: 'feed.import', metadata: { fileName } }, () =>
       createImportInstance(fileName, mediaType, bytes, clientId),
     );
@@ -162,7 +168,7 @@ const updatePositionFileImportTool: ToolDefinition = {
     const mappings = args.columnMappings as ColumnAssignment[];
     if (!Array.isArray(mappings)) throw new Error('columnMappings must be a list');
     const asOfDate = args.asOfDate ? String(args.asOfDate) : null;
-    return saveImportInstance(String(args.instanceId), mappings, asOfDate, await sessionClientId(supabase));
+    return saveImportInstance(String(args.instanceId), mappings, asOfDate, await requireLoadWrite(supabase));
   },
 };
 
@@ -179,11 +185,16 @@ const processPositionFileImportTool: ToolDefinition = {
     },
     required: ['instanceId'],
   },
+  // Writes live records without a staged review, so it needs what promoting a batch needs.
   execute: async (args, supabase) => processImportInstance(
     String(args.instanceId),
-    await sessionClientId(supabase),
+    await requireLoadPromote(supabase),
     Array.isArray(args.columnMappings) ? args.columnMappings as ColumnAssignment[] : undefined,
-    args.asOfDate ? String(args.asOfDate) : undefined
+    args.asOfDate ? String(args.asOfDate) : undefined,
+    undefined,
+    undefined,
+    undefined,
+    { actorId: await userIdOf(supabase) },
   ),
 };
 
@@ -223,14 +234,9 @@ const loadPositionFileTableTool: ToolDefinition = {
   description: 'Load one table of a stored file: select the table, save its mapping, its as-of date and its source, and load its records. The mapping is saved for the next file with the same columns. Use the mapping that preview_position_file_load showed loading cleanly. One call per table. Loading the same table again updates the records it loaded before.',
   category: 'import',
   inputSchema: { type: 'object', properties: tableLoadProperties, required: ['instanceId', 'columnMappings', 'asOfDate'] },
-  execute: async (args, supabase) => loadImportTable(String(args.instanceId), await sessionClientId(supabase), args),
+  // Writes live records without a staged review, so it needs what promoting a batch needs.
+  execute: async (args, supabase) => loadImportTable(String(args.instanceId), await requireLoadPromote(supabase), args, undefined, { actorId: await userIdOf(supabase) }),
 };
-
-/** Promoting and reverting change live records, so the caller must hold load.promote in the client. */
-async function requirePromote(supabase: SupabaseClient, clientId: string): Promise<void> {
-  const { data, error } = await supabase.schema('tenancy').rpc('has_permission', { p_client_id: clientId, p_permission_code: 'load.promote' });
-  if (error || data !== true) throw new Error('Promoting or reverting a load needs the load.promote permission.');
-}
 
 const stageImportTool: ToolDefinition = {
   name: 'stage_position_file_import',
@@ -246,7 +252,7 @@ const stageImportTool: ToolDefinition = {
     },
     required: ['instanceId'],
   },
-  execute: async (args, supabase) => stageImportInstance(String(args.instanceId), await sessionClientId(supabase), {
+  execute: async (args, supabase) => stageImportInstance(String(args.instanceId), await requireLoadWrite(supabase), {
     columnMappings: Array.isArray(args.columnMappings) ? args.columnMappings as ColumnAssignment[] : undefined,
     asOfDate: args.asOfDate ? String(args.asOfDate) : undefined,
     decisions: Array.isArray(args.resolutions) ? args.resolutions : undefined,
@@ -307,7 +313,7 @@ const editStagedValueTool: ToolDefinition = {
     },
     required: ['batchId', 'valueId', 'value'],
   },
-  execute: async (args, supabase) => editStagedValue(String(args.batchId), String(args.valueId), await sessionClientId(supabase), {
+  execute: async (args, supabase) => editStagedValue(String(args.batchId), String(args.valueId), await requireLoadWrite(supabase), {
     value: String(args.value ?? ''),
     reason: args.reason ? String(args.reason) : null,
     userId: await userIdOf(supabase),
@@ -327,8 +333,8 @@ const promoteLoadBatchTool: ToolDefinition = {
     required: ['batchId'],
   },
   execute: async (args, supabase) => {
-    const clientId = await sessionClientId(supabase);
-    await requirePromote(supabase, clientId);
+    // Promoting changes live records, so the caller must hold load.promote in the client.
+    const clientId = await requireLoadPromote(supabase);
     return promoteBatch(String(args.batchId), clientId, {
       userId: await userIdOf(supabase),
       overrideReason: args.overrideReason ? String(args.overrideReason) : null,
@@ -342,8 +348,7 @@ const revertLoadBatchTool: ToolDefinition = {
   category: 'import',
   inputSchema: { type: 'object', properties: { batchId: { type: 'string' } }, required: ['batchId'] },
   execute: async (args, supabase) => {
-    const clientId = await sessionClientId(supabase);
-    await requirePromote(supabase, clientId);
+    const clientId = await requireLoadPromote(supabase);
     return revertBatch(String(args.batchId), clientId, await userIdOf(supabase));
   },
 };
@@ -353,7 +358,7 @@ const discardLoadBatchTool: ToolDefinition = {
   description: 'Drop a staged batch. Nothing live was changed, so there is nothing to undo.',
   category: 'import',
   inputSchema: { type: 'object', properties: { batchId: { type: 'string' } }, required: ['batchId'] },
-  execute: async (args, supabase) => discardBatch(String(args.batchId), await sessionClientId(supabase)),
+  execute: async (args, supabase) => discardBatch(String(args.batchId), await requireLoadWrite(supabase)),
 };
 
 const indexImportTool: ToolDefinition = {
@@ -368,7 +373,7 @@ const indexImportTool: ToolDefinition = {
     },
     required: ['instanceId'],
   },
-  execute: async (args, supabase) => indexImportFile(String(args.instanceId), await sessionClientId(supabase), { typeCode: args.typeCode ? String(args.typeCode) : null }),
+  execute: async (args, supabase) => indexImportFile(String(args.instanceId), await requireLoadWrite(supabase), { typeCode: args.typeCode ? String(args.typeCode) : null }),
 };
 
 const understandImportTool: ToolDefinition = {

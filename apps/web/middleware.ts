@@ -1,15 +1,28 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import { CLIENT_ADMIN_PERMISSIONS, isPlatformAdminPath } from '@/lib/admin-access';
-import { loginPath, NEXT_PATH_COOKIE, safeNextPath } from '@/lib/safe-next-path';
+import { loginPath, NEXT_PATH_COOKIE, nextPathFromCookie, safeNextPath } from '@/lib/safe-next-path';
 import { isPublicPath } from '@/lib/public-paths';
+import { readSignInDecision, REFUSED_SIGN_IN, signInStanding, UNCHECKED_SIGN_IN, uncheckedSignInAction, type SignInDecision } from '@/lib/sign-in-gate';
 
 // Which pages a signed-out visitor may open is in lib/public-paths.ts, shared with the signed-out gate.
 
-async function signInDecision(supabase: { schema: (name: string) => any }) {
-  const { data, error } = await supabase.schema('tenancy').rpc('current_sign_in_decision');
-  if (error || !data || typeof data !== 'object') return null;
-  return data as { allowed?: boolean; reason?: string | null; mfa_required?: boolean; mfa_satisfied?: boolean };
+/**
+ * The client's sign-in rules as they apply to this session, or null when they
+ * could not be read. It is asked twice before giving up, so one dropped request
+ * does not count. Null is never treated as allowed: see signInStanding.
+ */
+async function signInDecision(supabase: { schema: (name: string) => any }): Promise<SignInDecision | null> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const { data, error } = await supabase.schema('tenancy').rpc('current_sign_in_decision');
+      const decision = error ? null : readSignInDecision(data);
+      if (decision) return decision;
+    } catch {
+      // Asked once more below.
+    }
+  }
+  return null;
 }
 
 function withSessionCookies(next: NextResponse, response: NextResponse) {
@@ -86,7 +99,7 @@ export async function middleware(request: NextRequest) {
     request.nextUrl.searchParams.forEach((value, key) => callback.searchParams.set(key, value));
     if (!callback.searchParams.get('redirectedFrom')) {
       const remembered = request.cookies.get(NEXT_PATH_COOKIE)?.value;
-      if (remembered) callback.searchParams.set('redirectedFrom', safeNextPath(decodeURIComponent(remembered)));
+      if (remembered) callback.searchParams.set('redirectedFrom', nextPathFromCookie(remembered));
     }
     return NextResponse.redirect(callback);
   }
@@ -112,9 +125,10 @@ export async function middleware(request: NextRequest) {
   // are also refused by the Auth access-token hook; this stops the app itself.
   if (user) {
     const decision = await signInDecision(supabase);
-    if (decision?.allowed === false) {
+    const standing = signInStanding(decision);
+    if (standing === 'refused') {
       await supabase.auth.signOut();
-      const message = decision.reason || 'This sign-in method is not allowed for this organization.';
+      const message = decision?.reason || REFUSED_SIGN_IN;
       if (pathname.startsWith('/api/')) {
         return withSessionCookies(NextResponse.json({ error: message }, { status: 403 }), response);
       }
@@ -122,14 +136,30 @@ export async function middleware(request: NextRequest) {
       redirectUrl.searchParams.set('error', message);
       return withSessionCookies(NextResponse.redirect(redirectUrl), response);
     }
-    const needsMfa = Boolean(decision?.mfa_required && decision.mfa_satisfied === false);
-    if (needsMfa && !pathname.startsWith('/login/mfa') && !pathname.startsWith('/api/auth/')) {
+    // Fail closed. When the rules could not be read, or gave no answer, nobody knows whether this
+    // session is allowed or still owes a second factor, so nothing of the app is served on it: a
+    // page sends the visitor to the sign-in page with the reason, and an API route answers 403.
+    // For a page, this browser's session is dropped, because the sign-in page sends a signed-in
+    // visitor straight back here. Public pages and static files are left alone.
+    if (standing === 'unchecked') {
+      const action = uncheckedSignInAction(pathname, { isPublic, isAsset: isApiOrAsset && !pathname.startsWith('/api/') });
+      if (action === 'forbid') {
+        return withSessionCookies(NextResponse.json({ error: UNCHECKED_SIGN_IN }, { status: 403 }), response);
+      }
+      if (action === 'sign_in_again') {
+        await supabase.auth.signOut({ scope: 'local' });
+        const redirectUrl = new URL('/login', request.url);
+        redirectUrl.searchParams.set('error', UNCHECKED_SIGN_IN);
+        return withSessionCookies(NextResponse.redirect(redirectUrl), response);
+      }
+    }
+    if (standing === 'needs_mfa' && !pathname.startsWith('/login/mfa') && !pathname.startsWith('/api/auth/')) {
       if (pathname.startsWith('/api/')) {
         return NextResponse.json({ error: 'Multi-factor authentication is required.' }, { status: 403 });
       }
       if (!isApiOrAsset) {
         const redirectUrl = new URL('/login/mfa', request.url);
-        redirectUrl.searchParams.set('redirectedFrom', `${pathname}${request.nextUrl.search}`);
+        redirectUrl.searchParams.set('redirectedFrom', safeNextPath(`${pathname}${request.nextUrl.search}`));
         return NextResponse.redirect(redirectUrl);
       }
     }

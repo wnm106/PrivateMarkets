@@ -37,6 +37,22 @@ export function isImage(mimeType: string): boolean {
   return mimeType.startsWith(IMAGE_MIME_PREFIX);
 }
 
+/** What a browser may show in place: plain pictures, which cannot carry script, and PDF. An SVG can, so it is not here. */
+const INLINE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']);
+
+/**
+ * How a stored attachment is sent back. The type was claimed by whoever
+ * uploaded the file, so it is only honoured for a plain picture or a PDF.
+ * Anything else, HTML and SVG included, is sent as a download of plain bytes,
+ * so it can never run as a page of this site.
+ */
+export function attachmentDelivery(mimeType: string | null | undefined): { contentType: string; disposition: 'inline' | 'attachment' } {
+  const type = String(mimeType || '').split(';')[0].trim().toLowerCase();
+  return INLINE_TYPES.has(type)
+    ? { contentType: type, disposition: 'inline' }
+    : { contentType: 'application/octet-stream', disposition: 'attachment' };
+}
+
 /** Formats a byte count for the UI. */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

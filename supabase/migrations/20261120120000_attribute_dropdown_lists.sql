@@ -609,6 +609,10 @@ SET value_label = EXCLUDED.value_label,
 -- 3. Affiliate each choice attribute to its list
 -- ------------------------------------------------------------
 
+-- Only the list code changes. On a database built from scratch the derivation
+-- inputs of some of these attributes come from the seed, which runs after the
+-- migrations, so the derivation check is held off for this one update.
+ALTER TABLE metadata_register.attribute_register DISABLE TRIGGER trg_validate_derived_attribute;
 UPDATE metadata_register.attribute_register AS a
 SET reference_list_code = m.list_code,
     data_type = 'REFERENCE_LIST',
@@ -668,6 +672,7 @@ FROM (VALUES
 ) AS m(attribute_code, list_code)
 WHERE a.attribute_code = m.attribute_code
   AND a.reference_list_code IS NULL;
+ALTER TABLE metadata_register.attribute_register ENABLE TRIGGER trg_validate_derived_attribute;
 
 DO $$
 DECLARE

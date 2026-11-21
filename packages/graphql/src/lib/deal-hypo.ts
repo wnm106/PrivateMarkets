@@ -11,7 +11,7 @@
  */
 
 import type { Context } from '../context';
-import { commitAllocation, loadAllocationDraft, type AllocationHold } from './allocation-store';
+import { assertAllocationInputsOnDeal, commitAllocation, loadAllocationDraft, type AllocationHold } from './allocation-store';
 import type { AllocationAdjustment } from './allocation-engine';
 import { DEAL_SURFACE_RULE_CODES, dealSurfaceResults, rulesToScore, scoreDealFunds } from './deal-compliance';
 
@@ -20,6 +20,24 @@ export interface DealScoreArgs {
   asOfDate?: string | null;
   holds?: any[] | null;
   adjustments?: any[] | null;
+}
+
+/**
+ * Scoring and Hypo runs read and write with the service role, so the caller's own
+ * right to change the deal is settled first, with the caller's JWT. Returns their id.
+ */
+export async function assertMayScoreDeal(context: Context, dealId: string): Promise<string> {
+  if (!context.user) throw new Error('Not authenticated');
+  const { data: mayWrite, error } = await context.supabase
+    .schema('tenancy')
+    .rpc('has_entity_access', { p_entity_id: dealId, p_level: 'WRITE' });
+  if (error || mayWrite !== true) throw new Error('You do not have access to score this deal.');
+  return context.user.id;
+}
+
+/** The service role sees every client's rules. This keeps the shared ones and the deal client's own. */
+export function ownRulesFilter(clientId: string | null): string {
+  return clientId ? `client_id.is.null,client_id.eq.${clientId}` : 'client_id.is.null';
 }
 
 export function hypoScenarioCode(dealCode: string): string {
@@ -52,10 +70,15 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
   // Hypo positions are engine rows, not a user edit. The caller's JWT cannot
   // insert them under the entity RLS policies, so the write uses the service
   // role. The rules themselves still run as the compliance functions.
+  const userId = await assertMayScoreDeal(context, args.dealId);
   const writer = context.supabaseAdmin || context.supabase;
-  const draft = await loadAllocationDraft(writer, args.dealId, args.asOfDate, parseHolds(args.holds), parseAdjustments(args.adjustments));
+  // The draft is read as the caller, so it holds only the tranches and funds they can see.
+  const holds = parseHolds(args.holds);
+  const adjustments = parseAdjustments(args.adjustments);
+  const draft = await loadAllocationDraft(context.supabase, args.dealId, args.asOfDate, holds, adjustments);
+  assertAllocationInputsOnDeal(draft, holds, adjustments);
   const scenarioCode = hypoScenarioCode(draft.dealCode);
-  const preview = await commitAllocation(writer, draft, context.user?.id ?? null, { scenarioCode });
+  const preview = await commitAllocation(writer, draft, userId, { scenarioCode });
   const fundIds = new Set(preview.rows.map((row) => row.fundId));
 
   // Pro forma rules are inactive on purpose, so a platform-wide job skips
@@ -71,14 +94,14 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
         .select('rule_id, entity_id, group_value, rank_from, applies, valid_from, valid_to')
         .in('entity_id', fundList)
       : Promise.resolve({ data: [] as any[], error: null }),
-    compliance.from('rules').select('*').in('rule_code', [...DEAL_SURFACE_RULE_CODES]),
+    compliance.from('rules').select('*').in('rule_code', [...DEAL_SURFACE_RULE_CODES]).or(ownRulesFilter(draft.clientId)),
   ]);
   if (thresholdRead.error) throw new Error(thresholdRead.error.message);
   if (surfaceRead.error) throw new Error(surfaceRead.error.message);
   const thresholdRows = (thresholdRead.data || []) as any[];
   const enrolledIds = [...new Set(thresholdRows.map((row) => row.rule_id))];
   const { data: enrolledRows, error: enrolledError } = enrolledIds.length
-    ? await compliance.from('rules').select('*').in('id', enrolledIds)
+    ? await compliance.from('rules').select('*').in('id', enrolledIds).or(ownRulesFilter(draft.clientId))
     : { data: [], error: null };
   if (enrolledError) throw new Error(enrolledError.message);
   const ruleById = new Map<string, any>();
@@ -102,7 +125,7 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
   // score uses. A failed scenario is reported, and the other still shows.
   const score = async (code: string) => {
     try {
-      const results = await scoreDealFunds(compliance, plans, draft.asOf, code, context.user?.id ?? null);
+      const results = await scoreDealFunds(compliance, plans, draft.asOf, code, userId);
       return results.filter((result) => fundIds.has(result.anchorEntityId));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

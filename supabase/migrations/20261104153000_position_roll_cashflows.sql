@@ -13,8 +13,12 @@ BEGIN
     SELECT id INTO v_template FROM metadata_register.domain_templates WHERE template_code = 'STANDARD_CASHFLOW';
     SELECT id INTO v_src FROM entity_instances.source_registry WHERE source_code = 'INTERNAL';
     SELECT relationship_name INTO v_rel_name FROM metadata_register.relationship_types WHERE relationship_code = 'POSITION_CASHFLOW';
+    -- The HSCF2 sample book is created only where supabase/seed ran before the
+    -- migrations (as on the hosted project). On a fresh database the seed runs
+    -- after them, so there is nothing to add flows to: skip rather than fail.
     IF v_client IS NULL OR v_template IS NULL OR v_src IS NULL OR v_rel_name IS NULL THEN
-        RAISE EXCEPTION 'HSCF2 cash flow seed is missing the fund, template, source, or relationship';
+        RAISE NOTICE 'HSCF2 sample book is not present (fund, template, source, or relationship missing); no cash flows added';
+        RETURN;
     END IF;
 
     CREATE TEMP TABLE t_flow ON COMMIT DROP AS

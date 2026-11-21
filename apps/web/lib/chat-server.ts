@@ -3,8 +3,6 @@ import { NextRequest } from 'next/server';
 
 export const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 export const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-/** Falls back to the caller's identity so RLS still applies if the key is unset. */
-export const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseAnonKey;
 
 export interface ChatAuth {
   /** Client that acts AS THE CALLER, so row level security applies. */

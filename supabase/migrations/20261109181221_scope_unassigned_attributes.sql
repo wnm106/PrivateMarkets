@@ -99,10 +99,16 @@ BEGIN
         AND lower(btrim(existing.attribute_name)) = lower(btrim(attribute_row.attribute_name))
     );
 
-  SELECT string_agg(attribute_code, ', ' ORDER BY attribute_code)
+  -- Only the five attributes above are this migration's to place. Other
+  -- attributes with no entity are left as they are: on a fresh database that is
+  -- the statement lines 20261106160000 adds for funds and issuers alike, which
+  -- the hosted project did not have when this ran (there the whole catalog was
+  -- checked and passed, and these five are part of it).
+  SELECT string_agg(attribute_row.attribute_code, ', ' ORDER BY attribute_row.attribute_code)
   INTO remaining
-  FROM metadata_register.attribute_register
-  WHERE domain_code IS NULL;
+  FROM metadata_register.attribute_register AS attribute_row
+  JOIN unscoped_attribute_homes AS home ON home.attribute_code = attribute_row.attribute_code
+  WHERE attribute_row.domain_code IS NULL;
 
   IF remaining IS NOT NULL THEN
     RAISE EXCEPTION 'Attributes still have no entity: %', remaining;

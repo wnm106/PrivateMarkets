@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { calcProcessHandler, complianceEvaluateHandler, dqScanHandler, loaderRunHandler, staleScanHandler } from './handlers';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { jobType } from '@tapestrai/graphql/src/lib/job-types';
+import { buildHandlers, calcProcessHandler, complianceEvaluateHandler, dqScanHandler, loaderRunHandler, scoped, staleScanHandler } from './handlers';
 import { toDueSchedule, toJobRun } from './store';
-import { JobError, fireDueSchedules, runLoop, tick, type DueSchedule, type JobHandler, type JobRun, type JobStore } from './worker';
+import { JobError, LeaseLostError, fireDueSchedules, runLoop, tick, type DueSchedule, type JobHandler, type JobRun, type JobStore } from './worker';
 
 function run(overrides: Partial<JobRun> = {}): JobRun {
   return { id: 'run-1', clientId: 'client-a', scheduleId: null, requestedBy: 'user-1', jobType: 'test', payload: {}, attempts: 1, maxAttempts: 3, ...overrides };
@@ -133,6 +134,93 @@ describe('tick', () => {
     };
     const result = await tick({ store, handlers: { test: async () => ({}) }, workerName: 'w' });
     expect(result).toMatchObject({ claimed: 1, succeeded: 0, failed: 1 });
+  });
+});
+
+describe('a run whose claim is lost', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A handler that waits until it is told its claim is gone, the way a long handler checks before each step. */
+  function waitsForLoss(seen: { aborted?: boolean; reason?: unknown }): JobHandler {
+    return (_run, job) =>
+      new Promise((_resolve, reject) => {
+        job!.signal.addEventListener('abort', () => {
+          seen.aborted = true;
+          seen.reason = job!.signal.reason;
+          reject(job!.signal.reason);
+        });
+      });
+  }
+
+  it('tells the handler when another worker holds the run, and records no outcome', async () => {
+    vi.useFakeTimers();
+    const { store, calls } = memoryStore({ runs: [run()] });
+    store.heartbeat = async (runId) => (calls.push(['heartbeat', runId]), false);
+    const seen: { aborted?: boolean; reason?: unknown } = {};
+    const ticked = tick({ store, handlers: { test: waitsForLoss(seen) }, workerName: 'w', leaseSeconds: 30 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await ticked;
+    expect(seen).toMatchObject({ aborted: true });
+    expect(seen.reason).toBeInstanceOf(LeaseLostError);
+    expect(result).toMatchObject({ succeeded: 0, failed: 1 });
+    expect(calls.filter((call) => call[0] === 'complete' || call[0] === 'fail')).toEqual([]);
+  });
+
+  it('gives up the run before the lease can run out when the store stops answering', async () => {
+    vi.useFakeTimers();
+    const { store, calls } = memoryStore({ runs: [run()] });
+    // Never answers: no yes, no no, no error.
+    store.heartbeat = () => new Promise(() => undefined);
+    const seen: { aborted?: boolean } = {};
+    let abortedAt = 0;
+    const started = Date.now();
+    const ticked = tick({
+      store,
+      handlers: { test: (r, job) => (job!.signal.addEventListener('abort', () => (abortedAt = Date.now() - started)), waitsForLoss(seen)(r, job)) },
+      workerName: 'w',
+      leaseSeconds: 30,
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await ticked;
+    expect(seen.aborted).toBe(true);
+    // Beats every 10 seconds, and the handler is told 5 seconds before the 30 second lease could end.
+    expect(abortedAt).toBe(25_000);
+    expect(calls.filter((call) => call[0] === 'complete' || call[0] === 'fail')).toEqual([]);
+  });
+
+  it('survives one failed beat when the next gets through', async () => {
+    vi.useFakeTimers();
+    const { store, calls } = memoryStore({ runs: [run()] });
+    let beats = 0;
+    store.heartbeat = async () => {
+      beats += 1;
+      if (beats === 1) throw new Error('connection reset');
+      return true;
+    };
+    let signal: AbortSignal | undefined;
+    const handler: JobHandler = (_run, job) => {
+      signal = job!.signal;
+      return new Promise((resolve) => setTimeout(() => resolve({ done: true }), 45_000));
+    };
+    const ticked = tick({ store, handlers: { test: handler }, workerName: 'w', leaseSeconds: 30 });
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(await ticked).toMatchObject({ succeeded: 1 });
+    expect(signal?.aborted).toBe(false);
+    expect(calls).toContainEqual(['complete', 'run-1', { done: true }]);
+  });
+
+  it('does not record success for a handler that finished after its claim was lost', async () => {
+    vi.useFakeTimers();
+    const { store, calls } = memoryStore({ runs: [run()] });
+    store.heartbeat = async () => false;
+    // Ignores the signal and finishes anyway.
+    const handler: JobHandler = () => new Promise((resolve) => setTimeout(() => resolve({ rows: 1 }), 15_000));
+    const ticked = tick({ store, handlers: { test: handler }, workerName: 'w', leaseSeconds: 30 });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await ticked).toMatchObject({ succeeded: 0 });
+    expect(calls.filter((call) => call[0] === 'complete' || call[0] === 'fail')).toEqual([]);
   });
 });
 
@@ -305,12 +393,15 @@ describe('complianceEvaluateHandler', () => {
 });
 
 describe('loaderRunHandler', () => {
-  it('marks the loader failed and fails the job without a retry', async () => {
-    const { supabase, calls } = fakeSupabase({});
+  const staff = (tenantAdmin: boolean) => fakeSupabase({ rpc: () => ({ data: { name: 'Ada', tenantAdmin }, error: null }) });
+
+  it('marks the loader failed and fails the job without a retry, when platform staff queued it', async () => {
+    const { supabase, calls } = staff(true);
     const failure = await loaderRunHandler(supabase, () => NOW)(run({ payload: { loaderId: 'loader-1' } })).catch((error) => error);
     expect(failure).toBeInstanceOf(JobError);
     expect(failure.message).toMatch(/replaced by feeds/);
     expect(calls).toEqual([
+      ['rpc', 'workflow_worker_person', { p_user_id: 'user-1', p_client_id: null, p_permissions: [] }],
       [
         'update',
         'data_loaders',
@@ -318,6 +409,16 @@ describe('loaderRunHandler', () => {
         { id: 'loader-1' },
       ],
     ]);
+  });
+
+  it('leaves the shared loader alone when anyone else queued the run, or nobody did', async () => {
+    const member = staff(false);
+    await expect(loaderRunHandler(member.supabase, () => NOW)(run({ payload: { loaderId: 'loader-1' } }))).rejects.toThrow(/replaced by feeds/);
+    expect(member.calls.filter((call) => call[0] === 'update')).toEqual([]);
+
+    const system = staff(true);
+    await expect(loaderRunHandler(system.supabase, () => NOW)(run({ requestedBy: null, payload: { loaderId: 'loader-1' } }))).rejects.toThrow(/replaced by feeds/);
+    expect(system.calls).toEqual([]);
   });
 
   it('needs a loader id', async () => {
@@ -353,5 +454,59 @@ describe('dqScanHandler and staleScanHandler', () => {
     const timedOut = await staleScanHandler(slow.supabase)(run()).catch((error) => error);
     expect(timedOut).toBeInstanceOf(Error);
     expect(timedOut).not.toBeInstanceOf(JobError);
+  });
+});
+
+describe('scoped', () => {
+  const handled: JobRun[] = [];
+  const inner: JobHandler = async (job) => (handled.push(job), { ok: true });
+  const staff = (tenantAdmin: boolean) => fakeSupabase({ rpc: () => ({ data: { name: 'Ada', tenantAdmin }, error: null }) });
+
+  afterEach(() => {
+    handled.length = 0;
+  });
+
+  it('refuses a platform job that names a client, before anything runs', async () => {
+    const { supabase, calls } = staff(true);
+    const failure = await scoped(supabase, inner)(run({ jobType: 'calc.process', clientId: 'client-a' })).catch((error) => error);
+    expect(failure).toBeInstanceOf(JobError);
+    expect(failure.message).toMatch(/platform job and cannot belong to a client/);
+    expect(handled).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses a platform job queued by someone who is not platform staff now', async () => {
+    const { supabase, calls } = staff(false);
+    const failure = await scoped(supabase, inner)(run({ jobType: 'compliance.evaluate', clientId: null, requestedBy: 'user-1' })).catch((error) => error);
+    expect(failure).toBeInstanceOf(JobError);
+    expect(failure.message).toMatch(/not platform staff/);
+    expect(handled).toEqual([]);
+    expect(calls).toEqual([['rpc', 'workflow_worker_person', { p_user_id: 'user-1', p_client_id: null, p_permissions: [] }]]);
+  });
+
+  it('runs a platform job queued by platform staff, or by the system', async () => {
+    const { supabase } = staff(true);
+    expect(await scoped(supabase, inner)(run({ jobType: 'calc.process', clientId: null, requestedBy: 'user-1' }))).toEqual({ ok: true });
+    const nobody = staff(false);
+    expect(await scoped(nobody.supabase, inner)(run({ jobType: 'workflow.triggers', clientId: null, requestedBy: null }))).toEqual({ ok: true });
+    expect(nobody.calls).toEqual([]);
+  });
+
+  it('refuses a client job with no client, and a type that is not listed', async () => {
+    const { supabase } = staff(true);
+    await expect(scoped(supabase, inner)(run({ jobType: 'document.process', clientId: null }))).rejects.toThrow(/needs a client/);
+    await expect(scoped(supabase, inner)(run({ jobType: 'made.up' }))).rejects.toThrow(/not a job type/);
+    expect(await scoped(supabase, inner)(run({ jobType: 'dq.scan' }))).toEqual({ ok: true });
+  });
+
+  it('wraps every handler the worker registers', async () => {
+    const { supabase, calls } = staff(true);
+    const handlers = buildHandlers(supabase);
+    for (const [code, handler] of Object.entries(handlers)) {
+      // Each with the wrong scope: a client for a platform job, none for a client job.
+      const wrong = jobType(code)?.scope === 'PLATFORM' ? 'client-a' : null;
+      await expect(handler(run({ jobType: code, clientId: wrong }))).rejects.toBeInstanceOf(JobError);
+    }
+    expect(calls).toEqual([]);
   });
 });

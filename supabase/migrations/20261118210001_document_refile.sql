@@ -10,6 +10,11 @@
 -- document, so the worker describes those passages again against the topics the
 -- document has now. What a person wrote is left alone. Nothing else is read or
 -- embedded again.
+--
+-- This file was 20261118210000_document_refile.sql, the same version as
+-- 20261118210000_agents.sql, so the CLI could not record both. It has its own
+-- version now. It only replaces one function and its grants, so it is safe to run
+-- again where it was already applied under the old version. See docs/MIGRATIONS.md.
 
 CREATE OR REPLACE FUNCTION public.document_refile(p_id UUID)
 RETURNS INTEGER
