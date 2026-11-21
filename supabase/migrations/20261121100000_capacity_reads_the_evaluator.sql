@@ -23,7 +23,9 @@
 --   * Proforma legs can name their tranche (so a rule that groups through the
 --     deal, such as sponsor, sees it) and can be unfunded (the amount goes to
 --     UNFUNDED_COMMITMENT_AMOUNT instead of FUNDED_PAR_AMOUNT).
---   * The old capacity function and its private interpreters are dropped.
+--   * The old capacity function and its private interpreters are dropped by
+--     20261121100100, once the app that calls the new path is deployed. Until
+--     then both exist, so applying this migration does not break the running app.
 
 -- ============================================================
 -- 1. Rule metadata replaces code lists in the application
@@ -615,18 +617,7 @@ COMMENT ON FUNCTION compliance.deal_capacity_observations(UUID[], JSONB, DATE, T
 GRANT EXECUTE ON FUNCTION compliance.deal_capacity_observations(UUID[], JSONB, DATE, TIMESTAMPTZ, VARCHAR, TEXT[], BOOLEAN) TO authenticated, service_role;
 
 -- ============================================================
--- 5. The old capacity path and its private interpreters
--- ============================================================
-
-DROP FUNCTION IF EXISTS compliance.fund_security_capacities(UUID[], UUID[], DATE, TIMESTAMPTZ, VARCHAR);
-DROP FUNCTION IF EXISTS compliance.composite_rule_capacity(UUID, UUID, compliance.rule_versions, NUMERIC, DATE, TIMESTAMPTZ);
-DROP FUNCTION IF EXISTS compliance.security_matches_filters(UUID, JSONB, DATE, TIMESTAMPTZ);
-DROP FUNCTION IF EXISTS compliance.proposed_security_matches(UUID, UUID, DATE, TIMESTAMPTZ);
-DROP FUNCTION IF EXISTS compliance.security_group_value(UUID, JSONB, CHARACTER VARYING, DATE, TIMESTAMPTZ);
-DROP FUNCTION IF EXISTS compliance.capacity_amount(NUMERIC, NUMERIC, NUMERIC, TEXT, TEXT);
-
--- ============================================================
--- 6. The internal client is a flag, not a client code
+-- 5. The internal client is a flag, not a client code
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION entity_instances.sync_intersection_client_id()
