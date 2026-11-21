@@ -148,24 +148,50 @@ function recordTabs(
     return { record: section.relationshipCode ? refs[0]?.name || null : anchor.entityName, fields: fieldValues(target, fields) };
   };
 
-  const canvasLabel = canvas.find((section) => !section.relationshipCode)?.title || anchor.domainName || 'Record';
+  const info = recordTabInfo(experience, anchor);
   const tabs: Record<string, TabPayload> = {
     record: {
-      label: canvasLabel,
-      purpose: `The main view of this ${anchor.domainName || 'record'}: ${canvas.map((section) => section.title).join(', ') || 'its attributes'}.`,
+      ...info.record,
       data: { record: anchor.entityName, code: anchor.entityCode, sections: canvas.map((section) => ({ title: section.title, ...describe(section) })) },
+    },
+  };
+  for (const section of own) {
+    if (!info[section.key]) continue;
+    tabs[section.key] = { ...info[section.key], data: describe(section) };
+  }
+  return tabs;
+}
+
+/**
+ * The name and purpose of each tab, published whether or not the record has loaded.
+ * Before the working view loads only the main record tab is known; its own tabs
+ * come from the working view's sections, so they are listed once it has loaded.
+ */
+function recordTabInfo(experience: RecordExperience | null, anchor: EntityData | null): Record<string, Omit<TabPayload, 'data'>> {
+  const sections = experience?.sections || [];
+  const canvas = sections.filter((section) => !isOwnTab(section));
+  const own = sections.filter(isOwnTab);
+  const domain = anchor?.domainName || 'record';
+  const info: Record<string, Omit<TabPayload, 'data'>> = {
+    record: {
+      label: canvas.find((section) => !section.relationshipCode)?.title || anchor?.domainName || 'Record',
+      purpose: `The main view of this ${domain}: ${canvas.map((section) => section.title).join(', ') || 'its attributes'}.`,
     },
   };
   for (const section of own) {
     // A covenant test publishes its own figures from inside the tab, which stays mounted.
     if (section.kind === 'COVENANT_TEST') continue;
-    tabs[section.key] = {
+    info[section.key] = {
       label: section.title,
-      purpose: `${section.title}${section.kind === 'GRID' ? `: the ${anchor.domainName || 'record'}'s related ${section.title.toLowerCase()}` : ''}, as set up in the working view ${experience.experienceName}.`,
-      data: describe(section),
+      purpose: `${section.title}${section.kind === 'GRID' ? `: the ${domain}'s related ${section.title.toLowerCase()}` : ''}, as set up in the working view ${experience?.experienceName}.`,
     };
   }
-  return tabs;
+  return info;
+}
+
+/** Every tab known so far with data: null, for while the working view or record is still loading. */
+function pendingRecordTabs(experience: RecordExperience | null, anchor: EntityData | null): Record<string, TabPayload> {
+  return Object.fromEntries(Object.entries(recordTabInfo(experience, anchor)).map(([key, tab]) => [key, { ...tab, data: null }]));
 }
 
 export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: string; entityId: string }) {
@@ -434,7 +460,7 @@ export function RecordWorkspace({ experienceCode, entityId }: { experienceCode: 
     await reloadAnchor();
   };
 
-  usePublishTabs(experience && anchor ? recordTabs(experience, anchor, related, catalogs, dashboards) : {});
+  usePublishTabs(experience && anchor ? recordTabs(experience, anchor, related, catalogs, dashboards) : pendingRecordTabs(experience, anchor));
 
   if (loading) {
     return <div className="view-fade"><div className="xp-empty">Loading working view…</div></div>;
