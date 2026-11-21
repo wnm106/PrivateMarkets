@@ -436,7 +436,9 @@ export function evaluateScreens(
         count++;
         if (flagged.length < maxFlagged) {
           const picked: Row = {};
-          for (const k of [...IDENTITY, ...c.variables]) if (row[k] !== undefined) picked[k] = row[k];
+          // A grouped row names its subject in a lookup column ("iss.entity_name"), not entity_name.
+          const grouped = Object.keys(row).filter((k) => /\.entity_(name|code)$/.test(k));
+          for (const k of [...IDENTITY, ...grouped, ...c.variables]) if (row[k] !== undefined) picked[k] = row[k];
           flagged.push(picked);
         }
       }
@@ -479,7 +481,10 @@ export function evaluateScenarios(
         .filter((r) => asNumber(r[rank]) !== null)
         .sort((a, b) => (asNumber(b[rank]) as number) - (asNumber(a[rank]) as number))
         .slice(0, s.top);
-      names = rows.map((r) => String(r.entity_name ?? r.entity_code ?? ''));
+      // A grouped row has no entity_name; its label is the grouped column (e.g. "iss.entity_name").
+      const label = (r: Row) => r.entity_name ?? r.entity_code
+        ?? Object.entries(r).find(([k, v]) => k !== rank && typeof v === 'string' && v.trim() !== '')?.[1] ?? '';
+      names = rows.map((r) => String(label(r)));
     }
     const params = s.params ?? {};
     const values: number[] = [];

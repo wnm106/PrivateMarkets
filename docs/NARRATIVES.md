@@ -93,7 +93,23 @@ A name is not an identifier. In the test data, 95 issuer names are held by two r
 Not built yet: a data-change fingerprint (a report is flagged stale by age and date only), per-run cost tracking, and pruning of old evidence.
 
 ## Seeded narrative
-`FUND_LP_PORTFOLIO_REVIEW` (migration `20261113140000_narrative_framework.sql`) covers: executive summary, portfolio evolution (four comparison dates), performance attribution, borrower-by-borrower review (grouped, with a status scorecard), credit ranking, risk call-outs, industry exposure and sentiment, compliance and liquidity, forward outlook, and ten LP questions. Its queries use only documented position, security and issuer codes. NAV history, covenants, financials, ratings and compliance are found by each section's tools at run time, so the narrative says "data not available" where the fund has none. To make the risk call-outs fully deterministic for your data, add `measures` and `screens` with the attribute codes `get_model_map` returns for your fund.
+`FUND_LP_PORTFOLIO_REVIEW` was first seeded by `20261113140000_narrative_framework.sql` and redesigned for presenting to an investor by `20261121160000_lp_review_investor_redesign.sql` (the current definition, tested by `narrative-seed.test.ts`). It reads in the order an allocator reads:
+
+1. **Fund at a glance**: KPI cards, a 150-word story, three strengths and two watch items. Written last, from the other sections.
+2. **NAV track record**: the fund's own NAV and gross asset value at 13 monthly dates, the reconciliation of positions to NAV, and gross asset value to NAV as a reading of fund-level borrowing.
+3. **Returns and income**: net and gross IRR from the fund; TVPI, DPI, income yield, distribution coverage and expense ratio as measures on the fund's quarterly NAV statement (`STATEMENT_FUND`, five quarters); a 12-month NAV bridge from the inception-to-date roll-forward.
+4. **What drove NAV**: an industry bridge (waterfall) over 12 months and the largest moves by borrower, from `compare_asof`.
+5. **Portfolio composition**: industry mix now, a quarter ago and a year ago, with computed concentration screens.
+6. **Concentration and downside**: computed top-N shares, a Herfindahl index (effective number of borrowers), and stress cases (largest name written off; two and five largest lose half).
+7. **Loan book**: lien, rate type, PIK and cov-lite mix; spread, coupon and mark weighted by marked value in the query (`WEIGHTED_AVG`); a maturity ladder and rate sensitivity as scenarios.
+8. **Borrower credit quality**: weighted leverage and coverage now and a year ago, rating mix, non-accrual at fair value and cost, and a watchlist. A borrower's status is a measure (coverage under 1.5x, leverage over 6.5x or a mark under 90 is Watchlist), not the model's call. The PM's own view of a name comes only from the `watchlistNotes` input.
+9. **Limits and liquidity**: undrawn commitments and credit line against unfunded borrower commitments, and every fund rule evaluated at the as-of date, tightest headroom first.
+10. **Anticipated LP questions**: six to eight, answered from the sections above. Never about data or systems.
+11. **Appendix: data room readiness (internal)**: the only place gaps are discussed, with what to load next.
+
+Design choices that matter: industry is read from the security (`sec.INDUSTRY`), where it is stored, not the issuer. Concentration, stress, weighted averages and borrower status are query metrics, measures, scenarios and screens, so they are computed, not judged; only `drivers`, `limits` and the appendix use tools.
+
+Test data: `supabase/seed/bench_fund4_lp_story.sql` back-fills Bench Fund 4 (fund terms and IRR, five quarterly NAV statements that reconcile to its NAV series, loan terms, borrower financials a year ago and now, marks, a watchlist and one non-accrual) so every section has something to show. It is deterministic and re-runnable, and tags its rows `metadata.backfill = 'lp_story'`. It stamps `golden_source_id` on its own rows: the insert trigger only resolves a winner among open-ended rows, so dated history written directly into the golden master is otherwise invisible to grids. Gaps are left out of cards, tables and charts (one "Not shown" line per section at most) and listed once in the appendix. A change in NAV is never called a return unless flows, income and fees are in the evidence. Money is shown in $M and shares in percent units, because the renderer prints numbers as given.
 
 ## Files
 - `packages/graphql/src/lib/narrative-spec.ts`: spec types, expression evaluator, screens, scenarios, block normalization, verification, export. Pure; safe in the browser.
