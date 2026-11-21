@@ -20,31 +20,42 @@ function row(partial: Partial<ExposureThreshold> & Pick<ExposureThreshold, 'id'>
 }
 
 describe('resolveExposureLimit', () => {
-  const fallback = { soft: 22, hard: 35 };
-
-  it('uses the fund row for that name ahead of the fund default and the rule default', () => {
+  it('uses the fund row for that name ahead of the fund default', () => {
     const rows = [
-      row({ id: 'rule', entityId: null, hard: 35, soft: 22 }),
       row({ id: 'fund', hard: 25, soft: 21.25 }),
       row({ id: 'name', groupValue: 'Industrials', hard: 20, soft: 18 }),
     ];
-    expect(resolveExposureLimit(rows, fund, 'Industrials', 1, fallback, asOf)).toEqual({
+    expect(resolveExposureLimit(rows, fund, 'Industrials', 1, asOf)).toEqual({
       limitPct: 20,
       softPct: 18,
       thresholdId: 'name',
     });
-    expect(resolveExposureLimit(rows, fund, 'Healthcare', 2, fallback, asOf)).toEqual({
+    expect(resolveExposureLimit(rows, fund, 'Healthcare', 2, asOf)).toEqual({
       limitPct: 25,
       softPct: 21.25,
       thresholdId: null,
     });
   });
 
-  it('keeps the rule numbers when the fund row has no numbers of its own', () => {
+  it("ignores a rule-wide row: only the fund's own limits count", () => {
+    const rows = [row({ id: 'rule', entityId: null, hard: 35, soft: 22 })];
+    expect(resolveExposureLimit(rows, fund, 'Healthcare', 1, asOf)).toEqual({
+      limitPct: null,
+      softPct: null,
+      thresholdId: null,
+    });
+  });
+
+  it("ignores another fund's row", () => {
+    const rows = [row({ id: 'other', entityId: 'fund-2', hard: 10 })];
+    expect(resolveExposureLimit(rows, fund, 'Healthcare', 1, asOf).limitPct).toBeNull();
+  });
+
+  it('has no limit when the fund row has no numbers', () => {
     const rows = [row({ id: 'blank', soft: null, hard: null })];
-    expect(resolveExposureLimit(rows, fund, 'Healthcare', 1, fallback, asOf)).toEqual({
-      limitPct: 35,
-      softPct: 22,
+    expect(resolveExposureLimit(rows, fund, 'Healthcare', 1, asOf)).toEqual({
+      limitPct: null,
+      softPct: null,
       thresholdId: null,
     });
   });
@@ -54,13 +65,13 @@ describe('resolveExposureLimit', () => {
       row({ id: 'top', rankFrom: 1, rankTo: 1, hard: 8, soft: 6 }),
       row({ id: 'rest', rankFrom: 2, rankTo: null, hard: 3, soft: 2.4 }),
     ];
-    expect(resolveExposureLimit(rows, fund, 'Largest', 1, fallback, asOf).limitPct).toBe(8);
-    expect(resolveExposureLimit(rows, fund, 'Smaller', 3, fallback, asOf).limitPct).toBe(3);
+    expect(resolveExposureLimit(rows, fund, 'Largest', 1, asOf).limitPct).toBe(8);
+    expect(resolveExposureLimit(rows, fund, 'Smaller', 3, asOf).limitPct).toBe(3);
   });
 
   it('shows no limit when the fund has declined the rule', () => {
-    const rows = [row({ id: 'out', applies: false })];
-    expect(resolveExposureLimit(rows, fund, 'Healthcare', 1, fallback, asOf)).toEqual({
+    const rows = [row({ id: 'out', applies: false, hard: 35 })];
+    expect(resolveExposureLimit(rows, fund, 'Healthcare', 1, asOf)).toEqual({
       limitPct: null,
       softPct: null,
       thresholdId: null,

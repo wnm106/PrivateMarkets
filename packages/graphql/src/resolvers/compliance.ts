@@ -384,9 +384,36 @@ export const complianceResolvers = {
     upsertComplianceThreshold: async (_: any, args: { input: any }, context: Context) => {
       try {
         const input = args.input;
+        // A limit belongs to one fund. There is no rule-wide limit.
+        if (!input.entityId) {
+          return {
+            threshold: null,
+            errors: [{ field: 'entityId', message: 'A threshold must name a fund. Set the limit on each fund that uses the rule.', code: 'FUND_REQUIRED' }],
+          };
+        }
+        // A fund newly enrolled with no numbers starts from the rule's default
+        // limit, unless the rule reads the limit from a fund attribute.
+        if (!input.id && input.applies !== false && !input.groupValue && input.rankFrom == null
+          && input.softLimitValue == null && input.hardLimitValue == null) {
+          const { data: version } = await cx(context)
+            .from('rule_versions')
+            .select('soft_limit_value, hard_limit_value, hard_limit_attribute_code, limit_direction')
+            .eq('rule_id', input.ruleId)
+            .eq('is_active', true)
+            .order('version_number', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (version && !version.hard_limit_attribute_code) {
+            input.softLimitValue = version.soft_limit_value ?? null;
+            input.hardLimitValue = version.hard_limit_value ?? null;
+            if (!input.limitDirection && (version.limit_direction === 'MIN' || version.limit_direction === 'MAX')) {
+              input.limitDirection = version.limit_direction;
+            }
+          }
+        }
         const row: Record<string, unknown> = {
           rule_id: input.ruleId,
-          entity_id: input.entityId || null,
+          entity_id: input.entityId,
           group_value: input.groupValue ? String(input.groupValue).trim() : null,
           rank_from: input.rankFrom ?? null,
           rank_to: input.rankTo ?? null,
