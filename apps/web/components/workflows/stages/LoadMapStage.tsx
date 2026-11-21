@@ -46,7 +46,7 @@ const post = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Cont
  * goes. Confirming saves the mapping and the date on the file and hands the run
  * on to stage the values.
  */
-export function LoadMapStage({ stage, busy, onComplete }: StageScreenProps) {
+export function LoadMapStage({ stage, busy, onComplete, onProgress }: StageScreenProps) {
   const fileId = String(stage.args.importInstanceId || '');
   const [detail, setDetail] = useState<FileDetail | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -181,6 +181,7 @@ export function LoadMapStage({ stage, busy, onComplete }: StageScreenProps) {
           onConfirm: confirm,
           onAbandon: () => void onComplete('abandoned', {}),
           onShowSource: setPointing,
+          onProgress,
         }}
       />
       </div>

@@ -208,3 +208,22 @@ describe('the briefing line', () => {
     );
   });
 });
+
+describe('forms and screens on Needs you', () => {
+  it('lists a form or screen the person can act on, opened on its decision, and counts it in the headline', () => {
+    const items = needsYouItems({
+      now: new Date('2026-11-21T12:00:00Z'),
+      userId: 'me',
+      workflowSteps: [
+        { id: 's1', kind: 'stage', runId: 'run1', nodeId: 'map', title: 'Map the file', workflowName: 'File intake', detail: 'Map a file', canAct: true, createdAt: '2026-11-21T11:00:00Z', dueAt: '2026-11-21T10:00:00Z', overdue: true },
+        { id: 'f1', kind: 'form', runId: 'run2', nodeId: 'ask', title: 'Confirm the period', workflowName: 'Intake', detail: '2 questions', canAct: false, createdAt: '2026-11-21T11:00:00Z' },
+      ],
+    });
+    assert.equal(items.length, 1);
+    assert.equal(items[0].href, '/workflows/runs/run1?decision=map');
+    assert.equal(items[0].urgency, 'critical');
+    const summary = summarize(items);
+    assert.equal(summary.steps, 1);
+    assert.equal(headline(summary), '1 form or screen in workflow runs is waiting for your decision.');
+  });
+});

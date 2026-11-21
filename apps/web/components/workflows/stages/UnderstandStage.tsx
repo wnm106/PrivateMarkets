@@ -6,6 +6,7 @@ import { ConfirmButton } from '@/components/feeds/ConfirmButton';
 import { SourcePane, type SourceTarget } from '@/components/feeds/SourcePane';
 import type { FileUnderstanding } from '@tapestrai/mcp-server/src/feeds/import-document';
 import type { StageScreenProps } from './index';
+import { useReportProgress } from './useProgress';
 
 const METHOD: Record<string, string> = {
   tabular: 'Read as a table',
@@ -36,7 +37,7 @@ function plural(count: number, one: string, many = `${one}s`) {
  * the right. The person says what kind of document it is, which table to load,
  * and which stored record it is about, before any column is mapped.
  */
-export function UnderstandStage({ stage, busy, onComplete }: StageScreenProps) {
+export function UnderstandStage({ stage, busy, onComplete, onProgress }: StageScreenProps) {
   const fileId = String(stage.args.importInstanceId || '');
   const [found, setFound] = useState<FileUnderstanding | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -105,6 +106,20 @@ export function UnderstandStage({ stage, busy, onComplete }: StageScreenProps) {
       setWorking(false);
     }
   }
+
+  // What this screen asks of the person, in the order it is laid out.
+  const chosenTable = found ? found.tables.find((item) => item.selected) || found.tables[0] || null : null;
+  const linked = found?.matches.find((match) => match.id === entityId);
+  useReportProgress(onProgress, found ? {
+    parts: [
+      found.document
+        ? { label: 'Say what kind of document this is', done: Boolean(typeCode), note: found.documentTypes.find((type) => type.code === typeCode)?.name }
+        : { label: 'Say what kind of document this is', done: true, note: 'Not kept as a document' },
+      ...(found.tables.length > 1 ? [{ label: 'Choose the table to load', done: found.rowCount > 0, note: chosenTable?.name }] : []),
+      ...(found.subject && found.matches.length > 0 ? [{ label: 'Link the record it is about', done: Boolean(entityId), note: linked ? linked.name : 'Optional' }] : []),
+      { label: 'Confirm and go on to mapping', done: false },
+    ],
+  } : null);
 
   if (error && !found) return <div role="alert" style={{ color: 'var(--red)' }}>{error}</div>;
   if (!found) return <div style={{ color: 'var(--ink-3)' }}>Reading the file…</div>;

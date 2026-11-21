@@ -1,6 +1,7 @@
 'use client';
 
 import type { ComponentType } from 'react';
+import type { CheckProgress } from '@/lib/workflow-checklist';
 import type { StageView } from '@/lib/workflow-stages';
 import { LoadMapStage } from './LoadMapStage';
 import { LoadQualityStage } from './LoadQualityStage';
@@ -12,6 +13,11 @@ export interface StageScreenProps {
   busy: boolean;
   /** Leaves the stage with one of its outcomes. Rejects with the reason when it is refused. */
   onComplete: (outcome: string, result: Record<string, unknown>) => Promise<void>;
+  /**
+   * Reports what the person still has to do on this screen, in order, so the
+   * run's checklist can show it under this decision. Called whenever it changes.
+   */
+  onProgress?: (progress: CheckProgress) => void;
 }
 
 /**

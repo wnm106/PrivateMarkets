@@ -3,6 +3,8 @@ import { parseFilters, prepareRunInput, runSetupOf, type RunSetup } from '../lib
 import { NODE_TYPES, asGraph, validateGraph } from '../lib/workflow-graph';
 import { STAGE_SCREENS } from '../lib/workflow-screens';
 import { LIST_VALUE_TOOL, asDecision, asProposal, checkDecision, proposalCounts } from '../lib/workflow-proposal';
+import { checkRecords, runChecklist } from '../lib/workflow-checklist';
+import { formTask, reviewTask, stageTask, taskList } from '../lib/workflow-tasks';
 import { WORKFLOW_TEMPLATES } from '../lib/workflow-templates';
 import { callerClientId } from './jobs';
 
@@ -329,6 +331,51 @@ export const workflowResolvers = {
       });
       if (error) throw error;
       return ((data as Row[] | null) || []).map(mapStage);
+    },
+
+    myTasks: async (_: unknown, args: { withPlace?: boolean | null }, context: Context) => {
+      const call = async (fn: string, params: Record<string, unknown>) => {
+        const { data, error } = await context.supabase.rpc(fn, params);
+        if (error) throw error;
+        return (data as Row[] | null) || [];
+      };
+      const [reviews, forms, stages] = await Promise.all([
+        call('workflow_reviews_list', { p_status: 'OPEN', p_limit: 100, p_mine: false }),
+        call('workflow_forms_list', { p_status: 'OPEN', p_run_id: null }),
+        call('workflow_stages_list', { p_status: 'OPEN', p_run_id: null }),
+      ]);
+      const now = Date.now();
+      const list = taskList(
+        [
+          ...reviews.map((row) => reviewTask(mapReview(row), now)),
+          ...forms.map((row) => formTask(mapForm(row), now)),
+          ...stages.map((row) => stageTask(mapStage(row), now)),
+        ],
+        now,
+      );
+      if (!args.withPlace) return list;
+      // Each task's place on its run's checklist, read once per run.
+      const runIds = [...new Set(list.tasks.map((task) => task.runId))].slice(0, 25);
+      const runs = new Map<string, Awaited<ReturnType<typeof readRun>>>();
+      await Promise.all(runIds.map(async (id) => runs.set(id, await readRun(context, id).catch(() => null))));
+      const placed = list.tasks.map((task) => {
+        const run = runs.get(task.runId);
+        if (!run) return task;
+        const checklist = runChecklist({
+          graph: run.graph,
+          status: run.status,
+          currentNode: run.currentNode,
+          steps: run.steps,
+          records: checkRecords({
+            reviews: run.reviews,
+            forms: forms.filter((row) => row.run_id === task.runId).map(mapForm),
+            stages: stages.filter((row) => row.run_id === task.runId).map(mapStage),
+          }),
+        });
+        const item = checklist.items.find((entry) => entry.nodeId === task.nodeId);
+        return item?.number ? { ...task, place: item.number, placeOf: checklist.total } : task;
+      });
+      return { ...list, tasks: placed };
     },
 
     workflowStageScreens: () => STAGE_SCREENS.map((screen) => ({ code: screen.code, label: screen.label, description: screen.description, outcomes: screen.outcomes, args: screen.args })),

@@ -7,6 +7,8 @@
  * changes run, with the reviewer's answers filled in.
  */
 
+import { normalizeViews, type ProposalView } from './workflow-views';
+
 export type ProposalAction = 'CREATE' | 'UPDATE' | 'DELETE';
 export type Confidence = 'HIGH' | 'MEDIUM' | 'LOW';
 
@@ -47,6 +49,8 @@ export interface ProposalItem {
 
 export interface Proposal {
   items: ProposalItem[];
+  /** What the agent asked the reviewer to look at beside the changes. See workflow-views.ts. */
+  views?: ProposalView[];
 }
 
 function text(value: unknown, fallback = ''): string {
@@ -328,7 +332,9 @@ export function proposalCounts(proposal: Proposal): ProposalCounts {
 export function asProposal(value: unknown): Proposal {
   const raw = record(value);
   const items = (Array.isArray(raw.items) ? raw.items : []).filter((item) => item && typeof item === 'object') as ProposalItem[];
+  const { views } = normalizeViews(raw.views, null);
   return {
+    ...(views.length > 0 ? { views } : {}),
     items: items.map((item) => ({
       ...item,
       args: record(item.args),

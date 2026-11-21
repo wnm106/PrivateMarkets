@@ -439,6 +439,53 @@ describe('runAgentStep', () => {
     expect(results[1].content).toMatch(/delete_compliance_rule, which this step cannot propose/);
   });
 
+  it('shows the reviewer only the views its step allows, and keeps them with the proposal', async () => {
+    const offered: string[][] = [];
+    const tools = { names: () => new Set(specs.map((spec) => spec.name)), specs: () => specs, run: async () => ({ ok: true }) };
+    const model = scripted([
+      {
+        stop: 'tools',
+        calls: [
+          {
+            id: '1',
+            name: 'show_reviewer',
+            input: {
+              views: [
+                { view: 'rec.cash', args: { fundId: 'HARBOR' }, focus: ['txn-9'], why: 'The wire settles two flows.' },
+                { view: 'rec.nav', args: { fundId: 'HARBOR' }, why: 'Not allowed here.' },
+              ],
+            },
+          },
+        ],
+      },
+      { stop: 'end', text: 'Done.' },
+    ]);
+    const turn = model.turn.bind(model);
+    model.turn = async (system, toolSpecs, messages) => {
+      offered.push(toolSpecs.map((spec) => spec.name));
+      return turn(system, toolSpecs, messages);
+    };
+    const { request: built, events } = request({ instructions: 'Reconcile', tools: ['get_entity'], proposable: ['submit_manual_override'], showable: ['rec.cash', 'made.up'] });
+    const result = await runAgentStep(built, { tools, model: () => model });
+
+    expect(offered[0]).toEqual(['get_entity', 'propose_changes', 'show_reviewer']);
+    expect(result.views).toEqual([{ id: 'view-1', view: 'rec.cash', args: { fundId: 'HARBOR' }, focus: ['txn-9'], why: 'The wire settles two flows.' }]);
+    const results = (model.seen[1][2] as { results: Array<{ content: string }> }).results;
+    expect(results[0].content).toMatch(/rec.nav is not a view this step can show/);
+    expect(events).toContain('agent.view');
+
+    // A step that lists no views is not offered the tool.
+    const plain = scripted([{ stop: 'end', text: 'Done.' }]);
+    const seen: string[][] = [];
+    const plainTurn = plain.turn.bind(plain);
+    plain.turn = async (system, toolSpecs, messages) => {
+      seen.push(toolSpecs.map((spec) => spec.name));
+      return plainTurn(system, toolSpecs, messages);
+    };
+    await runAgentStep(request({ instructions: 'Reconcile', tools: ['get_entity'] }).request, { tools, model: () => plain });
+    expect(seen[0]).toEqual(['get_entity', 'propose_changes']);
+  });
+
   it('reads with its tools, cannot write, and only proposes what the step allows', async () => {
     const ran: string[] = [];
     const tools = { names: () => new Set(specs.map((spec) => spec.name)), specs: () => specs, run: async (name: string) => (ran.push(name), { ok: true }) };

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { EventView, ReviewView, RunDetail } from './workflows';
+import { WORKFLOW_TEMPLATES } from '@tapestrai/graphql/src/lib/workflow-templates';
+import { checkRecords, runChecklist } from './workflow-checklist';
 import { newestFirst, reviewNextStep, runNextStep, runTabs, summaryLead } from './workflow-run-view';
 
 const SUMMARY = `I checked three issuers and found one missing required value. I've proposed one change, but it needs a value from you before it can run.
@@ -121,5 +123,28 @@ describe('the run page', () => {
     assert.equal(overview.openReviews[0].changes.length, 2);
     const details = tabs.details.data as { history: Array<{ summary: string }> };
     assert.deepEqual(details.history.map((entry) => entry.summary), ['b', 'a']);
+  });
+
+  it('names the open decision by its place in the checklist, whatever kind of step it is', () => {
+    const graph = WORKFLOW_TEMPLATES.find((template) => template.code === 'FILE_INTAKE')!.graph;
+    const steps = ['start', 'receive'].map((nodeId) => ({ nodeId, nodeType: '', nodeLabel: null, status: 'SUCCEEDED', outcome: null, attempts: 1, output: null, errorMessage: null, startedAt: '', finishedAt: null }));
+    const intake = run({ graph, reviews: [], currentNode: 'understand', steps: [...steps, { ...steps[0], nodeId: 'understand', status: 'WAITING' }] });
+    const stages = [{ id: 's1', nodeId: 'understand', status: 'OPEN', title: 'Understand the file', canAct: true, screen: 'intake.understand', instructions: null, blocker: null, returnedReason: null }];
+    const checklist = runChecklist({ graph, status: intake.status, currentNode: intake.currentNode, steps: intake.steps, records: checkRecords({ stages }), progress: { s1: { parts: [{ label: 'Say what kind of document this is', done: true }, { label: 'Confirm', done: false }] } } });
+
+    const next = runNextStep(intake, checklist);
+    assert.equal(next.tone, 'act');
+    assert.equal(next.headline, 'Decision 1 of 3: Understand the file.');
+    assert.equal(next.detail, 'Understand a file, 1 of 2 done. The run waits here until you finish it.');
+
+    const overview = runTabs(intake, { checklist, stages, forms: [] }).overview.data as { checklist: { summary: string; items: Array<{ number: number; state: string; parts?: unknown[] }> }; openStages: Array<{ title: string; yours: boolean }> };
+    assert.equal(overview.checklist.summary, '0 of 3 decisions done');
+    assert.deepEqual(overview.checklist.items.map((entry) => [entry.number, entry.state]), [[1, 'current'], [2, 'ahead'], [3, 'ahead']]);
+    assert.equal(overview.checklist.items[0].parts?.length, 2);
+    assert.deepEqual(overview.openStages, [{ title: 'Understand the file', screen: 'intake.understand', instructions: null, yours: true, whyNot: null, cameBack: null }]);
+    assert.equal((runTabs(intake).overview.data as { checklist: unknown }).checklist, null);
+
+    const finished = runChecklist({ graph: WORKFLOW_TEMPLATES.find((template) => template.code === 'DATA_QUALITY_BRIEF')!.graph, status: 'SUCCEEDED', currentNode: null, steps: [], records: [] });
+    assert.equal(runNextStep(run({ status: 'SUCCEEDED', reviews: [] }), finished).headline, 'Finished. It needed no decisions.');
   });
 });

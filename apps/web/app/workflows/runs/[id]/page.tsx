@@ -3,14 +3,13 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { GuidedRun } from '@/components/workflows/GuidedRun';
 import { ReviewPanel } from '@/components/workflows/ReviewPanel';
-import { RunChildren, RunForms } from '@/components/workflows/RunForms';
+import { RunChecklist, useRunDecisions } from '@/components/workflows/RunChecklist';
+import { RunChildren } from '@/components/workflows/RunForms';
 import { WorkflowCanvas, type CanvasSelection } from '@/components/workflows/WorkflowCanvas';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { usePublishTabs, usePublishViewContext } from '@/lib/view-context';
 import { newestFirst, runNextStep, runTabs, type Tone } from '@/lib/workflow-run-view';
-import { isGuided } from '@/lib/workflow-stages';
 import { CANCEL_RUN, RETRY_RUN, WORKFLOW_RUN_QUERY, clock, kindOf, statusOf, when, type EventView, type MutationErrors, type RunDetail } from '@/lib/workflows';
 
 const ACTOR: Record<EventView['actorType'], { label: string; color: string; tint: string }> = {
@@ -52,7 +51,6 @@ export default function WorkflowRunPage() {
   const [openEvent, setOpenEvent] = useState<string | null>(null);
 
   usePublishViewContext({ activity: 'viewing', kind: 'workflow-run', label: run?.workflowName ? `${run.workflowName} run` : 'Workflow run', id, summary: run ? statusOf(run.status).label : undefined });
-  usePublishTabs(runTabs(run));
 
   const load = useCallback(async () => {
     const result = await graphqlQuery<{ workflowRun: RunDetail | null }>(WORKFLOW_RUN_QUERY, { id }, 'network-only');
@@ -67,6 +65,10 @@ export default function WorkflowRunPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Every decision the run needs, read beside it, as one numbered checklist.
+  const decisions = useRunDecisions(run, load);
+  usePublishTabs(runTabs(run, decisions.loaded ? decisions : null));
 
   // Follow the run while the worker is moving it.
   const moving = run?.status === 'QUEUED' || run?.status === 'RUNNING';
@@ -87,14 +89,10 @@ export default function WorkflowRunPage() {
   const selectedNode = selectedNodeId ? run?.graph?.nodes.find((node) => node.id === selectedNodeId) : undefined;
   const selectedStep = selectedNodeId ? run?.steps.find((step) => step.nodeId === selectedNodeId) : undefined;
   const events = newestFirst(run?.events || []).filter((event) => (actorFilter === 'ALL' || event.actorType === actorFilter) && (!selectedNodeId || event.nodeId === selectedNodeId));
-  // With a Split, several paths can each be waiting for a review at once.
-  const openReviews = (run?.reviews || []).filter((review) => review.status === 'OPEN');
   const pastReviews = (run?.reviews || []).filter((review) => review.status !== 'OPEN');
   const status = run ? statusOf(run.status) : null;
-  const next = run ? runNextStep(run) : null;
+  const next = run ? runNextStep(run, decisions.loaded ? decisions.checklist : null) : null;
   const tone = next ? TONE[next.tone] : null;
-  // A workflow with stages is worked through one screen at a time.
-  const guided = isGuided(run?.graph);
 
   return (
     <div className="view-fade">
@@ -156,24 +154,15 @@ export default function WorkflowRunPage() {
                 One of the runs <Link href={`/workflows/runs/${run.input.parentRunId}`}>a run split by record</Link> started.
               </div>
             )}
-            {openReviews.map((openReview) => (
-              <div key={openReview.id} style={{ marginBottom: 16 }}>
-                <ReviewPanel review={openReview} canManage={run.canManage === true} onDecided={load} />
-              </div>
-            ))}
-            <RunForms runId={run.id} onAnswered={load} />
             <RunChildren runId={run.id} />
-            {guided && <GuidedRun run={run} onChanged={load} />}
-            {openReviews.length === 0 && !guided && (
-              <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>
-                {pastReviews.length > 0 ? `${pastReviews.length === 1 ? 'One review was' : `${pastReviews.length} reviews were`} decided in this run. ` : ''}
-                The steps, earlier decisions and full history are on{' '}
-                <button type="button" onClick={() => setTab('details')} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--entity-link)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-                  Details
-                </button>
-                .
-              </div>
-            )}
+            <RunChecklist run={run} decisions={decisions} onChanged={load} />
+            <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>
+              The design, every step and the full history are on{' '}
+              <button type="button" onClick={() => setTab('details')} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--entity-link)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                Details
+              </button>
+              .
+            </div>
           </div>
 
           {tab === 'details' && (

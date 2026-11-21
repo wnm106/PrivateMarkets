@@ -8,6 +8,7 @@ import { usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { AsOfDatePicker } from './AsOfDatePicker';
 import { GlobalSearch } from './GlobalSearch';
+import { TasksButton } from './TaskCenter';
 
 const CRUMB_LABELS: Record<string, string> = {
   funds: 'Funds',
@@ -90,6 +91,7 @@ export function TopBar() {
       </nav>
       <GlobalSearch />
       <div className="topbar-right">
+        <TasksButton />
         <AsOfDatePicker />
         <div className={`status-pill ${live ? '' : 'is-historical'}`}>
           <span className="status-dot"></span>{live ? 'Live' : 'Historical'}

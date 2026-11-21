@@ -107,7 +107,7 @@ export type Urgency = 'critical' | 'high' | 'normal';
 /** Decide: someone has to make a call. Fix: something broke and needs a hand. */
 export type NeedsYouLane = 'decide' | 'fix';
 
-export type NeedsYouKind = 'review' | 'file-review' | 'file-failed' | 'job-failed' | 'run-failed' | 'exception' | 'urgent-exceptions';
+export type NeedsYouKind = 'review' | 'workflow-step' | 'file-review' | 'file-failed' | 'job-failed' | 'run-failed' | 'exception' | 'urgent-exceptions';
 
 export interface NeedsYouItem {
   id: string;
@@ -135,6 +135,21 @@ export interface ReviewSource {
   workflowName?: string | null;
   itemCount: number;
   canReview: boolean;
+  createdAt: string;
+  dueAt?: string | null;
+  overdue?: boolean;
+}
+
+/** A form to answer or a screen to work in a workflow run, from the person's tasks. */
+export interface WorkflowStepSource {
+  id: string;
+  kind: 'form' | 'stage';
+  runId: string;
+  nodeId: string;
+  title: string;
+  workflowName?: string | null;
+  detail: string;
+  canAct: boolean;
   createdAt: string;
   dueAt?: string | null;
   overdue?: boolean;
@@ -183,6 +198,8 @@ export interface NeedsYouSources {
   now: Date;
   userId: string | null;
   reviews?: readonly ReviewSource[];
+  /** Forms and screens waiting on the person. Reviews come in under reviews. */
+  workflowSteps?: readonly WorkflowStepSource[];
   files?: readonly FileSource[];
   jobs?: readonly JobSource[];
   workflowRuns?: readonly WorkflowRunSource[];
@@ -227,6 +244,24 @@ export function needsYouItems(sources: NeedsYouSources): NeedsYouItem[] {
       href: `/workflows/runs/${review.runId}`,
       action: 'Review',
       at: review.createdAt,
+    });
+  }
+
+  for (const step of sources.workflowSteps || []) {
+    if (!step.canAct) continue;
+    const word = step.kind === 'form' ? 'Answer' : 'Open';
+    items.push({
+      id: `${step.kind}-${step.id}`,
+      lane: 'decide',
+      kind: 'workflow-step',
+      group: `${step.kind}:${step.id}`,
+      groupTitle: step.title,
+      urgency: step.overdue ? 'critical' : 'high',
+      title: step.title,
+      detail: [step.workflowName, step.detail, step.dueAt ? `${step.overdue ? 'was due' : 'due'} ${step.dueAt.slice(0, 16).replace('T', ' ')} UTC` : null].filter(Boolean).join(' · '),
+      href: `/workflows/runs/${step.runId}?decision=${encodeURIComponent(step.nodeId)}`,
+      action: word,
+      at: step.createdAt,
     });
   }
 
@@ -405,6 +440,8 @@ export function groupNeedsYou(items: readonly NeedsYouItem[]): NeedsYouGroup[] {
 export interface HomeSummary {
   reviews: number;
   proposedChanges: number;
+  /** Forms to answer and screens to work in workflow runs. */
+  steps?: number;
   filesWaiting: number;
   failures: number;
   urgentExceptions: number;
@@ -416,7 +453,8 @@ export function summarize(items: readonly NeedsYouItem[], urgentExceptionCount =
     if (item.kind === 'review') {
       summary.reviews += 1;
       summary.proposedChanges += item.changes || 0;
-    } else if (item.kind === 'file-review') summary.filesWaiting += 1;
+    } else if (item.kind === 'workflow-step') summary.steps = (summary.steps || 0) + 1;
+    else if (item.kind === 'file-review') summary.filesWaiting += 1;
     else if (item.kind === 'file-failed' || item.kind === 'job-failed' || item.kind === 'run-failed') summary.failures += 1;
   }
   return summary;
@@ -437,6 +475,7 @@ export function headline(summary: HomeSummary): string {
         : plural(summary.reviews, 'review'),
     );
   }
+  if (summary.steps) waiting.push(`${summary.steps} ${summary.steps === 1 ? 'form or screen' : 'forms and screens'} in workflow runs`);
   if (summary.filesWaiting) waiting.push(plural(summary.filesWaiting, 'file'));
   const broken: string[] = [];
   if (summary.urgentExceptions) broken.push(plural(summary.urgentExceptions, 'high-priority exception'));
@@ -444,7 +483,7 @@ export function headline(summary: HomeSummary): string {
 
   if (!waiting.length && !broken.length) return 'You’re all caught up. Nothing is waiting on you.';
   const sentences: string[] = [];
-  if (waiting.length) sentences.push(`${joinPhrases(waiting)} ${waiting.length === 1 && (summary.reviews + summary.filesWaiting) === 1 ? 'is' : 'are'} waiting for your decision.`);
+  if (waiting.length) sentences.push(`${joinPhrases(waiting)} ${waiting.length === 1 && (summary.reviews + (summary.steps || 0) + summary.filesWaiting) === 1 ? 'is' : 'are'} waiting for your decision.`);
   if (broken.length) sentences.push(`${joinPhrases(broken)} need${broken.length === 1 && (summary.urgentExceptions + summary.failures) === 1 ? 's' : ''} attention.`);
   return sentences.join(' ');
 }
@@ -517,6 +556,7 @@ export function agentLine(board: AgentsSummary | null): string {
 /** The short tag on a row in the queue. */
 export const KIND_LABEL: Record<NeedsYouKind, string> = {
   review: 'Review',
+  'workflow-step': 'Workflow',
   'file-review': 'File',
   'file-failed': 'File failed',
   'job-failed': 'Job failed',

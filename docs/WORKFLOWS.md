@@ -21,7 +21,9 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 | Who reviews | `supabase/migrations/20261117010000_workflow_review_routing.sql`, `apps/web/components/workflows/ReviewerPicker.tsx` | Who a review is for, keeping the starter apart, due dates, and reassigning |
 | Review notices | `supabase/migrations/20261117020000_workflow_review_notices.sql`, `packages/worker/src/assistant.ts` | Telling people a review is waiting or overdue |
 | Approvals, delivery | `supabase/migrations/20261117040000_workflow_review_approvals.sql`, `20261117050000_notification_delivery.sql`, `packages/worker/src/notify.ts` | More than one approval, handing an overdue review on, and sending notices by email and Slack |
-| Stages | `supabase/migrations/20261119120000_workflow_stages.sql`, `packages/graphql/src/lib/workflow-screens.ts`, `apps/web/components/workflows/GuidedRun.tsx`, `apps/web/components/workflows/stages` | A step that shows one screen and waits, the screens it can show, and the guided view of a run |
+| Stages | `supabase/migrations/20261119120000_workflow_stages.sql`, `packages/graphql/src/lib/workflow-screens.ts`, `apps/web/components/workflows/stages` | A step that shows one screen and waits, and the screens it can show |
+| Checklist | `packages/graphql/src/lib/workflow-checklist.ts`, `apps/web/components/workflows/RunChecklist.tsx` | Every decision a run needs, numbered in order, and the screen for the open one |
+| Tasks | `packages/graphql/src/lib/workflow-tasks.ts`, `apps/web/lib/tasks.ts`, `apps/web/components/layout/TaskCenter.tsx` | The decisions waiting on you, counted once, in the top bar, the inbox, the sidebar and the tab |
 | Forms, split runs, outbound | `supabase/migrations/20261117070000_workflow_forms_and_outbound.sql`, `packages/worker/src/workflow/outbound.ts`, `apps/web/app/portal` | Ask for information, the portal, one run per record, Call a connection, Send a message |
 | Analytics | `supabase/migrations/20261117080000_workflow_analytics.sql`, `apps/web/app/workflows/analytics` | How each workflow is doing |
 | Triggers | `supabase/migrations/20261117030000_workflow_triggers.sql`, `apps/web/components/workflows/WorkflowTriggers.tsx` | Starting a workflow when a feed event arrives or a data quality scan finds new failures |
@@ -164,6 +166,15 @@ To change something the agent calls `propose_changes`. Each proposed change says
 - anything it could not establish, as a question for the reviewer, with its best guess offered as a suggestion
 
 The step can limit which changes may be proposed ("Changes it can propose").
+
+**What the reviewer sees.** The step can also list views the agent may put in front of its reviewer ("What it can show the reviewer"). With `show_reviewer` the agent names a view, the fund and period to show, the rows it relied on, and why the reviewer should look. The engine keeps only views the step allows, with only the settings each takes, at most six, and stores them with the proposal. The views are listed in `packages/graphql/src/lib/workflow-views.ts`:
+
+| View | Shows |
+|---|---|
+| Cash reconciliation (`rec.cash`) | One fund's bank lines beside its book cash flows for a period, the lines the agent points at, and whether the two sides tie |
+| NAV reconciliation (`rec.nav`) | One fund's reported and proposed NAV, and the review items the agent points at, with the administrator's figure, ours, the NAV effect and what is decided |
+
+Fund reconciliation's reconciling step may show both. A view's component is in `apps/web/components/workflows/review-sections/RecSections.tsx`, under the same code.
 
 **Required fields are checked by the engine, not left to the agent.** When a change creates a record, the engine reads what that record's template requires. Each required attribute the agent did not supply becomes a question on the change, marked "required for this type of record".
 
@@ -318,6 +329,19 @@ A review opened before this was added keeps the rules it was opened under: open 
 
 ### Telling people
 
+**Your tasks.** A task is a decision in a run that you can act on now: a review you can decide, a form you can answer, a screen you can work. Each is one point on its run's checklist, however many changes it holds. `myTasks` counts them in one place (`packages/graphql/src/lib/workflow-tasks.ts`), so every place in the app shows the same number:
+
+| Where | What it shows |
+|---|---|
+| **Tasks** in the top bar | How many tasks are yours, red when any is overdue. It opens the inbox |
+| The inbox | Your tasks, overdue first, then the soonest due, then the longest waiting. Each says what it is, which workflow, its place on the run's checklist ("Decision 2 of 3"), what it holds, and when it is due. A task new since you last opened the inbox is marked New. A review whose every change is ready can be approved there. Below, the decisions you can see that someone else has to make |
+| Workflows in the sidebar | The same count. When the tools are folded away, it shows on Tools |
+| The browser tab | The count in front of the page title, "(3) Home" |
+| A note in the corner | When a task arrives while you are in the app, unless you are already on its run. It closes itself after ten seconds |
+| Needs you on the home page | Reviews, and now forms and screens |
+
+A task opens its run on that decision (`/workflows/runs/<run>?decision=<step>`). The count is read every minute while the tab is in view, when you come back to it, and as soon as you finish a decision. It clears only when the work is done, not when the task is seen.
+
 Nobody has to watch the list. A review is announced as a note in each person's assistant briefing (the Briefing chat), with a link to the run. It goes to whoever can decide the review, whether or not they follow anything or have turned the assistant on.
 
 | When | Who is told |
@@ -325,18 +349,34 @@ Nobody has to watch the list. A review is announced as a note in each person's a
 | The review opens | Everyone who can decide it: the people and roles it is for, or everyone holding `workflow.review` when it is for anyone. Not the person who started the run when the step keeps them apart |
 | It is reassigned | Everyone who can decide it now, except whoever reassigned it |
 | It passes its due date | The same people, and everyone holding a role under "Also tell when overdue". Once per review |
+| A form opens, or passes its due date | Everyone who can answer it: the people and roles it is for, or everyone holding `workflow.review` when it is for anyone. A form sent outside the firm is not announced here; the outsider gets its link |
+| A screen opens, comes back with a reason, or passes its due date | Everyone who can work it, the same way |
 
 On the home page, a review you can decide is under Needs you. An overdue one goes to the top, marked as when it was due.
 
 **Email and Slack.** Under **Review notices** on `/workflows`, someone who manages workflows can also send each notice by email to the reviewer's sign-in address, and to one Slack channel by its incoming webhook. Email needs `RESEND_API_KEY` and `NOTIFY_EMAIL_FROM` on the worker, and `APP_URL` for full links. Only a `https://hooks.slack.com/` address is accepted, and it is never shown again once saved. Each notice queues `notify.deliver`, which records every send; a recipient already sent to is not sent to again, and a failed send is tried again.
 
-The overdue notices come from the platform job `workflow.reviews_due`, on a schedule the migration creates (`WORKFLOW_REVIEWS_DUE`, every 15 minutes). The same job sends again any note that was not delivered in the last two weeks, to anyone still in that client and in no other. A note about a review that has been decided since is not sent. Each notice is also kept in the run's history.
+The overdue notices come from the platform job `workflow.reviews_due`, on a schedule the migration creates (`WORKFLOW_REVIEWS_DUE`, every 15 minutes). The same job sends again any note that was not delivered in the last two weeks, to anyone still in that client and in no other. A note about a review, form or screen that has been finished since is not sent; `ops.workflow_notice_open` decides that, for the briefing, email and Slack alike. Each notice is also kept in the run's history.
+
+A notice about a form or a screen links to its run on that decision. It is written by a trigger when the form or screen opens, in `supabase/migrations/20261121150000_workflow_step_notices.sql`; a notice that cannot be written is logged as a warning and never stops the run. `scripts/db-tests/workflow-notices.sql` checks all of it, and runs in CI with `npm run test:db`.
 
 Underneath, a notice is an `ops.activity_events` row with `recipients` set, in `supabase/migrations/20261117020000_workflow_review_notices.sql`. Any other part of the platform can address a note to people the same way.
 
 ### Deciding
 
-The review shows the agent's own summary, then a table of every proposed change with the agent's confidence beside it.
+The review shows the agent's own summary, the views it asked you to look at, then every proposed change with the agent's confidence beside it.
+
+**Each kind of change has its own screen.** The changes are grouped by the tool they run (`apps/web/lib/review-sections.ts`), and the groups are decided in order, each a part of the review on the run's checklist:
+
+| Section | Changes | What you see |
+|---|---|---|
+| Cash pairs | `approve_cash_match` | The bank transaction beside the book flows it settled, the difference and the dates. Change the flows to correct the pair |
+| Cash adjustments | `post_cash_adjustment` | Book less bank before and after, with the side, amount and reason to edit |
+| Reconciliation decisions | `record_rec_decision` | The review item with the administrator's figure, ours, the difference and the NAV effect, any decision already on the close, and Accept, Adjust or Query with the note. Adjust and Query need a note |
+| Other changes | Any other tool | The general table |
+| Reconciliation notes | `save_reconciliation_notes` | The notes to edit and preview, beside the notes kept now. A change you rejected for the same fund is named, so the notes can be made to match |
+
+The rec sections read the fund's reconciliation with the same queries as the reconciliation page, at your As Of and Knowledge dates. A review of only other changes keeps the one table. Every change can still open to its full settings and evidence, and a required question opens it.
 
 - **Approve the confident ones together** with one button.
 - **Walk through the rest.** Each opens to show exactly what will happen, why, what it is based on, and its questions. Answer, or take the agent's suggestion, then approve or reject and move to the next.
@@ -393,9 +433,26 @@ Each of the three screens has the file beside it (`apps/web/components/feeds/Sou
 
 A PDF or a picture is drawn as its page, with a box where the reader found the value; the box is as tight as the reader reported (the value, its row, or its table). Any other file is shown as the table that was read, with the cell, column or row highlighted. A page can be switched to its table. A file read without positions is shown as its table only.
 
-### The guided view
+### The checklist
 
-A run of a workflow with a stage in it opens as guided work: a ribbon of its steps, and the one screen that is waiting on you. Steps that only route the run (Start, End, Condition, Split, Join) are not on the ribbon, and a path a decision did not take drops off it. While the system's own steps run, the page says what it is doing and follows along. The steps and history are one click below.
+Every run opens as a checklist of the decisions it needs from people. A review, a form and a stage are each one decision. They are numbered in the order the run reaches them and ticked off as they are done, and the screen for the open one is beneath the list. The system's own steps are not on the list; while one runs, the page says what it is doing and follows along. The design, every step and the history are on Details.
+
+| On the list | Means |
+|---|---|
+| A number | A decision the run reaches whatever is chosen. "2 of 4 decisions done" counts these |
+| A tick | Decided, with how and by whom: "Approved by Ada", "Confirmed by Ada" |
+| A dash | Passed with nothing to decide, such as a review the agent proposed nothing for |
+| Your move | Open, and yours. It is opened beneath the list |
+| Waiting on … | Open, and someone else's, with the reason it is not yours |
+| A dashed circle, no number | Comes only on some choices: it sits on one way out of a decision not yet made. It is not counted in the total, and takes a number once the choice puts it on the path |
+
+A way out of a step that goes straight to End (Abandoned, Rejected, a Condition that ends the run) stops the run; it is not counted as another route. Steps every route reaches are numbered even after an undecided choice. A run with no review, form or stage on its path says it needs no decisions.
+
+**Inside a decision.** The open decision lists what is left to do on it, as its screen reports it, and ticks each part off as the person works: on Map a file, confirming where each column goes, the column that identifies each record, the as-of date, reviewing what the load will do, and choosing between records that matched more than one; on Understand a file, the kind of document, the table and the record it is about; on Check staged values, correcting what fails a critical check, then approving or discarding. A review reports how many of its changes are decided. A screen reports through `onProgress` on `StageScreenProps`; a new screen should report its own parts in the order it lays them out.
+
+A review walks its changes one at a time, flagged ones first, and a change comes up only after the changes it depends on are decided.
+
+The checklist is published to the assistant on the run's Overview tab, with each decision's number, state and parts, and the open stages and forms.
 
 ### File intake
 
@@ -521,7 +578,11 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 - Stages for proposed new fields and a drafted template. Three screens exist: understanding a file, mapping it, and checking staged values.
 - Choosing the stored record a file's values load onto. The Understand screen links the document to a record; the loader still matches values by code, identifier and name.
 - Starting a guided run when a file arrives by a feed. It is started by hand from Load data.
-- Stages on the home page's Needs you list and in review notices. An open stage shows on its run's page.
+- Handing an overdue form or screen on to other roles. Reviews can be; forms and screens are only chased.
+- Choosing how you are told: a digest, quiet hours, or browser notifications.
+- Screens for more kinds of change. Reconciliation changes have their own; a proposed new field, list value, alias or template is still decided in the general table.
+- Performance review. There is no read tool for returns or attribution, so no view or section for them.
+- The checklist on the home page and in the hub. It is on the run's page.
 - Steps on parallel paths running at the same moment. Paths do not wait on one another, but the worker runs one step at a time.
 - A deal setup template. The engine supports it.
 - Filtering by an attribute's value (every fund of one strategy). Filters are by type, code, id, and name.
