@@ -99,3 +99,29 @@ button:disabled { opacity: 0.5; cursor: default; }
 .workbook { border-top: 1px solid var(--line); padding-top: 12px; }
 .help { color: var(--ink-3); font-size: 12px; }
 code { font-family: Consolas, "SF Mono", Menlo, monospace; }
+.overrides { border-top: 1px solid var(--line); padding-top: 12px; }
+.override-editor[hidden] { display: none; }
+.override-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.override-line { padding: 8px; background: var(--surface); border-radius: 4px; display: flex; flex-direction: column; gap: 4px; }
+.override-head { display: flex; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+.override-head .code, .override-problems .code { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 12px; }
+.override-now { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.override-inputs { display: flex; gap: 6px; align-items: center; }
+.override-inputs input:first-child { flex: 1 1 auto; min-width: 0; }
+.override-inputs input:last-child { flex: 0 0 104px; }
+.override-from { color: var(--ink-3); font-size: 12px; }
+.override-status { font-size: 12px; min-height: 0; }
+.override-status:empty { display: none; }
+.override-status.ready { color: var(--accent); }
+.override-status.ok { color: #1a7f37; }
+.override-status.muted { color: var(--ink-3); }
+.override-status.error { color: var(--error); }
+.override-problems { margin: 8px 0 0; padding-left: 18px; color: var(--ink-3); font-size: 12px; }
+.override-problems:empty { display: none; }
+.override-summary { margin: 8px 0 0; color: var(--ink-2); }
+.override-summary:empty { display: none; }
+textarea {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg); color: var(--ink); font: inherit; resize: vertical;
+}
+@media (prefers-color-scheme: dark) { .override-status.ok { color: #57d68d; } }

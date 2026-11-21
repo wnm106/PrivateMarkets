@@ -130,6 +130,7 @@ export const resolvers = {
     ...responsibilityResolvers.Mutation,
     ...agentResolvers.Mutation,
     ...covenantResolvers.Mutation,
+    ...excelResolvers.Mutation,
   },
   
   Subscription: {},

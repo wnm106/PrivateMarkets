@@ -18,6 +18,8 @@
       <p>Matching ignores case but is otherwise exact. When two records share a name, the one whose entity type has the attribute is used; if that still leaves more than one, the cell shows <code>#N/A</code> and lists the codes to use instead.</p>
       <p>Numbers come back as numbers, true/false as TRUE/FALSE, and dates as text in YYYY-MM-DD, which Excel can still use in date arithmetic.</p>
       <p><code>=TAP</code> is a workbook name the add-in adds, which calls <code>=TAPESTRY.TAP</code>. Both work while the add-in is installed.</p>
+      <h2>Overriding a value</h2>
+      <p>Select cells with TAP formulas, open the Tapestry pane and choose <strong>Override selected cells</strong>. Type new values, choose <strong>Check</strong>, give a reason, then <strong>Save</strong>. Each value is saved as a manual entry, as on the record screen: it wins over every other source from its date until it is cleared in Tapestry. Values that have not changed are skipped. A formula never writes; only the pane does, when you save.</p>
       <h2>Sign-in</h2>
       <p>Each person signs in with their own Tapestry account from the Tapestry pane. Formulas show only what that account can see. Signing out of Excel does not sign you out of Tapestry in your browser, and signing out of the browser does not sign Excel out.</p>
       <h2>Errors</h2>

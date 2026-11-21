@@ -1,3 +1,4 @@
+import { refreshCalculations, writeManualOverride } from '@tapestrai/graphql/src/lib/source-write';
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
 
@@ -17,51 +18,28 @@ const submitManualOverride: ToolDefinition = {
     required: ['entityId', 'attributeCode', 'value', 'validFrom', 'overrideReason'],
   },
   execute: async (args, supabase) => {
-    const { data: attrDef } = await supabase
+    const { data: attrDef, error: attrError } = await supabase
       .from('attribute_register')
-      .select('*')
+      .select('id, data_type')
       .eq('attribute_code', args.attributeCode)
-      .single();
-
+      .maybeSingle();
+    if (attrError) throw attrError;
     if (!attrDef) throw new Error(`Attribute not found: ${args.attributeCode}`);
 
-    const { data: manualSource } = await supabase
-      .schema('entity_instances')
-      .from('source_registry')
-      .select('id')
-      .eq('source_code', 'MANUAL')
-      .single();
-
-    await supabase
-      .from('entity_attribute_values')
-      .update({ system_to: new Date().toISOString() })
-      .eq('entity_id', args.entityId)
-      .eq('attribute_id', attrDef.id)
-      .eq('source_id', manualSource?.id)
-      .eq('valid_to', '9999-12-31')
-      .eq('system_to', '9999-12-31 23:59:59');
-
-    // Insert override
-    const { data, error } = await supabase
-      .from('entity_attribute_values')
-      .insert({
-        entity_id: args.entityId,
-        attribute_id: attrDef.id,
-        source_id: manualSource?.id,
-        golden_value: args.value,
-        valid_from: args.validFrom,
-        precedence_rank: 1,
-        is_manual_override: true,
-        override_reason: args.overrideReason,
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
+    // The same writer the record screen and Excel use (lib/source-write.ts).
+    const written = await writeManualOverride(supabase, {
+      entityId: args.entityId,
+      attribute: attrDef,
+      value: args.value,
+      validFrom: args.validFrom,
+      reason: args.overrideReason,
+    });
+    await refreshCalculations(supabase, args.entityId);
 
     return {
       success: true,
-      goldenValueId: data.id,
+      goldenValueId: written.id,
+      storedValue: written.stored.golden_value,
       message: `Override applied for ${args.attributeCode} on entity ${args.entityId}`,
     };
   },

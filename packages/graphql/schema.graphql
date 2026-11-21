@@ -1594,6 +1594,47 @@ type TapValue {
   candidates: [String!]!
 }
 
+"""One manual entry asked for from Excel: an attribute of one record, from a date."""
+input TapOverrideInput {
+  """Attribute code, stored alias, or name, as in =TAP."""
+  attribute: String!
+  """Record code, name, or another stored name, as in =TAP."""
+  entity: String!
+  """First day the value holds, YYYY-MM-DD. Blank means today. It holds until it is cleared or a later manual entry replaces it."""
+  validFrom: String
+  """The new value as text. It is read the way a file load reads it: 1,250,000.50, 7.5%, 9/30/2026."""
+  value: String!
+  """currentText from the preview. When the record's value has changed since, the row is not written."""
+  expected: String
+  """This row's reason. The submission's reason is used when blank."""
+  reason: String
+}
+
+"""What a manual entry from Excel would do, or did."""
+type TapOverridePlan {
+  attribute: String!
+  entity: String!
+  validFrom: String
+  attributeCode: String
+  attributeName: String
+  dataType: String
+  entityId: ID
+  entityCode: String
+  entityName: String
+  domainCode: String
+  """The value in force on validFrom today."""
+  currentValue: JSON
+  """currentValue as text. Send it back as expected."""
+  currentText: String!
+  """The value as it will be stored, typed like a TAP result."""
+  newValue: JSON
+  newText: String
+  """READY, SAVED, UNCHANGED, STALE, DUPLICATE, INVALID_REQUEST, INVALID_VALUE, NOT_EDITABLE, NO_ACCESS, UNKNOWN_ATTRIBUTE, AMBIGUOUS_ATTRIBUTE, UNKNOWN_ENTITY, AMBIGUOUS_ENTITY, or FAILED."""
+  status: String!
+  message: String
+  candidates: [String!]!
+}
+
 """Another name of one record."""
 type EntityAlias {
   id: ID!
@@ -3274,6 +3315,9 @@ type Query {
   """Find a field from the words a person used: code, name, description, or a stored alias (Ending NAV is NAV). Chat's search_attributes reads the same search."""
   searchAttributes(query: String!, limit: Int): AttributeSearchResult!
 
+  """What saving these manual entries from Excel would do. Writes nothing."""
+  tapOverridePreview(overrides: [TapOverrideInput!]!): [TapOverridePlan!]!
+
   """Answer TAP formulas from Excel, in request order: one attribute of one record, as of a date. References match exactly, ignoring case. At most 500 at once."""
   tapValues(requests: [TapRequestInput!]!, knowledgeDate: DateTime): [TapValue!]!
 
@@ -3562,6 +3606,8 @@ type Mutation {
   splitValidTime(input: SplitValidTimeInput!): SplitValidTimeResult!
   submitManualOverride(input: ManualOverrideInput!): ManualOverrideResult!
   clearManualOverride(input: ClearManualOverrideInput!): ClearManualOverrideResult!
+  """Save manual entries from Excel through the same writer as submitManualOverride. Only rows a preview finds READY are written; unchanged values are skipped. At most 200."""
+  submitTapOverrides(overrides: [TapOverrideInput!]!, reason: String!): [TapOverridePlan!]!
   addCompetingSource(input: AddCompetingSourceInput!): AddCompetingSourceResult!
   deleteCompetingSource(input: DeleteCompetingSourceInput!): DeleteCompetingSourceResult!
   # Removes one stored version of a value. The same source's version just before it runs on to cover the gap.

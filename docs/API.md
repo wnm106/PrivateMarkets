@@ -243,6 +243,8 @@ query TapValues($requests: [TapRequestInput!]!) {
 # variables: { "requests": [{ "attribute": "NAV", "entity": "FUND-1", "asOfDate": "2026-09-30" }] }
 ```
 
+`tapOverridePreview(overrides)` and `submitTapOverrides(overrides, reason)` save manual entries from Excel, row by row, through the same writer as `submitManualOverride`. The preview writes nothing; the save writes only rows the preview finds `READY` and returns each row's outcome. Each row names its value the way a TAP cell does (`attribute`, `entity`, `validFrom`) and passes the preview's `currentText` back as `expected`, so a value that changed in between is not overwritten.
+
 `searchAttributes(query, limit)` finds a field from the words a person used, including stored aliases (Ending NAV is NAV). Chat's `search_attributes` tool reads the same search.
 
 ## Mutations

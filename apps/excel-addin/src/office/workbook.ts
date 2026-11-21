@@ -1,4 +1,5 @@
-import { SHORT_NAME, SHORT_NAME_COMMENT, SHORT_NAME_FORMULA, QUALIFIED_FUNCTION } from '../lib/formula';
+import { SHORT_NAME, SHORT_NAME_COMMENT, SHORT_NAME_FORMULA, QUALIFIED_FUNCTION, parseTapFormula } from '../lib/formula';
+import { cellAddressAt, referenceKey, referencesIn, type SelectedCell } from '../lib/overrides';
 
 /** Workbook actions the pane takes. Each is one Excel.run. */
 
@@ -80,4 +81,45 @@ export async function onSelectionChanged(handler: () => void): Promise<void> {
   } catch {
     /* Older Excel: the pane still has its Edit button. */
   }
+}
+
+/** Most cells the pane reads from one selection. A whole column is refused rather than read. */
+const MAX_SELECTION = 5000;
+
+/**
+ * The TAP cells in the selection, what each shows, and the value of every cell their
+ * formulas point at, so the pane knows which value each one is.
+ */
+export async function readSelectedTapCells(max: number): Promise<{ cells: SelectedCell[]; references: Map<string, unknown>; more: boolean }> {
+  return Excel.run(async (context) => {
+    const range = context.workbook.getSelectedRange();
+    range.load(['address', 'rowCount', 'columnCount']);
+    await context.sync();
+    if (range.rowCount * range.columnCount > MAX_SELECTION) {
+      throw new Error(`Select at most ${MAX_SELECTION} cells.`);
+    }
+    range.load(['formulas', 'values']);
+    await context.sync();
+
+    const cells: SelectedCell[] = [];
+    let more = false;
+    range.formulas.forEach((row, r) => row.forEach((formula, c) => {
+      if (!parseTapFormula(formula)) return;
+      if (cells.length >= max) { more = true; return; }
+      cells.push({ address: cellAddressAt(range.address, r, c), formula, value: range.values[r][c] });
+    }));
+
+    const references = new Map<string, unknown>();
+    const reads = referencesIn(cells).map((reference) => {
+      const sheet = reference.sheet
+        ? context.workbook.worksheets.getItem(reference.sheet)
+        : context.workbook.worksheets.getActiveWorksheet();
+      const cell = sheet.getRange(reference.address);
+      cell.load('values');
+      return { key: referenceKey(reference), cell };
+    });
+    if (reads.length) await context.sync();
+    for (const read of reads) references.set(read.key, read.cell.values?.[0]?.[0] ?? null);
+    return { cells, references, more };
+  });
 }

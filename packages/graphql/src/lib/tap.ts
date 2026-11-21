@@ -33,6 +33,8 @@ export interface TapResult {
   attribute: string;
   entity: string;
   asOfDate: string | null;
+  /** Null for a field every record has (ENTITY_CODE, ENTITY_NAME). Not part of the GraphQL type. */
+  attributeId: string | null;
   attributeCode: string | null;
   attributeName: string | null;
   dataType: string | null;
@@ -222,6 +224,7 @@ function emptyResult(request: TapRequest, asOfDate: string | null): TapResult {
     attribute: String(request.attribute ?? ''),
     entity: String(request.entity ?? ''),
     asOfDate,
+    attributeId: null,
     attributeCode: null,
     attributeName: null,
     dataType: null,
@@ -351,6 +354,7 @@ export async function resolveTapRequests(
       continue;
     }
     Object.assign(result, {
+      attributeId: choice.attribute.attributeId,
       attributeCode: choice.attribute.attributeCode,
       attributeName: choice.attribute.attributeName,
       dataType: choice.attribute.dataType,

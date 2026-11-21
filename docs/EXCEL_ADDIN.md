@@ -10,6 +10,8 @@
 
 The Tapestry pane has a formula builder. It searches attributes first, then records, then takes an optional as-of date, previews the value, and inserts the formula into the selected cell.
 
+The pane can also save new values as manual entries, the same as a manual override on the record screen. Formulas only read; writing is always an action someone takes in the pane.
+
 ## The pieces
 
 | Piece | Where |
@@ -22,6 +24,10 @@ The Tapestry pane has a formula builder. It searches attributes first, then reco
 | The session message between the page and the add-in | `packages/graphql/src/lib/excel-session.ts` |
 | `tapValues` and `searchAttributes` queries | `packages/graphql/src/resolvers/excel.ts`, `packages/graphql/src/lib/tap.ts`, `packages/graphql/src/lib/attribute-search.ts` |
 | Exact matching for a cell's references | `supabase/migrations/20261121150000_excel_tap_matches.sql` |
+| Manual entries from Excel: preview and save | `packages/graphql/src/lib/tap-override.ts`, `tapOverridePreview` and `submitTapOverrides` in `resolvers/excel.ts` |
+| The one manual-override writer (record screen, chat, workflows, Excel) | `packages/graphql/src/lib/source-write.ts` |
+| Reading a value as an attribute stores it (loads and overrides) | `packages/graphql/src/lib/attribute-values.ts` |
+| The Override values panel | `apps/excel-addin/src/ui/overrides.ts`, `apps/excel-addin/src/lib/overrides.ts` |
 
 ## The function
 
@@ -99,6 +105,50 @@ Supabase rotates refresh tokens. When two places hold the same session, the firs
 - A refresh the server refuses (revoked, expired, or the organization's rules changed) signs Excel out. TAP cells then show the sign-in message.
 - **Sign out** in the pane revokes the Excel session only (`/auth/v1/logout?scope=local`). Signing out of the app in a browser does not sign Excel out, and the other way round.
 
+## Manual entries from Excel
+
+Saving a value from Excel is the same as a manual override on the record screen. The value is stored under the Manual Entry source with a reason and the person who saved it. From its date it wins over every other source until it is cleared in Tapestry, or until a later manual entry replaces it.
+
+### Why a formula never writes
+
+Excel decides when a formula runs: on open, when a cell it depends on changes, on a full recalculation, on fill-down, paste and undo. A formula that wrote would save the same value again and again, at moments nobody chose. A workbook passed around would also write under the account of whoever opened it. So `=TAP` only reads, and there is no writing function. Writes happen in the pane, when the person asks.
+
+### In the pane
+
+1. Select cells that hold TAP formulas and choose **Override selected cells** (up to 50 at a time). The pane reads each formula to know the attribute, record and date. Arguments can be text or plain cell references, including references to other sheets. A cell whose arguments are other expressions is listed with the reason it cannot be read.
+2. Type the new values. Each row's date is the formula's as-of, or today, and can be changed. Rows left blank are skipped.
+3. **Check** runs `tapOverridePreview`. Nothing is written. Each row says what would happen:
+
+   | Status | Means |
+   | --- | --- |
+   | Will be saved (`READY`) | The value is new and you can change the record |
+   | Unchanged (`UNCHANGED`) | It is already this value. It is skipped, so a value another source supplies is not pinned as a manual entry by accident |
+   | Changed since you checked (`STALE`) | The record's value changed between Check and Save. Check again |
+   | Not a valid value (`INVALID_VALUE`) | The value does not fit the attribute's type |
+   | Not editable (`NOT_EDITABLE`) | The attribute is marked not editable, or it is the record's own code or name |
+   | You cannot change this record (`NO_ACCESS`) | You do not have write access to it |
+   | Not found, or more than one match | As for `=TAP` |
+
+4. Give a reason, then **Save**. `submitTapOverrides` checks every row again, writes only the ready ones, and returns each outcome. The pane then recalculates, so the TAP cells show what was saved.
+
+### Rules the save follows
+
+- **One writer.** The record screen (`submitManualOverride`), chat and workflow steps (`submit_manual_override`), and Excel all write through `writeManualOverride` in `lib/source-write.ts`.
+- **Typed like a load.** A value is read the way a file load reads it (`lib/attribute-values.ts`): `1,250,000.50` is stored as the number 1250000.5, `7.5%` as 0.075, and `9/30/2026` as the date 2026-09-30. A value that does not fit the type is refused.
+- **Versioned, not replaced.** A new manual entry versions the Manual Entry source from its date. An earlier manual entry keeps its own period, and one already scheduled later stays. Nothing is edited in place; the old version is closed in knowledge time, so an earlier Knowledge date still shows what was believed then.
+- **A later row is saved when an earlier one would carry over.** Say one save sets NAV from 30 September to 1,100 and from 31 December to 1,000, and 1,000 is already the 31 December value. The 31 December row is still saved, because otherwise the 30 September entry would carry over to it.
+- **Calculations follow.** After a save, the record's calculations are refreshed, as they are after any source change.
+- **Each person's own access.** Each write runs as the person. Row security admits a write only on a record they have write access to (`tenancy.has_entity_access(..., 'WRITE')`): a member of another client, or a viewer, is refused by the database itself. The preview checks the same thing first so it can say so.
+- **Sign-in rules apply to writes.** A save checks `tenancy.current_sign_in_decision` for the caller's token, as middleware does for the app. If the organization requires an authenticator step that the session has not met, nothing is written.
+
+### Changes this made to manual overrides everywhere
+
+Because the record screen, chat and workflows share the writer, they changed too:
+
+- A new manual entry used to close the record's open manual entry completely, losing the earlier entry's period. It now versions it, as described above.
+- Values are now typed. Before, they were stored as text only, without the typed number and date columns loads fill, and a value of the wrong type was accepted.
+- Calculations are now refreshed after a manual override. Before, only `addCompetingSource` refreshed them.
+
 ## Deploying
 
 1. Apply `20261121150000_excel_tap_matches.sql` to the hosted project before the web app that calls it is deployed (docs/MIGRATIONS.md). It only adds two functions.
@@ -129,7 +179,9 @@ EXCEL_ADDIN_ORIGIN=https://localhost:3000 npm run dev -- --experimental-https
 ## Not covered yet
 
 - **Knowledge date.** `tapValues` takes one, but the function and the pane do not offer it yet. Formulas read current knowledge.
+- **Clearing a manual entry from Excel.** Clear it on the record screen. A blank value in the pane is skipped rather than read as "clear".
+- **More than 50 cells at once.** The pane lists the first 50 TAP cells of a selection. Larger edits are a file load, which stages and checks a batch (docs/STAGING.md).
 - **Ranges.** One cell asks for one value. A spilled array of attributes across records (for example a column of funds by a row of fields) is the natural next function.
 - **1904 dates.** A workbook on the 1904 date system passes date cells four years off. Use `"YYYY-MM-DD"` text there.
 - **Microsoft single sign-on inside Office.** Sign-in uses the dialog. Office's own SSO (`getAccessToken`) could skip it for organizations on Microsoft Entra ID.
-- **Step-up on bearer requests.** The connect page will not hand over a session that still owes an authenticator step, and refreshing keeps the session's level. `/api/graphql` itself does not check `current_sign_in_decision` for bearer tokens; that is true for every API client today, not only Excel.
+- **Step-up on bearer reads.** Excel saves check `current_sign_in_decision`. Reads through `/api/graphql` do not, for any bearer client. The connect page will not hand over a session that still owes an authenticator step, and refreshing keeps the session's level.

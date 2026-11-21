@@ -13,6 +13,8 @@ import {
 } from '../lib/search';
 import { cellResult, errorResult, tapRequestFromArguments, type TapClient } from '../lib/tap-client';
 import { signInWithDialog } from '../office/sign-in';
+import { h } from './dom';
+import { mountOverrides } from './overrides';
 import { activeCellFormula, ensureShortName, hasShortName, insertFormula, onSelectionChanged, recalculateAll } from '../office/workbook';
 
 /**
@@ -25,24 +27,6 @@ interface Services {
   auth: ExcelAuth;
   graphql: GraphQLClient;
   tap: TapClient;
-}
-
-type Props = Record<string, string | boolean | ((event: Event) => void) | undefined>;
-
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Props = {}, children: Array<Node | string | null | false> = []): HTMLElementTagNameMap[K] {
-  const element = document.createElement(tag);
-  for (const [key, value] of Object.entries(props)) {
-    if (value === undefined || value === false) continue;
-    if (typeof value === 'function') element.addEventListener(key.replace(/^on/, '').toLowerCase(), value as EventListener);
-    else if (key === 'className') element.className = String(value);
-    else if (value === true) element.setAttribute(key, '');
-    else element.setAttribute(key, String(value));
-  }
-  for (const child of children) {
-    if (child === null || child === false) continue;
-    element.append(typeof child === 'string' ? document.createTextNode(child) : child);
-  }
-  return element;
 }
 
 function debounce<T extends unknown[]>(fn: (...args: T) => void, ms: number) {
@@ -80,9 +64,9 @@ export function mountPane(root: HTMLElement, services: Services): void {
   const entityPicked = h('p', { className: 'picked' });
   const asOfInput = h('input', { id: 'asof', type: 'text', autocomplete: 'off', placeholder: 'Blank for today, 2026-09-30, or a cell like B1', spellcheck: 'false' });
   const asOfPicker = h('input', { type: 'date', 'aria-label': 'Pick an as-of date', className: 'date-picker' });
-  const formulaPreview = h('code', { className: 'formula' });
+  const formulaPreview = h('code', { className: 'formula' }, ['=TAP("attribute", "record", "as of")']);
   const valuePreview = h('p', { className: 'value', 'aria-live': 'polite' });
-  const insertButton = h('button', { type: 'button', className: 'primary' }, ['Insert in selected cell']);
+  const insertButton = h('button', { type: 'button', className: 'primary', disabled: true }, ['Insert in selected cell']);
   const clearButton = h('button', { type: 'button' }, ['Clear']);
   const selectionNote = h('div', { className: 'selection', hidden: true });
   const refreshButton = h('button', { type: 'button' }, ['Refresh TAP formulas']);
@@ -362,6 +346,9 @@ export function mountPane(root: HTMLElement, services: Services): void {
     void recalculateAll().then(() => setStatus('TAP formulas recalculated.')).catch((error) => setStatus(String(error?.message || error), 'error'));
   });
 
+  const overrides = h('section', { className: 'overrides' });
+  mountOverrides(overrides, { auth, graphql, setStatus, afterSave: () => recalculateAll() });
+
   root.replaceChildren(
     h('header', {}, [h('h1', {}, ['Tapestry']), account]),
     status,
@@ -381,6 +368,7 @@ export function mountPane(root: HTMLElement, services: Services): void {
       h('div', { className: 'actions' }, [insertButton, clearButton]),
     ]),
     selectionNote,
+    overrides,
     h('section', { className: 'workbook' }, [
       refreshButton,
       h('p', { className: 'help' }, [

@@ -2,6 +2,7 @@ import { Context } from '../context';
 import { fetchAttributeSearch } from '../lib/attribute-search';
 import type { AttributeSearchHit } from '../lib/semantic-aliases';
 import { resolveTapRequests, type TapRequest } from '../lib/tap';
+import { planTapOverrides, submitTapOverrides, type TapOverrideRequest } from '../lib/tap-override';
 
 /** Queries the Excel add-in calls (docs/EXCEL_ADDIN.md). Every read runs as the signed-in caller. */
 
@@ -45,6 +46,22 @@ export const excelResolvers = {
     ) => {
       requireUser(context);
       return resolveTapRequests(context.supabase as never, args.requests || [], args.knowledgeDate);
+    },
+
+    tapOverridePreview: async (_: unknown, args: { overrides: TapOverrideRequest[] }, context: Context) => {
+      requireUser(context);
+      return planTapOverrides(context.supabase, args.overrides || []);
+    },
+  },
+
+  Mutation: {
+    submitTapOverrides: async (
+      _: unknown,
+      args: { overrides: TapOverrideRequest[]; reason: string },
+      context: Context,
+    ) => {
+      requireUser(context);
+      return submitTapOverrides(context.supabase, args.overrides || [], args.reason, context.user?.id ?? null);
     },
   },
 };
