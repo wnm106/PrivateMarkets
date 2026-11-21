@@ -7,6 +7,8 @@
 --
 -- Both functions run as the caller and read the same public views the API reads,
 -- so a person can only match the records and attributes they can already see.
+-- They are for signed-in people only. Supabase also grants new public functions to
+-- anon directly, which REVOKE ... FROM PUBLIC does not undo, so anon is revoked too.
 
 CREATE OR REPLACE FUNCTION public.tap_entity_matches(p_refs text[])
 RETURNS TABLE (
@@ -45,6 +47,7 @@ AS $$
 $$;
 
 REVOKE ALL ON FUNCTION public.tap_entity_matches(text[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.tap_entity_matches(text[]) FROM anon;
 GRANT EXECUTE ON FUNCTION public.tap_entity_matches(text[]) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.tap_entity_matches(text[]) IS
@@ -88,6 +91,7 @@ AS $$
 $$;
 
 REVOKE ALL ON FUNCTION public.tap_attribute_matches(text[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.tap_attribute_matches(text[]) FROM anon;
 GRANT EXECUTE ON FUNCTION public.tap_attribute_matches(text[]) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.tap_attribute_matches(text[]) IS
