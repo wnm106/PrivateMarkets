@@ -21,7 +21,8 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 | Who reviews | `supabase/migrations/20261117010000_workflow_review_routing.sql`, `apps/web/components/workflows/ReviewerPicker.tsx` | Who a review is for, keeping the starter apart, due dates, and reassigning |
 | Review notices | `supabase/migrations/20261117020000_workflow_review_notices.sql`, `packages/worker/src/assistant.ts` | Telling people a review is waiting or overdue |
 | Approvals, delivery | `supabase/migrations/20261117040000_workflow_review_approvals.sql`, `20261117050000_notification_delivery.sql`, `packages/worker/src/notify.ts` | More than one approval, handing an overdue review on, and sending notices by email and Slack |
-| Stages | `supabase/migrations/20261119120000_workflow_stages.sql`, `packages/graphql/src/lib/workflow-screens.ts`, `apps/web/components/workflows/GuidedRun.tsx`, `apps/web/components/workflows/stages` | A step that shows one screen and waits, the screens it can show, and the guided view of a run |
+| Stages | `supabase/migrations/20261119120000_workflow_stages.sql`, `packages/graphql/src/lib/workflow-screens.ts`, `apps/web/components/workflows/stages` | A step that shows one screen and waits, and the screens it can show |
+| Checklist | `apps/web/lib/workflow-checklist.ts`, `apps/web/components/workflows/RunChecklist.tsx` | Every decision a run needs, numbered in order, and the screen for the open one |
 | Forms, split runs, outbound | `supabase/migrations/20261117070000_workflow_forms_and_outbound.sql`, `packages/worker/src/workflow/outbound.ts`, `apps/web/app/portal` | Ask for information, the portal, one run per record, Call a connection, Send a message |
 | Analytics | `supabase/migrations/20261117080000_workflow_analytics.sql`, `apps/web/app/workflows/analytics` | How each workflow is doing |
 | Triggers | `supabase/migrations/20261117030000_workflow_triggers.sql`, `apps/web/components/workflows/WorkflowTriggers.tsx` | Starting a workflow when a feed event arrives or a data quality scan finds new failures |
@@ -393,9 +394,26 @@ Each of the three screens has the file beside it (`apps/web/components/feeds/Sou
 
 A PDF or a picture is drawn as its page, with a box where the reader found the value; the box is as tight as the reader reported (the value, its row, or its table). Any other file is shown as the table that was read, with the cell, column or row highlighted. A page can be switched to its table. A file read without positions is shown as its table only.
 
-### The guided view
+### The checklist
 
-A run of a workflow with a stage in it opens as guided work: a ribbon of its steps, and the one screen that is waiting on you. Steps that only route the run (Start, End, Condition, Split, Join) are not on the ribbon, and a path a decision did not take drops off it. While the system's own steps run, the page says what it is doing and follows along. The steps and history are one click below.
+Every run opens as a checklist of the decisions it needs from people. A review, a form and a stage are each one decision. They are numbered in the order the run reaches them and ticked off as they are done, and the screen for the open one is beneath the list. The system's own steps are not on the list; while one runs, the page says what it is doing and follows along. The design, every step and the history are on Details.
+
+| On the list | Means |
+|---|---|
+| A number | A decision the run reaches whatever is chosen. "2 of 4 decisions done" counts these |
+| A tick | Decided, with how and by whom: "Approved by Ada", "Confirmed by Ada" |
+| A dash | Passed with nothing to decide, such as a review the agent proposed nothing for |
+| Your move | Open, and yours. It is opened beneath the list |
+| Waiting on … | Open, and someone else's, with the reason it is not yours |
+| A dashed circle, no number | Comes only on some choices: it sits on one way out of a decision not yet made. It is not counted in the total, and takes a number once the choice puts it on the path |
+
+A way out of a step that goes straight to End (Abandoned, Rejected, a Condition that ends the run) stops the run; it is not counted as another route. Steps every route reaches are numbered even after an undecided choice. A run with no review, form or stage on its path says it needs no decisions.
+
+**Inside a decision.** The open decision lists what is left to do on it, as its screen reports it, and ticks each part off as the person works: on Map a file, confirming where each column goes, the column that identifies each record, the as-of date, reviewing what the load will do, and choosing between records that matched more than one; on Understand a file, the kind of document, the table and the record it is about; on Check staged values, correcting what fails a critical check, then approving or discarding. A review reports how many of its changes are decided. A screen reports through `onProgress` on `StageScreenProps`; a new screen should report its own parts in the order it lays them out.
+
+A review walks its changes one at a time, flagged ones first, and a change comes up only after the changes it depends on are decided.
+
+The checklist is published to the assistant on the run's Overview tab, with each decision's number, state and parts, and the open stages and forms.
 
 ### File intake
 
@@ -522,6 +540,8 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 - Choosing the stored record a file's values load onto. The Understand screen links the document to a record; the loader still matches values by code, identifier and name.
 - Starting a guided run when a file arrives by a feed. It is started by hand from Load data.
 - Stages on the home page's Needs you list and in review notices. An open stage shows on its run's page.
+- Screens chosen by the kind of change. A proposed new field, list value, alias or template is decided on a review's generic change form, not a screen built for it.
+- The checklist on the home page and in the hub. It is on the run's page.
 - Steps on parallel paths running at the same moment. Paths do not wait on one another, but the worker runs one step at a time.
 - A deal setup template. The engine supports it.
 - Filtering by an attribute's value (every fund of one strategy). Filters are by type, code, id, and name.

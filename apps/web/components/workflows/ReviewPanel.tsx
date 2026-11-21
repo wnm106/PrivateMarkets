@@ -4,8 +4,10 @@ import { Fragment, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { LIST_VALUE_TOOL, setPath, unanswered, unmetListValues, type Confidence, type ItemDecision, type ProposalAction, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { ChangeSettings, readArg } from '@/components/workflows/ChangeSettings';
 import { ReviewAssignment } from '@/components/workflows/ReviewerPicker';
+import { useReportProgress } from '@/components/workflows/stages/useProgress';
 import { graphqlMutation } from '@/lib/graphql';
 import { markdownToHtml } from '@/lib/markdown';
+import type { CheckProgress } from '@/lib/workflow-checklist';
 import { reviewNextStep, summaryLead } from '@/lib/workflow-run-view';
 import { DECIDE_REVIEW, showValue, when, type MutationErrors, type ReviewView } from '@/lib/workflows';
 
@@ -80,9 +82,11 @@ interface Props {
   /** The caller manages this client's workflows, so may reassign the review. */
   canManage?: boolean;
   onDecided(): void;
+  /** Reports how many changes this person has decided, for the run's checklist. */
+  onProgress?: (progress: CheckProgress) => void;
 }
 
-export function ReviewPanel({ review, canManage = false, onDecided }: Props) {
+export function ReviewPanel({ review, canManage = false, onDecided, onProgress }: Props) {
   const items = useMemo<ProposalItem[]>(() => review.proposal?.items || [], [review.proposal]);
   const open = review.status === 'OPEN';
   const canDecide = open && review.canReview;
@@ -162,8 +166,11 @@ export function ReviewPanel({ review, canManage = false, onDecided }: Props) {
     const pending = (item: ProposalItem) => !choices[item.id] || (choices[item.id] === 'APPROVE' && openQuestions(item).length > 0);
     const start = after ? items.findIndex((item) => item.id === after) + 1 : 0;
     const order = [...items.slice(start), ...items.slice(0, start)].filter((item) => item.id !== after && pending(item));
+    // A change comes up once the changes it depends on are decided, so a person never decides it before them.
+    const known = new Set(items.map((item) => item.id));
+    const unblocked = (item: ProposalItem) => (item.dependsOn || []).every((id) => !known.has(id) || id === after || Boolean(choices[id]));
     // The ones the agent flagged come first; the confident ones can be approved together.
-    return order.find((item) => item.needsReview) || order[0];
+    return order.find((item) => item.needsReview && unblocked(item)) || order.find(unblocked) || order[0];
   };
 
   const decideAndNext = (item: ProposalItem, choice: Choice) => {
@@ -206,6 +213,7 @@ export function ReviewPanel({ review, canManage = false, onDecided }: Props) {
   };
 
   const decided = items.length - undecided.length;
+  useReportProgress(canDecide ? onProgress : undefined, canDecide ? { done: decided, total: items.length } : null);
   const next = canDecide ? nextNeeding() : undefined;
   const approveConfident = () => setChoices((current) => ({ ...current, ...Object.fromEntries(confident.filter((item) => !current[item.id]).map((item) => [item.id, 'APPROVE' as Choice])) }));
   const applyLabel = approved.length === 0 ? 'Confirm: change nothing' : `Apply ${plural(approved.length, 'approved change')}`;

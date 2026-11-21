@@ -6,6 +6,7 @@ import { ConfirmButton } from '@/components/feeds/ConfirmButton';
 import { SourcePane, type SourceTarget } from '@/components/feeds/SourcePane';
 import type { BatchDetail } from '@tapestrai/mcp-server/src/feeds/load-batches';
 import type { StageScreenProps } from './index';
+import { useReportProgress } from './useProgress';
 
 async function json<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, body === undefined ? undefined : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -19,7 +20,7 @@ async function json<T>(url: string, body?: unknown): Promise<T> {
  * person corrects what is wrong, then approves the batch, which the run goes on
  * to promote, or discards it. Nothing is promoted from this screen itself.
  */
-export function LoadQualityStage({ stage, busy, onComplete }: StageScreenProps) {
+export function LoadQualityStage({ stage, busy, onComplete, onProgress }: StageScreenProps) {
   const batchId = String(stage.args.batchId || '');
   const [batch, setBatch] = useState<BatchDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +53,18 @@ export function LoadQualityStage({ stage, busy, onComplete }: StageScreenProps) 
       throw err;
     }
   }
+
+  const critical = batch?.quality?.summary.blocking || 0;
+  useReportProgress(onProgress, batch ? {
+    parts: [
+      {
+        label: 'Correct the values that fail a critical check',
+        done: critical === 0 || Boolean(override.trim()),
+        note: critical === 0 ? 'None fail' : override.trim() ? 'Approving anyway, with a reason' : `${countOf(critical, 'critical check')} fail`,
+      },
+      { label: 'Approve the batch to make it live, or discard it', done: false },
+    ],
+  } : null);
 
   if (error && !batch) return <div role="alert" style={{ color: 'var(--red)' }}>{error}</div>;
   if (!batch) return <div style={{ color: 'var(--ink-3)' }}>Reading the staged values…</div>;

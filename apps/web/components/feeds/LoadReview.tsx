@@ -7,6 +7,8 @@ import { describeOrphans, orphanColumns } from '@/lib/feeds/suggest';
 import { SourceViewer } from '@/components/feeds/SourceViewer';
 import type { SourceTarget } from '@/components/feeds/SourcePane';
 import { IntakePanel, SourcePicker, TrackAttribute, type IntakeInfo, type TableChoice } from '@/components/feeds/LoadIntake';
+import { useReportProgress } from '@/components/workflows/stages/useProgress';
+import type { CheckProgress } from '@/lib/workflow-checklist';
 import { IssueList, LoadPreview, LoadStepper, type LoadPreviewResult, type PreviewReject, type StepState } from '@/components/feeds/LoadPreview';
 import { ConfirmButton } from '@/components/feeds/ConfirmButton';
 import { EntityResolutionStep } from '@/components/feeds/EntityResolutionStep';
@@ -207,6 +209,8 @@ export function LoadReview({
     onAbandon: () => void;
     /** Points the pane beside this screen at where a column or a value sits in the file. */
     onShowSource?: (target: SourceTarget) => void;
+    /** Reports what is left to do on this screen, in order, to the run's checklist. */
+    onProgress?: (progress: CheckProgress) => void;
   };
   /** A staged batch was promoted or reverted, so the file and the queue have changed. */
   onPromoted?: () => void;
@@ -340,6 +344,24 @@ export function LoadReview({
     },
     { label: 'Promote', state: stageState === 'promoted' ? 'done' : stageState === 'staged' ? 'current' : 'waiting' },
   ];
+  // In a guided run, the same steps are reported to the run's checklist as the parts of this decision.
+  useReportProgress(guided?.onProgress, guided ? {
+    parts: [
+      { label: 'Confirm where each column goes', done: pending.length === 0, note: pending.length > 0 ? `${pending.length} to decide` : `${assignments.length} columns` },
+      {
+        label: 'Choose the column that identifies each record',
+        done: orphans.length === 0 && plan.steps.length > 0,
+        note: plan.steps.length === 0 ? 'No code or name is mapped yet' : orphans.length > 0 ? describeOrphans(orphans) : undefined,
+      },
+      { label: 'Set the date the values are as of', done: Boolean(chosenDate), note: chosenDate || undefined },
+      { label: 'Review what the load will do', done: reviewed, note: stale ? 'Changed since the review' : undefined },
+      ...(reviewed && (unresolved.length > 0 || decisions.length > 0)
+        ? [{ label: 'Choose the records that matched more than one', done: unresolved.length === 0, note: unresolved.length > 0 ? `${unresolved.length} to choose` : undefined }]
+        : []),
+      { label: 'Confirm and stage the values', done: false },
+    ],
+  } : null);
+
   async function runPreview(chosen: EntityResolutionDecision[] = decisions) {
     setPreviewing(true);
     setPreviewError(null);

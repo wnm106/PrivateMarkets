@@ -1,4 +1,5 @@
 import type { TabPayload } from '@/lib/view-context';
+import { checklistSummary, progressText, type Checklist } from '@/lib/workflow-checklist';
 import { assigneeText, statusOf, type EventView, type ReviewView, type RunDetail } from '@/lib/workflows';
 
 /**
@@ -68,8 +69,28 @@ export function reviewNextStep(review: ReviewView): NextStep {
   };
 }
 
-/** What the run as a whole is waiting for. */
-export function runNextStep(run: RunDetail): NextStep {
+/**
+ * What the run as a whole is waiting for. Given the run's checklist, it names
+ * the decision by its number, whatever kind of step it is.
+ */
+export function runNextStep(run: RunDetail, checklist?: Checklist | null): NextStep {
+  if (checklist) {
+    const { current, total } = checklist;
+    const place = (number: number | null) => (number !== null && total > 1 ? `Decision ${number} of ${total}: ` : '');
+    if (current) {
+      const progress = progressText(current.progress);
+      return { tone: 'act', headline: `${place(current.number)}${current.label}.`, detail: `${current.detail}${progress ? `, ${progress}` : ''}. The run waits here until you finish it.` };
+    }
+    const waiting = checklist.items.find((item) => item.state === 'waiting' && item.recordId);
+    if (waiting) return { tone: 'wait', headline: `Nothing for you to do. ${place(waiting.number)}${waiting.label} is with someone else.`, detail: waiting.note };
+    if (run.status === 'SUCCEEDED') {
+      return { tone: 'done', headline: checklist.total === 0 ? 'Finished. It needed no decisions.' : `Finished. ${checklist.done} of ${plural(checklist.total, 'decision')} made.` };
+    }
+    if (run.status === 'RUNNING' || run.status === 'QUEUED') {
+      const base = runNextStep(run);
+      return { ...base, detail: checklist.total === 0 && checklist.possible === 0 ? 'This run needs no decisions. It reports when it is done.' : `${checklistSummary(checklist)}. This page follows the run as it moves.` };
+    }
+  }
   const open = run.reviews.filter((review) => review.status === 'OPEN');
   const mine = open.filter((review) => review.canReview);
   const step = run.currentNode ? run.graph?.nodes.find((node) => node.id === run.currentNode)?.label || run.currentNode : null;
@@ -107,19 +128,50 @@ export function newestFirst(events: readonly EventView[]): EventView[] {
 
 const ACTOR_LABEL: Record<EventView['actorType'], string> = { SYSTEM: 'System', AGENT: 'Agent', USER: 'Person' };
 
+/** The decisions of a run, and the forms and stages behind them, once they have loaded. */
+export interface RunDecisionsView {
+  checklist: Checklist;
+  stages: Array<{ nodeId: string; title: string; screen: string; instructions: string | null; status: string; canAct: boolean; blocker: string | null; returnedReason: string | null }>;
+  forms: Array<{ nodeId: string; title: string; instructions: string | null; status: string; canAnswer: boolean; blocker: string | null; fields: unknown }>;
+}
+
 /** Both tabs of the run page, as the assistant reads them. */
-export function runTabs(run: RunDetail | null): Record<string, TabPayload> {
+export function runTabs(run: RunDetail | null, decisions?: RunDecisionsView | null): Record<string, TabPayload> {
   const nodeLabel = (id: string | null) => (id ? run?.graph?.nodes.find((node) => node.id === id)?.label || id : null);
   return {
     overview: {
       label: 'Overview',
-      purpose: 'What this run needs from the person looking at it now, and the agent findings behind it.',
-      howToRead: 'nextStep says what has to happen and who does it. A review lists the changes the agent proposed; nothing is written to a record until a reviewer approves and applies them. "Needs a close look" means the agent was unsure or is missing a value.',
+      purpose: 'The checklist of decisions this run needs from people, in order, which one is open now, and the agent findings behind it.',
+      howToRead: 'checklist lists every point where a person decides something, numbered in the order the run reaches them. state is done, skipped (passed with nothing to decide), current (open and yours), waiting (open and someone else\'s), attention (failed) or ahead. An item with no number comes only on some choices and is not in the total. parts are the things to do inside the open decision, as its screen reports them. nextStep says what has to happen and who does it. A review lists the changes the agent proposed; nothing is written to a record until a reviewer approves and applies them. "Needs a close look" means the agent was unsure or is missing a value. checklist is null while the forms and screens of the run load.',
       data: run
         ? {
             workflow: run.workflowName,
             status: statusOf(run.status).label,
-            nextStep: runNextStep(run),
+            nextStep: runNextStep(run, decisions?.checklist),
+            checklist: decisions
+              ? {
+                  summary: checklistSummary(decisions.checklist),
+                  total: decisions.checklist.total,
+                  done: decisions.checklist.done,
+                  dependingOnChoices: decisions.checklist.possible,
+                  workingOn: decisions.checklist.working,
+                  items: decisions.checklist.items.map((item) => ({
+                    number: item.number,
+                    decision: item.label,
+                    kind: item.kind,
+                    what: item.detail,
+                    state: item.state,
+                    where: item.note,
+                    ...(item.progress ? { progress: progressText(item.progress), parts: item.progress.parts?.map((part) => ({ part: part.label, done: part.done, note: part.note })) } : {}),
+                  })),
+                }
+              : null,
+            openStages: decisions
+              ? decisions.stages.filter((stage) => stage.status === 'OPEN').map((stage) => ({ title: stage.title, screen: stage.screen, instructions: stage.instructions, yours: stage.canAct, whyNot: stage.canAct ? null : stage.blocker, cameBack: stage.returnedReason }))
+              : null,
+            openForms: decisions
+              ? decisions.forms.filter((form) => form.status === 'OPEN').map((form) => ({ title: form.title, instructions: form.instructions, yours: form.canAnswer, whyNot: form.canAnswer ? null : form.blocker, questions: Array.isArray(form.fields) ? (form.fields as Array<{ label?: string; required?: boolean }>).map((field) => ({ question: field.label, required: field.required === true })) : [] }))
+              : null,
             openReviews: run.reviews
               .filter((review) => review.status === 'OPEN')
               .map((review) => ({
