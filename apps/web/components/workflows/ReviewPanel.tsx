@@ -1,12 +1,14 @@
 'use client';
 
-import { Fragment, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Fragment, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { LIST_VALUE_TOOL, setPath, unanswered, unmetListValues, type Confidence, type ItemDecision, type ProposalAction, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { ChangeSettings, readArg } from '@/components/workflows/ChangeSettings';
 import { ReviewAssignment } from '@/components/workflows/ReviewerPicker';
+import { AgentViews, RecSection, useRecData, type Decider } from '@/components/workflows/review-sections/RecSections';
 import { useReportProgress } from '@/components/workflows/stages/useProgress';
 import { graphqlMutation } from '@/lib/graphql';
 import { markdownToHtml } from '@/lib/markdown';
+import { recKeys, reviewSections, sectioned } from '@/lib/review-sections';
 import type { CheckProgress } from '@/lib/workflow-checklist';
 import { reviewNextStep, summaryLead } from '@/lib/workflow-run-view';
 import { DECIDE_REVIEW, showValue, when, type MutationErrors, type ReviewView } from '@/lib/workflows';
@@ -69,6 +71,16 @@ function AgentSummary({ text }: { text: string }) {
 
 /** Text the reviewer typed, as the kind of value the agent proposed there. */
 function coerce(original: unknown, text: string): unknown {
+  // A list, such as the cash flows of a pair, is edited as a whole and kept as JSON text.
+  if (Array.isArray(original)) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // Not a list after all: kept as typed.
+    }
+    return text;
+  }
   if (typeof original === 'number') {
     const parsed = Number(text);
     return text.trim() !== '' && Number.isFinite(parsed) ? parsed : text;
@@ -119,7 +131,15 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
   const [note, setNote] = useState(review.decision?.note || '');
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
-  const rows = useRef<Record<string, HTMLTableRowElement | null>>({});
+  const rows = useRef<Record<string, HTMLElement | null>>({});
+
+  // The changes in sections by their kind, decided in section order. The rec sections and the agent's views read the fund's reconciliation.
+  const sections = useMemo(() => reviewSections(items), [items]);
+  const inSections = sectioned(sections);
+  const ordered = useMemo(() => sections.flatMap((section) => section.items), [sections]);
+  const views = useMemo(() => review.proposal?.views || [], [review.proposal]);
+  const keys = useMemo(() => recKeys(sections, views), [sections, views]);
+  const recData = useRecData(keys);
 
   const confident = items.filter((item) => !item.needsReview);
   const attention = items.filter((item) => item.needsReview);
@@ -164,8 +184,8 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
   /** The next change that still needs a person: undecided, or approved with a question open. */
   const nextNeeding = (after?: string): ProposalItem | undefined => {
     const pending = (item: ProposalItem) => !choices[item.id] || (choices[item.id] === 'APPROVE' && openQuestions(item).length > 0);
-    const start = after ? items.findIndex((item) => item.id === after) + 1 : 0;
-    const order = [...items.slice(start), ...items.slice(0, start)].filter((item) => item.id !== after && pending(item));
+    const start = after ? ordered.findIndex((item) => item.id === after) + 1 : 0;
+    const order = [...ordered.slice(start), ...ordered.slice(0, start)].filter((item) => item.id !== after && pending(item));
     // A change comes up once the changes it depends on are decided, so a person never decides it before them.
     const known = new Set(items.map((item) => item.id));
     const unblocked = (item: ProposalItem) => (item.dependsOn || []).every((id) => !known.has(id) || id === after || Boolean(choices[id]));
@@ -213,10 +233,217 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
   };
 
   const decided = items.length - undecided.length;
-  useReportProgress(canDecide ? onProgress : undefined, canDecide ? { done: decided, total: items.length } : null);
+  useReportProgress(
+    canDecide ? onProgress : undefined,
+    canDecide
+      ? {
+          done: decided,
+          total: items.length,
+          ...(inSections
+            ? {
+                parts: sections.map((section) => {
+                  const done = section.items.filter((item) => choices[item.id]).length;
+                  return { label: section.label, done: done === section.items.length, note: `${done} of ${section.items.length} decided` };
+                }),
+              }
+            : {}),
+        }
+      : null,
+  );
   const next = canDecide ? nextNeeding() : undefined;
   const approveConfident = () => setChoices((current) => ({ ...current, ...Object.fromEntries(confident.filter((item) => !current[item.id]).map((item) => [item.id, 'APPROVE' as Choice])) }));
   const applyLabel = approved.length === 0 ? 'Confirm: change nothing' : `Apply ${plural(approved.length, 'approved change')}`;
+
+  /** Everything about one change: what it depends on, every setting, why, and what it is based on. */
+  function detailsOf(item: ProposalItem): ReactNode {
+    return (
+      <>
+        {item.tool === LIST_VALUE_TOOL && (
+          <div style={{ fontSize: 12, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e3a8a', borderRadius: 6, padding: '8px 10px', marginBottom: 10, lineHeight: 1.45 }}>
+            <strong>This adds a value to a list every client shares.</strong> Nothing on the list meant the same thing, so the agent proposes a new value. Only a tenant admin can approve it.
+            {items.filter((other) => (other.dependsOn || []).includes(item.id)).map((other) => (
+              <div key={other.id}>
+                Step 1 of 2. Then:{' '}
+                <button type="button" onClick={() => focus(other.id)} style={{ border: 'none', background: 'none', padding: 0, color: '#1d4ed8', fontWeight: 600, cursor: 'pointer', fontSize: 12 }}>
+                  {other.summary}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {(item.dependsOn || []).map((id) => items.find((other) => other.id === id)).filter((other): other is ProposalItem => Boolean(other)).map((other) => (
+          <div key={other.id} style={{ fontSize: 12, background: unmet(item).length > 0 ? '#fef2f2' : '#eff6ff', border: `1px solid ${unmet(item).length > 0 ? '#fecaca' : '#bfdbfe'}`, color: unmet(item).length > 0 ? '#991b1b' : '#1e3a8a', borderRadius: 6, padding: '8px 10px', marginBottom: 10, lineHeight: 1.45 }}>
+            <strong>Step 2 of 2.</strong> This sets a value that is not on the list yet. It needs{' '}
+            <button type="button" onClick={() => focus(other.id)} style={{ border: 'none', background: 'none', padding: 0, color: '#1d4ed8', fontWeight: 600, cursor: 'pointer', fontSize: 12 }}>
+              {other.summary}
+            </button>{' '}
+            approved too. {unmet(item).length > 0 ? 'That change is not approved: approve it, or choose a value already on the list here.' : 'Or choose a value already on the list here, and reject the addition.'}
+          </div>
+        ))}
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) minmax(260px, 1fr)', gap: 20 }}>
+          <div>
+            <div style={sectionLabel}>Exactly what will happen</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 6 }}>
+              {ACTION[item.action].label} via <code>{item.tool}</code>
+              {canDecide && '. Change any value here before you approve. What it is aimed at (the record, attribute, and type) is fixed.'}
+            </div>
+            <ChangeSettings
+              item={item}
+              canDecide={canDecide}
+              answers={answers[item.id] || {}}
+              edits={edits[item.id] || {}}
+              recordedArgs={(review.decision?.items?.[item.id] as { args?: Record<string, unknown> } | undefined)?.args}
+              onAnswer={(key, value) => answer(item.id, key, value)}
+              onEdit={(key, value) => edit(item, key, value)}
+            />
+          </div>
+          <div>
+            <div style={sectionLabel}>Why</div>
+            <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>{item.rationale || 'The agent gave no reason.'}</div>
+            {item.fixes && item.fixes.length > 0 && (
+              <>
+                <div style={{ ...sectionLabel, marginTop: 12 }}>Data quality checks this clears</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {item.fixes.map((code) => (
+                    <span key={code} style={{ ...chip('#166534', '#dcfce7'), fontFamily: 'var(--font-mono, monospace)', fontWeight: 600 }}>{code}</span>
+                  ))}
+                </div>
+              </>
+            )}
+            {item.evidence.length > 0 && (
+              <>
+                <div style={{ ...sectionLabel, marginTop: 12 }}>Based on</div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+                  {item.evidence.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  /** The general table of changes: one row each, opened to its detail. */
+  function changeTable(list: ProposalItem[]): ReactNode {
+    return (
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={{ ...head, width: 150 }}>Your decision</th>
+              <th style={{ ...head, width: 70 }}>Action</th>
+              <th style={head}>On</th>
+              <th style={head}>What changes</th>
+              <th style={{ ...head, width: 100 }}>Agent is</th>
+              <th style={{ ...head, width: 130 }}>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((item) => {
+              const choice = choices[item.id];
+              const status = statusFor(item);
+              const isOpen = expanded === item.id;
+              const attentionIndex = attention.findIndex((candidate) => candidate.id === item.id);
+              return (
+                <Fragment key={item.id}>
+                  <tr
+                    ref={(element) => {
+                      rows.current[item.id] = element;
+                    }}
+                    onClick={() => setExpanded(isOpen ? null : item.id)}
+                    style={{ cursor: 'pointer', background: isOpen ? '#f8fafc' : choice === 'REJECT' ? '#fafafa' : undefined, opacity: choice === 'REJECT' ? 0.7 : 1 }}
+                  >
+                    <td style={cell} onClick={(event) => event.stopPropagation()}>
+                      <div style={{ display: 'inline-flex', border: '1px solid var(--line-strong)', borderRadius: 6, overflow: 'hidden' }}>
+                        {(['APPROVE', 'REJECT'] as const).map((option) => (
+                          <button
+                            key={option}
+                            type="button"
+                            disabled={!canDecide}
+                            aria-pressed={choice === option}
+                            onClick={() => choose(item.id, option)}
+                            style={{
+                              border: 'none',
+                              padding: '4px 10px',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              cursor: canDecide ? 'pointer' : 'default',
+                              background: choice === option ? (option === 'APPROVE' ? '#166534' : '#475569') : '#fff',
+                              color: choice === option ? '#fff' : 'var(--ink-2)',
+                            }}
+                          >
+                            {option === 'APPROVE' ? 'Approve' : 'Reject'}
+                          </button>
+                        ))}
+                      </div>
+                    </td>
+                    <td style={cell}><span style={chip(ACTION[item.action].fg, ACTION[item.action].bg)}>{ACTION[item.action].label}</span></td>
+                    <td style={cell}>
+                      <div style={{ fontWeight: 600 }}>{item.target.label}</div>
+                      <div style={{ fontSize: 11, color: 'var(--ink-4)' }}>{item.target.kind}</div>
+                    </td>
+                    <td style={cell}>
+                      {item.summary}
+                      {item.fixes && item.fixes.length > 0 && (
+                        <div style={{ fontSize: 11, color: '#166534', marginTop: 2 }}>
+                          Clears {item.fixes.length === 1 ? 'a failing data quality check' : `${item.fixes.length} failing data quality checks`}
+                        </div>
+                      )}
+                    </td>
+                    <td style={cell}><span style={chip(CONFIDENCE[item.confidence].fg, CONFIDENCE[item.confidence].bg)}>{CONFIDENCE[item.confidence].label}</span></td>
+                    <td style={{ ...cell, color: status.fg, fontWeight: 600, fontSize: 12 }}>{status.text}</td>
+                  </tr>
+                  {isOpen && (
+                    <tr>
+                      <td colSpan={6} style={{ ...cell, background: '#f8fafc', padding: '14px 18px' }}>
+                        {attentionIndex >= 0 && <div style={{ fontSize: 11, color: '#b45309', fontWeight: 700, marginBottom: 8 }}>NEEDS YOUR ATTENTION · {attentionIndex + 1} OF {attention.length}</div>}
+                        {detailsOf(item)}
+
+                        {canDecide && (
+                          <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <button type="button" className="btn btn-sm btn-primary" disabled={openQuestions(item).length > 0} onClick={() => decideAndNext(item, 'APPROVE')}>
+                              Approve and continue
+                            </button>
+                            <button type="button" className="btn btn-sm" onClick={() => decideAndNext(item, 'REJECT')}>
+                              Reject and continue
+                            </button>
+                            {openQuestions(item).length > 0 && <span style={{ fontSize: 12, color: '#b45309' }}>Answer the required {openQuestions(item).length === 1 ? 'question' : 'questions'} to approve this one.</span>}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  /** How a section of the review reads and changes these decisions. */
+  const decider: Decider = {
+    canDecide,
+    choice: (item) => choices[item.id],
+    decide: (item, choice) => decideAndNext(item, choice),
+    current: (item, key) => {
+      const typed = edits[item.id]?.[key];
+      return typed === undefined ? readArg(item.args, key) : coerce(readArg(item.args, key), typed);
+    },
+    edit: (item, key, value) => edit(item, key, value === null || value === undefined ? null : typeof value === 'string' ? value : typeof value === 'number' ? String(value) : JSON.stringify(value)),
+    status: (item) => statusFor(item),
+    questions: (item) => openQuestions(item).length,
+    details: (item) => detailsOf(item),
+    register: (id, element) => {
+      rows.current[id] = element;
+    },
+    expanded,
+    expand: (id) => setExpanded(id),
+  };
 
   /** What the person looking at this review has to do now, and the button that does it. */
   function callToAction() {
@@ -282,6 +509,8 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
 
       {review.summary && <AgentSummary text={review.summary} />}
 
+      <AgentViews views={views} data={recData} />
+
       <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', borderBottom: '1px solid var(--line)' }}>
         <div style={{ fontSize: 13 }}>
           <strong>{plural(items.length, 'change')} proposed.</strong>{' '}
@@ -303,162 +532,27 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
       {items.length === 0 ? (
         <div style={{ padding: 16, fontSize: 13, color: 'var(--ink-3)' }}>The agent proposed no changes. Approve to let the run continue.</div>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th style={{ ...head, width: 150 }}>Your decision</th>
-                <th style={{ ...head, width: 70 }}>Action</th>
-                <th style={head}>On</th>
-                <th style={head}>What changes</th>
-                <th style={{ ...head, width: 100 }}>Agent is</th>
-                <th style={{ ...head, width: 130 }}>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => {
-                const choice = choices[item.id];
-                const status = statusFor(item);
-                const isOpen = expanded === item.id;
-                const attentionIndex = attention.findIndex((candidate) => candidate.id === item.id);
-                return (
-                  <Fragment key={item.id}>
-                    <tr
-                      ref={(element) => {
-                        rows.current[item.id] = element;
-                      }}
-                      onClick={() => setExpanded(isOpen ? null : item.id)}
-                      style={{ cursor: 'pointer', background: isOpen ? '#f8fafc' : choice === 'REJECT' ? '#fafafa' : undefined, opacity: choice === 'REJECT' ? 0.7 : 1 }}
-                    >
-                      <td style={cell} onClick={(event) => event.stopPropagation()}>
-                        <div style={{ display: 'inline-flex', border: '1px solid var(--line-strong)', borderRadius: 6, overflow: 'hidden' }}>
-                          {(['APPROVE', 'REJECT'] as const).map((option) => (
-                            <button
-                              key={option}
-                              type="button"
-                              disabled={!canDecide}
-                              aria-pressed={choice === option}
-                              onClick={() => choose(item.id, option)}
-                              style={{
-                                border: 'none',
-                                padding: '4px 10px',
-                                fontSize: 12,
-                                fontWeight: 600,
-                                cursor: canDecide ? 'pointer' : 'default',
-                                background: choice === option ? (option === 'APPROVE' ? '#166534' : '#475569') : '#fff',
-                                color: choice === option ? '#fff' : 'var(--ink-2)',
-                              }}
-                            >
-                              {option === 'APPROVE' ? 'Approve' : 'Reject'}
-                            </button>
-                          ))}
-                        </div>
-                      </td>
-                      <td style={cell}><span style={chip(ACTION[item.action].fg, ACTION[item.action].bg)}>{ACTION[item.action].label}</span></td>
-                      <td style={cell}>
-                        <div style={{ fontWeight: 600 }}>{item.target.label}</div>
-                        <div style={{ fontSize: 11, color: 'var(--ink-4)' }}>{item.target.kind}</div>
-                      </td>
-                      <td style={cell}>
-                        {item.summary}
-                        {item.fixes && item.fixes.length > 0 && (
-                          <div style={{ fontSize: 11, color: '#166534', marginTop: 2 }}>
-                            Clears {item.fixes.length === 1 ? 'a failing data quality check' : `${item.fixes.length} failing data quality checks`}
-                          </div>
-                        )}
-                      </td>
-                      <td style={cell}><span style={chip(CONFIDENCE[item.confidence].fg, CONFIDENCE[item.confidence].bg)}>{CONFIDENCE[item.confidence].label}</span></td>
-                      <td style={{ ...cell, color: status.fg, fontWeight: 600, fontSize: 12 }}>{status.text}</td>
-                    </tr>
-                    {isOpen && (
-                      <tr>
-                        <td colSpan={6} style={{ ...cell, background: '#f8fafc', padding: '14px 18px' }}>
-                          {attentionIndex >= 0 && <div style={{ fontSize: 11, color: '#b45309', fontWeight: 700, marginBottom: 8 }}>NEEDS YOUR ATTENTION · {attentionIndex + 1} OF {attention.length}</div>}
-                          {item.tool === LIST_VALUE_TOOL && (
-                            <div style={{ fontSize: 12, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e3a8a', borderRadius: 6, padding: '8px 10px', marginBottom: 10, lineHeight: 1.45 }}>
-                              <strong>This adds a value to a list every client shares.</strong> Nothing on the list meant the same thing, so the agent proposes a new value. Only a tenant admin can approve it.
-                              {items.filter((other) => (other.dependsOn || []).includes(item.id)).map((other) => (
-                                <div key={other.id}>
-                                  Step 1 of 2. Then:{' '}
-                                  <button type="button" onClick={() => focus(other.id)} style={{ border: 'none', background: 'none', padding: 0, color: '#1d4ed8', fontWeight: 600, cursor: 'pointer', fontSize: 12 }}>
-                                    {other.summary}
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          {(item.dependsOn || []).map((id) => items.find((other) => other.id === id)).filter((other): other is ProposalItem => Boolean(other)).map((other) => (
-                            <div key={other.id} style={{ fontSize: 12, background: unmet(item).length > 0 ? '#fef2f2' : '#eff6ff', border: `1px solid ${unmet(item).length > 0 ? '#fecaca' : '#bfdbfe'}`, color: unmet(item).length > 0 ? '#991b1b' : '#1e3a8a', borderRadius: 6, padding: '8px 10px', marginBottom: 10, lineHeight: 1.45 }}>
-                              <strong>Step 2 of 2.</strong> This sets a value that is not on the list yet. It needs{' '}
-                              <button type="button" onClick={() => focus(other.id)} style={{ border: 'none', background: 'none', padding: 0, color: '#1d4ed8', fontWeight: 600, cursor: 'pointer', fontSize: 12 }}>
-                                {other.summary}
-                              </button>{' '}
-                              approved too. {unmet(item).length > 0 ? 'That change is not approved: approve it, or choose a value already on the list here.' : 'Or choose a value already on the list here, and reject the addition.'}
-                            </div>
-                          ))}
-                          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) minmax(260px, 1fr)', gap: 20 }}>
-                            <div>
-                              <div style={sectionLabel}>Exactly what will happen</div>
-                              <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 6 }}>
-                                {ACTION[item.action].label} via <code>{item.tool}</code>
-                                {canDecide && '. Change any value here before you approve. What it is aimed at (the record, attribute, and type) is fixed.'}
-                              </div>
-                              <ChangeSettings
-                                item={item}
-                                canDecide={canDecide}
-                                answers={answers[item.id] || {}}
-                                edits={edits[item.id] || {}}
-                                recordedArgs={(review.decision?.items?.[item.id] as { args?: Record<string, unknown> } | undefined)?.args}
-                                onAnswer={(key, value) => answer(item.id, key, value)}
-                                onEdit={(key, value) => edit(item, key, value)}
-                              />
-                            </div>
-                            <div>
-                              <div style={sectionLabel}>Why</div>
-                              <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>{item.rationale || 'The agent gave no reason.'}</div>
-                              {item.fixes && item.fixes.length > 0 && (
-                                <>
-                                  <div style={{ ...sectionLabel, marginTop: 12 }}>Data quality checks this clears</div>
-                                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                    {item.fixes.map((code) => (
-                                      <span key={code} style={{ ...chip('#166534', '#dcfce7'), fontFamily: 'var(--font-mono, monospace)', fontWeight: 600 }}>{code}</span>
-                                    ))}
-                                  </div>
-                                </>
-                              )}
-                              {item.evidence.length > 0 && (
-                                <>
-                                  <div style={{ ...sectionLabel, marginTop: 12 }}>Based on</div>
-                                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-                                    {item.evidence.map((line) => (
-                                      <li key={line}>{line}</li>
-                                    ))}
-                                  </ul>
-                                </>
-                              )}
-                            </div>
-                          </div>
-
-                          {canDecide && (
-                            <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
-                              <button type="button" className="btn btn-sm btn-primary" disabled={openQuestions(item).length > 0} onClick={() => decideAndNext(item, 'APPROVE')}>
-                                Approve and continue
-                              </button>
-                              <button type="button" className="btn btn-sm" onClick={() => decideAndNext(item, 'REJECT')}>
-                                Reject and continue
-                              </button>
-                              {openQuestions(item).length > 0 && <span style={{ fontSize: 12, color: '#b45309' }}>Answer the required {openQuestions(item).length === 1 ? 'question' : 'questions'} to approve this one.</span>}
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <>
+          {!inSections && changeTable(items)}
+          {inSections &&
+            sections.map((section, index) => {
+              const done = section.items.filter((item) => choices[item.id]).length;
+              return (
+                <div key={section.kind} style={{ borderBottom: '1px solid var(--line)' }}>
+                  <div style={{ padding: '12px 16px 8px', display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 14, fontWeight: 600 }}>
+                      {index + 1}. {section.label}
+                    </span>
+                    <span style={{ fontSize: 12, color: done === section.items.length ? '#166534' : 'var(--ink-3)', fontWeight: 600 }}>
+                      {done} of {section.items.length} decided
+                    </span>
+                    <span style={{ fontSize: 12.5, color: 'var(--ink-3)', flexBasis: '100%' }}>{section.howTo}</span>
+                  </div>
+                  {section.kind === 'general' ? changeTable(section.items) : <div style={{ padding: '0 16px 14px' }}><RecSection section={section} data={recData} decider={decider} all={items} /></div>}
+                </div>
+              );
+            })}
+        </>
       )}
 
       {canDecide && (

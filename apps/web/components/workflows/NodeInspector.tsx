@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { REVIEW_VIEWS } from '@tapestrai/graphql/src/lib/workflow-views';
 import { CONDITION_OPS, isReadTool, nodeTypeDef, outcomesOf, upstreamOf, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { ReviewerPicker } from '@/components/workflows/ReviewerPicker';
 import { STAGE_SCREENS, stageScreen } from '@tapestrai/graphql/src/lib/workflow-screens';
@@ -409,6 +410,21 @@ export function NodeInspector({ graph, node, tools, problems, readOnly, clientId
           </Field>
           <Field name="Changes it can propose" help="The agent never makes these itself. Each one it proposes goes to a review step. Leave all unticked to allow any.">
             <ToolChecklist options={writeTools} chosen={list(config.proposable)} onChange={(next) => set({ proposable: next })} empty="The tool list could not be loaded." />
+          </Field>
+          <Field name="What it can show the reviewer" help="Views the agent can put beside its proposal, with the rows it relied on marked, so the reviewer checks its work against the same data.">
+            <div style={{ display: 'grid', gap: 4 }}>
+              {REVIEW_VIEWS.map((view) => {
+                const chosen = list(config.showable);
+                return (
+                  <label key={view.code} title={view.description} style={{ display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={chosen.includes(view.code)} onChange={(event) => set({ showable: event.target.checked ? [...chosen, view.code] : chosen.filter((code) => code !== view.code) })} />
+                    <span>
+                      <b>{view.label}</b> <span style={{ color: 'var(--ink-3)' }}>{view.description}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
           </Field>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <Field name="Model">

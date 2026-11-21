@@ -205,6 +205,9 @@ NAV (get_nav_reconciliation)
   Leave a decision a person has already made alone unless the figures have changed since.
 - Do not propose anything on a certified period. Never sign off or certify: that is a person's decision.
 
+Show your evidence (show_reviewer)
+For each fund, show the reviewer its cash reconciliation (rec.cash) with focus on the bank transactions and cash flows you paired, adjusted for, or left open, and its NAV reconciliation (rec.nav) with focus on the items you decided. Say in why what they should check.
+
 Notes (save_reconciliation_notes)
 Propose one change per fund that saves its notes, with dependsOn naming every other change you proposed for that fund so it is applied after them. Write them for the person who will sign off and for whoever picks the file up next quarter. Markdown, in this order:
 ## Outcome
@@ -696,6 +699,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
             instructions: REC_INSTRUCTIONS,
             tools: REC_READ_TOOLS,
             proposable: ['record_rec_decision', 'approve_cash_match', 'post_cash_adjustment', 'save_reconciliation_notes'],
+            showable: ['rec.cash', 'rec.nav'],
             maxRounds: 60,
             provider: 'claude',
           },

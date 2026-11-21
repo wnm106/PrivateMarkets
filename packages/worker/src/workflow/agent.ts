@@ -1,5 +1,6 @@
 import { isReadTool, resolveTemplates } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { normalizeItems, type ListValue, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { MAX_VIEWS, REVIEW_VIEWS, normalizeViews, type ProposalView } from '@tapestrai/graphql/src/lib/workflow-views';
 import { agentCharter, agentProposable, agentReadTools, outsideAgentDomains, type AgentDef } from '@tapestrai/graphql/src/lib/workflow-agents';
 import { runWithAgentContext, takeAgentAudits } from '@tapestrai/mcp-server/src/agent/harness';
 import { checkListValues } from './list-check';
@@ -54,6 +55,7 @@ interface AgentState {
   provider: string;
   messages: unknown[];
   items: ProposalItem[];
+  views?: ProposalView[];
   rounds: number;
 }
 
@@ -128,6 +130,40 @@ const PROPOSE_SPEC: ToolSpec = {
   },
 };
 
+export const SHOW_TOOL = 'show_reviewer';
+
+/** The tool that puts a view beside the proposal, offered only with the views this step may show. */
+function showSpec(codes: string[]): ToolSpec {
+  const views = REVIEW_VIEWS.filter((view) => codes.includes(view.code));
+  return {
+    name: SHOW_TOOL,
+    description:
+      'Choose what the reviewer sees beside your proposed changes, so they can check your work against the same data you read. ' +
+      `Show the view that holds the evidence for a decision, and point at the rows that matter with focus. At most ${MAX_VIEWS} views in all; show what matters, not everything you read. ` +
+      'Each call adds views. Views you can show:\n' +
+      views.map((view) => `- ${view.code}: ${view.description} Settings: ${view.args.map((arg) => `${arg.key}${arg.required ? '' : ' (optional)'}: ${arg.help}`).join(' ')} Focus: ${view.focus}`).join('\n'),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        views: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              view: { type: 'string', enum: views.map((view) => view.code) },
+              args: { type: 'object', description: 'The view\'s settings.' },
+              focus: { type: 'array', items: { type: 'string' }, description: 'Ids of the rows to point at.' },
+              why: { type: 'string', description: 'One or two sentences: what the reviewer should see here and why it matters to the decision.' },
+            },
+            required: ['view', 'args', 'why'],
+          },
+        },
+      },
+      required: ['views'],
+    },
+  };
+}
+
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n[cut: ${text.length - max} more characters]`;
 }
@@ -168,7 +204,7 @@ function restore(state: unknown, provider: string): AgentState | null {
   if (!state || typeof state !== 'object') return null;
   const raw = state as Partial<AgentState>;
   if (raw.provider !== provider || !Array.isArray(raw.messages) || raw.messages.length === 0) return null;
-  return { provider, messages: raw.messages, items: Array.isArray(raw.items) ? raw.items : [], rounds: Number(raw.rounds) || 0 };
+  return { provider, messages: raw.messages, items: Array.isArray(raw.items) ? raw.items : [], views: Array.isArray(raw.views) ? raw.views : [], rounds: Number(raw.rounds) || 0 };
 }
 
 export interface AgentDeps {
@@ -209,13 +245,16 @@ async function executeAgentStep(request: AgentRequest, deps: AgentDeps): Promise
   const writeNames = all.filter((tool) => !isReadTool(tool.name)).map((tool) => tool.name);
   const canPropose = new Set(agentProposable(agent, strings(config.proposable), writeNames));
   const proposable = all.filter((tool) => canPropose.has(tool.name));
-  const system = systemPrompt(proposable, agent);
-  const tools = proposable.length > 0 ? [...readSpecs, PROPOSE_SPEC] : readSpecs;
+  // The views this step may show its reviewer. Only known views count.
+  const showable = strings(config.showable).filter((code) => REVIEW_VIEWS.some((view) => view.code === code));
+  const system = systemPrompt(proposable, agent) + (showable.length > 0 ? `\n\n## What the reviewer sees\nWith ${SHOW_TOOL} you choose the views the reviewer sees beside your changes. Show the evidence behind your decisions, the rows you relied on, before you finish.` : '');
+  const tools = [...readSpecs, ...(proposable.length > 0 ? [PROPOSE_SPEC] : []), ...(showable.length > 0 ? [showSpec(showable)] : [])];
 
   const state: AgentState = restore(request.state, model.provider) || {
     provider: model.provider,
     messages: [model.userMessage(taskMessage(request))],
     items: [],
+    views: [],
     rounds: 0,
   };
   if (state.rounds > 0) await request.event('agent.resumed', `Continued from round ${state.rounds} after a restart`);
@@ -268,6 +307,15 @@ async function executeAgentStep(request: AgentRequest, deps: AgentDeps): Promise
     return { content: lines.join(' '), isError: kept.length === 0 && refused.length > 0 };
   };
 
+  const show = (input: Record<string, unknown>): { content: string; isError: boolean } => {
+    const kept = state.views || [];
+    const { views, refused } = normalizeViews(input.views, showable, kept);
+    state.views = [...kept, ...views];
+    const lines = [`The reviewer will see ${views.length} more view${views.length === 1 ? '' : 's'} (${state.views.length} in total).`];
+    if (refused.length > 0) lines.push(`Not shown, fix and try again: ${refused.join(' ')}`);
+    return { content: lines.join(' '), isError: views.length === 0 && refused.length > 0 };
+  };
+
   const auditedTurn = async (systemPrompt: string, toolSpecs: ToolSpec[], messages: unknown[]): Promise<ModelTurn> => {
     const before = takeAgentAudits().length;
     const turn = await model.turn(systemPrompt, toolSpecs, messages);
@@ -302,7 +350,7 @@ async function executeAgentStep(request: AgentRequest, deps: AgentDeps): Promise
     }
     if (turn.calls.length === 0) {
       if (turn.stop === 'limit') throw new Error('The model ran out of room before it finished. Narrow the step, or give it fewer records at a time.');
-      return { summary: turn.text, items: state.items };
+      return { summary: turn.text, items: state.items, views: state.views || [] };
     }
     if (turn.text) await request.event('agent.note', clip(turn.text, 600));
 
@@ -312,6 +360,7 @@ async function executeAgentStep(request: AgentRequest, deps: AgentDeps): Promise
           const outcome = await propose(call.input);
           return { call, ...outcome };
         }
+        if (call.name === SHOW_TOOL && showable.length > 0) return { call, ...show(call.input) };
         if (!allowed.has(call.name)) {
           return { call, content: `${call.name} is not available in this step. To change data, use ${PROPOSE_TOOL}.`, isError: true };
         }
@@ -325,8 +374,8 @@ async function executeAgentStep(request: AgentRequest, deps: AgentDeps): Promise
     );
     for (const result of results) {
       await request.event(
-        result.call.name === PROPOSE_TOOL ? 'agent.proposal' : 'agent.tool',
-        result.call.name === PROPOSE_TOOL ? result.content : `${result.isError ? 'Tried' : 'Read with'} ${result.call.name}`,
+        result.call.name === PROPOSE_TOOL ? 'agent.proposal' : result.call.name === SHOW_TOOL ? 'agent.view' : 'agent.tool',
+        result.call.name === PROPOSE_TOOL || result.call.name === SHOW_TOOL ? result.content : `${result.isError ? 'Tried' : 'Read with'} ${result.call.name}`,
         { tool: result.call.name, args: result.call.input, ok: !result.isError, ...(result.isError ? { error: result.content } : {}) },
       );
     }
@@ -340,5 +389,5 @@ async function executeAgentStep(request: AgentRequest, deps: AgentDeps): Promise
   state.messages.push(model.userMessage('You have used every tool round this step allows. Do not call any more tools. Write your summary for the reviewer now, and say plainly what you did not get to.'));
   const last = await auditedTurn(system, [], state.messages);
   await request.event('agent.note', `Stopped at the limit of ${maxRounds} rounds`);
-  return { summary: last.text || `The agent used all ${maxRounds} rounds without writing a summary.`, items: state.items };
+  return { summary: last.text || `The agent used all ${maxRounds} rounds without writing a summary.`, items: state.items, views: state.views || [] };
 }

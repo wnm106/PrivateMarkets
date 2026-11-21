@@ -25,6 +25,7 @@ import {
   type FoundationAttribute,
   type ProposalItem,
 } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import type { ProposalView } from '@tapestrai/graphql/src/lib/workflow-views';
 import { exitCheckFor, stageScreen } from '@tapestrai/graphql/src/lib/workflow-screens';
 
 /**
@@ -200,6 +201,8 @@ export interface AgentRequest {
 export interface AgentResult {
   summary: string;
   items: ProposalItem[];
+  /** What the agent asked the reviewer to look at. */
+  views?: ProposalView[];
 }
 
 export interface EngineDeps {
@@ -327,7 +330,8 @@ async function runAgent(node: WorkflowNode, ctx: StepContext): Promise<StepOutco
       items.push(item);
     }
   }
-  const proposal = { items };
+  const views = result.views || [];
+  const proposal = { items, ...(views.length > 0 ? { views } : {}) };
   const counts = proposalCounts(proposal);
   await store.event(
     ctx.run.id,

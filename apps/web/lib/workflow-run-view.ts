@@ -1,4 +1,6 @@
 import type { TabPayload } from '@/lib/view-context';
+import { reviewView } from '@tapestrai/graphql/src/lib/workflow-views';
+import { reviewSections } from '@/lib/review-sections';
 import { checklistSummary, progressText, type Checklist } from '@/lib/workflow-checklist';
 import { assigneeText, statusOf, type EventView, type ReviewView, type RunDetail } from '@/lib/workflows';
 
@@ -142,7 +144,7 @@ export function runTabs(run: RunDetail | null, decisions?: RunDecisionsView | nu
     overview: {
       label: 'Overview',
       purpose: 'The checklist of decisions this run needs from people, in order, which one is open now, and the agent findings behind it.',
-      howToRead: 'checklist lists every point where a person decides something, numbered in the order the run reaches them. state is done, skipped (passed with nothing to decide), current (open and yours), waiting (open and someone else\'s), attention (failed) or ahead. An item with no number comes only on some choices and is not in the total. parts are the things to do inside the open decision, as its screen reports them. nextStep says what has to happen and who does it. A review lists the changes the agent proposed; nothing is written to a record until a reviewer approves and applies them. "Needs a close look" means the agent was unsure or is missing a value. checklist is null while the forms and screens of the run load.',
+      howToRead: 'checklist lists every point where a person decides something, numbered in the order the run reaches them. state is done, skipped (passed with nothing to decide), current (open and yours), waiting (open and someone else\'s), attention (failed) or ahead. An item with no number comes only on some choices and is not in the total. parts are the things to do inside the open decision, as its screen reports them. nextStep says what has to happen and who does it. A review lists the changes the agent proposed, in sections by kind (cash pairs, cash adjustments, reconciliation decisions, other changes, notes), decided in that order; agentShows are the views the agent asked the reviewer to look at, and why. Nothing is written to a record until a reviewer approves and applies them. "Needs a close look" means the agent was unsure or is missing a value. checklist is null while the forms and screens of the run load.',
       data: run
         ? {
             workflow: run.workflowName,
@@ -178,6 +180,8 @@ export function runTabs(run: RunDetail | null, decisions?: RunDecisionsView | nu
                 title: review.title,
                 nextStep: reviewNextStep(review),
                 agentSummary: summaryLead(review.summary, 600),
+                sections: reviewSections(review.proposal?.items || []).map((section) => ({ section: section.label, changes: section.items.length })),
+                agentShows: (review.proposal?.views || []).map((view) => ({ view: reviewView(view.view)?.label || view.view, fund: view.args.fundId, period: view.args.periodEnd || null, why: view.why, pointsAt: view.focus.length })),
                 changes: (review.proposal?.items || []).slice(0, 40).map((item) => ({
                   on: item.target.label,
                   change: item.summary,

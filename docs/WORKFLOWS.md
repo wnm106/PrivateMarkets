@@ -166,6 +166,15 @@ To change something the agent calls `propose_changes`. Each proposed change says
 
 The step can limit which changes may be proposed ("Changes it can propose").
 
+**What the reviewer sees.** The step can also list views the agent may put in front of its reviewer ("What it can show the reviewer"). With `show_reviewer` the agent names a view, the fund and period to show, the rows it relied on, and why the reviewer should look. The engine keeps only views the step allows, with only the settings each takes, at most six, and stores them with the proposal. The views are listed in `packages/graphql/src/lib/workflow-views.ts`:
+
+| View | Shows |
+|---|---|
+| Cash reconciliation (`rec.cash`) | One fund's bank lines beside its book cash flows for a period, the lines the agent points at, and whether the two sides tie |
+| NAV reconciliation (`rec.nav`) | One fund's reported and proposed NAV, and the review items the agent points at, with the administrator's figure, ours, the NAV effect and what is decided |
+
+Fund reconciliation's reconciling step may show both. A view's component is in `apps/web/components/workflows/review-sections/RecSections.tsx`, under the same code.
+
 **Required fields are checked by the engine, not left to the agent.** When a change creates a record, the engine reads what that record's template requires. Each required attribute the agent did not supply becomes a question on the change, marked "required for this type of record".
 
 ### Data quality checks
@@ -337,7 +346,19 @@ Underneath, a notice is an `ops.activity_events` row with `recipients` set, in `
 
 ### Deciding
 
-The review shows the agent's own summary, then a table of every proposed change with the agent's confidence beside it.
+The review shows the agent's own summary, the views it asked you to look at, then every proposed change with the agent's confidence beside it.
+
+**Each kind of change has its own screen.** The changes are grouped by the tool they run (`apps/web/lib/review-sections.ts`), and the groups are decided in order, each a part of the review on the run's checklist:
+
+| Section | Changes | What you see |
+|---|---|---|
+| Cash pairs | `approve_cash_match` | The bank transaction beside the book flows it settled, the difference and the dates. Change the flows to correct the pair |
+| Cash adjustments | `post_cash_adjustment` | Book less bank before and after, with the side, amount and reason to edit |
+| Reconciliation decisions | `record_rec_decision` | The review item with the administrator's figure, ours, the difference and the NAV effect, any decision already on the close, and Accept, Adjust or Query with the note. Adjust and Query need a note |
+| Other changes | Any other tool | The general table |
+| Reconciliation notes | `save_reconciliation_notes` | The notes to edit and preview, beside the notes kept now. A change you rejected for the same fund is named, so the notes can be made to match |
+
+The rec sections read the fund's reconciliation with the same queries as the reconciliation page, at your As Of and Knowledge dates. A review of only other changes keeps the one table. Every change can still open to its full settings and evidence, and a required question opens it.
 
 - **Approve the confident ones together** with one button.
 - **Walk through the rest.** Each opens to show exactly what will happen, why, what it is based on, and its questions. Answer, or take the agent's suggestion, then approve or reject and move to the next.
@@ -540,7 +561,8 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 - Choosing the stored record a file's values load onto. The Understand screen links the document to a record; the loader still matches values by code, identifier and name.
 - Starting a guided run when a file arrives by a feed. It is started by hand from Load data.
 - Stages on the home page's Needs you list and in review notices. An open stage shows on its run's page.
-- Screens chosen by the kind of change. A proposed new field, list value, alias or template is decided on a review's generic change form, not a screen built for it.
+- Screens for more kinds of change. Reconciliation changes have their own; a proposed new field, list value, alias or template is still decided in the general table.
+- Performance review. There is no read tool for returns or attribution, so no view or section for them.
 - The checklist on the home page and in the hub. It is on the run's page.
 - Steps on parallel paths running at the same moment. Paths do not wait on one another, but the worker runs one step at a time.
 - A deal setup template. The engine supports it.
