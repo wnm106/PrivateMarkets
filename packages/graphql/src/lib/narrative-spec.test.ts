@@ -109,6 +109,16 @@ describe('sections', () => {
     expect(errors.join('\n')).toMatch(/screen s/);
   });
 
+  it('keeps a monthly series of 13 dates and rejects more instead of dropping them', () => {
+    const months = (n: number) => Array.from({ length: n }, (_, i) => (i === 0 ? { label: 'Current' } : { label: `${i} months ago`, offset: { months: i } }));
+    const dates = resolveAsOfSet(months(13), '2026-11-21');
+    expect(dates).toHaveLength(13);
+    expect(dates[12].date).toBe('2025-11-21');
+    const section = { key: 'one', title: 'One', instructions: 'x', blocks: [{ type: 'kpis' as const, key: 'k' }] };
+    expect(validateNarrativeSpec({ sections: [{ ...section, comparisons: months(13) }] })).toEqual([]);
+    expect(validateNarrativeSpec({ sections: [{ ...section, comparisons: months(14) }] }).join(' ')).toMatch(/at most 13 comparison dates/);
+  });
+
   it('accepts a well-formed section', () => {
     expect(validateNarrativeSpec({
       sections: [{

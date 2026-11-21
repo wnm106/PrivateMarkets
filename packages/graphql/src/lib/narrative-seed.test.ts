@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { narrativePlan, validateNarrative } from './narrative-engine';
 import {
-  applyMeasures, evaluateScenarios, evaluateScreens, narrativeSections, sectionRunOrder, type NarrativeSection,
+  applyMeasures, evaluateScenarios, evaluateScreens, narrativeSections, resolveAsOfSet, sectionRunOrder, type NarrativeSection,
 } from './narrative-spec';
 
 // The current definition of the seeded LP review (the investor-facing redesign).
@@ -60,6 +60,8 @@ describe('seeded LP portfolio review', () => {
   it('charts thirteen monthly NAV marks from the fund itself', () => {
     const nav = section('nav_trend');
     expect(nav.comparisons).toHaveLength(13);
+    // Every one of them is run: a year of month-ends, not just the first six.
+    expect(resolveAsOfSet(nav.comparisons, '2026-11-21').map((d) => d.date).at(-1)).toBe('2025-11-21');
     const fund = nav.dataQueries!.find((q) => q.key === 'fund_values')!;
     expect(fund.includeAnchor).toBe(true);
     expect(fund.select).toEqual(['NAV', 'GROSS_ASSET_VALUE']);

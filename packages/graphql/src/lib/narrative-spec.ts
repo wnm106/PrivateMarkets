@@ -181,13 +181,20 @@ export interface ResolvedAsOf {
 
 export const DEFAULT_COMPARISONS: AsOfComparison[] = [{ label: 'Current' }];
 
+/**
+ * Every comparison re-runs all of a section's queries, so the count is bounded.
+ * 13 allows a monthly series: the as-of date and each of the 12 months before it.
+ * validateNarrativeSpec rejects more, so nothing is dropped silently.
+ */
+export const MAX_COMPARISONS = 13;
+
 export function resolveAsOfSet(
   comparisons: AsOfComparison[] | undefined,
   asOfDate: string,
   params: Record<string, unknown> = {},
 ): ResolvedAsOf[] {
   const list = comparisons && comparisons.length ? comparisons : DEFAULT_COMPARISONS;
-  return list.slice(0, 6).map((c) => {
+  return list.slice(0, MAX_COMPARISONS).map((c) => {
     if (c.param) {
       const raw = params[c.param];
       const date = typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : null;
@@ -617,6 +624,9 @@ export function validateNarrativeSpec(spec: NarrativeSpec, validateQueries?: (q:
       if (!(s.batch.size >= 1)) errors.push(`${w}: batch size must be at least 1`);
     }
     if (s.research && !Array.isArray(s.research.queries)) errors.push(`${w}: research.queries must be an array`);
+    if ((s.comparisons?.length ?? 0) > MAX_COMPARISONS) {
+      errors.push(`${w}: at most ${MAX_COMPARISONS} comparison dates (has ${s.comparisons!.length}); the rest would be ignored`);
+    }
   }
   try { sectionRunOrder(sections); } catch (e: any) { errors.push(e.message); }
   return errors;

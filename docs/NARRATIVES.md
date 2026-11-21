@@ -13,7 +13,7 @@ A **section** has:
 | `key`, `title`, `purpose` | Identity, and the question the section leads with |
 | `instructions` | What to analyse. Names the query keys it may cite |
 | `dataQueries` | Declared data (same spec as dashboards) |
-| `comparisons` | Re-run every query at other as-of dates: `{label, offset:{years,quarters,months,days}}` or `{label, param}` for an input such as an inception date |
+| `comparisons` | Re-run every query at other as-of dates: `{label, offset:{years,quarters,months,days}}` or `{label, param}` for an input such as an inception date. At most 13 (a monthly series over a year); validation rejects more |
 | `measures` | Derived columns per row: `{query, alias, expr}` |
 | `screens` | Thresholds applied to every row, computed not judged: `{key, label, query, when, severity}` |
 | `scenarios` | What-ifs aggregated across rows: `{key, label, query, expr, agg, params, rankBy, top}` (rate shock, "two largest stop paying") |
