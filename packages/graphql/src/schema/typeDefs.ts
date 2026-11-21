@@ -1091,6 +1091,8 @@ type ComplianceFundRule {
   resultUnit: String
   limitDirection: String
   groupByAttributeCode: String
+  # What one group of the result is called (Issuer, Sector), from the rule.
+  groupLabel: String
   consolidateDescendants: Boolean!
   isActive: Boolean!
 }
@@ -2730,15 +2732,19 @@ type AllocationPreview {
 }
 
 # One fund's standing on one compliance rule and group that the deal's
-# securities would worsen, read from the booked book (hypothetical positions
-# left out). current is numerator / denominator, or numerator for an amount
-# rule. room is what the fund can add before the hard limit; when
-# denominatorGrows the new position counts in the denominator too.
+# securities would worsen, read by the rule evaluator from the fund's book
+# without this deal (other deals' proposals count, as in the pro forma panel).
+# current is numerator / denominator, or numerator for an amount rule. room is
+# what the fund can add before the hard limit; when denominatorGrows the new
+# position counts in the denominator too. groupLabel names what a group is
+# (Issuer, Sector), from the rule. limitDirection is MAX or MIN.
 type AllocationCapacity {
   fundId: ID!
   ruleCode: String!
   ruleName: String!
   groupValue: String
+  groupLabel: String
+  limitDirection: String!
   trancheIds: [ID!]!
   room: Float!
   numerator: Float

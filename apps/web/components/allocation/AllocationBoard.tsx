@@ -157,7 +157,7 @@ const PREVIEW = `
         cells { trancheId eligible amount systemAmount capReason imbalance exclusionKind exclusionText overridden reasonCode }
       }
       adjustments { fundId trancheId type amount reason note saved }
-      capacities { fundId ruleCode ruleName groupValue trancheIds room numerator denominator hardLimit softLimit resultUnit denominatorGrows }
+      capacities { fundId ruleCode ruleName groupValue groupLabel limitDirection trancheIds room numerator denominator hardLimit softLimit resultUnit denominatorGrows }
       errors { message }
     }
   }

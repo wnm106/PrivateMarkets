@@ -37,3 +37,13 @@ To mark one as applied without running it: `npx supabase migration repair --stat
 1. Dry-run it in a transaction that rolls back: `begin;` + the file + `rollback;`, run with `npx supabase db query --linked -f <file>`.
 2. Apply it: `npx supabase db push` once nothing else is pending, or `npx supabase db query --linked -f <file>` followed by `npx supabase migration repair --status applied <version>`.
 3. A request through `db query --linked` is cut off after about two minutes. A migration that does more than that, such as solving a formula for every record, has to be split, or run over a direct connection with `psql`.
+
+## Applied on 2026-11-21
+
+`20261114160000_compliance_capacity_and_proforma` (never applied before; the new capacity path needs its proforma functions) and `20261121130000_capacity_reads_the_evaluator` were applied together in one transaction through the Management API, after a dry run in a rolled-back transaction, and recorded in `supabase_migrations.schema_migrations`.
+
+Still to do:
+
+- `20261121130100_retire_old_capacity_path` drops `compliance.fund_security_capacities`. Apply it only after the web app built from this change is deployed; the app deployed before it still calls that function.
+- `20261121120000 fund_thresholds_only` is applied on the hosted project but is in no branch of this repo. Its SQL is in `supabase_migrations.schema_migrations.statements`. Add it here as a file so a fresh database matches.
+- 23 other files here are still not applied (`npx supabase db push --dry-run` lists them). Review each as described above.

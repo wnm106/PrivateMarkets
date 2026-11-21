@@ -13,7 +13,7 @@
 import type { Context } from '../context';
 import { commitAllocation, loadAllocationDraft, type AllocationHold } from './allocation-store';
 import type { AllocationAdjustment } from './allocation-engine';
-import { DEAL_SURFACE_RULE_CODES, dealSurfaceResults, rulesToScore, scoreDealFunds } from './deal-compliance';
+import { dealSurfaceResults, loadDealScorePlans, scoreDealFunds } from './deal-compliance';
 
 export interface DealScoreArgs {
   dealId: string;
@@ -58,32 +58,10 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
   const preview = await commitAllocation(writer, draft, context.user?.id ?? null, { scenarioCode });
   const fundIds = new Set(preview.rows.map((row) => row.fundId));
 
-  // Pro forma rules are inactive on purpose, so a platform-wide job skips
-  // them. Enrolled rules are the ones with a limit assigned to a fund on
-  // this deal. Reading through the service role keeps a user policy from
-  // hiding an inactive rule.
+  // Which rules this deal is scored on, for which funds, is one database
+  // function shared with the deal score and capacity.
   const compliance = writer.schema('compliance');
-  const fundList = [...fundIds];
-  const [thresholdRead, surfaceRead] = await Promise.all([
-    fundList.length
-      ? compliance
-        .from('rule_thresholds')
-        .select('rule_id, entity_id, group_value, rank_from, applies, valid_from, valid_to')
-        .in('entity_id', fundList)
-      : Promise.resolve({ data: [] as any[], error: null }),
-    compliance.from('rules').select('*').in('rule_code', [...DEAL_SURFACE_RULE_CODES]),
-  ]);
-  if (thresholdRead.error) throw new Error(thresholdRead.error.message);
-  if (surfaceRead.error) throw new Error(surfaceRead.error.message);
-  const thresholdRows = (thresholdRead.data || []) as any[];
-  const enrolledIds = [...new Set(thresholdRows.map((row) => row.rule_id))];
-  const { data: enrolledRows, error: enrolledError } = enrolledIds.length
-    ? await compliance.from('rules').select('*').in('id', enrolledIds)
-    : { data: [], error: null };
-  if (enrolledError) throw new Error(enrolledError.message);
-  const ruleById = new Map<string, any>();
-  for (const row of [...(surfaceRead.data || []), ...(enrolledRows || [])]) ruleById.set(row.id, row);
-  const plans = rulesToScore([...ruleById.values()], thresholdRows, fundIds, draft.asOf);
+  const plans = await loadDealScorePlans(compliance, fundIds, draft.asOf);
   if (!plans.length) throw new Error('No compliance rules with limits are assigned to the funds on this deal.');
   const { data: versionRows, error: versionError } = await compliance
     .from('rule_versions')
@@ -121,9 +99,10 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
   return {
     scenarioCode,
     asOfDate: draft.asOf,
-    rules: plans.map(({ rule: row }) => {
+    rules: plans.map(({ rule: row, groupLabel }) => {
       const version = versionByRule.get(row.id);
       return {
+        groupLabel,
         id: row.id,
         ruleCode: row.rule_code,
         ruleName: row.rule_name,

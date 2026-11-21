@@ -15,8 +15,6 @@ const OPEN_TO = '9999-12-31';
 const OPEN_SYSTEM_TO = '9999-12-31 23:59:59';
 const MAX_REJECTS = 500;
 const DRY_PREFIX = 'dry:';
-/** Client that scripts and tests load into. The app always passes the signed-in user's client instead. */
-export const DEFAULT_CLIENT_CODE = 'MERIDIAN_INTERNAL';
 
 interface AttributeMeta {
   id: string;
@@ -227,9 +225,18 @@ function collectDrafts(
   return result;
 }
 
+/**
+ * The client that scripts and tests load into: the platform's internal client
+ * (tenancy.clients.is_internal). The app always passes the signed-in user's
+ * client instead.
+ */
 export async function defaultClientId(db: SupabaseClient): Promise<string> {
-  const found = await db.schema('tenancy').from('clients').select('id').eq('client_code', DEFAULT_CLIENT_CODE).single();
-  if (found.error || !found.data?.id) throw new Error(`Client ${DEFAULT_CLIENT_CODE} was not found`);
+  const found = await db.schema('tenancy').from('clients').select('id')
+    .eq('is_internal', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (found.error || !found.data?.id) throw new Error('No internal client (tenancy.clients.is_internal) was found');
   return found.data.id;
 }
 

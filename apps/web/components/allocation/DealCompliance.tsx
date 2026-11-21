@@ -21,6 +21,7 @@ export interface FundRule {
   resultUnit?: string | null;
   limitDirection?: string | null;
   groupByAttributeCode?: string | null;
+  groupLabel?: string | null;
 }
 
 export interface FundResult {
@@ -66,12 +67,6 @@ const STATUS_RANK: Record<string, number> = {
   ERROR: 2,
   NO_DATA: 3,
   PASS: 4,
-};
-
-export const GROUP_LABEL: Record<string, string> = {
-  ISSUER_LEGAL_NAME: 'Issuer',
-  SECTOR: 'Sector',
-  SPONSOR_NAME: 'Sponsor',
 };
 
 export function reading(result: FundResult, direction?: string | null): { bucket: Exclude<Bucket, 'all'>; tone: string; label: string } {
@@ -127,7 +122,7 @@ function detailSections(rule: FundRule, result: FundResult): Array<{ label: stri
   const sections: Array<{ label: string; value: string }> = [];
   if (result.groupByValue) {
     sections.push({
-      label: GROUP_LABEL[rule.groupByAttributeCode || ''] || 'Group',
+      label: rule.groupLabel || 'Group',
       value: result.groupByValue,
     });
   }
@@ -153,7 +148,7 @@ function detailSections(rule: FundRule, result: FundResult): Array<{ label: stri
 function explain(rule: FundRule, result: FundResult): string {
   const direction = result.limitDirection || rule.limitDirection;
   const groupName = result.groupByValue
-    ? `${GROUP_LABEL[rule.groupByAttributeCode || ''] || 'Group'} ${result.groupByValue}. `
+    ? `${rule.groupLabel || 'Group'} ${result.groupByValue}. `
     : '';
   const rank = result.rankPosition != null ? `Rank ${result.rankPosition}. ` : '';
   const count = result.contributingCount != null
@@ -233,7 +228,7 @@ function tally(results: FundResult[], directionFor: (result: FundResult) => stri
 const SCORE = `
   mutation ScoreDealCompliance($dealId: ID!, $asOfDate: Date, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
     scoreDealCompliance(dealId: $dealId, asOfDate: $asOfDate, holds: $holds, adjustments: $adjustments) {
-      rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode }
+      rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode groupLabel }
       results { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
       errors { message }
     }
@@ -383,7 +378,7 @@ export function ComplianceGaugeList({
         const owner = result.anchorEntityId === fundId
           ? ''
           : funds.find((fund) => fund.fundId === result.anchorEntityId)?.fundName.replace(/^[^:]+:\s*/, '') || '';
-        const group = result.groupByValue ? `${GROUP_LABEL[rule.groupByAttributeCode || ''] || 'Group'} ${result.groupByValue}` : '';
+        const group = result.groupByValue ? `${rule.groupLabel || 'Group'} ${result.groupByValue}` : '';
         const open = openId === result.id;
         const sections = detailSections(rule, result);
         return (

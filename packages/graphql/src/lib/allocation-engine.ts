@@ -48,7 +48,7 @@ export interface AllocationSleeve {
   allowed: string[];
   denyNote: string;
   /**
-   * Present when caps come from compliance.fund_security_capacities.
+   * Present when caps come from compliance.deal_capacity_observations.
    * An empty list means no rule constrains this sleeve.
    */
   capacityPools?: AllocationCapacityPool[];
@@ -68,7 +68,7 @@ export interface AllocationPortfolio {
   denyNote: string;
   sleeves: AllocationSleeve[];
   /**
-   * Present when caps come from compliance.fund_security_capacities.
+   * Present when caps come from compliance.deal_capacity_observations.
    * Issuer, sponsor, and unfunded limits on the fund are not applied on top.
    */
   capacityPools?: AllocationCapacityPool[];

@@ -10,6 +10,10 @@ export interface CapacityReading {
   ruleCode: string;
   ruleName: string;
   groupValue?: string | null;
+  /** What a group of the rule is called (Issuer, Sector), from the rule itself. */
+  groupLabel?: string | null;
+  /** MAX: stay at or below the limit. MIN: stay at or above it. Missing is MAX. */
+  limitDirection?: string | null;
   trancheIds: string[];
   room: number;
   numerator?: number | null;
@@ -71,6 +75,16 @@ export function standingTone(value: number | null, reading: CapacityReading): { 
     return value != null && value > 1e-6 ? { tone: 'breach', label: 'Not permitted, held' } : { tone: 'blocked', label: 'Not permitted' };
   }
   if (value == null || reading.hardLimit == null) return { tone: 'na', label: 'Not measured' };
+  if (reading.limitDirection === 'MIN') {
+    // A floor: the figure must stay at or above the limit.
+    if (value < reading.hardLimit * 0.9995) return { tone: 'breach', label: 'Below limit' };
+    if (value <= reading.hardLimit * 1.005) return { tone: 'breach', label: 'At limit' };
+    if (reading.softLimit != null && reading.softLimit > reading.hardLimit && value < reading.softLimit) {
+      return { tone: 'near', label: 'Below soft limit' };
+    }
+    if (value <= reading.hardLimit / 0.85) return { tone: 'near', label: 'Near limit' };
+    return { tone: 'ok', label: 'Within limit' };
+  }
   const ratio = value / reading.hardLimit;
   if (ratio > 1.0005) return { tone: 'breach', label: 'Over limit' };
   if (ratio >= 0.995) return { tone: 'breach', label: 'At limit' };
@@ -98,7 +112,7 @@ export function standing(reading: CapacityReading, used: number, ownerId: string
   const utilisation = isProhibition(reading)
     ? 1
     : proForma != null && reading.hardLimit
-      ? proForma / reading.hardLimit
+      ? (reading.limitDirection === 'MIN' ? (proForma > 0 ? reading.hardLimit / proForma : 1) : proForma / reading.hardLimit)
       : Number.isFinite(roomUsed) ? roomUsed : 1;
   return {
     reading,

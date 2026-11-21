@@ -1,9 +1,19 @@
 name: Deploy web to Cloudflare
 
-# Manual only: run it from the Actions tab. Building happens on Linux because
-# the OpenNext bundler needs symlinks, which Windows blocks without Developer Mode.
+# Deploys master once CI has passed on it, and can still be run by hand from the
+# Actions tab. It deploys the exact commit CI tested, never a newer one. Building
+# happens on Linux because the OpenNext bundler needs symlinks, which Windows
+# blocks without Developer Mode.
+#
+# Database migrations are not applied here. A change whose app needs a new
+# migration must have it applied before merging (docs/MIGRATIONS.md); a
+# migration that removes what the deployed app calls is applied after.
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
 
 concurrency:
   group: deploy-web-cloudflare
@@ -14,11 +24,18 @@ permissions:
 
 jobs:
   deploy:
+    # By hand, or after CI succeeded on a push to master (not on a pull request).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The commit CI passed on. A manual run deploys the branch it was started from.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:

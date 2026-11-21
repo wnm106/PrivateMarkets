@@ -1,0 +1,23 @@
+# Migrations that cannot apply in order on a fresh database, and how
+# scripts/db-replay/replay.sh applies them. Production got them in a different
+# order, so they are not edited. This list only shrinks: a new migration must
+# apply cleanly and never goes here.
+#
+#   replica        apply with triggers and foreign keys off
+#   views          rewrite CREATE OR REPLACE VIEW as drop and create
+#   broken         may fail; the replay carries on without it
+#
+# The seed runs before this migration (later migrations need its attributes).
+seed-before 20261016000000
+# Sample data written against a production client id that no migration creates.
+legacy-client 6c6bac30-6911-4cd7-97e5-d5447a8f06fb
+
+20261012140000_retire_dotted_attribute_codes.sql   replica
+20261013145919_client_schema_scope.sql             views
+# Self-checking migrations whose expected counts come from production data.
+20261024140000_dq_compiled_rule_sql.sql            broken
+20261105160000_role_entity_security.sql            broken
+20261109181221_scope_unassigned_attributes.sql     broken
+20261117060000_data_quality_program.sql            broken
+# Depends on 20261024140000.
+20261117090000_dq_compiled_rules_lazy.sql          broken
