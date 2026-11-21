@@ -18,6 +18,8 @@
 --      The rule version's numbers are a template only, used by the rule
 --      builder's test run (compliance.rule_preview) and to fill a new fund row.
 -- Rules on records that are not funds (statement covenants) are unchanged.
+--
+-- guard: data-migration Retiring the rule-wide limit would silently drop limits the allocation already enforces, so each fund's current limit is written onto its own row first.
 
 -- 1. Copy each rule's limit onto the allocation-eligible funds it covers.
 WITH eligible AS (
@@ -157,7 +159,10 @@ ALTER TABLE compliance.rule_thresholds
     ADD CONSTRAINT rule_thresholds_fund_only CHECK (entity_id IS NOT NULL) NOT VALID;
 
 -- 3. Fund rules read only the fund's own rows.
-CREATE OR REPLACE FUNCTION compliance.resolve_threshold(
+-- Dropped first: a database built from every migration has a fifth column
+-- (limit_direction) that no current caller reads and the hosted one lacks.
+DROP FUNCTION IF EXISTS compliance.resolve_threshold(UUID, UUID, TEXT, BIGINT, DATE, NUMERIC, NUMERIC);
+CREATE FUNCTION compliance.resolve_threshold(
     p_rule_id UUID,
     p_entity_id UUID,
     p_group TEXT,

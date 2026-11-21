@@ -30,12 +30,9 @@ const CODES = [
   'ISSUER_LEGAL_NAME',
 ] as const;
 
-/** Share-of-book tests whose thresholds are the concentration limits. */
-export const EXPOSURE_RULE_CODES = {
-  strategy: 'FUND_STRATEGY_BOOK_PCT',
-  sector: 'FUND_SECTOR_BOOK_PCT',
-  issuer: 'FUND_ISSUER_BOOK_PCT',
-} as const;
+/** The share-of-book dimensions a rule can carry as metadata.exposure_dimension. */
+export type ExposureDimension = 'strategy' | 'sector' | 'issuer';
+const EXPOSURE_DIMENSIONS: readonly ExposureDimension[] = ['strategy', 'sector', 'issuer'];
 
 const FUND_STRATEGY: Record<string, string> = {
   DIRECT_LENDING: 'Direct lending',
@@ -503,16 +500,26 @@ interface ExposureRule {
   thresholds: ExposureThreshold[];
 }
 
-/** The share-of-book rules and this fund's own limits for them. */
+/**
+ * The share-of-book rules, found by metadata.exposure_dimension (strategy,
+ * sector, issuer), and this fund's own limits for them.
+ */
 async function loadExposureRules(
   supabase: SupabaseClient,
   fundId: string,
-): Promise<Map<string, ExposureRule>> {
-  const out = new Map<string, ExposureRule>();
-  const codes = Object.values(EXPOSURE_RULE_CODES);
+): Promise<Map<ExposureDimension, ExposureRule>> {
+  const out = new Map<ExposureDimension, ExposureRule>();
   const compliance = supabase.schema('compliance');
-  const { data: rules, error } = await compliance.from('rules').select('id, rule_code').in('rule_code', codes);
+  const { data: tagged, error } = await compliance
+    .from('rules')
+    .select('id, rule_code, metadata')
+    .not('metadata->>exposure_dimension', 'is', null);
   if (error) throw new Error(error.message);
+  const dimensionOf = (rule: { metadata?: Record<string, unknown> | null }) => {
+    const value = rule.metadata?.exposure_dimension;
+    return EXPOSURE_DIMENSIONS.find((dimension) => dimension === value) || null;
+  };
+  const rules = (tagged || []).filter((rule) => dimensionOf(rule));
   const ids = (rules || []).map((rule) => rule.id as string);
   if (!ids.length) return out;
   const { data: thresholds, error: thresholdError } = await compliance
@@ -523,7 +530,9 @@ async function loadExposureRules(
   if (thresholdError) throw new Error(thresholdError.message);
   const numberOrNull = (value: unknown) => (value == null || value === '' ? null : Number(value));
   for (const rule of rules || []) {
-    out.set(rule.rule_code, {
+    const dimension = dimensionOf(rule);
+    if (!dimension || out.has(dimension)) continue;
+    out.set(dimension, {
       id: rule.id,
       code: rule.rule_code,
       thresholds: (thresholds || []).filter((row) => row.rule_id === rule.id).map((row) => ({
@@ -796,8 +805,8 @@ export async function loadFundSurface(
     : null;
 
   const exposureRules = await loadExposureRules(supabase, fund.id);
-  const bars = (dimension: 'strategy' | 'sector' | 'issuer'): ExposureBar[] => {
-    const rule = exposureRules.get(EXPOSURE_RULE_CODES[dimension]);
+  const bars = (dimension: ExposureDimension): ExposureBar[] => {
+    const rule = exposureRules.get(dimension);
     const grouped = new Map<string, { label: string; amount: number }>();
     for (const position of live) {
       const key = dimension === 'strategy' ? position.strategyCode : dimension === 'sector' ? position.sector : position.issuerKey;
