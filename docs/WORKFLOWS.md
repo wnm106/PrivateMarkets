@@ -349,12 +349,16 @@ Nobody has to watch the list. A review is announced as a note in each person's a
 | The review opens | Everyone who can decide it: the people and roles it is for, or everyone holding `workflow.review` when it is for anyone. Not the person who started the run when the step keeps them apart |
 | It is reassigned | Everyone who can decide it now, except whoever reassigned it |
 | It passes its due date | The same people, and everyone holding a role under "Also tell when overdue". Once per review |
+| A form opens, or passes its due date | Everyone who can answer it: the people and roles it is for, or everyone holding `workflow.review` when it is for anyone. A form sent outside the firm is not announced here; the outsider gets its link |
+| A screen opens, comes back with a reason, or passes its due date | Everyone who can work it, the same way |
 
 On the home page, a review you can decide is under Needs you. An overdue one goes to the top, marked as when it was due.
 
 **Email and Slack.** Under **Review notices** on `/workflows`, someone who manages workflows can also send each notice by email to the reviewer's sign-in address, and to one Slack channel by its incoming webhook. Email needs `RESEND_API_KEY` and `NOTIFY_EMAIL_FROM` on the worker, and `APP_URL` for full links. Only a `https://hooks.slack.com/` address is accepted, and it is never shown again once saved. Each notice queues `notify.deliver`, which records every send; a recipient already sent to is not sent to again, and a failed send is tried again.
 
-The overdue notices come from the platform job `workflow.reviews_due`, on a schedule the migration creates (`WORKFLOW_REVIEWS_DUE`, every 15 minutes). The same job sends again any note that was not delivered in the last two weeks, to anyone still in that client and in no other. A note about a review that has been decided since is not sent. Each notice is also kept in the run's history.
+The overdue notices come from the platform job `workflow.reviews_due`, on a schedule the migration creates (`WORKFLOW_REVIEWS_DUE`, every 15 minutes). The same job sends again any note that was not delivered in the last two weeks, to anyone still in that client and in no other. A note about a review, form or screen that has been finished since is not sent; `ops.workflow_notice_open` decides that, for the briefing, email and Slack alike. Each notice is also kept in the run's history.
+
+A notice about a form or a screen links to its run on that decision. It is written by a trigger when the form or screen opens, in `supabase/migrations/20261121150000_workflow_step_notices.sql`; a notice that cannot be written is logged as a warning and never stops the run. `scripts/db-tests/workflow-notices.sql` checks all of it, and runs in CI with `npm run test:db`.
 
 Underneath, a notice is an `ops.activity_events` row with `recipients` set, in `supabase/migrations/20261117020000_workflow_review_notices.sql`. Any other part of the platform can address a note to people the same way.
 
@@ -574,7 +578,7 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 - Stages for proposed new fields and a drafted template. Three screens exist: understanding a file, mapping it, and checking staged values.
 - Choosing the stored record a file's values load onto. The Understand screen links the document to a record; the loader still matches values by code, identifier and name.
 - Starting a guided run when a file arrives by a feed. It is started by hand from Load data.
-- Notices for forms and screens. They are in the Tasks inbox and on Needs you, but are not sent to the briefing, by email or to Slack, and are not chased when overdue.
+- Handing an overdue form or screen on to other roles. Reviews can be; forms and screens are only chased.
 - Choosing how you are told: a digest, quiet hours, or browser notifications.
 - Screens for more kinds of change. Reconciliation changes have their own; a proposed new field, list value, alias or template is still decided in the general table.
 - Performance review. There is no read tool for returns or attribution, so no view or section for them.
