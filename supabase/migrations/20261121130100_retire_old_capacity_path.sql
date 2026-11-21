@@ -1,6 +1,6 @@
 -- Retire the capacity path that kept its own copy of the compliance rules.
 --
--- 20261121100000 added compliance.deal_capacity_observations, which reads the
+-- 20261121130000 added compliance.deal_capacity_observations, which reads the
 -- rule evaluator, and the app now calls it. Apply this only after the app built
 -- from that change is deployed: the previous app calls
 -- compliance.fund_security_capacities.

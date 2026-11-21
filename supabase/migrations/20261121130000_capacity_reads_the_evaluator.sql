@@ -24,7 +24,7 @@
 --     deal, such as sponsor, sees it) and can be unfunded (the amount goes to
 --     UNFUNDED_COMMITMENT_AMOUNT instead of FUNDED_PAR_AMOUNT).
 --   * The old capacity function and its private interpreters are dropped by
---     20261121100100, once the app that calls the new path is deployed. Until
+--     20261121130100, once the app that calls the new path is deployed. Until
 --     then both exist, so applying this migration does not break the running app.
 
 -- ============================================================
