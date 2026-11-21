@@ -23,7 +23,7 @@ The pane can also save new values as manual entries, the same as a manual overri
 | Sign-in form and authenticator step shared with `/login` | `apps/web/components/auth/SignInForm.tsx`, `apps/web/components/auth/MfaStep.tsx` |
 | The session message between the page and the add-in | `packages/graphql/src/lib/excel-session.ts` |
 | `tapValues` and `searchAttributes` queries | `packages/graphql/src/resolvers/excel.ts`, `packages/graphql/src/lib/tap.ts`, `packages/graphql/src/lib/attribute-search.ts` |
-| Exact matching for a cell's references | `supabase/migrations/20261121150000_excel_tap_matches.sql` |
+| Exact matching for a cell's references | `supabase/migrations/20261121150100_excel_tap_matches.sql` |
 | Manual entries from Excel: preview and save | `packages/graphql/src/lib/tap-override.ts`, `tapOverridePreview` and `submitTapOverrides` in `resolvers/excel.ts` |
 | The one manual-override writer (record screen, chat, workflows, Excel) | `packages/graphql/src/lib/source-write.ts` |
 | Reading a value as an attribute stores it (loads and overrides) | `packages/graphql/src/lib/attribute-values.ts` |
@@ -151,7 +151,7 @@ Because the record screen, chat and workflows share the writer, they changed too
 
 ## Deploying
 
-1. Apply `20261121150000_excel_tap_matches.sql` to the hosted project before the web app that calls it is deployed (docs/MIGRATIONS.md). It only adds two functions.
+1. Apply `20261121150100_excel_tap_matches.sql` to the hosted project before the web app that calls it is deployed (docs/MIGRATIONS.md). It only adds two functions.
 2. Deploy the web app as usual. `apps/web`'s `prebuild` builds the add-in into `public/excel/addin/`, so every deploy serves the matching add-in. The manifest's URLs come from:
    - `EXCEL_ADDIN_ORIGIN`, else `NEXT_PUBLIC_APP_URL`, else `https://localhost:3000`. It must be https.
    - `EXCEL_ADDIN_ID`, the add-in's GUID. Give staging its own so both can be installed. Production uses the default in `scripts/build.mjs`.
