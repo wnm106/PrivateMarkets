@@ -68,7 +68,7 @@ export const PROMPTS: PromptDefinition[] = [
 export function getPromptMessages(name: string, args: Record<string, string> = {}): PromptMessage[] {
   switch (name) {
     case 'compose_narrative': return composeNarrativePrompt(args);
-    case 'portfolio_review': return composeNarrativePrompt({ ...args, narrativeCode: 'FUND_LP_PORTFOLIO_REVIEW', request: 'Produce the full LP portfolio review: executive summary, portfolio evolution, performance attribution, borrower-by-borrower credit review and ranking, risk call-outs, industry exposure and sentiment, fund compliance and liquidity, forward outlook, and the ten toughest LP questions.' });
+    case 'portfolio_review': return composeNarrativePrompt({ ...args, narrativeCode: 'FUND_LP_PORTFOLIO_REVIEW', request: 'Produce the investor-ready LP portfolio review: fund at a glance, NAV track record, returns and income, what drove NAV, portfolio composition, concentration and downside, loan book, borrower credit quality, limits and liquidity, anticipated LP questions, and the internal data-room appendix.' });
     case 'build_compliance_rule': return buildComplianceRulePrompt(args);
     case 'explore_data_model': return exploreDataModelPrompt(args);
     case 'interpret_compliance_results': return interpretComplianceResultsPrompt(args);
