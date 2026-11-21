@@ -9,7 +9,8 @@ import {
 import type { AllocationAdjustment } from '../lib/allocation-engine';
 import { storeDealPerformance } from '../lib/deal-performance-store';
 
-function adjustments(input: any[] | null | undefined): AllocationAdjustment[] | null {
+/** GraphQL adjustment inputs as engine adjustments. `saved` is kept so a saved amount is not read as an override. */
+export function adjustments(input: any[] | null | undefined): AllocationAdjustment[] | null {
   if (!input) return null;
   return input.map((item) => ({
     fundId: item.fundId,
@@ -22,7 +23,7 @@ function adjustments(input: any[] | null | undefined): AllocationAdjustment[] | 
   }));
 }
 
-function holds(input: any[] | null | undefined): AllocationHold[] | null {
+export function holds(input: any[] | null | undefined): AllocationHold[] | null {
   if (!input) return null;
   return input.map((item) => ({ trancheId: item.trancheId, holdPct: Number(item.holdPct) }));
 }

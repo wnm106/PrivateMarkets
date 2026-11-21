@@ -1,6 +1,6 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextRequest, NextResponse } from 'next/server';
-import { NEXT_PATH_COOKIE, safeNextPath } from '@/lib/safe-next-path';
+import { NEXT_PATH_COOKIE, nextPathFromCookie, safeNextPath } from '@/lib/safe-next-path';
 
 /**
  * OAuth (Azure AD) PKCE callback. The session cookies have to be set on this
@@ -11,9 +11,8 @@ export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
   const remembered = request.cookies.get(NEXT_PATH_COOKIE)?.value;
-  const redirectedFrom = safeNextPath(
-    searchParams.get('redirectedFrom') || (remembered ? decodeURIComponent(remembered) : null),
-  );
+  const requested = searchParams.get('redirectedFrom');
+  const redirectedFrom = requested ? safeNextPath(requested) : nextPathFromCookie(remembered);
 
   if (!code) {
     return NextResponse.redirect(`${origin}/login?error=missing_code`);

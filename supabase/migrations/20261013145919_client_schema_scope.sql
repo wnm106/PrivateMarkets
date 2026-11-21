@@ -197,6 +197,24 @@ SELECT
   client_id
 FROM metadata_register.domain_templates;
 
+-- 00055 created this view as SELECT * over metadata_register.relationship_types.
+-- On a fresh database that table has updated_at (00009) at the position the
+-- listed columns below give to client_id, and CREATE OR REPLACE VIEW cannot drop
+-- or rename a column, so the old view is dropped first. Where the view has no
+-- updated_at, as on the hosted project, it is replaced in place as before. A
+-- dropped view comes back with the schema's default grants, which are the
+-- grants it had.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = to_regclass('public.relationship_types')
+      AND attname = 'updated_at' AND attnum > 0 AND NOT attisdropped
+  ) THEN
+    DROP VIEW public.relationship_types;
+  END IF;
+END $$;
+
 CREATE OR REPLACE VIEW public.relationship_types AS
 SELECT
   id,

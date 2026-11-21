@@ -37,7 +37,9 @@ import type { Actor, ToolNeed, ToolRunner } from './engine';
  *
  * People are checked by lookup, not by signing in as them. Whoever is behind a
  * step (the person who started the run, or who approved the change) must hold
- * the permissions that step needs.
+ * the permissions that step needs, and must be able to reach each record the
+ * call names: the account may see records a person's entity grants keep from
+ * them, so its reach is not theirs.
  */
 
 export interface ToolEnv {
@@ -52,8 +54,29 @@ const NEEDS: Record<ToolNeed, string[]> = {
   apply: ['workflow.review', 'entity.write'],
 };
 
-/** Tool settings that hold the reason for a change. An approved change is signed there. */
+/**
+ * Tools that write live records from a load. The service account holds
+ * load.promote, so the person behind the call must too, as on the web routes
+ * that do the same.
+ */
+const LOAD_PROMOTE_TOOLS = new Set(['promote_load_batch', 'revert_load_batch', 'process_position_file_import', 'load_position_file_table', 'run_load_session']);
+
+/** What the person behind a call to this tool must hold, for this kind of call. */
+export function permissionsFor(name: string, need: ToolNeed): string[] {
+  return LOAD_PROMOTE_TOOLS.has(name) ? [...NEEDS[need], 'load.promote'] : NEEDS[need];
+}
+
+/** Tool settings that hold the reason for a change. A change is signed there with the person it was made for. */
 const REASON_KEYS = ['overrideReason', 'resolutionNotes', 'note', 'reason'];
+
+/**
+ * Settings that name a record, by id or by code, at any depth (a list of
+ * members names each one). A record id is a UUID; anything else in an id
+ * setting (fundId takes a fund code too) is checked as a code.
+ */
+const RECORD_ID_KEY = /(?:entity|security|fund)ids?$/i;
+const RECORD_CODE_KEY = /(?:entity|security|fund)codes?$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const PERSON_CHECK_MS = 60_000;
 /** A session is replaced this long before it expires, so a long step does not outlive it. */
@@ -61,8 +84,8 @@ const SESSION_MARGIN_MS = 5 * 60_000;
 const NO_SESSION = { auth: { autoRefreshToken: false, persistSession: false } } as const;
 
 export function buildRegistry(): ToolRegistry {
-  // The registry's own client is never used: every call passes the service account's client.
-  const registry = new ToolRegistry(null as unknown as SupabaseClient);
+  // The registry keeps no client. Every call below passes the one it runs as.
+  const registry = new ToolRegistry();
   registerDomainTools(registry);
   registerLineageTools(registry);
   registerOverrideTools(registry);
@@ -90,7 +113,28 @@ export function toolSpecs(registry: ToolRegistry): ToolSpec[] {
   }));
 }
 
-/** Adds who approved a change to the tool's own reason field, when it has one. */
+/** The records a tool call names: their ids, and the codes of any named by code. */
+export function namedRecords(args: unknown): { ids: string[]; codes: string[] } {
+  const ids = new Set<string>();
+  const codes = new Set<string>();
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 8 || !value || typeof value !== 'object') return;
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const byId = RECORD_ID_KEY.test(key);
+      if (byId || RECORD_CODE_KEY.test(key)) {
+        for (const entry of Array.isArray(item) ? item : [item]) {
+          const text = typeof entry === 'string' || typeof entry === 'number' ? String(entry).trim() : '';
+          if (text) (byId && UUID.test(text) ? ids : codes).add(text);
+        }
+      }
+      visit(item, depth + 1);
+    }
+  };
+  visit(args, 0);
+  return { ids: [...ids], codes: [...codes] };
+}
+
+/** Adds who a change was made for, or who approved it, to the tool's own reason field, when it has one. */
 export function signReason(spec: ToolSpec | undefined, args: Record<string, unknown>, signature: string): Record<string, unknown> {
   const properties = (spec?.inputSchema.properties || {}) as Record<string, unknown>;
   const key = REASON_KEYS.find((candidate) => candidate in properties);
@@ -146,17 +190,45 @@ export function workflowTools(
   const accounts = new Map<string, Promise<Session>>();
 
   /** Refuses when the person behind the call does not hold what it needs. Asked again after a minute. */
-  async function personFor(actor: Actor, need: ToolNeed): Promise<{ name: string | null; tenantAdmin: boolean }> {
-    const key = `${actor.userId}:${actor.clientId}:${need}`;
+  async function personFor(actor: Actor, permissions: string[]): Promise<{ name: string | null; tenantAdmin: boolean }> {
+    const key = `${actor.userId}:${actor.clientId}:${permissions.join(',')}`;
     const known = people.get(key);
     if (known && known.until > Date.now()) return known;
-    const { data, error } = await service.rpc('workflow_worker_person', { p_user_id: actor.userId, p_client_id: actor.clientId, p_permissions: NEEDS[need] });
+    const { data, error } = await service.rpc('workflow_worker_person', { p_user_id: actor.userId, p_client_id: actor.clientId, p_permissions: permissions });
     if (error) throw new Error(error.message);
     const result = (data || {}) as { problem?: string; name?: string | null; tenantAdmin?: boolean };
     if (result.problem) throw new Error(result.problem);
     const person = { until: Date.now() + PERSON_CHECK_MS, name: result.name || null, tenantAdmin: result.tenantAdmin === true };
     people.set(key, person);
     return person;
+  }
+
+  /**
+   * Refuses when the person behind the call cannot reach a record it names: see
+   * it, for a read, or change it, for a write or an approved change. Asked as
+   * the person, through tenancy.has_entity_access, so their entity grants
+   * apply. Every call is asked, because each names its own records.
+   */
+  async function assertRecordAccess(name: string, args: Record<string, unknown>, actor: Actor, need: ToolNeed): Promise<void> {
+    const { ids, codes } = namedRecords(args);
+    if (ids.length === 0 && codes.length === 0) return;
+    const level = need === 'read' ? 'READ' : 'WRITE';
+    const { data, error } = await service.rpc('workflow_worker_entity_access', {
+      p_user_id: actor.userId,
+      p_client_id: actor.clientId,
+      p_level: level,
+      p_entity_ids: ids,
+      p_entity_codes: codes,
+    });
+    // Without an answer the call does not run: the service account's reach is wider than the person's.
+    if (error) throw new Error(`"${name}" was not run: the records it names could not be checked against what the person behind this step may reach. ${error.message}`);
+    const result = (data || {}) as { problem?: unknown; denied?: unknown };
+    if (typeof result.problem === 'string' && result.problem) throw new Error(result.problem);
+    if (typeof result.denied !== 'number') throw new Error(`"${name}" was not run: the records it names could not be checked against what the person behind this step may reach.`);
+    if (result.denied > 0) {
+      const what = result.denied === 1 && ids.length + codes.length === 1 ? 'the record' : result.denied === 1 ? 'one of the records' : `${result.denied} of the records`;
+      throw new Error(`"${name}" was not run: the person behind this step may not ${level === 'READ' ? 'see' : 'change'} ${what} it names.`);
+    }
   }
 
   /** A client for the service account of this client. The session is kept until shortly before it expires. */
@@ -187,7 +259,8 @@ export function workflowTools(
 
   async function run(name: string, args: Record<string, unknown>, actor: Actor, need: ToolNeed, runId?: string): Promise<unknown> {
     if (!names.has(name)) throw new Error(`There is no tool called "${name}".`);
-    const person = await personFor(actor, need);
+    const person = await personFor(actor, permissionsFor(name, need));
+    await assertRecordAccess(name, args, actor, need);
     if (name === LIST_VALUE_TOOL) {
       // A list is shared by every client, and only a tenant admin may change one.
       // The service account is not one, so this single change is made with the
@@ -197,8 +270,15 @@ export function workflowTools(
       return registry.executeTool(name, args, service);
     }
     const client = await accountClient(actor.clientId);
-    // The record's own history shows the service account. The reason says who approved it.
-    const finalArgs = need === 'apply' ? signReason(byName.get(name), args, `Approved by ${person.name || 'a reviewer'}${runId ? ` in workflow run ${runId}` : ''}.`) : args;
+    // The record's own history shows the service account. The reason says who the change was for:
+    // the reviewer who approved it, or the person who started the run a fixed step changed it in.
+    const where = runId ? ` in workflow run ${runId}` : '';
+    const finalArgs =
+      need === 'apply'
+        ? signReason(byName.get(name), args, `Approved by ${person.name || 'a reviewer'}${where}.`)
+        : need === 'write'
+          ? signReason(byName.get(name), args, `Made by a workflow step for ${person.name || 'the person who started the run'}${where}.`)
+          : args;
     return registry.executeTool(name, finalArgs, client);
   }
 

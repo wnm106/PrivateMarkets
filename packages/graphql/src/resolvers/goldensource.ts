@@ -213,24 +213,37 @@ async function resolveAndPersistGolden(
 async function batchReresolve(
   context: Context, domainCode: string, attributeCode: string, templateCode?: string
 ): Promise<number> {
-  let query = context.supabase.from("entity_master").select("entity_id, template_id, domain_code").eq("domain_code", domainCode);
+  let templateId: string | null = null;
   if (templateCode) {
-    const { data: tmpl } = await context.supabase.from("domain_templates").select("id").eq("template_code", templateCode).single();
-    if (tmpl) query = query.eq("template_id", tmpl.id);
+    const { data: tmpl, error: templateError } = await context.supabase.from("domain_templates").select("id").eq("template_code", templateCode).maybeSingle();
+    if (templateError) throw templateError;
+    // Without this the whole domain would be re-resolved instead of one template.
+    if (!tmpl) throw new Error(`Template ${templateCode} was not found.`);
+    templateId = tmpl.id;
   }
-  const { data: entities } = await query;
-  if (!entities || entities.length === 0) return 0;
 
   let resolved = 0;
   const validFrom = new Date().toISOString().split("T")[0];
   const batchSize = 50;
-  for (let i = 0; i < entities.length; i += batchSize) {
-    const batch = entities.slice(i, i + batchSize);
-    const results = await Promise.all(batch.map(async (entity: any) => {
-      try { await resolveAndPersistGolden(context, entity.entity_id, attributeCode, domainCode, entity.template_id, validFrom); return true; }
-      catch (err) { console.error(`Failed to re-resolve for entity ${entity.entity_id}:`, err); return false; }
-    }));
-    resolved += results.filter(Boolean).length;
+  // PostgREST returns at most max_rows (1,000) rows per request, so the entities are read page by page.
+  const pageSize = 1000;
+  for (let from = 0; ; ) {
+    let query = context.supabase.from("entity_master").select("entity_id, template_id, domain_code").eq("domain_code", domainCode);
+    if (templateId) query = query.eq("template_id", templateId);
+    const { data: entities, error } = await query.order("entity_id", { ascending: true }).range(from, from + pageSize - 1);
+    if (error) throw error;
+    const page = entities || [];
+    if (page.length === 0) break;
+    for (let i = 0; i < page.length; i += batchSize) {
+      const batch = page.slice(i, i + batchSize);
+      const results = await Promise.all(batch.map(async (entity: any) => {
+        try { await resolveAndPersistGolden(context, entity.entity_id, attributeCode, domainCode, entity.template_id, validFrom); return true; }
+        catch (err) { console.error(`Failed to re-resolve for entity ${entity.entity_id}:`, err); return false; }
+      }));
+      resolved += results.filter(Boolean).length;
+    }
+    // Advance by what came back, so a lower row cap than pageSize skips nothing.
+    from += page.length;
   }
   return resolved;
 }
@@ -256,7 +269,11 @@ async function qualifyTemplate(
     if (logic === "AND") matches = conditions.every((cond: any) => evaluateApplicabilityCondition(cond, attributesByCode));
     else matches = conditions.some((cond: any) => evaluateApplicabilityCondition(cond, attributesByCode));
     if (matches) {
-      await context.supabase.from("master_entities").update({ template_id: template.id }).eq("id", entityId);
+      const { data: updated, error: updateError } = await context.supabase
+        .from("master_entities").update({ template_id: template.id }).eq("id", entityId).select("id");
+      if (updateError) throw updateError;
+      // Row level security hides a record the caller may not change, so nothing is updated and no error comes back.
+      if (!updated?.length) throw new Error("The record's template was not changed. You may not edit this record.");
       return { templateId: template.id, templateCode: template.template_code, matched: true };
     }
   }

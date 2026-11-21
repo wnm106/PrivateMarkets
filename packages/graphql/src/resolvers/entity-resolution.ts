@@ -490,8 +490,10 @@ export const entityResolutionResolvers = {
           patch.min_score = minScore;
         }
         if (input.isActive != null) patch.is_active = input.isActive;
-        const { error } = await context.supabase.from('match_rules').update(patch).eq('id', input.id);
+        const { data: updated, error } = await context.supabase.from('match_rules').update(patch).eq('id', input.id).select('id');
         if (error) throw error;
+        // Row level security hides a rule the caller may not change: nothing is updated and no error comes back.
+        if (!updated?.length) throw new Error('The match rule was not saved. It may not exist, or you may not edit it.');
         if (input.clauses) await replaceClauses(context.supabase, input.id, input.clauses);
         const rules = await loadRules(context.supabase);
         return { rule: rules.find((rule) => rule.id === input.id) || null, errors: [] };

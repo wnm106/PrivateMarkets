@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { assertPublicAddress, type HttpOptions } from '../connectors';
+import { publicFetch, type HttpOptions } from '../connectors';
 import { notifyEnv, type Fetch, type NotifyEnv } from '../notify';
 import type { HttpCall, Outbound } from './engine';
 
@@ -8,7 +8,8 @@ import type { HttpCall, Outbound } from './engine';
  *
  *   http   calls one of the client's HTTP connections, at a path under its
  *          base address, with the connection's stored credential. https only,
- *          no private or internal hosts, no redirects, 30 seconds at most.
+ *          no private or internal hosts, no redirects, 30 seconds at most. The
+ *          connection is made to the address that was checked (publicFetch).
  *   email  through Resend (RESEND_API_KEY, NOTIFY_EMAIL_FROM).
  *   slack  to the client's incoming webhook, set where review notices are.
  */
@@ -68,17 +69,23 @@ export function workflowOutbound(deps: OutboundDeps): Outbound {
       if (String(connection.kind) !== 'HTTP') throw new Error(`"${call.connection}" is not an HTTP connection.`);
       const config = (connection.config || {}) as Row;
       const url = connectionUrl(String(config.baseUrl || ''), call.path);
-      await assertPublicAddress(url, { ...deps.http, fetchImpl: fetcher });
+      const headers = { accept: 'application/json', ...(call.body === undefined ? {} : { 'content-type': 'application/json' }), ...authFor(config, typeof found?.secret === 'string' ? found.secret : null) };
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
       try {
-        const response = await fetcher(url, {
-          method: call.method,
-          headers: { accept: 'application/json', ...(call.body === undefined ? {} : { 'content-type': 'application/json' }), ...authFor(config, typeof found?.secret === 'string' ? found.secret : null) },
-          body: call.body === undefined ? undefined : JSON.stringify(call.body),
-          redirect: 'manual',
-          signal: controller.signal,
-        });
+        const response = await publicFetch(
+          url,
+          {
+            method: call.method,
+            headers,
+            body: call.body === undefined ? undefined : JSON.stringify(call.body),
+            redirect: 'manual',
+            signal: controller.signal,
+            // The reply is cut to MAX_BODY_CHARS below. A character is at most four bytes.
+            maxBytes: MAX_BODY_CHARS * 4,
+          },
+          { ...deps.http, fetchImpl: deps.fetchImpl },
+        );
         if (response.status >= 300 && response.status < 400) throw new Error(`${url.host} answered with a redirect, which is not followed.`);
         const raw = (await response.text()).slice(0, MAX_BODY_CHARS);
         let body: unknown = raw;

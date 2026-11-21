@@ -32,30 +32,26 @@ const submitManualOverride: ToolDefinition = {
       .eq('source_code', 'MANUAL')
       .single();
 
-    await supabase
-      .from('entity_attribute_values')
-      .update({ system_to: new Date().toISOString() })
-      .eq('entity_id', args.entityId)
-      .eq('attribute_id', attrDef.id)
-      .eq('source_id', manualSource?.id)
-      .eq('valid_to', '9999-12-31')
-      .eq('system_to', '9999-12-31 23:59:59');
+    if (!manualSource?.id) throw new Error('The MANUAL source is not registered');
 
-    // Insert override
-    const { data, error } = await supabase
-      .from('entity_attribute_values')
-      .insert({
-        entity_id: args.entityId,
-        attribute_id: attrDef.id,
-        source_id: manualSource?.id,
-        golden_value: args.value,
-        valid_from: args.validFrom,
+    // A bi-temporal write: earlier dates keep their values, and what was known
+    // before this override can still be asked for.
+    const numeric = Number(args.value);
+    const { data: id, error } = await supabase.schema('golden_master').rpc('write_value', {
+      p_entity_id: args.entityId,
+      p_attribute_id: attrDef.id,
+      p_source_id: manualSource.id,
+      p_valid_from: args.validFrom,
+      p_value: {
+        golden_value: String(args.value),
+        golden_value_numeric: String(args.value).trim() !== '' && Number.isFinite(numeric) ? numeric : null,
         precedence_rank: 1,
         is_manual_override: true,
         override_reason: args.overrideReason,
-      })
-      .select()
-      .single();
+      },
+      p_valid_to: null,
+    });
+    const data = { id: id as string };
 
     if (error) throw error;
 

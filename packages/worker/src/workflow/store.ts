@@ -87,6 +87,11 @@ export function supabaseWorkflowStore(supabase: SupabaseClient, leaseSeconds = 9
   }
 
   return {
+    async clientOf(runId) {
+      // The only read of a run that does not also take its lock. To the service role every run is visible.
+      const row = await call<Row | null>('workflow_run_get', { p_run_id: runId });
+      return row ? text(row.client_id) : null;
+    },
     async load(runId, owner) {
       const row = await call<Row | null>('workflow_worker_load', { p_run_id: runId, p_owner: owner, p_lease_seconds: leaseSeconds });
       if (!row) return null;

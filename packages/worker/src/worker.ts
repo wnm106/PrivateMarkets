@@ -40,7 +40,19 @@ export interface JobStore {
 }
 
 export type JobResult = Record<string, unknown>;
-export type JobHandler = (run: JobRun) => Promise<JobResult | void>;
+
+/** What a handler is told about its claim on the run. */
+export interface JobContext {
+  /**
+   * Aborts when this worker no longer holds the run: another worker has claimed
+   * it, or the claim could not be renewed. A handler that does more than one
+   * thing calls signal.throwIfAborted() before each step that changes or sends
+   * something, so a run another worker has picked up is not carried out twice.
+   */
+  signal: AbortSignal;
+}
+
+export type JobHandler = (run: JobRun, job?: JobContext) => Promise<JobResult | void>;
 
 /** Throw this from a handler when trying again cannot help. */
 export class JobError extends Error {
@@ -53,9 +65,22 @@ export class JobError extends Error {
   }
 }
 
+/** What signal.throwIfAborted() throws once the claim is lost. No outcome is recorded for the run. */
+export class LeaseLostError extends Error {
+  constructor() {
+    super('This worker no longer holds the run.');
+    this.name = 'LeaseLostError';
+  }
+}
+
 export interface WorkerOptions {
   store: JobStore;
   handlers: Record<string, JobHandler>;
+  /**
+   * Who holds a claim. Every process needs its own: the store accepts a heartbeat
+   * or an outcome only from the name the run is claimed by, so two processes
+   * sharing one name could each finish a run the other holds.
+   */
   workerName: string;
   /** Runs claimed per tick. They run side by side. */
   concurrency?: number;
@@ -106,7 +131,8 @@ export async function fireDueSchedules(options: WorkerOptions): Promise<number> 
   return fired;
 }
 
-async function runOne(run: JobRun, options: WorkerOptions): Promise<boolean> {
+/** `claimedAt` is when the claim was asked for: the lease is counted from no later than that. */
+async function runOne(run: JobRun, options: WorkerOptions, claimedAt = Date.now()): Promise<boolean> {
   const { store, workerName } = options;
   const leaseSeconds = options.leaseSeconds ?? DEFAULT_LEASE_SECONDS;
   const log = options.log || (() => undefined);
@@ -117,28 +143,62 @@ async function runOne(run: JobRun, options: WorkerOptions): Promise<boolean> {
     return false;
   }
 
-  // Keep the claim alive while a long job runs.
+  // Keep the claim alive while a long job runs, and tell the handler when it is gone.
+  // Once the lease runs out another worker claims the run, so carrying on would run the job twice.
+  const leaseMs = leaseSeconds * 1000;
+  const beatMs = Math.max(1000, Math.floor(leaseMs / 3));
+  // The handler is told this long before the lease could run out, so it can stop before anyone else may claim the run.
+  const marginMs = Math.floor(beatMs / 2);
+  const lost = new AbortController();
+  const lose = (reason: string) => {
+    if (lost.signal.aborted) return;
+    lost.abort(new LeaseLostError());
+    log('Run claim lost', { runId: run.id, jobType: run.jobType, reason });
+  };
+  // Counted from the last time the claim was known to hold: when it was asked for, or when a beat that
+  // was then answered yes was sent. A beat that fails or never answers moves nothing, so a store that
+  // stops answering still ends the run in time. One missed beat is survived; the next one must get through.
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const heldAt = (at: number) => {
+    clearTimeout(deadline);
+    deadline = setTimeout(() => lose('the claim could not be renewed in time'), Math.max(0, at + leaseMs - marginMs - Date.now()));
+  };
+  heldAt(claimedAt);
   const beat = setInterval(() => {
-    store.heartbeat(run.id, workerName, leaseSeconds).catch(() => undefined);
-  }, Math.max(1000, Math.floor((leaseSeconds * 1000) / 3)));
+    if (lost.signal.aborted) return;
+    const sentAt = Date.now();
+    store.heartbeat(run.id, workerName, leaseSeconds).then(
+      (held) => {
+        if (lost.signal.aborted) return;
+        if (held) heldAt(sentAt);
+        else lose('another worker holds the run');
+      },
+      () => undefined,
+    );
+  }, beatMs);
 
   try {
-    const result = (await handler(run)) || {};
+    const result = (await handler(run, { signal: lost.signal })) || {};
+    // Not this worker's run any more: whoever holds it now records the outcome.
+    if (lost.signal.aborted) return false;
     const held = await store.complete(run.id, workerName, result);
     log(held ? 'Run succeeded' : 'Run finished after its claim was lost', { runId: run.id, jobType: run.jobType });
     return held;
   } catch (error) {
+    if (lost.signal.aborted) return false;
     const retryable = error instanceof JobError ? error.retryable : true;
     const status = await store.fail(run.id, workerName, message(error), retryable);
     log('Run failed', { runId: run.id, jobType: run.jobType, error: message(error), status });
     return false;
   } finally {
     clearInterval(beat);
+    clearTimeout(deadline);
   }
 }
 
 export async function tick(options: WorkerOptions): Promise<TickResult> {
   const fired = await fireDueSchedules(options);
+  const claimedAt = Date.now();
   const runs = await options.store.claim(
     options.workerName,
     options.concurrency ?? DEFAULT_CONCURRENCY,
@@ -146,7 +206,7 @@ export async function tick(options: WorkerOptions): Promise<TickResult> {
   );
   const outcomes = await Promise.all(
     runs.map((run) =>
-      runOne(run, options).catch((error) => {
+      runOne(run, options, claimedAt).catch((error) => {
         // The store itself failed. The lease will expire and the run is claimed again.
         (options.log || (() => undefined))('Run outcome could not be recorded', { runId: run.id, error: message(error) });
         return false;

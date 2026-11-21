@@ -31,3 +31,48 @@ jobs:
 
       - name: Unit tests
         run: npm run test:ci
+
+  # Applies the whole migration chain and the seed on a real Supabase Postgres
+  # (the image supabase/config.toml names, through the Supabase CLI), then runs
+  # the tenant-isolation tests in supabase/tests. Mirrors scripts/db-test.sh:
+  # `db start` + `db reset` do its step 1 (migrations in order, each recorded in
+  # supabase_migrations.schema_migrations, then the seed); `--db-url` runs
+  # steps 2-4 (history check, fixture, tests).
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_CLI: supabase@2.122.1
+      # config.toml turns on the experimental no-Docker runtime for local VMs.
+      # CI has Docker, and the steps below expect the Docker database container.
+      SUPABASE_EXPERIMENTAL_STACK: "0"
+      # supabase/config.toml reads these with env(); the database does not use them.
+      AZURE_CLIENT_ID: ci-unused
+      AZURE_CLIENT_SECRET: ci-unused
+      DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Start the local Supabase database
+        run: npx --yes "$SUPABASE_CLI" db start
+
+      - name: Apply every migration and the seed to a fresh database
+        run: npx --yes "$SUPABASE_CLI" db reset --local --yes
+
+      - name: psql
+        run: command -v psql || (sudo apt-get update && sudo apt-get install -y postgresql-client)
+
+      - name: Migration history, fixture and tenant-isolation tests
+        run: bash scripts/db-test.sh --db-url "$DB_URL"
+
+      - name: Database log
+        if: failure()
+        run: docker logs --tail 300 supabase_db_meridian-mdm || true
+
+      - name: Stop Supabase
+        if: always()
+        run: npx --yes "$SUPABASE_CLI" stop --no-backup || true

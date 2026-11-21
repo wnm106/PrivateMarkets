@@ -363,15 +363,3 @@ export class FormulaEngine {
     }
   }
 }
-
-/**
- * Singleton instance for convenience
- */
-let formulaEngineInstance: FormulaEngine | null = null;
-
-export function getFormulaEngine(supabase: SupabaseClient): FormulaEngine {
-  if (!formulaEngineInstance) {
-    formulaEngineInstance = new FormulaEngine(supabase);
-  }
-  return formulaEngineInstance;
-}

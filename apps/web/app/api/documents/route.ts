@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { DOCUMENT_BUCKET, formatOfFile } from '@tapestrai/graphql/src/lib/document-content';
-import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
+import { feedWriteClientId, requireFeedUser } from '@/lib/feeds/require-user';
 import { supabaseServerClient } from '@/lib/supabase-server';
 
 /**
@@ -24,8 +24,10 @@ const MAX_BYTES = 50 * 1024 * 1024;
 export async function POST(request: NextRequest) {
   const user = await requireFeedUser();
   if (!user) return NextResponse.json({ error: 'Sign in to add a document.' }, { status: 401 });
-  const clientId = await feedClientId();
-  if (!clientId) return NextResponse.json({ error: 'Choose a client before adding a document.' }, { status: 400 });
+  // A document belongs to one client. Someone in several is refused, not filed under whichever came first.
+  const client = await feedWriteClientId('Choose a client before adding a document.');
+  if ('error' in client) return client.error;
+  const { clientId } = client;
 
   let form: FormData;
   try {

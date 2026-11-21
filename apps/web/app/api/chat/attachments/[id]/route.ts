@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticate } from '@/lib/chat-server';
-import { CHAT_ATTACHMENT_BUCKET } from '@/lib/chat-attachments';
+import { CHAT_ATTACHMENT_BUCKET, attachmentDelivery } from '@/lib/chat-attachments';
 
 /**
  * GET /api/chat/attachments/:id
@@ -8,6 +8,10 @@ import { CHAT_ATTACHMENT_BUCKET } from '@/lib/chat-attachments';
  * Streams the stored object back to its owner. RLS on `chat_message_attachments`
  * resolves the row (so a non-owner gets 404), and the download itself runs with
  * the caller's token, so the bucket's `{uid}/` prefix policy also applies.
+ *
+ * The stored type is what the uploader claimed. Only a plain picture or a PDF
+ * is shown in place. Anything else downloads as plain bytes, and the browser is
+ * told not to guess a type from the content.
  */
 
 export const runtime = 'nodejs';
@@ -37,12 +41,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ error: error?.message || 'Could not read attachment' }, { status: 500 });
   }
 
+  const delivery = attachmentDelivery(row.mime_type);
   return new NextResponse(await blob.arrayBuffer(), {
     headers: {
-      'Content-Type': row.mime_type,
+      'Content-Type': delivery.contentType,
       // The filename is echoed back out, so keep it inert.
-      'Content-Disposition': `inline; filename="${row.file_name.replace(/[^\w.\- ]+/g, '_')}"`,
+      'Content-Disposition': `${delivery.disposition}; filename="${row.file_name.replace(/[^\w.\- ]+/g, '_')}"`,
       'Cache-Control': 'private, max-age=3600',
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 }

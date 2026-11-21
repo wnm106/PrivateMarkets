@@ -420,15 +420,6 @@ function mapResult(row: any): ComplianceEvaluationResult {
     };
 }
 
-let complianceEngineInstance: ComplianceEngine | null = null;
-
-export function getComplianceEngine(supabase: SupabaseClient): ComplianceEngine {
-    if (!complianceEngineInstance) {
-        complianceEngineInstance = new ComplianceEngine(supabase);
-    }
-    return complianceEngineInstance;
-}
-
 export interface ProformaSnapshotOptions {
     anchorEntityId: string;
     legs: NormalizedProformaLeg[];

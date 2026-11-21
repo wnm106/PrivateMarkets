@@ -17,6 +17,7 @@ import { QUERY_DATA_GUIDE, registerQueryTools } from '@tapestrai/mcp-server/src/
 import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrative-tools';
 import { registerExternalIdTools } from '@tapestrai/mcp-server/src/tools/external-id-tools';
 import { loadExternalServers } from '@tapestrai/mcp-server/src/external/load';
+import { serviceClient } from '@/lib/assistant-connections-server';
 import { buildExternalToolset, externalServersPrompt, type ExternalToolset } from '@tapestrai/mcp-server/src/external/toolset';
 import { NARRATIVE_COMPOSE_GUIDE } from '@tapestrai/mcp-server/src/lib/narrative-guide';
 import { formatLessons, lessonFromRow, matchLessons } from '@tapestrai/mcp-server/src/lib/chat-lessons';
@@ -52,7 +53,6 @@ import { callerClientId } from '@/lib/agent-audit';
 import { bindAgentContext, invokeAgent, usageForClient, type AgentAudit } from '@tapestrai/mcp-server/src/agent/harness';
 import { geminiAnswerText } from '@tapestrai/mcp-server/src/agent/usage';
 
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseAnonKey;
 const geminiApiKey =
   process.env.GEMINI_API_KEY ||
   process.env.GOOGLE_AI_API_KEY ||
@@ -66,10 +66,10 @@ const REPORT_REQUEST = /\b(review|report|briefing|narrative|memo|presentation|pa
 /** Cap the stored turn so a huge tool payload can't bloat the transcript. */
 const MAX_STORED_CONTENT = 20000;
 
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-// Initialize the MCP tool registry
-const toolRegistry = new ToolRegistry(supabase);
+// The tool registry holds no database client. Every tool call below passes the
+// caller's own client, so tenancy and row security decide what a tool may touch.
+// This route never holds the service role key.
+const toolRegistry = new ToolRegistry();
 registerDomainTools(toolRegistry);
 registerLineageTools(toolRegistry);
 registerDocumentTools(toolRegistry);
@@ -261,6 +261,11 @@ export async function POST(request: NextRequest) {
   // The client's own MCP servers, connected on first use this turn and closed when it ends.
   let externalToolset: ExternalToolset | null = null;
   try {
+    // The assistant is for signed-in users only. Nothing is read, no model is
+    // called, and no tool runs for a request without a valid session.
+    const auth = await authenticate(request);
+    if (!auth) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+
     const { messages, context, toolContext, conversationId, attachmentIds, designerDraft, voice, skill: requestedSkill, skillState: clientSkillState } = await request.json();
     const requestedAttachmentIds: string[] = Array.isArray(attachmentIds) ? attachmentIds : [];
 
@@ -268,11 +273,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Gemini API key not configured' }, { status: 500 });
     }
 
-    // History is a signed-in feature; anonymous callers still get a reply but
-    // nothing is persisted for them.
-    const auth = await authenticate(request);
-    const clientId = auth ? await callerClientId(auth.supabase) : null;
-    bindAgentContext({ userId: auth?.userId ?? null, clientId, feature: 'chat', activity: 'chat.turn' });
+    const clientId = await callerClientId(auth.supabase);
+    bindAgentContext({ userId: auth.userId, clientId, feature: 'chat', activity: 'chat.turn' });
     const audits: AgentAudit[] = [];
     const withUsage = (payload: Record<string, unknown>, status = 200) =>
       NextResponse.json({ ...payload, usage: usageForClient(audits) }, { status });
@@ -290,7 +292,7 @@ export async function POST(request: NextRequest) {
     let history: Array<{ role: string; content: string }> = [];
     let turnAttachments: Array<{ file_name: string; mime_type: string; parts: any[] }> = [];
 
-    if (auth && lastUser) {
+    if (lastUser) {
       if (conversationId) {
         const { data } = await selectConversationRows((columns) =>
           auth.supabase.from('chat_conversations').select(columns).eq('id', conversationId).maybeSingle()
@@ -405,12 +407,10 @@ export async function POST(request: NextRequest) {
     // data schemas grant USAGE to `authenticated` but not to `service_role`, so a
     // service-role client is refused by the security_invoker views before RLS is
     // even consulted.
-    const toolSupabase = auth
-      ? createClient(supabaseUrl, supabaseAnonKey, {
-          global: { headers: { Authorization: `Bearer ${auth.token}` } },
-          auth: { autoRefreshToken: false, persistSession: false },
-        })
-      : undefined;
+    const toolSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: `Bearer ${auth.token}` } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
 
     const tools = toolRegistry
       .listToolsForGemini(skill?.toolContext ?? toolContext)
@@ -422,7 +422,9 @@ export async function POST(request: NextRequest) {
     // be loaded leaves the assistant with Tapestry's own tools.
     if (auth && clientId && !skill && isCategoryAllowed('external', toolContext)) {
       try {
-        const servers = await loadExternalServers(supabase, clientId);
+        // Only the connection loader holds the service role, for this one read: the
+        // function that returns a server's credentials is not granted to signed-in users.
+        const servers = await loadExternalServers(serviceClient(), clientId);
         if (servers.length) {
           externalToolset = buildExternalToolset(servers);
           tools.push(...externalToolset.declarations);
@@ -434,14 +436,12 @@ export async function POST(request: NextRequest) {
     }
     if (tools.some((tool) => tool.name === 'query_data')) {
       systemInstruction += QUERY_DATA_GUIDE;
-      if (auth) {
-        const { data, error } = await auth.supabase
-          .from('chat_lessons')
-          .select('id, phrases, reading, query_shape, answer_shape')
-          .eq('is_active', true);
-        if (!error && data?.length) {
-          systemInstruction += formatLessons(matchLessons(userText, data.map(lessonFromRow)));
-        }
+      const { data, error } = await auth.supabase
+        .from('chat_lessons')
+        .select('id, phrases, reading, query_shape, answer_shape')
+        .eq('is_active', true);
+      if (!error && data?.length) {
+        systemInstruction += formatLessons(matchLessons(userText, data.map(lessonFromRow)));
       }
     }
     if (tools.some((tool) => tool.name === 'start_narrative_run') && (userText.length > 600 || REPORT_REQUEST.test(userText))) {
@@ -454,7 +454,7 @@ export async function POST(request: NextRequest) {
 
     /** Records the assistant turn and returns the thread id when persistence is on. */
     const persistAssistantTurn = async (text: string): Promise<string | null> => {
-      if (!auth || !conversation) return null;
+      if (!conversation) return null;
       await auth.supabase.from('chat_messages').insert({
         conversation_id: conversation.id,
         role: 'model',
@@ -489,7 +489,7 @@ export async function POST(request: NextRequest) {
     };
 
     const scope = {
-      userId: auth?.userId ?? null,
+      userId: auth.userId,
       clientId,
       agent: skill?.id ?? 'assistant',
       conversationId: (conversation?.id ?? conversationId ?? null) as string | null,

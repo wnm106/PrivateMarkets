@@ -324,10 +324,18 @@ END;
 $function$;
 
 -- 2. Required attributes.
+--
+-- Each listed attribute must exist on its entity. One that is not in the
+-- catalog at all is skipped with a notice: on a fresh database NAV, COUNTRY and
+-- the other attributes supabase/seed/001_seed_data.sql adds arrive after the
+-- migrations. On the hosted project every one exists, so nothing is skipped
+-- there. An attribute that exists on another entity still stops the migration.
 DO $$
 DECLARE
   v_expected int := 185;
   v_found int;
+  v_absent int;
+  v_absent_list text;
 BEGIN
   WITH req(domain_code, attribute_code) AS (VALUES
     ('ACCOUNT', 'ACCOUNT_LABEL'),
@@ -516,11 +524,20 @@ BEGIN
     ('TRADE', 'TRADE_LABEL'),
     ('TRADE', 'TRADE_STATUS')
   )
-  SELECT count(*) INTO v_found
+  SELECT count(ar.id),
+         count(*) FILTER (WHERE NOT EXISTS (
+           SELECT 1 FROM metadata_register.attribute_register x WHERE x.attribute_code = r.attribute_code)),
+         string_agg(r.domain_code || '.' || r.attribute_code, ', ' ORDER BY r.domain_code, r.attribute_code)
+           FILTER (WHERE NOT EXISTS (
+             SELECT 1 FROM metadata_register.attribute_register x WHERE x.attribute_code = r.attribute_code))
+  INTO v_found, v_absent, v_absent_list
   FROM req r
-  JOIN metadata_register.attribute_register ar
+  LEFT JOIN metadata_register.attribute_register ar
     ON ar.domain_code = r.domain_code AND ar.attribute_code = r.attribute_code;
-  IF v_found <> v_expected THEN
+  IF v_absent > 0 THEN
+    RAISE NOTICE 'Required attributes not in the catalog yet, skipped: %', v_absent_list;
+  END IF;
+  IF v_found + v_absent <> v_expected THEN
     RAISE EXCEPTION 'Expected % required attributes, found %', v_expected, v_found;
   END IF;
 
@@ -739,10 +756,16 @@ WHERE rule_id IN (SELECT id FROM data_quality.dq_rules WHERE rule_code IN ('FUND
 DELETE FROM data_quality.dq_rules WHERE rule_code IN ('FUND_NAV_NOT_NULL', 'PRICE_NOT_NEGATIVE');
 
 -- 4. The rules. Existing rules keep their id, so accepted exceptions stay attached.
+--
+-- As in 2, a rule whose attribute is not in the catalog at all (on a fresh
+-- database, one supabase/seed adds after the migrations) is skipped with a
+-- notice; a rule whose attribute sits on another entity stops the migration.
 DO $$
 DECLARE
   v_expected int := 177;
   v_found int;
+  v_absent int;
+  v_absent_list text;
 BEGIN
   CREATE TEMP TABLE _dq_program_rules ON COMMIT DROP AS
   SELECT v.*, ar.id AS attribute_id
@@ -925,13 +948,24 @@ BEGIN
     ('ORDER_TRANSACTION_TYPE_ALLOWED', 'Transaction Type Allowed', 'ORDER', 'TRANSACTION_TYPE', 'VALIDITY', 'HIGH', 'TRANSACTION_TYPE IS NULL OR TRANSACTION_TYPE IN (''Margin_Purchase'',''Short_Sale'',''Buy'',''Sell'',''Borrow'')', 'The compliance rules branch on the transaction type, so it has to be one they know.'),
     ('ORDER_COMPLIANCE_STATUS_ALLOWED', 'Compliance Status Allowed', 'ORDER', 'COMPLIANCE_STATUS', 'VALIDITY', 'HIGH', 'COMPLIANCE_STATUS IS NULL OR COMPLIANCE_STATUS IN (''CLEAR'',''BLOCKED'')', 'Compliance status is Clear or Blocked.')
   ) AS v(rule_code, rule_name, domain_code, attribute_code, rule_type, rule_severity, rule_expression, rule_description)
-  JOIN metadata_register.attribute_register ar
+  LEFT JOIN metadata_register.attribute_register ar
     ON ar.domain_code = v.domain_code AND ar.attribute_code = v.attribute_code;
 
-  SELECT count(*) INTO v_found FROM _dq_program_rules;
-  IF v_found <> v_expected THEN
+  SELECT count(*) FILTER (WHERE p.attribute_id IS NOT NULL),
+         count(*) FILTER (WHERE p.attribute_id IS NULL AND NOT EXISTS (
+           SELECT 1 FROM metadata_register.attribute_register x WHERE x.attribute_code = p.attribute_code)),
+         string_agg(p.rule_code, ', ' ORDER BY p.rule_code)
+           FILTER (WHERE p.attribute_id IS NULL AND NOT EXISTS (
+             SELECT 1 FROM metadata_register.attribute_register x WHERE x.attribute_code = p.attribute_code))
+  INTO v_found, v_absent, v_absent_list
+  FROM _dq_program_rules p;
+  IF v_absent > 0 THEN
+    RAISE NOTICE 'Rules on attributes not in the catalog yet, skipped: %', v_absent_list;
+  END IF;
+  IF v_found + v_absent <> v_expected THEN
     RAISE EXCEPTION 'Expected % rules, matched % to an attribute', v_expected, v_found;
   END IF;
+  DELETE FROM _dq_program_rules WHERE attribute_id IS NULL;
 
   INSERT INTO data_quality.dq_rules
     (rule_code, rule_name, domain_code, attribute_id, rule_type, rule_severity, rule_expression, rule_description, is_active)

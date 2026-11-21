@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import http from 'node:http';
+import https from 'node:https';
+import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { posix } from 'node:path';
+import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { JobError } from './worker';
 
@@ -262,21 +265,113 @@ export function emailConnector(supabase: SupabaseClient, connection: ConnectionS
 
 // ---------------------------------------------------------------------------
 // HTTP: download from an https address
+// Public addresses only
 // ---------------------------------------------------------------------------
+//
+// The worker sits inside the network, so an address a user typed must not be
+// able to reach internal services. Two things make that hold:
+//
+//   1. Every address the host resolves to must be public (isPublicAddress).
+//   2. The connection is made to an address that passed, and to no other
+//      (pinnedLookup). The name is resolved once. If it were resolved again to
+//      connect, a name that answers differently the second time would get
+//      past the check.
 
-function isPrivateAddress(address: string): boolean {
-  if (isIP(address) === 4) {
-    const [a, b] = address.split('.').map(Number);
-    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-      || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
-  }
-  const lower = address.toLowerCase();
-  if (lower.startsWith('::ffff:')) return isPrivateAddress(lower.slice(7));
-  return lower === '::' || lower === '::1' || lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe8')
-    || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb');
+function blockList(family: 'ipv4' | 'ipv6', subnets: Array<[string, number]>): BlockList {
+  const list = new BlockList();
+  for (const [network, prefix] of subnets) list.addSubnet(network, prefix, family);
+  return list;
+}
+
+/** IPv4 that is not a host on the public internet. */
+const NOT_PUBLIC_V4 = blockList('ipv4', [
+  ['0.0.0.0', 8], // this network
+  ['10.0.0.0', 8], // private
+  ['100.64.0.0', 10], // shared by carriers (CGNAT)
+  ['127.0.0.0', 8], // loopback
+  ['169.254.0.0', 16], // link-local, where cloud metadata services live
+  ['172.16.0.0', 12], // private
+  ['192.0.0.0', 24], // protocol assignments
+  ['192.0.2.0', 24], // documentation
+  ['192.88.99.0', 24], // 6to4 relays
+  ['192.168.0.0', 16], // private
+  ['198.18.0.0', 15], // benchmarking
+  ['198.51.100.0', 24], // documentation
+  ['203.0.113.0', 24], // documentation
+  ['224.0.0.0', 4], // multicast
+  ['240.0.0.0', 4], // reserved, and broadcast
+]);
+
+/**
+ * The only IPv6 that can be a public host is global unicast. Everything outside
+ * it is refused without being listed: ::, ::1, unique-local fc00::/7, link-local
+ * fe80::/10, multicast ff00::/8, and whatever is set aside next.
+ */
+const GLOBAL_V6 = blockList('ipv6', [['2000::', 3]]);
+
+/** Global unicast that is set aside for something other than hosts. */
+const NOT_PUBLIC_V6 = blockList('ipv6', [
+  ['2001:2::', 48], // benchmarking
+  ['2001:10::', 28], // ORCHID
+  ['2001:20::', 28], // ORCHIDv2
+  ['2001:db8::', 32], // documentation
+  ['3fff::', 20], // documentation
+]);
+
+/** The eight 16-bit groups of an IPv6 address that isIP has already accepted. */
+function groupsOf(address: string): number[] {
+  // A dotted tail (::ffff:1.2.3.4) is the last two groups.
+  const dotted = /^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(address);
+  const text = dotted
+    ? `${dotted[1]}${((Number(dotted[2]) << 8) | Number(dotted[3])).toString(16)}:${((Number(dotted[4]) << 8) | Number(dotted[5])).toString(16)}`
+    : address;
+  const [head, tail] = text.split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  // "::" stands for as many zero groups as it takes to make eight.
+  const zeros = tail === undefined ? 0 : 8 - left.length - right.length;
+  return [...left, ...Array<string>(zeros).fill('0'), ...right].map((group) => parseInt(group, 16));
+}
+
+function dottedQuad(high: number, low: number): string {
+  return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+}
+
+/**
+ * The IPv4 addresses an IPv6 address carries inside it, or null when it carries
+ * none. A packet sent to one of these forms is delivered to the IPv4 address
+ * inside, so the address is only as public as that is. However the address is
+ * written (::ffff:127.0.0.1 or ::ffff:7f00:1), the groups are the same.
+ */
+function embeddedV4(groups: number[]): string[] | null {
+  const [a, b, c, d, e, f, g, h] = groups;
+  // ::a.b.c.d, the old IPv4-compatible form. :: and ::1 are in it too, as 0.0.0.0 and 0.0.0.1.
+  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0) return [dottedQuad(g, h)];
+  // ::ffff:a.b.c.d, IPv4-mapped.
+  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0xffff) return [dottedQuad(g, h)];
+  // 64:ff9b::a.b.c.d, NAT64. A network with only IPv6 reaches IPv4 hosts through it.
+  if (a === 0x64 && b === 0xff9b && c === 0 && d === 0 && e === 0 && f === 0) return [dottedQuad(g, h)];
+  // 2002:AABB:CCDD::/48, 6to4.
+  if (a === 0x2002) return [dottedQuad(b, c)];
+  // 2001:0:SERVER:..:CLIENT, Teredo. The client's address is stored with every bit flipped.
+  if (a === 0x2001 && b === 0) return [dottedQuad(c, d), dottedQuad(g ^ 0xffff, h ^ 0xffff)];
+  return null;
+}
+
+/** Whether an IP address is a host on the public internet. Anything that is not an IP address is not. */
+export function isPublicAddress(address: string): boolean {
+  // A zone (fe80::1%eth0) names an interface, not a different address.
+  const text = address.split('%')[0];
+  const family = isIP(text);
+  if (family === 4) return !NOT_PUBLIC_V4.check(text, 'ipv4');
+  if (family !== 6) return false;
+  const inside = embeddedV4(groupsOf(text));
+  if (inside) return inside.every((v4) => !NOT_PUBLIC_V4.check(v4, 'ipv4'));
+  return GLOBAL_V6.check(text, 'ipv6') && !NOT_PUBLIC_V6.check(text, 'ipv6');
 }
 
 export interface HttpOptions {
+  /** Tests supply a stand-in. The default connects only to an address that was checked. */
   fetchImpl?: typeof fetch;
   resolve?: (host: string) => Promise<string[]>;
   /** Tests only: allow http and private addresses. */
@@ -284,19 +379,15 @@ export interface HttpOptions {
 }
 
 /**
- * The worker sits inside the network, so an address a user typed must not be
- * able to reach internal services: https only, and no private, loopback or
- * link-local hosts. Redirects are refused for the same reason.
+ * The addresses a host may be reached at. The name is resolved once, here, and
+ * the host is refused unless every address it has is public. Connect to one of
+ * the addresses returned, never to the name again.
+ *
+ * Empty when private hosts are allowed: nothing is checked, so whatever makes
+ * the connection resolves the name itself.
  */
-export async function assertPublicAddress(url: URL, options: HttpOptions = {}): Promise<void> {
-  if (options.allowPrivate) return;
-  if (url.protocol !== 'https:') throw new JobError('The address must start with https://.');
-  await assertPublicHost(url.hostname.replace(/^\[|\]$/g, ''), options);
-}
-
-/** Refuses a host that is, or resolves to, a private, loopback or link-local address. */
-export async function assertPublicHost(host: string, options: HttpOptions = {}): Promise<void> {
-  if (options.allowPrivate) return;
+export async function publicAddresses(host: string, options: HttpOptions = {}): Promise<string[]> {
+  if (options.allowPrivate) return [];
   const resolve = options.resolve || (async (name: string) => (await lookup(name, { all: true })).map((entry) => entry.address));
   let addresses: string[];
   try {
@@ -304,10 +395,118 @@ export async function assertPublicHost(host: string, options: HttpOptions = {}):
   } catch {
     throw new Error(`${host} could not be found.`);
   }
-  if (addresses.length === 0 || addresses.some(isPrivateAddress)) {
+  if (addresses.length === 0 || !addresses.every(isPublicAddress)) {
     throw new JobError(`${host} is not a public address.`);
   }
+  return addresses;
 }
+
+/** A name lookup that only ever answers with the addresses given, whatever the name resolves to by now. */
+export function pinnedLookup(addresses: string[]): LookupFunction {
+  const entries = addresses.map((address) => ({ address, family: isIP(address) }));
+  return (_hostname, options, callback) => {
+    if (options.all) callback(null, entries);
+    else callback(null, entries[0].address, entries[0].family);
+  };
+}
+
+export interface PublicRequest {
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+  /** A redirect is never followed. 'error' fails the request; 'manual' hands the redirect back as the reply. */
+  redirect: 'error' | 'manual';
+  signal?: AbortSignal;
+  /** Stop reading the reply once it is longer than this. What was read so far is returned. */
+  maxBytes?: number;
+}
+
+/**
+ * Sends one request. With addresses, the connection is made to one of them and
+ * nowhere else: the name in the address is used for the Host header and the
+ * certificate check only, and is never looked up again.
+ */
+export function pinnedRequest(url: URL, init: PublicRequest, addresses: string[]): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const request = (url.protocol === 'http:' ? http : https).request(
+      url,
+      {
+        method: init.method,
+        headers: { accept: '*/*', 'accept-encoding': 'gzip, deflate, br', 'user-agent': 'node', ...init.headers },
+        signal: init.signal,
+        // A connection of its own: a shared one may be to an address checked for some earlier request.
+        agent: false,
+        ...(addresses.length > 0 ? { lookup: pinnedLookup(addresses) } : {}),
+      },
+      (incoming) => {
+        const status = incoming.statusCode || 0;
+        if (status >= 300 && status < 400 && init.redirect === 'error') {
+          request.destroy();
+          reject(new Error(`${url.host} answered with a redirect, which is not followed.`));
+          return;
+        }
+        const encoding = String(incoming.headers['content-encoding'] || '').trim().toLowerCase();
+        const decoder = encoding === 'gzip' || encoding === 'x-gzip' ? createGunzip() : encoding === 'deflate' ? createInflate() : encoding === 'br' ? createBrotliDecompress() : null;
+        const stream = decoder ? incoming.pipe(decoder) : incoming;
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          try {
+            const headers = new Headers();
+            for (const [name, value] of Object.entries(incoming.headers)) {
+              for (const item of Array.isArray(value) ? value : [value]) if (item !== undefined) headers.append(name, item);
+            }
+            // Once decoded, these two no longer describe the body.
+            if (decoder) {
+              headers.delete('content-encoding');
+              headers.delete('content-length');
+            }
+            const empty = init.method === 'HEAD' || status === 204 || status === 205 || status === 304;
+            resolve(new Response(empty ? null : Buffer.concat(chunks), { status, statusText: incoming.statusMessage, headers }));
+          } catch (error) {
+            // A status no reply may carry.
+            reject(error);
+          }
+        };
+        stream.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+          size += chunk.length;
+          if (init.maxBytes && size > init.maxBytes) {
+            finish();
+            request.destroy();
+          }
+        });
+        stream.on('end', finish);
+        stream.on('error', reject);
+        incoming.on('error', reject);
+        incoming.on('close', () => {
+          if (!incoming.complete) reject(new Error(`${url.host} closed the connection before the reply was complete.`));
+        });
+      },
+    );
+    request.on('error', reject);
+    request.end(init.body);
+  });
+}
+
+/**
+ * fetch, for an address a user typed: https only, public hosts only, and no
+ * redirect is followed, because a redirect is a second address nobody checked.
+ * The request goes to the address that was checked.
+ */
+export async function publicFetch(url: URL, init: PublicRequest, options: HttpOptions = {}): Promise<Response> {
+  if (!options.allowPrivate && url.protocol !== 'https:') throw new JobError('The address must start with https://.');
+  const addresses = await publicAddresses(url.hostname.replace(/^\[|\]$/g, ''), options);
+  if (options.fetchImpl) return options.fetchImpl(url, init);
+  return pinnedRequest(url, init, addresses);
+}
+
+// ---------------------------------------------------------------------------
+// HTTP: download from an https address
+// ---------------------------------------------------------------------------
 
 function authHeaders(connection: ConnectionSpec): Record<string, string> {
   const authType = String(connection.config.authType || 'NONE').toUpperCase();
@@ -337,7 +536,6 @@ function nameFromResponse(response: Response, url: URL, fallback: string): strin
 }
 
 export function httpConnector(connection: ConnectionSpec, options: HttpOptions = {}): Connector {
-  const doFetch = options.fetchImpl || fetch;
   const base = String(connection.config.baseUrl || '').trim();
 
   function address(path: string, now: Date): URL {
@@ -354,14 +552,10 @@ export function httpConnector(connection: ConnectionSpec, options: HttpOptions =
     return url;
   }
 
-  async function request(url: URL, method: 'GET' | 'HEAD'): Promise<Response> {
-    await assertPublicAddress(url, options);
-    return doFetch(url, {
-      method,
-      headers: authHeaders(connection),
-      redirect: 'error',
-      signal: AbortSignal.timeout(60_000),
-    });
+  function request(url: URL, method: 'GET' | 'HEAD'): Promise<Response> {
+    const headers = authHeaders(connection);
+    // One byte past the limit is enough to know a file is too large.
+    return publicFetch(url, { method, headers, redirect: 'error', signal: AbortSignal.timeout(60_000), maxBytes: MAX_FILE_BYTES + 1 }, options);
   }
 
   return {
@@ -446,7 +640,9 @@ export function sftpConnector(connection: ConnectionSpec, options: SftpOptions =
     if (session) return session;
     if (!host || !username) throw new JobError('The connection needs a host and a user name.');
     if (!connection.secret) throw new JobError('This connection needs a stored credential.');
-    await assertPublicHost(host, options);
+    // Connect to the address that was checked, not to the name: a name looked up again could answer differently.
+    // Empty only when private hosts are allowed, and then the name is used as it is.
+    const [address] = await publicAddresses(host.replace(/^\[|\]$/g, ''), options);
     const created = options.createSession
       ? options.createSession()
       : // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -454,7 +650,7 @@ export function sftpConnector(connection: ConnectionSpec, options: SftpOptions =
     let refused = false;
     try {
       await created.connect({
-        host,
+        host: address || host,
         port,
         username,
         ...(authType === 'KEY' ? { privateKey: connection.secret } : { password: connection.secret }),

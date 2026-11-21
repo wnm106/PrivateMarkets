@@ -293,6 +293,8 @@ async function executeAgentStep(request: AgentRequest, deps: AgentDeps): Promise
   };
 
   while (state.rounds < maxRounds) {
+    // The job lost its claim: the job that has the run now carries the step on from its last checkpoint.
+    request.signal?.throwIfAborted();
     const turn = await auditedTurn(system, tools, state.messages);
     if (turn.stop === 'refused') throw new Error(`The model declined this step${turn.refusal ? `: ${turn.refusal}` : '.'}`);
     state.messages.push(turn.message);
@@ -337,6 +339,7 @@ async function executeAgentStep(request: AgentRequest, deps: AgentDeps): Promise
   }
 
   // Out of rounds: one last turn with no tools, so the reviewer still gets a summary.
+  request.signal?.throwIfAborted();
   state.messages.push(model.userMessage('You have used every tool round this step allows. Do not call any more tools. Write your summary for the reviewer now, and say plainly what you did not get to.'));
   const last = await auditedTurn(system, [], state.messages);
   await request.event('agent.note', `Stopped at the limit of ${maxRounds} rounds`);

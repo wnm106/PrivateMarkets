@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { confirmImportUnderstanding, understandImportFile } from '@tapestrai/mcp-server/src/feeds/import-document';
-import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
+import { feedClientId, requireFeedUser, requireFeedWriter } from '@/lib/feeds/require-user';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +26,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
 
 /** Records the kind of document a person confirmed the file is, and the stored record it is about. */
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
-  const who = await caller();
+  const who = await requireFeedWriter('Sign in to open the file');
   if ('error' in who) return who.error;
   const { id } = await context.params;
   const body = await request.json().catch(() => ({}));

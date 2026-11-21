@@ -145,11 +145,13 @@ export async function scoreDealFunds(
   asOf: string,
   scenarioCode: string,
   triggeredBy: string | null,
+  /** The knowledge instant to score at. A staged what-if is readable at its own instant only. */
+  knowledgeDate: string = new Date().toISOString(),
 ): Promise<DealScoreResult[]> {
   const { data, error } = await compliance.rpc('score_deal_funds', {
     p_plans: plans.map((plan) => ({ ruleCode: plan.rule.rule_code, anchors: plan.anchorIds })),
     p_as_of: asOf,
-    p_knowledge: new Date().toISOString(),
+    p_knowledge: knowledgeDate,
     p_scenario: scenarioCode,
     p_triggered_by: triggeredBy,
   });

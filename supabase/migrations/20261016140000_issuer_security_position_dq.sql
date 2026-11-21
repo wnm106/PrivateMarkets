@@ -684,11 +684,18 @@ SET rule_name = EXCLUDED.rule_name,
 
 -- Two as-of dates: 15 Oct 2026 and 16 Oct 2026. Stable attributes cover both
 -- days. Attributes that move have a row for the 15th and a new row from the 16th.
+--
+-- The sample records belong to the hosted project's client 6c6bac30-... . A
+-- database without that client (a fresh one) gives them to its first client,
+-- the way the other sample-data migrations choose a client.
 INSERT INTO entity_instances.master_entities (
   entity_code, domain_code, template_id, entity_name, description, client_id, metadata
 )
 SELECT v.entity_code, v.domain_code, t.id, v.entity_name, v.description,
-       '6c6bac30-6911-4cd7-97e5-d5447a8f06fb'::uuid,
+       COALESCE(
+         (SELECT c.id FROM tenancy.clients c WHERE c.id = '6c6bac30-6911-4cd7-97e5-d5447a8f06fb'::uuid),
+         (SELECT c.id FROM tenancy.clients c ORDER BY c.created_at LIMIT 1)
+       ),
        '{"dqSample":true}'::jsonb
 FROM (VALUES
   ('DQ-ISS-NORTHWIND', 'ISSUER', 'ISSUER_STANDARD', 'Northwind Packaging LLC', 'Clean issuer. Market cap and leverage move between 15 and 16 Oct 2026.'),

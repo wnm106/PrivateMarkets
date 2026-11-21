@@ -424,6 +424,48 @@ AS $$
     );
 $$;
 
+REVOKE ALL ON FUNCTION tenancy.intersection_accessible(UUID, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION tenancy.intersection_accessible(UUID, TEXT) TO authenticated;
+
+DROP POLICY IF EXISTS "Intersections readable if all members accessible" ON entity_instances.intersection_instances;
+DROP POLICY IF EXISTS "Intersections updatable if all members accessible" ON entity_instances.intersection_instances;
+DROP POLICY IF EXISTS "Intersection attribute values readable per member access" ON golden_master.intersection_attribute_values;
+DROP POLICY IF EXISTS "Intersection attribute values writable per member access" ON golden_master.intersection_attribute_values;
+
+CREATE POLICY "Intersections readable if all members accessible" ON entity_instances.intersection_instances
+    FOR SELECT TO authenticated
+    USING (tenancy.intersection_accessible(id, 'READ'));
+
+CREATE POLICY "Intersections updatable if all members accessible" ON entity_instances.intersection_instances
+    FOR UPDATE TO authenticated
+    USING (tenancy.intersection_accessible(id, 'WRITE'))
+    WITH CHECK (
+        client_id IN (SELECT tenancy.current_client_ids())
+        AND tenancy.has_permission(client_id, 'entity.write')
+    );
+
+CREATE POLICY "Intersection attribute values readable per member access" ON golden_master.intersection_attribute_values
+    FOR SELECT TO authenticated
+    USING (tenancy.intersection_accessible(intersection_id, 'READ'));
+
+CREATE POLICY "Intersection attribute values writable per member access" ON golden_master.intersection_attribute_values
+    FOR ALL TO authenticated
+    USING (tenancy.intersection_accessible(intersection_id, 'WRITE'))
+    WITH CHECK (tenancy.intersection_accessible(intersection_id, 'WRITE'));
+
+-- position_master.dimensional_intersections and position_master.position_metrics
+-- were dropped by 20261031140000, which runs before this file. Where they are
+-- gone (a fresh database, and the hosted project once 20261031140000 has run)
+-- there is nothing left to protect, so the helper and the four policies are not
+-- created. A database that still has the tables gets them as before.
+DO $position_master$
+BEGIN
+    IF to_regclass('position_master.dimensional_intersections') IS NULL THEN
+        RAISE NOTICE 'position_master.dimensional_intersections does not exist (dropped by 20261031140000); its access helper and policies are not created';
+        RETURN;
+    END IF;
+
+    EXECUTE $fn$
 CREATE OR REPLACE FUNCTION tenancy.dimensional_intersection_accessible(p_intersection_id UUID, p_level TEXT)
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -447,59 +489,36 @@ AS $$
           AND (di.security_entity_id IS NULL OR tenancy.has_entity_access(di.security_entity_id, p_level))
     );
 $$;
+$fn$;
+    REVOKE ALL ON FUNCTION tenancy.dimensional_intersection_accessible(UUID, TEXT) FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION tenancy.dimensional_intersection_accessible(UUID, TEXT) TO authenticated;
 
-REVOKE ALL ON FUNCTION tenancy.intersection_accessible(UUID, TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION tenancy.dimensional_intersection_accessible(UUID, TEXT) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION tenancy.intersection_accessible(UUID, TEXT) TO authenticated;
-GRANT EXECUTE ON FUNCTION tenancy.dimensional_intersection_accessible(UUID, TEXT) TO authenticated;
+    DROP POLICY IF EXISTS "Dimensional intersections readable per member access" ON position_master.dimensional_intersections;
+    DROP POLICY IF EXISTS "Dimensional intersections writable per member access" ON position_master.dimensional_intersections;
 
-DROP POLICY IF EXISTS "Intersections readable if all members accessible" ON entity_instances.intersection_instances;
-DROP POLICY IF EXISTS "Intersections updatable if all members accessible" ON entity_instances.intersection_instances;
-DROP POLICY IF EXISTS "Intersection attribute values readable per member access" ON golden_master.intersection_attribute_values;
-DROP POLICY IF EXISTS "Intersection attribute values writable per member access" ON golden_master.intersection_attribute_values;
-DROP POLICY IF EXISTS "Dimensional intersections readable per member access" ON position_master.dimensional_intersections;
-DROP POLICY IF EXISTS "Dimensional intersections writable per member access" ON position_master.dimensional_intersections;
-DROP POLICY IF EXISTS "Position metrics readable per intersection access" ON position_master.position_metrics;
-DROP POLICY IF EXISTS "Position metrics writable per intersection access" ON position_master.position_metrics;
+    CREATE POLICY "Dimensional intersections readable per member access" ON position_master.dimensional_intersections
+        FOR SELECT TO authenticated
+        USING (tenancy.dimensional_intersection_accessible(id, 'READ'));
 
-CREATE POLICY "Intersections readable if all members accessible" ON entity_instances.intersection_instances
-    FOR SELECT TO authenticated
-    USING (tenancy.intersection_accessible(id, 'READ'));
+    CREATE POLICY "Dimensional intersections writable per member access" ON position_master.dimensional_intersections
+        FOR ALL TO authenticated
+        USING (tenancy.dimensional_intersection_accessible(id, 'WRITE'))
+        WITH CHECK (tenancy.dimensional_intersection_accessible(id, 'WRITE'));
 
-CREATE POLICY "Intersections updatable if all members accessible" ON entity_instances.intersection_instances
-    FOR UPDATE TO authenticated
-    USING (tenancy.intersection_accessible(id, 'WRITE'))
-    WITH CHECK (
-        client_id IN (SELECT tenancy.current_client_ids())
-        AND tenancy.has_permission(client_id, 'entity.write')
-    );
+    IF to_regclass('position_master.position_metrics') IS NOT NULL THEN
+        DROP POLICY IF EXISTS "Position metrics readable per intersection access" ON position_master.position_metrics;
+        DROP POLICY IF EXISTS "Position metrics writable per intersection access" ON position_master.position_metrics;
 
-CREATE POLICY "Intersection attribute values readable per member access" ON golden_master.intersection_attribute_values
-    FOR SELECT TO authenticated
-    USING (tenancy.intersection_accessible(intersection_id, 'READ'));
+        CREATE POLICY "Position metrics readable per intersection access" ON position_master.position_metrics
+            FOR SELECT TO authenticated
+            USING (tenancy.dimensional_intersection_accessible(intersection_id, 'READ'));
 
-CREATE POLICY "Intersection attribute values writable per member access" ON golden_master.intersection_attribute_values
-    FOR ALL TO authenticated
-    USING (tenancy.intersection_accessible(intersection_id, 'WRITE'))
-    WITH CHECK (tenancy.intersection_accessible(intersection_id, 'WRITE'));
-
-CREATE POLICY "Dimensional intersections readable per member access" ON position_master.dimensional_intersections
-    FOR SELECT TO authenticated
-    USING (tenancy.dimensional_intersection_accessible(id, 'READ'));
-
-CREATE POLICY "Dimensional intersections writable per member access" ON position_master.dimensional_intersections
-    FOR ALL TO authenticated
-    USING (tenancy.dimensional_intersection_accessible(id, 'WRITE'))
-    WITH CHECK (tenancy.dimensional_intersection_accessible(id, 'WRITE'));
-
-CREATE POLICY "Position metrics readable per intersection access" ON position_master.position_metrics
-    FOR SELECT TO authenticated
-    USING (tenancy.dimensional_intersection_accessible(intersection_id, 'READ'));
-
-CREATE POLICY "Position metrics writable per intersection access" ON position_master.position_metrics
-    FOR ALL TO authenticated
-    USING (tenancy.dimensional_intersection_accessible(intersection_id, 'WRITE'))
-    WITH CHECK (tenancy.dimensional_intersection_accessible(intersection_id, 'WRITE'));
+        CREATE POLICY "Position metrics writable per intersection access" ON position_master.position_metrics
+            FOR ALL TO authenticated
+            USING (tenancy.dimensional_intersection_accessible(intersection_id, 'WRITE'))
+            WITH CHECK (tenancy.dimensional_intersection_accessible(intersection_id, 'WRITE'));
+    END IF;
+END $position_master$;
 
 -- Scope rows name entities. Other tenants must not read them.
 DROP POLICY IF EXISTS "Compliance scope assignments readable by authenticated" ON compliance.rule_scope_assignments;

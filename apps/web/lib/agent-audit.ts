@@ -7,23 +7,20 @@ import {
   type AgentContext,
   type ClientUsage,
 } from '@tapestrai/mcp-server/src/agent/harness';
+import { soleClientId } from '@tapestrai/mcp-server/src/feeds/session-client';
 
 /** Puts the signed-in user on model calls made while loading a file. */
 export function asFeedCaller<T>(userId: string, clientId: string, fn: () => Promise<T>): Promise<T> {
   return runWithAgentContext({ userId, clientId, feature: 'feed-intake', activity: 'feed.import' }, fn);
 }
 
-/** The client this session is acting for, including support-mode impersonation. */
+/**
+ * The client this session is acting for, including support-mode impersonation,
+ * for naming it on a model call's receipt. Someone who belongs to more than one
+ * client gets null: the receipt then names no client instead of a guessed one.
+ */
 export async function callerClientId(supabase: SupabaseClient): Promise<string | null> {
-  const { data, error } = await supabase.schema('tenancy').rpc('current_client_ids');
-  if (error || !Array.isArray(data) || data.length === 0) return null;
-  const first = data[0];
-  if (typeof first === 'string') return first;
-  if (first && typeof first === 'object') {
-    const value = Object.values(first)[0];
-    return typeof value === 'string' ? value : null;
-  }
-  return null;
+  return soleClientId(supabase);
 }
 
 /**

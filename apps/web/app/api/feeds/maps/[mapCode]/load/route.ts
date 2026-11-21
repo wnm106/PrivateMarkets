@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loadFileWithMap, MapMismatchError } from '@/lib/feeds/import-instances';
-import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
+import { requireFeedLoader } from '@/lib/feeds/require-user';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Store a file and load it straight into live records with a saved map. The
+ * loader writes with the service role, so the caller is checked first, with
+ * their own session: they need load.promote in the client, the same as
+ * promoting a staged batch.
+ */
 export async function POST(request: NextRequest, context: { params: Promise<{ mapCode: string }> }) {
-  const user = await requireFeedUser();
-  if (!user) return NextResponse.json({ error: 'Sign in to load a file with a saved map.' }, { status: 401 });
-  const clientId = await feedClientId();
-  if (!clientId) return NextResponse.json({ error: 'Choose a client before loading the file' }, { status: 400 });
+  const who = await requireFeedLoader('Sign in to load a file with a saved map.');
+  if ('error' in who) return who.error;
+  const { user, clientId } = who;
   const { mapCode } = await context.params;
   const form = await request.formData();
   const file = form.get('file');
@@ -26,6 +31,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ma
       typeof asOfDate === 'string' && asOfDate ? asOfDate : undefined,
       undefined,
       typeof source === 'string' && source ? source : undefined,
+      user.id,
     );
     return NextResponse.json({
       mapCode: instance.mapCode,

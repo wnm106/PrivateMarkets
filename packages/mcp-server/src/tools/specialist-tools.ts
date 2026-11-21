@@ -2,6 +2,11 @@
  * Data specialist tools.
  * The same interview the load screen runs: read a file, ask what cannot be
  * decided, recommend new entities or attributes, save a reusable map, and load.
+ *
+ * The load-session functions write with the service role. Each tool that
+ * writes first asks the database, as the caller, whether they may: edit
+ * records in the one client they are loading into (requireLoadWrite), and for
+ * the load itself, which writes live records, load.promote (requireLoadPromote).
  */
 
 import type { JSONSchema7 } from 'json-schema';
@@ -15,8 +20,8 @@ import {
   saveSourceMap,
   startLoadSession,
 } from '../feeds/load-sessions';
-import { withSupabaseCaller } from '../agent/harness';
-import { sessionClientId } from '../feeds/session-client';
+import { userIdOf, withSupabaseCaller } from '../agent/harness';
+import { requireLoadPromote, requireLoadWrite, sessionClientId } from '../feeds/session-client';
 import { ToolRegistry } from '../lib/tool-registry.js';
 import { ToolDefinition } from '../lib/types.js';
 
@@ -52,7 +57,7 @@ const startLoadSessionTool: ToolDefinition = {
   } as JSONSchema7,
   execute: async (args, supabase) => {
     if (!args.contentBase64 && !args.csvText) throw new Error('Provide contentBase64 or csvText');
-    const clientId = await sessionClientId(supabase);
+    const clientId = await requireLoadWrite(supabase);
     const bytes = args.contentBase64
       ? Buffer.from(String(args.contentBase64), 'base64')
       : Buffer.from(String(args.csvText), 'utf8');
@@ -93,7 +98,7 @@ const answerLoadSessionTool: ToolDefinition = {
     (args.answers || {}) as Record<string, string>,
     Array.isArray(args.acceptedRecommendationIds) ? args.acceptedRecommendationIds.map(String) : undefined,
     Array.isArray(args.dismissedRecommendationIds) ? args.dismissedRecommendationIds.map(String) : undefined,
-    await sessionClientId(supabase)
+    await requireLoadWrite(supabase)
   ),
 };
 
@@ -107,7 +112,7 @@ const refreshLoadSessionTool: ToolDefinition = {
     required: ['sessionId'],
   } as JSONSchema7,
   execute: async (args, supabase) => {
-    const clientId = await sessionClientId(supabase);
+    const clientId = await requireLoadWrite(supabase);
     return withSupabaseCaller(supabase, clientId, { feature: 'feed-intake', activity: 'feed.import' }, () =>
       refreshLoadSession(String(args.sessionId), clientId),
     );
@@ -126,7 +131,7 @@ const saveSourceMapTool: ToolDefinition = {
     },
     required: ['sessionId'],
   } as JSONSchema7,
-  execute: async (args, supabase) => saveSourceMap(String(args.sessionId), args.name ? String(args.name) : undefined, await sessionClientId(supabase)),
+  execute: async (args, supabase) => saveSourceMap(String(args.sessionId), args.name ? String(args.name) : undefined, await requireLoadWrite(supabase)),
 };
 
 const runLoadSessionTool: ToolDefinition = {
@@ -138,7 +143,8 @@ const runLoadSessionTool: ToolDefinition = {
     properties: { sessionId: { type: 'string' } },
     required: ['sessionId'],
   } as JSONSchema7,
-  execute: async (args, supabase) => runLoadSession(String(args.sessionId), await sessionClientId(supabase)),
+  // Writes live records without a staged review, so it needs what promoting a batch needs.
+  execute: async (args, supabase) => runLoadSession(String(args.sessionId), await requireLoadPromote(supabase), undefined, undefined, { actorId: await userIdOf(supabase) }),
 };
 
 export function registerSpecialistTools(registry: ToolRegistry): void {

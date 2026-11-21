@@ -17,7 +17,7 @@ async function main() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
   const supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-  const registry = new ToolRegistry(supabase);
+  const registry = new ToolRegistry();
   registerPositionFileTools(registry);
   const names = registry.listTools().map((tool: { name: string }) => tool.name);
   for (const name of [
@@ -32,27 +32,27 @@ async function main() {
   }
 
   const remote = createClient('https://example.com', 'remote-key', { auth: { persistSession: false, autoRefreshToken: false } });
-  const remoteRegistry = new ToolRegistry(remote);
+  const remoteRegistry = new ToolRegistry();
   registerPositionFileTools(remoteRegistry);
   let refused = false;
   try {
-    await remoteRegistry.executeTool('list_position_file_imports', {});
+    await remoteRegistry.executeTool('list_position_file_imports', {}, remote);
   } catch (error: any) {
     refused = String(error.message).includes('local database');
   }
   assert(refused, 'a non-local Supabase client was allowed to list imports');
 
-  const listed = await registry.executeTool('list_position_file_imports', {});
+  const listed = await registry.executeTool('list_position_file_imports', {}, supabase);
   assert(listed.sourceCode === 'POSITION_FILE' && Array.isArray(listed.instances), 'queue list missing');
 
-  const targets = await registry.executeTool('list_position_file_mapping_targets', {});
+  const targets = await registry.executeTool('list_position_file_mapping_targets', {}, supabase);
   assert(targets.targets.some((target: { key: string }) => target.key === 'attribute:ISSUER:INDUSTRY'), 'issuer industry target missing');
   assert(targets.targets.some((target: { key: string }) => target.key === 'attribute:FUND:INDUSTRY'), 'fund industry target missing');
 
   const created = await registry.executeTool('create_position_file_import', {
     fileName: 'Position_FIle.csv',
     contentBase64: readFileSync(csvPath).toString('base64'),
-  });
+  }, supabase);
   assert(created.columnMappings.length === 42, `expected 42 columns, got ${created.columnMappings.length}`);
   assert(created.status === 'READY', created.status);
   const rating = created.columnMappings.find((column: { sourceColumn: string }) => column.sourceColumn === 'issuer credit rating');
@@ -68,7 +68,7 @@ async function main() {
     instanceId: created.id,
     asOfDate: '2026-09-30',
     columnMappings: edited,
-  });
+  }, supabase);
   const savedIndustry = saved.columnMappings.find((column: { sourceColumn: string }) => column.sourceColumn === 'issuer industry');
   assert(savedIndustry.domainCode === 'FUND' && savedIndustry.transform.kind === 'uppercase', 'mapping was not saved');
 
@@ -77,12 +77,12 @@ async function main() {
     instanceId: created.id,
     asOfDate: '2026-09-30',
     columnMappings: restoredMappings,
-  });
+  }, supabase);
   assert(processed.status === 'SUCCEEDED', processed.errorMessage || processed.status);
   assert(processed.resultSummary.created === 0 && processed.resultSummary.matched === 56, JSON.stringify(processed.resultSummary));
   assert(processed.resultSummary.attributesCreated === 0, `created ${processed.resultSummary.attributesCreated} attribute rows`);
 
-  const again = await registry.executeTool('process_position_file_import', { instanceId: created.id });
+  const again = await registry.executeTool('process_position_file_import', { instanceId: created.id }, supabase);
   assert(again.status === 'SUCCEEDED' && again.resultSummary.attributesCreated === 0 && again.resultSummary.attributesUpdated === 0, JSON.stringify(again.resultSummary));
   assert(again.runs.length === 2, `expected 2 runs, got ${again.runs.length}`);
 
