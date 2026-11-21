@@ -11823,3 +11823,118 @@ details.rb-step[open] { overflow: visible; }
 .as-item.following .as-item-name { font-weight: 600; }
 .as-path-badge { align-self: flex-start; margin-top: 4px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--badge-ok-bg); color: var(--badge-ok-fg); }
 .as-step-num.add { background: var(--accent-2); }
+
+/* ---------------------------------------------------------------------------
+   Tasks: the count in the top bar and sidebar, the inbox, and the note when a
+   task arrives. components/layout/TaskCenter.tsx
+   --------------------------------------------------------------------------- */
+.tasks-anchor { position: relative; }
+.tasks-launcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.tasks-launcher:hover, .tasks-launcher.active { border-color: var(--brand-cyan, #0e7490); box-shadow: var(--focus-ring, 0 0 0 3px rgba(14, 116, 144, 0.15)); }
+.tasks-launcher.has-tasks { color: var(--ink); font-weight: 600; }
+.tasks-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #c2410c;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.tasks-count.is-overdue { background: var(--red, #b91c1c); }
+.tasks-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(72vh, 620px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line-strong, #cbd5e1);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+  z-index: 60;
+  overflow: hidden;
+}
+.tasks-panel-head { display: flex; gap: 10px; align-items: baseline; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.tasks-panel-title { font-size: 14px; font-weight: 600; }
+.tasks-panel-sum { font-size: 12.5px; color: var(--ink-3); }
+.tasks-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 auto; min-height: 72px; }
+.tasks-panel-head, .tasks-waiting, .tasks-panel-foot, .tasks-empty { flex: none; }
+.tasks-row { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.tasks-row.is-overdue { background: #fef2f2; }
+.tasks-row.is-done { background: #f0fdf4; }
+.tasks-mark { width: 10px; height: 10px; margin-top: 4px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: #fff; }
+.tasks-mark.is-overdue { width: 14px; height: 14px; margin-top: 2px; background: var(--red, #b91c1c); }
+.tasks-mark.is-new { background: #c2410c; }
+.tasks-mark.is-done { width: 14px; height: 14px; margin-top: 2px; background: #16a34a; }
+.tasks-mark.is-others { background: var(--line-strong, #cbd5e1); }
+.tasks-row-main { display: grid; gap: 2px; min-width: 0; color: inherit; text-decoration: none; }
+.tasks-row-main:hover .tasks-row-title { color: var(--entity-link); }
+.tasks-row-title { font-size: 13.5px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.tasks-row-about { font-weight: 400; color: var(--ink-2); }
+.tasks-row-sub { font-size: 12px; color: var(--ink-3); }
+.tasks-row-error { font-size: 12px; color: var(--red, #b91c1c); }
+.tasks-new { margin-left: 6px; font-size: 10.5px; font-weight: 700; color: #c2410c; text-transform: uppercase; letter-spacing: 0.4px; }
+.tasks-row-side { display: grid; gap: 6px; justify-items: end; }
+.tasks-when { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+.tasks-when.is-overdue { color: var(--red, #b91c1c); font-weight: 600; }
+.tasks-empty { padding: 18px 14px; font-size: 13px; color: var(--ink-3); }
+.tasks-waiting { border-top: 1px solid var(--line); }
+.tasks-waiting-toggle { width: 100%; text-align: left; padding: 9px 14px; border: none; background: none; font: inherit; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
+.tasks-list.is-others { max-height: 180px; }
+.tasks-list.is-others .tasks-row-title { font-weight: 500; }
+.tasks-panel-foot { padding: 9px 14px; border-top: 1px solid var(--line); font-size: 12.5px; background: var(--bg-alt); }
+.sidebar-task-badge {
+  margin-left: auto;
+  background: #fff1e6;
+  color: #c2410c;
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.sidebar-task-badge.is-overdue { background: #fde8e8; color: var(--red, #b91c1c); }
+.tasks-toasts { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 8px; z-index: 80; width: min(380px, calc(100vw - 32px)); }
+.tasks-toast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 12px 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong, #cbd5e1);
+  border-left: 4px solid #c2410c;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
+  animation: tasks-in 0.2s ease-out;
+}
+.tasks-toast.is-overdue { border-left-color: var(--red, #b91c1c); }
+.tasks-toast-text { display: grid; gap: 1px; min-width: 0; }
+.tasks-toast-kicker { font-size: 10.5px; font-weight: 700; color: #c2410c; text-transform: uppercase; letter-spacing: 0.4px; }
+.tasks-toast-title { font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.tasks-toast-sub { font-size: 12px; color: var(--ink-3); }
+.tasks-toast-close { border: none; background: none; font-size: 18px; line-height: 1; color: var(--ink-3); cursor: pointer; padding: 2px 4px; }
+@keyframes tasks-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .tasks-toast { animation: none; } }
+@media (max-width: 720px) { .tasks-launcher-label { display: none; } }

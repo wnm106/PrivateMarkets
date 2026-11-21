@@ -52,6 +52,12 @@ describe('review notes', () => {
     expect(briefText([review, { ...review, id: 'e10', kind: 'REVIEW_OVERDUE' }], 'IMMEDIATE')).toMatch(/^2 workflow review notes for you\./);
   });
 
+  it('says a workflow needs you when the notes are about forms and screens too', () => {
+    const screen = { id: 'e12', kind: 'STAGE_ASSIGNED', summary: 'Waiting for you: "Map the file" in File intake', occurredAt: '2026-11-16T14:05:00Z', href: '/workflows/runs/run-2?decision=map' };
+    expect(briefText([screen], 'IMMEDIATE')).toBe('A workflow needs you.\n\n- Waiting for you: "Map the file" in File intake (2026-11-16 14:05 UTC) [Open](/workflows/runs/run-2?decision=map)');
+    expect(briefText([review, screen], 'IMMEDIATE')).toMatch(/^2 workflow notes for you\./);
+  });
+
   it('keeps the usual wording when a note mixes reviews and followed changes, and links only inside the app', () => {
     expect(briefText([review, { ...review, id: 'e11', kind: 'FEED_LOADED', href: 'https://elsewhere.example' }], 'IMMEDIATE')).toMatch(
       /^2 things you asked to hear about right away\.[\s\S]*\(2026-11-16 14:05 UTC\)$/,

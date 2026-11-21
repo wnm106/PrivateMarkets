@@ -7,6 +7,7 @@ import { SignedOutGate } from '@/components/auth/SignedOutGate';
 import { TopBar } from './TopBar';
 import { AppSidebar } from './AppSidebar';
 import { ChatPanel } from './ChatPanel';
+import { TaskWatcher } from './TaskCenter';
 import { LivePage } from './LivePage';
 import { ImpersonationBanner } from './ImpersonationBanner';
 import { AttributeInspectProvider } from '@/components/detail/AttributeInspect';
@@ -46,6 +47,7 @@ export function AppChrome({
         </div>
         <ChatPanel context={routeContext} />
       </div>
+      <TaskWatcher />
     </div>
   );
 

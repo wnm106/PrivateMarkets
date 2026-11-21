@@ -13,7 +13,8 @@ import { assigneeText, dueText, statusOf, when, type Assignee, type MutationErro
  * it went to; someone who manages workflows can answer it for them.
  */
 
-interface FormView {
+export interface FormView {
+  nodeId: string;
   id: string;
   runId: string;
   workflowName: string | null;
@@ -34,8 +35,8 @@ interface FormView {
   createdAt: string;
 }
 
-const FIELDS = 'id runId workflowName title instructions fields status answers note externalEmail linkActive assignees canAnswer blocker submittedByName submittedAt dueAt createdAt';
-const QUERY = `query WorkflowForms($status: String, $runId: ID) { workflowForms(status: $status, runId: $runId) { ${FIELDS} } }`;
+const FIELDS = 'id runId nodeId workflowName title instructions fields status answers note externalEmail linkActive assignees canAnswer blocker submittedByName submittedAt dueAt createdAt';
+export const FORMS_QUERY = `query WorkflowForms($status: String, $runId: ID) { workflowForms(status: $status, runId: $runId) { ${FIELDS} } }`;
 const SUBMIT = `mutation SubmitWorkflowForm($id: ID!, $outcome: String!, $answers: JSON, $note: String) {
   submitWorkflowForm(id: $id, outcome: $outcome, answers: $answers, note: $note) { form { id } errors { message } }
 }`;
@@ -54,7 +55,7 @@ export function RunForms({ runId, onAnswered }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const result = await graphqlQuery<{ workflowForms: FormView[] }>(QUERY, runId ? { status: null, runId } : { status: 'OPEN' }, 'network-only');
+    const result = await graphqlQuery<{ workflowForms: FormView[] }>(FORMS_QUERY, runId ? { status: null, runId } : { status: 'OPEN' }, 'network-only');
     if (!result.aborted) setForms(result.data?.workflowForms || []);
   }, [runId]);
 
@@ -67,63 +68,85 @@ export function RunForms({ runId, onAnswered }: Props) {
   return (
     <section style={{ display: 'grid', gap: 8, margin: '16px 0' }}>
       <div style={{ fontSize: 14, fontWeight: 600 }}>{runId ? 'Forms' : `Forms waiting (${forms.length})`}</div>
-      {forms.map((form) => {
-        const due = form.status === 'OPEN' ? dueText(form.dueAt) : null;
-        const expanded = openId === form.id || (Boolean(runId) && form.status === 'OPEN' && form.canAnswer && forms.length === 1);
-        return (
-          <div key={form.id} style={card}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <strong>{form.title}</strong>
-              {!runId && form.workflowName && <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{form.workflowName}</span>}
-              <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
-                {form.externalEmail ? `Sent to ${form.externalEmail}${form.status === 'OPEN' ? (form.linkActive ? ' · link works' : ' · link expired') : ''}` : `For ${assigneeText(form.assignees)}`}
-              </span>
-              {due && <span style={{ fontSize: 12, fontWeight: 600 }}>{due}</span>}
-              {form.status !== 'OPEN' && (
-                <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
-                  {form.status === 'SUBMITTED' ? 'Answered' : form.status === 'DECLINED' ? 'Declined' : 'Cancelled'}
-                  {form.submittedByName ? ` by ${form.submittedByName}` : ''} {when(form.submittedAt)}
-                </span>
-              )}
-              <span style={{ flex: 1 }} />
-              {!runId && <Link href={`/workflows/runs/${form.runId}`} style={{ fontSize: 12 }}>Run</Link>}
-              {form.status === 'OPEN' && form.canAnswer && !expanded && (
-                <button type="button" className="btn btn-sm btn-primary" onClick={() => setOpenId(form.id)}>
-                  {form.externalEmail ? 'Answer for them' : 'Fill in'}
-                </button>
-              )}
-            </div>
-            {form.instructions && <div style={{ fontSize: 13, color: 'var(--ink-2)', whiteSpace: 'pre-wrap' }}>{form.instructions}</div>}
-            {form.status === 'OPEN' && !form.canAnswer && form.blocker && <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{form.blocker}</div>}
-            {form.status === 'SUBMITTED' && form.answers && (
-              <dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '4px 12px', margin: 0, fontSize: 13 }}>
-                {asFields(form.fields).map((field) => (
-                  <div key={field.key} style={{ display: 'contents' }}>
-                    <dt style={{ color: 'var(--ink-3)' }}>{field.label}</dt>
-                    <dd style={{ margin: 0 }}>{form.answers?.[field.key] === undefined ? '—' : String(form.answers[field.key])}</dd>
-                  </div>
-                ))}
-              </dl>
-            )}
-            {form.note && form.status !== 'OPEN' && <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Note: {form.note}</div>}
-            {form.status === 'OPEN' && form.canAnswer && expanded && (
-              <FormFields
-                fields={asFields(form.fields)}
-                onSubmit={async (outcome, answers, note) => {
-                  const { data, error } = await graphqlMutation<{ submitWorkflowForm: { errors: MutationErrors } }>(SUBMIT, { id: form.id, outcome, answers, note });
-                  const problem = error?.message || data?.submitWorkflowForm.errors[0]?.message;
-                  if (problem) return problem;
-                  setOpenId(null);
-                  void load();
-                  onAnswered?.();
-                  return null;
-                }}
-              />
-            )}
-          </div>
-        );
-      })}
+      {forms.map((form) => (
+        <FormCard
+          key={form.id}
+          form={form}
+          inRun={Boolean(runId)}
+          expanded={openId === form.id || (Boolean(runId) && form.status === 'OPEN' && form.canAnswer && forms.length === 1)}
+          onExpand={() => setOpenId(form.id)}
+          onAnswered={() => {
+            setOpenId(null);
+            void load();
+            onAnswered?.();
+          }}
+        />
+      ))}
     </section>
+  );
+}
+
+interface CardProps {
+  form: FormView;
+  /** Shown on its run's page, so the run is not linked. */
+  inRun: boolean;
+  expanded: boolean;
+  onExpand(): void;
+  onAnswered(): void;
+}
+
+/** One form: who it is for, and its fields when it is open and yours, or its answers once given. */
+export function FormCard({ form, inRun, expanded, onExpand, onAnswered }: CardProps) {
+  const due = form.status === 'OPEN' ? dueText(form.dueAt) : null;
+  return (
+    <div style={card}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>{form.title}</strong>
+        {!inRun && form.workflowName && <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{form.workflowName}</span>}
+        <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+          {form.externalEmail ? `Sent to ${form.externalEmail}${form.status === 'OPEN' ? (form.linkActive ? ' · link works' : ' · link expired') : ''}` : `For ${assigneeText(form.assignees)}`}
+        </span>
+        {due && <span style={{ fontSize: 12, fontWeight: 600 }}>{due}</span>}
+        {form.status !== 'OPEN' && (
+          <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+            {form.status === 'SUBMITTED' ? 'Answered' : form.status === 'DECLINED' ? 'Declined' : 'Cancelled'}
+            {form.submittedByName ? ` by ${form.submittedByName}` : ''} {when(form.submittedAt)}
+          </span>
+        )}
+        <span style={{ flex: 1 }} />
+        {!inRun && <Link href={`/workflows/runs/${form.runId}`} style={{ fontSize: 12 }}>Run</Link>}
+        {form.status === 'OPEN' && form.canAnswer && !expanded && (
+          <button type="button" className="btn btn-sm btn-primary" onClick={onExpand}>
+            {form.externalEmail ? 'Answer for them' : 'Fill in'}
+          </button>
+        )}
+      </div>
+      {form.instructions && <div style={{ fontSize: 13, color: 'var(--ink-2)', whiteSpace: 'pre-wrap' }}>{form.instructions}</div>}
+      {form.status === 'OPEN' && !form.canAnswer && form.blocker && <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{form.blocker}</div>}
+      {form.status === 'SUBMITTED' && form.answers && (
+        <dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '4px 12px', margin: 0, fontSize: 13 }}>
+          {asFields(form.fields).map((field) => (
+            <div key={field.key} style={{ display: 'contents' }}>
+              <dt style={{ color: 'var(--ink-3)' }}>{field.label}</dt>
+              <dd style={{ margin: 0 }}>{form.answers?.[field.key] === undefined ? '—' : String(form.answers[field.key])}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {form.note && form.status !== 'OPEN' && <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Note: {form.note}</div>}
+      {form.status === 'OPEN' && form.canAnswer && expanded && (
+        <FormFields
+          fields={asFields(form.fields)}
+          onSubmit={async (outcome, answers, note) => {
+            const { data, error } = await graphqlMutation<{ submitWorkflowForm: { errors: MutationErrors } }>(SUBMIT, { id: form.id, outcome, answers, note });
+            const problem = error?.message || data?.submitWorkflowForm.errors[0]?.message;
+            if (problem) return problem;
+            onAnswered();
+            return null;
+          }}
+        />
+      )}
+    </div>
   );
 }
 

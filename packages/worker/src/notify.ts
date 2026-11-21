@@ -59,13 +59,31 @@ export function noticeLink(href: string | null | undefined, appUrl?: string): st
   return appUrl ? `${appUrl.replace(/\/+$/, '')}${href}` : href;
 }
 
+const SUBJECTS: Record<string, string> = {
+  REVIEW_OVERDUE: 'Overdue workflow review',
+  FORM_ASSIGNED: 'A workflow form is waiting for you',
+  FORM_OVERDUE: 'Overdue workflow form',
+  STAGE_ASSIGNED: 'A workflow step is waiting for you',
+  STAGE_RETURNED: 'A workflow step came back to you',
+  STAGE_OVERDUE: 'Overdue workflow step',
+};
+
 export function emailSubject(kind: string | undefined): string {
-  return kind === 'REVIEW_OVERDUE' ? 'Overdue workflow review' : 'A workflow review is waiting for you';
+  return SUBJECTS[kind || ''] || 'A workflow review is waiting for you';
 }
 
-export function emailText(summary: string, link: string | null, name: string | null): string {
+/** Why the person is getting the email, by what it is about. */
+function becauseLine(kind: string | undefined): string {
+  if (kind?.startsWith('FORM_')) return 'You are getting this because the form is for you.';
+  if (kind?.startsWith('STAGE_')) return 'You are getting this because this step of the workflow is for you.';
+  return 'You are getting this because the review is assigned to you.';
+}
+
+export function emailText(summary: string, link: string | null, name: string | null, kind?: string): string {
   const hello = name ? `Hello ${name},` : 'Hello,';
-  return [hello, '', summary + '.', ...(link ? ['', `Open it: ${link}`] : []), '', 'You are getting this because the review is assigned to you.'].join('\n');
+  // A summary that already ends a sentence keeps its own stop.
+  const body = /[.!?]$/.test(summary.trim()) ? summary.trim() : `${summary}.`;
+  return [hello, '', body, ...(link ? ['', `Open it: ${link}`] : []), '', becauseLine(kind)].join('\n');
 }
 
 export function slackText(summary: string, link: string | null): string {
@@ -99,7 +117,7 @@ export async function deliver(collected: Collected, env: NotifyEnv, fetcher: Fet
           from: env.emailFrom,
           to: [recipient.email],
           subject: emailSubject(collected.kind),
-          text: emailText(summary, link, recipient.name),
+          text: emailText(summary, link, recipient.name, collected.kind),
         });
         deliveries.push({ channel: 'EMAIL', recipient: recipient.email, status: error ? 'FAILED' : 'SENT', ...(error ? { error } : {}) });
       }

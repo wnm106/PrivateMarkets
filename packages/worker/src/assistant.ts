@@ -26,6 +26,8 @@ export interface BriefEvent {
 
 /** Notes addressed to a person about a workflow review, rather than something they follow. */
 const REVIEW_KINDS = new Set(['REVIEW_ASSIGNED', 'REVIEW_OVERDUE']);
+/** Notes addressed to a person about any decision in a workflow run: a review, a form, a screen. */
+const WORKFLOW_KINDS = new Set([...REVIEW_KINDS, 'FORM_ASSIGNED', 'FORM_OVERDUE', 'STAGE_ASSIGNED', 'STAGE_RETURNED', 'STAGE_OVERDUE']);
 
 interface Collected {
   events?: unknown;
@@ -42,10 +44,15 @@ interface Committed {
 export function briefText(events: BriefEvent[], mode: BriefMode, truncated = false): string {
   if (events.length === 0) return '';
   const reviews = events.every((event) => REVIEW_KINDS.has(event.kind || ''));
+  const workflow = events.every((event) => WORKFLOW_KINDS.has(event.kind || ''));
   const lead = reviews
     ? events.length === 1
       ? 'A workflow review needs you.'
       : `${events.length} workflow review notes for you.`
+    : workflow
+      ? events.length === 1
+        ? 'A workflow needs you.'
+        : `${events.length} workflow notes for you.`
     : mode === 'IMMEDIATE'
       ? events.length === 1
         ? 'Something you asked to hear about right away.'

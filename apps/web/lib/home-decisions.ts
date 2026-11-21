@@ -5,15 +5,8 @@
  * else is opened and reviewed in full. Everything here is pure.
  */
 
-import {
-  asProposal,
-  checkDecision,
-  unanswered,
-  type Confidence,
-  type Proposal,
-  type ProposalItem,
-  type ReviewDecision,
-} from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { asProposal, type Confidence, type ReviewDecision } from '@tapestrai/graphql/src/lib/workflow-proposal';
+import { approveAllDecision, isReady } from '@tapestrai/graphql/src/lib/workflow-tasks';
 
 /** What the home page reads of one review. */
 export interface DecisionReview {
@@ -68,17 +61,8 @@ export interface DecisionCard {
 const LINES = 3;
 const RANK: Record<Confidence, number> = { LOW: 0, MEDIUM: 1, HIGH: 2 };
 
-/** Whether a change can be approved without a person adding or checking anything. */
-export function isReady(item: ProposalItem): boolean {
-  return !item.needsReview && unanswered(item, { decision: 'APPROVE' }).length === 0;
-}
-
-/** The decision that approves every change as proposed, or null when any change is not ready or the whole would not be accepted. */
-export function approveAllDecision(proposal: Proposal): ReviewDecision | null {
-  if (proposal.items.length === 0 || !proposal.items.every(isReady)) return null;
-  const decision: ReviewDecision = { items: Object.fromEntries(proposal.items.map((item) => [item.id, { decision: 'APPROVE' as const }])) };
-  return checkDecision(proposal, decision).ok ? decision : null;
-}
+// Whether a change is ready, and the decision that approves a review in place, are the task inbox's rules too.
+export { approveAllDecision, isReady } from '@tapestrai/graphql/src/lib/workflow-tasks';
 
 export function decisionCard(review: DecisionReview): DecisionCard {
   const proposal = asProposal(review.proposal);

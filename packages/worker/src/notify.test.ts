@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deliver, emailText, noticeLink, notifyDeliverHandler, slackText, type Fetch } from './notify';
+import { deliver, emailSubject, emailText, noticeLink, notifyDeliverHandler, slackText, type Fetch } from './notify';
 
 function fakeFetch(fail: (url: string) => boolean = () => false) {
   const calls: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> = [];
@@ -78,5 +78,17 @@ describe('notify.deliver', () => {
     const result = await notifyDeliverHandler(supabase as never, {}, fetcher)({ id: 'j', payload: { eventId: 'e1' } } as never);
     expect(result).toMatchObject({ sent: 0 });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('notices about forms and screens', () => {
+  it('name what is waiting in the subject, and say why the person is told', () => {
+    expect(emailSubject('FORM_ASSIGNED')).toBe('A workflow form is waiting for you');
+    expect(emailSubject('STAGE_RETURNED')).toBe('A workflow step came back to you');
+    expect(emailSubject('STAGE_OVERDUE')).toBe('Overdue workflow step');
+    expect(emailSubject('REVIEW_ASSIGNED')).toBe('A workflow review is waiting for you');
+    expect(emailText('Form waiting for you: "Confirm the period" in Intake, 2 questions', null, 'Ada', 'FORM_ASSIGNED')).toMatch(/2 questions\.\n\nYou are getting this because the form is for you\.$/);
+    // A summary that already ends a sentence is not given a second stop.
+    expect(emailText('Came back to you: "Map the file" in File intake. Choose the date.', null, null, 'STAGE_RETURNED')).toContain('Choose the date.\n\nYou are getting this because this step of the workflow is for you.');
   });
 });
