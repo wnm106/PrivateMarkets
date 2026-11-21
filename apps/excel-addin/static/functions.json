@@ -1,0 +1,32 @@
+{
+  "functions": [
+    {
+      "id": "TAP",
+      "name": "TAP",
+      "description": "One attribute of one Tapestry record, as of a date. Open the Tapestry pane to search attributes and records.",
+      "helpUrl": "__ORIGIN__/excel/addin/help.html",
+      "result": { "type": "any", "dimensionality": "scalar" },
+      "parameters": [
+        {
+          "name": "attribute",
+          "description": "Attribute code, alias or name, such as \"NAV\". ENTITY_NAME and ENTITY_CODE are the record's own name and code.",
+          "type": "any",
+          "dimensionality": "scalar"
+        },
+        {
+          "name": "entity",
+          "description": "Record code or name, such as \"FUND-1\" or \"Apex Fund\".",
+          "type": "any",
+          "dimensionality": "scalar"
+        },
+        {
+          "name": "as_of",
+          "description": "Optional. A date, a date cell, or \"YYYY-MM-DD\". Blank means today.",
+          "type": "any",
+          "dimensionality": "scalar",
+          "optional": true
+        }
+      ]
+    }
+  ]
+}

@@ -1531,6 +1531,69 @@ type EntitySearchHit {
   matchedDomainName: String
 }
 
+"""A field found from the words a person used: its code, name, description, or a stored alias."""
+type AttributeSearchHit {
+  attributeCode: String!
+  attributeName: String
+  description: String
+  dataType: String
+  """The entity type the field is on. For an alias match, the alias's entity type."""
+  domainCode: String
+  referenceDomainCode: String
+  """The stored alias that matched, such as Ending NAV for NAV."""
+  matchedAlias: String
+  """ATTRIBUTE, ATTRIBUTE_ALIAS, or ENTITY_NAME. ENTITY_NAME means the words are a record's name, attributeCode entity_name."""
+  match: String!
+}
+
+"""An entity type found from a word for it, such as Borrower for ISSUER."""
+type EntityTypeSearchHit {
+  domainCode: String!
+  domainName: String
+  matchedAlias: String
+}
+
+type AttributeSearchResult {
+  attributes: [AttributeSearchHit!]!
+  entityNames: [AttributeSearchHit!]!
+  entityTypes: [EntityTypeSearchHit!]!
+}
+
+"""One TAP formula from Excel: an attribute of one record, as of a date."""
+input TapRequestInput {
+  """Attribute code, stored alias, or name. ENTITY_CODE and ENTITY_NAME are the record's own code and name."""
+  attribute: String!
+  """Record code, name, or another stored name."""
+  entity: String!
+  """YYYY-MM-DD. Blank means today."""
+  asOfDate: String
+}
+
+"""The answer to one TAP request. When the cell cannot be answered, error and message say why and value is null."""
+type TapValue {
+  attribute: String!
+  entity: String!
+  asOfDate: String
+  attributeCode: String
+  attributeName: String
+  dataType: String
+  entityId: ID
+  entityCode: String
+  entityName: String
+  domainCode: String
+  """A number, text, or true/false. A date is text, YYYY-MM-DD."""
+  value: JSON
+  """NUMBER, TEXT, BOOLEAN, or DATE."""
+  valueType: String
+  """The day the winning stored value took effect. Null for a calculated or built-in value."""
+  validFrom: String
+  """INVALID_REQUEST, UNKNOWN_ATTRIBUTE, AMBIGUOUS_ATTRIBUTE, UNKNOWN_ENTITY, AMBIGUOUS_ENTITY, or NO_VALUE."""
+  error: String
+  message: String
+  """For an ambiguous reference, the records or attributes that match, by code."""
+  candidates: [String!]!
+}
+
 """Another name of one record."""
 type EntityAlias {
   id: ID!
@@ -3207,6 +3270,12 @@ type Query {
 
   """Match a record by its name, another stored name, a related name, or a parent name. ALIAS means the other name matched. Parent domains rank before child domains."""
   searchEntities(query: String!, limit: Int): [EntitySearchHit!]!
+
+  """Find a field from the words a person used: code, name, description, or a stored alias (Ending NAV is NAV). Chat's search_attributes reads the same search."""
+  searchAttributes(query: String!, limit: Int): AttributeSearchResult!
+
+  """Answer TAP formulas from Excel, in request order: one attribute of one record, as of a date. References match exactly, ignoring case. At most 500 at once."""
+  tapValues(requests: [TapRequestInput!]!, knowledgeDate: DateTime): [TapValue!]!
 
   """Other names stored for one record, such as a project name for a borrower."""
   entityAliases(entityId: ID!): [EntityAlias!]!

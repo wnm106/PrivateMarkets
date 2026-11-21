@@ -78,3 +78,6 @@ migrate_entities_to_bill_client.sql
 .wrangler/
 .dev.vars*
 !.dev.vars.example
+
+# Excel add-in build output (apps/excel-addin/scripts/build.mjs)
+apps/web/public/excel/addin/

@@ -223,6 +223,28 @@ query ListDQExceptions(
 }
 ```
 
+### Excel: TAP Values and Attribute Search
+
+The Excel add-in (docs/EXCEL_ADDIN.md) answers `=TAP` cells with `tapValues`, in request order. References match exactly, ignoring case. A cell that cannot be answered comes back with `error` and `message` instead of a value; one bad cell never fails the others.
+
+```graphql
+query TapValues($requests: [TapRequestInput!]!) {
+  tapValues(requests: $requests) {
+    attributeCode
+    entityCode
+    asOfDate
+    value        # number, text, or true/false; a date is text, YYYY-MM-DD
+    valueType    # NUMBER, TEXT, BOOLEAN, DATE
+    error        # INVALID_REQUEST, UNKNOWN_ATTRIBUTE, AMBIGUOUS_ATTRIBUTE, UNKNOWN_ENTITY, AMBIGUOUS_ENTITY, NO_VALUE
+    message
+    candidates   # for an ambiguous reference, the codes that would settle it
+  }
+}
+# variables: { "requests": [{ "attribute": "NAV", "entity": "FUND-1", "asOfDate": "2026-09-30" }] }
+```
+
+`searchAttributes(query, limit)` finds a field from the words a person used, including stored aliases (Ending NAV is NAV). Chat's `search_attributes` tool reads the same search.
+
 ## Mutations
 
 ### Create Entity

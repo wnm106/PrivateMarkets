@@ -203,6 +203,7 @@ npx supabase db push
 - [API Reference](docs/API.md) - GraphQL API documentation
 - [Deployment Guide](docs/DEPLOYMENT.md) - Production deployment instructions
 - [Bi-temporal Model](docs/BI_TEMPORAL.md) - Understanding the bi-temporal data model
+- [Excel Add-in](docs/EXCEL_ADDIN.md) - `=TAP(attribute, record, as of)` in Excel, with per-person sign-in
 
 ## Key Features
 

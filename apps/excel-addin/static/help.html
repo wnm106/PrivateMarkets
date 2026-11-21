@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TAP in Excel</title>
+    <link rel="stylesheet" href="taskpane.css?v=__BUILD__" />
+  </head>
+  <body>
+    <main>
+      <h1>TAP in Excel</h1>
+      <p><code>=TAP(attribute, record, [as_of])</code> returns one attribute of one Tapestry record, as of a date.</p>
+      <ul>
+        <li><strong>attribute</strong>: an attribute code such as <code>"NAV"</code>, a stored alias such as <code>"Ending NAV"</code>, or the attribute's name. <code>"ENTITY_NAME"</code> and <code>"ENTITY_CODE"</code> are the record's own name and code.</li>
+        <li><strong>record</strong>: the record's code, its name, or another name stored for it.</li>
+        <li><strong>as_of</strong>: optional. A date cell, <code>DATE(2026,9,30)</code>, or <code>"2026-09-30"</code>. Blank means today.</li>
+      </ul>
+      <p>Matching ignores case but is otherwise exact. When two records share a name, the one whose entity type has the attribute is used; if that still leaves more than one, the cell shows <code>#N/A</code> and lists the codes to use instead.</p>
+      <p>Numbers come back as numbers, true/false as TRUE/FALSE, and dates as text in YYYY-MM-DD, which Excel can still use in date arithmetic.</p>
+      <p><code>=TAP</code> is a workbook name the add-in adds, which calls <code>=TAPESTRY.TAP</code>. Both work while the add-in is installed.</p>
+      <h2>Sign-in</h2>
+      <p>Each person signs in with their own Tapestry account from the Tapestry pane. Formulas show only what that account can see. Signing out of Excel does not sign you out of Tapestry in your browser, and signing out of the browser does not sign Excel out.</p>
+      <h2>Errors</h2>
+      <ul>
+        <li><code>#N/A</code> with "Sign in to Tapestry": open the Tapestry pane and sign in.</li>
+        <li><code>#N/A</code>: the attribute or record was not found, more than one matched, or the record has no value on that date. Hover over the cell for the reason.</li>
+        <li><code>#VALUE!</code>: an argument is missing, or the as-of is not a date.</li>
+      </ul>
+    </main>
+  </body>
+</html>
