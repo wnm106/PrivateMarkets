@@ -3,15 +3,6 @@
 import { useMemo, useState } from 'react';
 import { isProhibition, standingsForFund, type CapacityReading, type CapacityStanding } from '@/lib/capacity-view';
 
-const GROUP_LABEL: Record<string, string> = {
-  FUND_ISSUER_NAV_PCT: 'Issuer',
-  PF_ISSUER_CONCENTRATION: 'Issuer',
-  ACT40_ISSUER_5_25: 'Issuer',
-  PF_SPONSOR_CONCENTRATION: 'Sponsor',
-  FUND_SECTOR_BOOK_PCT: 'Sector',
-  FUND_INSTRUMENT_EXPOSURE: 'Instrument',
-};
-
 function words(code: string): string {
   return code.toLowerCase().replace(/_/g, ' ');
 }
@@ -67,7 +58,7 @@ export function CapacityRules({ fundId, readings, rows, onOpenHypo }: {
         const open = openKey === key;
         const banned = isProhibition(reading);
         const group = reading.groupValue
-          ? `${GROUP_LABEL[reading.ruleCode] || 'Group'} ${banned ? words(reading.groupValue) : reading.groupValue}`
+          ? `${reading.groupLabel || 'Group'} ${banned ? words(reading.groupValue) : reading.groupValue}`
           : '';
         const owner = item.ownerId ? names.get(item.ownerId) || '' : '';
         const unit = reading.resultUnit;

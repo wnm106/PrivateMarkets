@@ -12,6 +12,9 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
+    "lint:surfaces": "eslint -c surfaces/eslint.config.mjs \"surfaces/*/src/**/*.{ts,tsx}\"",
+    "guard": "node scripts/guard/check-static.mjs",
+    "guard:db": "tsx scripts/guard/check-db.ts",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
     "typecheck:ci": "npm run typecheck --workspaces --if-present",
@@ -19,6 +22,8 @@
     "db:migrate": "supabase db push",
     "db:seed": "supabase db seed",
     "db:reset": "supabase db reset --local --yes",
+    "db:replay": "bash scripts/db-replay/replay.sh",
+    "test:db": "tsx scripts/db-tests/capacity-parity.ts",
     "db:studio": "supabase studio",
     "generate:graphql": "graphql-codegen --config codegen.ts",
     "clean": "turbo run clean && rm -rf node_modules"

@@ -552,3 +552,259 @@ export function asNumber(value: unknown): number | null {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
+
+// ---------------------------------------------------------------------------
+// Deal capacity from compliance.deal_capacity_observations
+// ---------------------------------------------------------------------------
+
+/** What one leg added to one rule group in the probe. */
+export interface LegContribution {
+  par: number;
+  /** Added to the numerator. Null when the rule does not sum the leg's value. */
+  numerator: number | null;
+  /** Added to the denominator. */
+  denominator: number | null;
+}
+
+/** One row of compliance.deal_capacity_observations: one fund, rule and group. */
+export interface DealObservationRow {
+  fund_id: string;
+  rule_code: string;
+  rule_name: string | null;
+  group_value: string | null;
+  group_label: string | null;
+  limit_direction: string | null;
+  result_unit: string | null;
+  base_numerator: number | string | null;
+  base_denominator: number | string | null;
+  base_value: number | string | null;
+  base_status: string | null;
+  base_soft_limit: number | string | null;
+  base_hard_limit: number | string | null;
+  probe_numerator: number | string | null;
+  probe_denominator: number | string | null;
+  probe_value: number | string | null;
+  probe_status: string | null;
+  probe_soft_limit: number | string | null;
+  probe_hard_limit: number | string | null;
+  probe_rank: number | null;
+  contributions: Record<string, { par: number | string; numerator: number | string | null; denominator: number | string | null }> | null;
+  rank_sensitive: boolean | null;
+  error_message: string | null;
+}
+
+/** The room one security has on one fund, rule and group. */
+export interface DealCapacityLine {
+  fundId: string;
+  securityId: string;
+  ruleCode: string;
+  ruleName: string;
+  groupValue: string | null;
+  groupLabel: string | null;
+  direction: 'MAX' | 'MIN';
+  resultUnit: string | null;
+  baseNumerator: number | null;
+  baseDenominator: number | null;
+  hardLimit: number | null;
+  softLimit: number | null;
+  /** Per unit of par of this security. */
+  numeratorSlope: number;
+  denominatorSlope: number;
+  impact: CapacityImpact;
+  /** Additional par before the hard limit. Null when the rule puts no ceiling on it. */
+  capacity: number | null;
+  rankSensitive: boolean;
+}
+
+function contributionsOf(row: DealObservationRow): Map<string, LegContribution> {
+  const out = new Map<string, LegContribution>();
+  for (const [securityId, value] of Object.entries(row.contributions || {})) {
+    const par = asNumber(value.par);
+    if (par == null || par === 0) continue;
+    out.set(securityId, { par, numerator: asNumber(value.numerator), denominator: asNumber(value.denominator) ?? 0 });
+  }
+  return out;
+}
+
+/** The book's numerator and denominator for the group before any leg, and what all legs added. */
+function groupBase(row: DealObservationRow, legs: Map<string, LegContribution>): { num: number | null; den: number | null } {
+  let addedNum = 0;
+  let addedDen = 0;
+  for (const leg of legs.values()) {
+    addedNum += leg.numerator ?? 0;
+    addedDen += leg.denominator ?? 0;
+  }
+  const baseNum = asNumber(row.base_numerator);
+  const baseDen = asNumber(row.base_denominator);
+  const probeNum = asNumber(row.probe_numerator);
+  const probeDen = asNumber(row.probe_denominator);
+  return {
+    num: baseNum ?? (probeNum == null ? null : probeNum - addedNum),
+    den: baseDen ?? (probeDen == null ? null : probeDen - addedDen),
+  };
+}
+
+function direction(value: string | null | undefined): 'MAX' | 'MIN' {
+  return value === 'MIN' ? 'MIN' : 'MAX';
+}
+
+/** Solve one security on one observed group with a given hard limit. */
+export function solveObservedLine(row: DealObservationRow, securityId: string, limitOverride?: number | null): DealCapacityLine | null {
+  const legs = contributionsOf(row);
+  const leg = legs.get(securityId);
+  if (!leg || leg.numerator == null) return null;
+  const base = groupBase(row, legs);
+  const a = leg.numerator / leg.par;
+  const b = (leg.denominator ?? 0) / leg.par;
+  const limit = limitOverride !== undefined ? limitOverride : (asNumber(row.probe_hard_limit) ?? asNumber(row.base_hard_limit));
+  const dir = direction(row.limit_direction);
+  const hasDenominator = base.den != null || row.probe_denominator != null;
+  const solved = solveCapacityLine({
+    direction: dir,
+    limit,
+    resultUnit: row.result_unit,
+    shape: hasDenominator ? 'ratio' : 'sum',
+    probePar: leg.par,
+    baseNum: base.num ?? 0,
+    baseDen: hasDenominator ? base.den : null,
+    baseValue: asNumber(row.base_value),
+    baseStatus: row.base_status,
+    probeNum: (base.num ?? 0) + leg.numerator,
+    probeDen: hasDenominator ? (base.den ?? 0) + (leg.denominator ?? 0) : null,
+    probeValue: null,
+    probeStatus: null,
+    numeratorSlope: a,
+    denominatorSlope: b,
+    limitKind: 'HARD',
+  });
+  return {
+    fundId: row.fund_id,
+    securityId,
+    ruleCode: row.rule_code,
+    ruleName: row.rule_name || row.rule_code,
+    groupValue: row.group_value,
+    groupLabel: row.group_label,
+    direction: dir,
+    resultUnit: row.result_unit,
+    baseNumerator: base.num,
+    baseDenominator: hasDenominator ? base.den : null,
+    hardLimit: limit,
+    softLimit: asNumber(row.probe_soft_limit) ?? asNumber(row.base_soft_limit),
+    numeratorSlope: a,
+    denominatorSlope: b,
+    impact: solved.impact,
+    capacity: downToCents(solved.capacityPar),
+    rankSensitive: Boolean(row.rank_sensitive),
+  };
+}
+
+/**
+ * Room is rounded down to a whole cent. A closed form that lands exactly on a
+ * limit (a third of the book, say) is a hair over it in floating point, and the
+ * evaluator's exact arithmetic would call buying the room a breach.
+ */
+function downToCents(value: number | null): number | null {
+  if (value == null || !Number.isFinite(value) || value <= 0) return value;
+  return Math.max(0, Math.floor(value * 100 + 1e-7) / 100);
+}
+
+/** Every security on every observed group, solved. Errors are returned, not thrown. */
+export function solveDealObservations(rows: DealObservationRow[]): { lines: DealCapacityLine[]; errors: string[] } {
+  const lines: DealCapacityLine[] = [];
+  const errors: string[] = [];
+  for (const row of rows) {
+    if (row.error_message) {
+      if (!errors.includes(row.error_message)) errors.push(`${row.rule_code}: ${row.error_message}`);
+      continue;
+    }
+    for (const securityId of contributionsOf(row).keys()) {
+      const solved = solveObservedLine(row, securityId);
+      if (solved && (solved.impact === 'worsens' || solved.impact === 'blocks')) lines.push(solved);
+    }
+  }
+  return { lines, errors };
+}
+
+function newHardBreach(rows: DealObservationRow[]): boolean {
+  return rows.some((row) => row.probe_status === 'HARD_BREACH' && row.base_status !== 'HARD_BREACH');
+}
+
+function scaleOf(unit: string | null | undefined): number {
+  return unit === 'PERCENTAGE' ? 100 : 1;
+}
+
+/**
+ * Par at which this security's group reaches another group's figure, the next
+ * point where ranks, and so rank-band limits, can change. Infinity when none.
+ */
+function nextCrossing(line: DealCapacityLine, rows: DealObservationRow[], after: number): number {
+  const s = line.baseDenominator == null ? 1 : scaleOf(line.resultUnit);
+  const n0 = line.baseNumerator ?? 0;
+  const d0 = line.baseDenominator;
+  let best = Number.POSITIVE_INFINITY;
+  for (const row of rows) {
+    if (row.group_value === line.groupValue) continue;
+    // The other group's figure from its exact numerator and denominator; the
+    // stored result is rounded, which can put a crossing just behind us.
+    const otherNum = asNumber(row.probe_numerator);
+    const otherDen = asNumber(row.probe_denominator);
+    const other = otherNum != null && d0 != null && otherDen != null && otherDen !== 0
+      ? (otherNum / otherDen) * s
+      : otherNum != null && d0 == null
+        ? otherNum
+        : asNumber(row.probe_value);
+    if (other == null) continue;
+    let x: number;
+    if (d0 == null) {
+      if (Math.abs(line.numeratorSlope) <= EPS) continue;
+      x = (other - n0) / line.numeratorSlope;
+    } else {
+      const slope = line.numeratorSlope * s - other * line.denominatorSlope;
+      if (Math.abs(slope) <= EPS) continue;
+      x = (other * d0 - n0 * s) / slope;
+    }
+    // Only a group still ahead: one this security has already passed, or is
+    // level with, is not the next change.
+    if (Number.isFinite(x) && x > after && x < best) best = x;
+  }
+  return best;
+}
+
+/**
+ * The largest par, counted up from zero without a gap, that keeps every group
+ * of a rank-banded rule inside its limit. A rank band changes the limit when
+ * this security passes another group, and a group it passes can then breach
+ * its own tighter band, so a closed form from one probe is not enough.
+ * `observeAt(par)` is the evaluator's result for every group of the rule with
+ * this security alone at `par` (deal_capacity_observations with p_all_groups).
+ */
+export async function walkRankedCapacity(
+  line: DealCapacityLine,
+  observeAt: (par: number) => Promise<DealObservationRow[]>,
+  maxSteps = 12,
+): Promise<number | null> {
+  const nudge = (par: number) => Math.max(1, Math.abs(par) * 1e-9);
+  let known = 0;
+  for (let step = 0; step < maxSteps; step += 1) {
+    const here = await observeAt(known + nudge(known));
+    if (newHardBreach(here)) return known;
+    const own = here.find((row) => row.group_value === line.groupValue && row.contributions && row.contributions[line.securityId]);
+    if (!own) return known;
+    const solved = solveObservedLine(
+      { ...own, base_numerator: line.baseNumerator, base_denominator: line.baseDenominator },
+      line.securityId,
+    );
+    const closed = solved && solved.impact === 'worsens' && solved.capacity != null ? solved.capacity : Number.POSITIVE_INFINITY;
+    const crossing = nextCrossing(line, here, known + nudge(known));
+    const target = Math.min(closed, crossing);
+    if (!Number.isFinite(target)) return null;
+    if (target <= known + nudge(known)) return known;
+    const there = await observeAt(target);
+    if (newHardBreach(there)) {
+      return searchFeasiblePar(target, async (par) => par <= known || !newHardBreach(await observeAt(par)), 12);
+    }
+    if (closed <= crossing) return closed;
+    known = downToCents(target) ?? target;
+  }
+  return known;
+}

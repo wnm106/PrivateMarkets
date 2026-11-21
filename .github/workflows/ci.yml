@@ -31,3 +31,72 @@ jobs:
 
       - name: Unit tests
         run: npm run test:ci
+
+  # docs/GUARDRAILS.md: no code names a client, rule or entity; records go in
+  # supabase/seed; applied migrations are never edited; surfaces reach the
+  # platform only through the SDK.
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Guardrails on what changed
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          [ -z "$BASE" ] && BASE="${{ github.event.before }}"
+          git cat-file -e "$BASE" 2>/dev/null || BASE="HEAD~1"
+          node scripts/guard/check-static.mjs --base "$BASE"
+
+      - name: Surface import boundary
+        run: npm run lint:surfaces
+
+  # Build the database from supabase/migrations on plain Postgres, then check
+  # what only a database can show: no function names a client, rule or entity,
+  # and deal capacity agrees with the rule evaluator for every deal and fund.
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      # The sample book is dated; a fixed As Of keeps results stable.
+      CAPACITY_AS_OF: '2026-11-21'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build the database from migrations
+        run: npm run db:replay
+
+      - name: Guardrails in the database
+        run: npm run guard:db
+
+      - name: Capacity agrees with the evaluator
+        run: npm run test:db

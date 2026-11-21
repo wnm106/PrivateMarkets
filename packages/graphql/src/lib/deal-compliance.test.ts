@@ -1,22 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dealSurfaceResults, dealSurfaceRules, rulesToScore } from './deal-compliance';
-
-describe('dealSurfaceRules', () => {
-  it('keeps the pro forma rules and leaves the rest of the fund book out', () => {
-    const selected = dealSurfaceRules([
-      { rule_code: 'FUND_ISSUER_NAV_PCT' },
-      { rule_code: 'PF_ISSUER_CONCENTRATION' },
-      { rule_code: 'CLO_OC_AB' },
-      { rule_code: 'PF_SPONSOR_CONCENTRATION' },
-      { rule_code: 'PF_UNFUNDED_COMMITMENTS' },
-    ]);
-    expect(selected.map((rule) => rule.rule_code)).toEqual([
-      'PF_ISSUER_CONCENTRATION',
-      'PF_SPONSOR_CONCENTRATION',
-      'PF_UNFUNDED_COMMITMENTS',
-    ]);
-  });
-});
+import { dealSurfaceResults, loadDealScorePlans } from './deal-compliance';
 
 describe('dealSurfaceResults', () => {
   const meridian = 'meridian';
@@ -60,31 +43,45 @@ describe('dealSurfaceResults', () => {
   });
 });
 
-describe('rulesToScore', () => {
-  const meridian = 'meridian';
-  const sleeve = 'sleeve';
-  const asOf = '2026-11-16';
+// Which rules apply to which fund is compliance.deal_score_plans. Its cases
+// (deal-surface rules on every fund, enrolled rules only where a limit is
+// assigned, an opt-out wins, inactive rules skipped) are database tests in
+// supabase/tests/deal_capacity.sql.
+describe('loadDealScorePlans', () => {
+  function fakeCompliance(planRows: unknown[], ruleRows: unknown[]) {
+    const calls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+    return {
+      calls,
+      rpc: async (fn: string, args: Record<string, unknown>) => {
+        calls.push({ fn, args });
+        return { data: planRows, error: null };
+      },
+      from: (_table: string) => ({
+        select: () => ({
+          in: async (_column: string, ids: string[]) => ({ data: (ruleRows as any[]).filter((row) => ids.includes(row.id)), error: null }),
+        }),
+      }),
+    };
+  }
 
-  it('scores pro forma rules for every fund and enrolled rules only where a limit applies', () => {
-    const plans = rulesToScore([
-      { id: 'pf', rule_code: 'PF_ISSUER_CONCENTRATION', is_active: false },
-      { id: 'sector', rule_code: 'FUND_SECTOR_BOOK_PCT', is_active: true },
-      { id: 'issuer', rule_code: 'FUND_ISSUER_NAV_PCT', is_active: true },
-      { id: 'closed', rule_code: 'FUND_GROSS_EXPOSURE', is_active: true },
-      { id: 'retired', rule_code: 'FUND_POSITION_COUNT', is_active: false },
-    ], [
-      { rule_id: 'sector', entity_id: sleeve, applies: true, valid_to: '9999-12-31' },
-      { rule_id: 'sector', entity_id: sleeve, group_value: 'Industrial distribution', applies: true },
-      { rule_id: 'issuer', entity_id: sleeve, applies: true, rank_from: 1, valid_to: '9999-12-31' },
-      { rule_id: 'closed', entity_id: meridian, applies: false },
-      { rule_id: 'closed', entity_id: meridian, applies: true, rank_from: 1 },
-      { rule_id: 'retired', entity_id: meridian, applies: true },
-    ], new Set([meridian, sleeve]), asOf);
-
-    expect(plans.map((plan) => [plan.rule.rule_code, plan.ignoreEnrollment, plan.anchorIds])).toEqual([
-      ['PF_ISSUER_CONCENTRATION', true, [meridian, sleeve]],
-      ['FUND_SECTOR_BOOK_PCT', true, [sleeve]],
-      ['FUND_ISSUER_NAV_PCT', true, [sleeve]],
+  it('reads the plan from the database and attaches each rule and its group label', async () => {
+    const compliance = fakeCompliance(
+      [
+        { rule_id: 'pf', rule_code: 'PF_ISSUER_CONCENTRATION', anchor_ids: ['fund', 'sleeve'], group_label: 'Issuer' },
+        { rule_id: 'gone', rule_code: 'DELETED_RULE', anchor_ids: ['fund'], group_label: null },
+      ],
+      [{ id: 'pf', rule_code: 'PF_ISSUER_CONCENTRATION', is_active: false }],
+    );
+    const plans = await loadDealScorePlans(compliance, ['fund', 'sleeve', 'fund'], '2026-11-21');
+    expect(compliance.calls).toEqual([{ fn: 'deal_score_plans', args: { p_fund_ids: ['fund', 'sleeve'], p_as_of_date: '2026-11-21' } }]);
+    expect(plans).toEqual([
+      { rule: { id: 'pf', rule_code: 'PF_ISSUER_CONCENTRATION', is_active: false }, anchorIds: ['fund', 'sleeve'], groupLabel: 'Issuer' },
     ]);
+  });
+
+  it('asks nothing when the deal has no funds', async () => {
+    const compliance = fakeCompliance([], []);
+    expect(await loadDealScorePlans(compliance, [], '2026-11-21')).toEqual([]);
+    expect(compliance.calls).toEqual([]);
   });
 });

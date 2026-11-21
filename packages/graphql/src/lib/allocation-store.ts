@@ -18,6 +18,7 @@ import {
   type AllocationSleeve,
   type AllocationTranche,
 } from './allocation-engine';
+import { solveDealObservations, walkRankedCapacity, type DealObservationRow } from './compliance-capacity';
 
 const OPEN_SYSTEM = '9999-12-31 23:59:59';
 
@@ -58,7 +59,8 @@ export interface AllocationDraft {
 
 /**
  * One fund's standing on one compliance rule and group that this deal would
- * worsen, read from the booked book (hypothetical positions left out). The
+ * worsen, read by the rule evaluator from the fund's book without this deal
+ * (other deals' proposals in, the same book the pro forma panel scores). The
  * deal surface shows the current figure, the room and the pro forma figure
  * from this without writing positions.
  */
@@ -67,6 +69,10 @@ export interface CapacityReading {
   ruleCode: string;
   ruleName: string;
   groupValue: string | null;
+  /** What a group of this rule is called, such as Issuer. From the rule, not the code. */
+  groupLabel: string | null;
+  /** MAX: the figure must stay at or below the limit. MIN: at or above. */
+  limitDirection: 'MAX' | 'MIN';
   /** The deal's tranches this rule counts. */
   trancheIds: string[];
   /** The amount this fund can add before the rule's hard limit, in dollars. */
@@ -550,32 +556,16 @@ export async function loadAllocationDraft(
   };
 }
 
-interface CapacityRow {
-  fund_id: string;
-  security_id: string;
-  rule_code: string;
-  rule_name: string;
-  capacity: number | string | null;
-  group_value: string | null;
-  /** What the rule sums. A rule on unfunded or funded amounts covers only those tranches. */
-  numerator_code?: string | null;
-  numerator?: number | string | null;
-  denominator?: number | string | null;
-  hard_limit?: number | string | null;
-  soft_limit?: number | string | null;
-  result_unit?: string | null;
-  denominator_grows?: boolean | null;
-}
-
-function numberOrNull(value: number | string | null | undefined): number | null {
-  if (value == null || value === '') return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
+/** One dollar of each security: small enough that ranks are read as the buy starts. */
+const PROBE_PAR = 1;
 
 /**
  * Caps are the compliance rule capacities for each fund and security.
- * The engine must not rebuild those limits from fund attributes.
+ * compliance.deal_capacity_observations runs the rule evaluator on each fund's
+ * book without this deal and with a probe of each security; the room is solved
+ * here from those results by compliance-capacity.ts, the same algebra
+ * investmentCapacity uses. Nothing here decides which rules apply, which
+ * positions count, or which group a security lands in.
  */
 async function attachComplianceCapacity(
   supabase: SupabaseClient,
@@ -589,7 +579,6 @@ async function attachComplianceCapacity(
     ...portfolios.map((portfolio) => portfolio.id),
     ...portfolios.flatMap((portfolio) => portfolio.sleeves.map((sleeve) => sleeve.id)),
   ];
-  const securityIds = [...new Set(tranches.map((tranche) => tranche.securityId).filter((id): id is string => Boolean(id)))];
   const tranchesForSecurity = new Map<string, string[]>();
   for (const tranche of tranches) {
     if (!tranche.securityId) continue;
@@ -597,92 +586,96 @@ async function attachComplianceCapacity(
     list.push(tranche.id);
     tranchesForSecurity.set(tranche.securityId, list);
   }
+  const legFor = (securityId: string, par: number) => {
+    const trancheIds = tranchesForSecurity.get(securityId) || [];
+    return {
+      security_id: securityId,
+      tranche_id: trancheIds[0] || null,
+      par,
+      unfunded: trancheIds.length > 0 && trancheIds.every((id) => unfundedTranches.has(id)),
+    };
+  };
   const empty = () => {
     for (const portfolio of portfolios) {
       portfolio.capacityPools = [];
       for (const sleeve of portfolio.sleeves) sleeve.capacityPools = [];
     }
   };
+  const securityIds = [...tranchesForSecurity.keys()];
   if (!fundIds.length || !securityIds.length) {
     empty();
     return [];
   }
-  const { data, error } = await supabase.schema('compliance').rpc('fund_security_capacities', {
-    p_fund_ids: fundIds,
-    p_security_ids: securityIds,
-    p_as_of_date: asOf,
-    p_knowledge_date: new Date().toISOString(),
-    p_exclude_scenario: dealCode,
-  });
-  if (error) throw new Error(error.message);
-  const rows = (data || []) as CapacityRow[];
-  // Tranches of one security share it, but a rule on unfunded commitments is not
-  // worsened by the funded tranche, and a rule on funded par not by the unfunded one.
-  const trancheScope = (row: CapacityRow) => (tranchesForSecurity.get(row.security_id) || []).filter((trancheId) => {
-    if (row.numerator_code === 'UNFUNDED_COMMITMENT_AMOUNT') return unfundedTranches.has(trancheId);
-    if (row.numerator_code === 'FUNDED_PAR_AMOUNT') return !unfundedTranches.has(trancheId);
-    return true;
-  });
-  const poolsFor = (fundId: string): AllocationCapacityPool[] => {
-    const grouped = new Map<string, AllocationCapacityPool>();
-    for (const row of rows) {
-      if (row.fund_id !== fundId) continue;
-      const trancheIds = trancheScope(row);
-      if (!trancheIds.length) continue;
-      const capacity = Number(row.capacity);
-      if (!Number.isFinite(capacity)) continue;
-      const key = `${row.rule_code}|${row.group_value ?? ''}`;
-      const existing = grouped.get(key);
-      if (!existing) {
-        grouped.set(key, {
-          trancheIds: [...trancheIds],
-          capacity,
-          ruleName: row.rule_name || row.rule_code,
-          hardLimit: numberOrNull(row.hard_limit),
-          groupValue: row.group_value && row.group_value !== '__ALL__' && row.group_value !== row.rule_code ? row.group_value : null,
-        });
-      } else {
-        existing.capacity = Math.min(existing.capacity, capacity);
-        for (const trancheId of trancheIds) {
-          if (!existing.trancheIds.includes(trancheId)) existing.trancheIds.push(trancheId);
-        }
-      }
-    }
-    return [...grouped.values()];
+  const knowledge = new Date().toISOString();
+  const observe = async (funds: string[], legs: ReturnType<typeof legFor>[], ruleCodes: string[] | null, allGroups: boolean) => {
+    const { data, error } = await supabase.schema('compliance').rpc('deal_capacity_observations', {
+      p_fund_ids: funds,
+      p_legs: legs,
+      p_as_of_date: asOf,
+      p_knowledge_date: knowledge,
+      p_deal_code: dealCode,
+      p_rule_codes: ruleCodes,
+      p_all_groups: allGroups,
+    });
+    if (error) throw new Error(error.message);
+    return (data || []) as DealObservationRow[];
   };
-  for (const portfolio of portfolios) {
-    portfolio.capacityPools = poolsFor(portfolio.id);
-    for (const sleeve of portfolio.sleeves) sleeve.capacityPools = poolsFor(sleeve.id);
+
+  const rows = await observe(fundIds, securityIds.map((id) => legFor(id, PROBE_PAR)), null, false);
+  const { lines, errors } = solveDealObservations(rows);
+  if (errors.length) throw new Error(`Compliance capacity could not be read. ${errors.join(' ')}`);
+
+  // A rank band can move the limit, or another group's limit, as the buy grows.
+  for (const line of lines) {
+    if (!line.rankSensitive || line.capacity == null || line.capacity <= 0) continue;
+    line.capacity = await walkRankedCapacity(line, (par) => observe([line.fundId], [legFor(line.securityId, par)], [line.ruleCode], true));
   }
 
+  const groupOf = (value: string | null) => (value && value !== '__ALL__' && value !== '__UNASSIGNED__' ? value : null);
   // One reading per fund, rule and group. Securities in one group share its room.
   const readings = new Map<string, CapacityReading>();
-  for (const row of rows) {
-    const trancheIds = trancheScope(row);
-    const room = Number(row.capacity);
-    if (!trancheIds.length || !Number.isFinite(room)) continue;
-    const key = `${row.fund_id}|${row.rule_code}|${row.group_value ?? ''}`;
+  for (const line of lines) {
+    if (line.capacity == null || !Number.isFinite(line.capacity)) continue;
+    const trancheIds = tranchesForSecurity.get(line.securityId) || [];
+    if (!trancheIds.length) continue;
+    const key = `${line.fundId}|${line.ruleCode}|${line.groupValue ?? ''}`;
     const existing = readings.get(key);
     if (existing) {
-      existing.room = Math.min(existing.room, room);
+      existing.room = Math.min(existing.room, line.capacity);
+      existing.denominatorGrows = existing.denominatorGrows || line.denominatorSlope > 0;
       for (const trancheId of trancheIds) if (!existing.trancheIds.includes(trancheId)) existing.trancheIds.push(trancheId);
       continue;
     }
-    const group = row.group_value && row.group_value !== '__ALL__' && row.group_value !== row.rule_code ? row.group_value : null;
     readings.set(key, {
-      fundId: row.fund_id,
-      ruleCode: row.rule_code,
-      ruleName: row.rule_name || row.rule_code,
-      groupValue: group,
+      fundId: line.fundId,
+      ruleCode: line.ruleCode,
+      ruleName: line.ruleName,
+      groupValue: groupOf(line.groupValue),
+      groupLabel: line.groupLabel,
+      limitDirection: line.direction,
       trancheIds: [...trancheIds],
-      room,
-      numerator: numberOrNull(row.numerator),
-      denominator: numberOrNull(row.denominator),
-      hardLimit: numberOrNull(row.hard_limit),
-      softLimit: numberOrNull(row.soft_limit),
-      resultUnit: row.result_unit || null,
-      denominatorGrows: Boolean(row.denominator_grows),
+      room: Math.max(0, line.capacity),
+      numerator: line.baseNumerator,
+      denominator: line.baseDenominator,
+      hardLimit: line.hardLimit,
+      softLimit: line.softLimit,
+      resultUnit: line.resultUnit,
+      denominatorGrows: line.denominatorSlope > 0,
     });
+  }
+
+  const poolsFor = (fundId: string): AllocationCapacityPool[] => [...readings.values()]
+    .filter((reading) => reading.fundId === fundId)
+    .map((reading) => ({
+      trancheIds: [...reading.trancheIds],
+      capacity: reading.room,
+      ruleName: reading.ruleName,
+      hardLimit: reading.hardLimit,
+      groupValue: reading.groupValue,
+    }));
+  for (const portfolio of portfolios) {
+    portfolio.capacityPools = poolsFor(portfolio.id);
+    for (const sleeve of portfolio.sleeves) sleeve.capacityPools = poolsFor(sleeve.id);
   }
   return [...readings.values()];
 }

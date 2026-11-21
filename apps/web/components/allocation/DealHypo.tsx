@@ -15,7 +15,6 @@ import {
 } from '@/lib/deal-hypo-view';
 import {
   CATEGORY,
-  GROUP_LABEL,
   formatMeasure,
   reading,
   type ComplianceFundRef,
@@ -27,7 +26,7 @@ const HYPO = `
   mutation RunDealHypo($dealId: ID!, $asOfDate: Date, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
     runDealHypo(dealId: $dealId, asOfDate: $asOfDate, holds: $holds, adjustments: $adjustments) {
       scenarioCode asOfDate ranAt
-      rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode }
+      rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode groupLabel }
       before { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
       after { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
       allocations { fundId fundName parentFundId level amount }
@@ -324,7 +323,7 @@ export function DealHypoPanel({ funds, hypo }: { funds: ComplianceFundRef[]; hyp
                     const rule = rules.get(line.ruleId);
                     if (!rule) return null;
                     const side = line.after || line.before;
-                    const groupLabel = line.groupByValue ? `${GROUP_LABEL[rule.groupByAttributeCode || ''] || 'Group'} ${line.groupByValue}` : '';
+                    const groupLabel = line.groupByValue ? `${rule.groupLabel || 'Group'} ${line.groupByValue}` : '';
                     return (
                       <tr key={line.key} className={isBreach(line.after?.status) ? 'dh-over' : ''}>
                         <td className="dc-rule">

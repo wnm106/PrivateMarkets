@@ -1,82 +1,44 @@
-// The deal surface scores these on demand. They stay inactive so a scheduled
-// run of every active fund rule does not pick them up.
-export const DEAL_SURFACE_RULE_CODES = [
-  'PF_ISSUER_CONCENTRATION',
-  'PF_SPONSOR_CONCENTRATION',
-  'PF_UNFUNDED_COMMITMENTS',
-] as const;
-
-export function dealSurfaceRules<T extends { rule_code: string }>(rows: T[]): T[] {
-  const wanted = new Set<string>(DEAL_SURFACE_RULE_CODES);
-  return rows.filter((row) => wanted.has(row.rule_code));
-}
-
-export interface DealScoreRule {
-  id: string;
-  rule_code: string;
-  is_active?: boolean | null;
-}
-
-export interface DealScoreThreshold {
-  rule_id: string;
-  entity_id?: string | null;
-  group_value?: string | null;
-  rank_from?: number | null;
-  applies?: boolean | null;
-  valid_from?: string | null;
-  valid_to?: string | null;
-}
-
-export interface DealScorePlan<T extends DealScoreRule> {
+/** One rule the deal is scored on and the funds it covers, from compliance.deal_score_plans. */
+export interface DealScorePlan<T extends { id: string; rule_code: string } = { id: string; rule_code: string }> {
   rule: T;
   anchorIds: string[];
-  ignoreEnrollment: boolean;
+  /** What one group of the result is called (Issuer, Sector), from the rule. */
+  groupLabel: string | null;
 }
 
-function openOn(value: string | null | undefined, asOf: string, side: 'from' | 'to'): boolean {
-  if (!value) return true;
-  const day = value.slice(0, 10);
-  return side === 'from' ? day <= asOf : day >= asOf;
-}
+type ComplianceSchema = {
+  rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { message: string } | null }>;
+  from: (table: string) => any;
+};
 
 /**
- * Score the pro forma rules for every fund on the deal (their limits live on
- * the fund, not in a threshold row) and any other active rule that has a
- * limit assigned to one of those funds.
+ * The rules a deal is scored on, for which funds. The database decides
+ * (compliance.deal_score_plans): rules marked deal_surface cover every fund on
+ * the deal, and any other active rule covers the funds with a limit assigned to
+ * them. The pro forma panel, the hypo and capacity read the same plan.
  */
-export function rulesToScore<T extends DealScoreRule>(
-  rules: T[],
-  thresholds: DealScoreThreshold[],
-  fundIds: ReadonlySet<string>,
+export async function loadDealScorePlans(
+  compliance: ComplianceSchema,
+  fundIds: Iterable<string>,
   asOf: string,
-): Array<DealScorePlan<T>> {
-  const surface = new Set<string>(DEAL_SURFACE_RULE_CODES);
-  const anchors = [...fundIds];
-  const plans: Array<DealScorePlan<T>> = [];
-  for (const rule of rules) {
-    if (surface.has(rule.rule_code)) {
-      if (anchors.length) plans.push({ rule, anchorIds: anchors, ignoreEnrollment: true });
-      continue;
-    }
-    if (rule.is_active === false) continue;
-    const optedOut = new Set(thresholds.flatMap((item) => {
-      if (item.rule_id !== rule.id || item.applies !== false || !item.entity_id) return [];
-      if (item.group_value || item.rank_from != null) return [];
-      if (!openOn(item.valid_from, asOf, 'from') || !openOn(item.valid_to, asOf, 'to')) return [];
-      return [item.entity_id];
-    }));
-    // A rank band or a group limit is a limit assigned to the fund, even when
-    // there is no separate "this test applies" row. An explicit opt-out wins.
-    const enrolled = [...new Set(thresholds.flatMap((item) => {
-      if (item.rule_id !== rule.id) return [];
-      if (item.applies !== true || !item.entity_id || !fundIds.has(item.entity_id)) return [];
-      if (optedOut.has(item.entity_id)) return [];
-      if (!openOn(item.valid_from, asOf, 'from') || !openOn(item.valid_to, asOf, 'to')) return [];
-      return [item.entity_id];
-    }))];
-    if (enrolled.length) plans.push({ rule, anchorIds: enrolled, ignoreEnrollment: true });
-  }
-  return plans;
+): Promise<Array<DealScorePlan<any>>> {
+  const funds = [...new Set(fundIds)];
+  if (!funds.length) return [];
+  const { data, error } = await compliance.rpc('deal_score_plans', { p_fund_ids: funds, p_as_of_date: asOf });
+  if (error) throw new Error(error.message);
+  const planRows = (data || []) as Array<{ rule_id: string; rule_code: string; anchor_ids: string[]; group_label: string | null }>;
+  if (!planRows.length) return [];
+  // Read through the service role where the caller has it, so a user policy
+  // does not hide an inactive deal-surface rule.
+  const { data: ruleRows, error: ruleError } = await compliance
+    .from('rules')
+    .select('*')
+    .in('id', planRows.map((row) => row.rule_id));
+  if (ruleError) throw new Error(ruleError.message);
+  const ruleById = new Map<string, any>(((ruleRows || []) as any[]).map((row) => [row.id, row]));
+  return planRows
+    .filter((row) => ruleById.has(row.rule_id))
+    .map((row) => ({ rule: ruleById.get(row.rule_id), anchorIds: row.anchor_ids || [], groupLabel: row.group_label ?? null }));
 }
 
 /**
