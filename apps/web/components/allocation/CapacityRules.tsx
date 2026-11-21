@@ -51,7 +51,7 @@ export function CapacityRules({ fundId, readings, rows, onOpenHypo }: {
 
   return (
     <>
-      <p className="da-note">Booked book now, and with this allocation. Every rule on these funds is tested by a Hypo run.</p>
+      <p className="da-note">Booked book now, and with this allocation. Only limits set on each fund are tested; set them under Compliance, Thresholds by fund.</p>
       {standings.map((item) => {
         const reading = item.reading;
         const key = `${reading.fundId}|${reading.ruleCode}|${reading.groupValue ?? ''}`;

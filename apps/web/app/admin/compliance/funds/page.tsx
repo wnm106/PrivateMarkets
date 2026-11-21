@@ -232,8 +232,8 @@ export default function FundThresholdsPage() {
           <span className="da-chip">Fund limits</span>
           <h1>{selected?.entityName || 'Thresholds'}</h1>
           <p>{childCount
-            ? `${childCount} child funds. A fund is scored only for a rule that has a threshold here. A parent includes the positions of its children when the rule consolidates.`
-            : 'A fund is scored only for a rule that has a threshold here. The test itself can still apply to every fund.'}</p>
+            ? `${childCount} child funds. A fund is scored, and limits a deal allocation, only for a rule that has a threshold here. There is no rule-wide limit. A parent includes the positions of its children when the rule consolidates.`
+            : 'A fund is scored, and limits a deal allocation, only for a rule that has a threshold here. There is no rule-wide limit.'}</p>
         </div>
         <div className="da-facts">
           <div className="da-fact big"><span>Rules on the book</span><strong>{board ? board.rules.length : '—'}</strong></div>

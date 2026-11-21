@@ -16,6 +16,9 @@ type ComplianceSchema = {
  * (compliance.deal_score_plans): rules marked deal_surface cover every fund on
  * the deal, and any other active rule covers the funds with a limit assigned to
  * them. The pro forma panel, the hypo and capacity read the same plan.
+ * There is no rule-wide limit: compliance.resolve_threshold skips a fund with
+ * no threshold row of its own, so a deal_surface rule only limits the funds
+ * that have their own limit for it.
  */
 export async function loadDealScorePlans(
   compliance: ComplianceSchema,

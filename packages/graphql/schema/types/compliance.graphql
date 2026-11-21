@@ -311,7 +311,7 @@ type ComplianceEvaluationResult {
   evaluatedAt: DateTime!
 }
 
-# A limit stored on a fund (or as the rule default when entityId is null).
+# A limit stored on one fund. Rows with no entityId are retired rule-wide limits kept for history; new ones are refused.
 # groupValue sets the limit for one industry or other group.
 # rankFrom/rankTo is an inclusive band. rankTo null means that rank and every later rank.
 type ComplianceThreshold {

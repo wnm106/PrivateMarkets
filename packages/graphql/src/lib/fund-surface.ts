@@ -400,9 +400,10 @@ function dayOn(value: string, asOf: string, side: 'from' | 'to'): boolean {
 }
 
 /**
- * The limit a compliance rule would use for one group: the fund's own row
- * before a rule default, a named group before a rank band, and a rank band
- * before the plain limit. A blank fund row keeps the rule's own numbers.
+ * The limit a compliance rule uses for one group, read only from the fund's
+ * own rows, as compliance.resolve_threshold reads them: a named group before
+ * a rank band, and a rank band before the plain limit. No row, or a row that
+ * opts out, is no limit. There is no rule-wide limit.
  * The returned threshold id is only the fund's row for this exact group,
  * which is the row an edit of that name should update.
  */
@@ -411,31 +412,27 @@ export function resolveExposureLimit(
   fundId: string,
   group: string,
   rank: number,
-  fallback: { soft: number | null; hard: number | null },
   asOf: string,
 ): ExposureLimitPick {
   const candidates = rows.filter((row) => {
     if (!dayOn(row.validFrom, asOf, 'from') || !dayOn(row.validTo, asOf, 'to')) return false;
-    if (row.entityId && row.entityId !== fundId) return false;
+    if (row.entityId !== fundId) return false;
     if (row.groupValue && row.groupValue !== group) return false;
     if (row.rankFrom == null) return true;
     if (rank < row.rankFrom) return false;
     return row.rankTo == null || rank <= row.rankTo;
   });
   candidates.sort((a, b) => {
-    const entity = (a.entityId === fundId ? 0 : 1) - (b.entityId === fundId ? 0 : 1);
-    if (entity) return entity;
     const grouped = (a.groupValue ? 0 : 1) - (b.groupValue ? 0 : 1);
     if (grouped) return grouped;
     return (a.rankFrom != null ? 0 : 1) - (b.rankFrom != null ? 0 : 1);
   });
   const picked = candidates[0];
   if (!picked || !picked.applies) return { limitPct: null, softPct: null, thresholdId: null };
-  const blank = picked.soft == null && picked.hard == null;
-  const specific = picked.entityId === fundId && picked.groupValue === group && picked.rankFrom == null;
+  const specific = picked.groupValue === group && picked.rankFrom == null;
   return {
-    limitPct: blank ? fallback.hard : picked.hard,
-    softPct: blank ? fallback.soft : picked.soft,
+    limitPct: picked.hard,
+    softPct: picked.soft,
     thresholdId: specific ? picked.id : null,
   };
 }
@@ -503,15 +500,13 @@ export async function links(
 interface ExposureRule {
   id: string;
   code: string;
-  fallback: { soft: number | null; hard: number | null };
   thresholds: ExposureThreshold[];
 }
 
+/** The share-of-book rules and this fund's own limits for them. */
 async function loadExposureRules(
   supabase: SupabaseClient,
   fundId: string,
-  asOf: string,
-  knowledge: string,
 ): Promise<Map<string, ExposureRule>> {
   const out = new Map<string, ExposureRule>();
   const codes = Object.values(EXPOSURE_RULE_CODES);
@@ -520,36 +515,17 @@ async function loadExposureRules(
   if (error) throw new Error(error.message);
   const ids = (rules || []).map((rule) => rule.id as string);
   if (!ids.length) return out;
-  const { data: versions, error: versionError } = await compliance
-    .from('rule_versions')
-    .select('rule_id, version_number, hard_limit_value, soft_limit_value, valid_from, valid_to, system_from, system_to, is_active')
-    .in('rule_id', ids);
-  if (versionError) throw new Error(versionError.message);
   const { data: thresholds, error: thresholdError } = await compliance
     .from('rule_thresholds')
     .select('id, rule_id, entity_id, group_value, rank_from, rank_to, soft_limit_value, hard_limit_value, applies, valid_from, valid_to')
     .in('rule_id', ids)
-    .or(`entity_id.is.null,entity_id.eq.${fundId}`);
+    .eq('entity_id', fundId);
   if (thresholdError) throw new Error(thresholdError.message);
-  const known = new Date(knowledge).getTime();
+  const numberOrNull = (value: unknown) => (value == null || value === '' ? null : Number(value));
   for (const rule of rules || []) {
-    const version = (versions || [])
-      .filter((row) => row.rule_id === rule.id && row.is_active !== false)
-      .filter((row) => dayOn(String(row.valid_from || ''), asOf, 'from') && dayOn(String(row.valid_to || ''), asOf, 'to'))
-      .filter((row) => {
-        const from = row.system_from ? new Date(row.system_from).getTime() : 0;
-        const to = row.system_to ? new Date(row.system_to).getTime() : Number.POSITIVE_INFINITY;
-        return from <= known && to >= known;
-      })
-      .sort((a, b) => Number(b.version_number) - Number(a.version_number))[0];
-    const numberOrNull = (value: unknown) => (value == null || value === '' ? null : Number(value));
     out.set(rule.rule_code, {
       id: rule.id,
       code: rule.rule_code,
-      fallback: {
-        hard: numberOrNull(version?.hard_limit_value),
-        soft: numberOrNull(version?.soft_limit_value),
-      },
       thresholds: (thresholds || []).filter((row) => row.rule_id === rule.id).map((row) => ({
         id: row.id,
         entityId: row.entity_id,
@@ -819,7 +795,7 @@ export async function loadFundSurface(
     ? live.reduce((sum, item) => sum + item.fairValue * num(item.mark), 0) / investmentsFairValue
     : null;
 
-  const exposureRules = await loadExposureRules(supabase, fund.id, asOf, knowledge);
+  const exposureRules = await loadExposureRules(supabase, fund.id);
   const bars = (dimension: 'strategy' | 'sector' | 'issuer'): ExposureBar[] => {
     const rule = exposureRules.get(EXPOSURE_RULE_CODES[dimension]);
     const grouped = new Map<string, { label: string; amount: number }>();
@@ -840,7 +816,7 @@ export async function loadFundSurface(
       .sort((a, b) => b.amount - a.amount || a.key.localeCompare(b.key))
       .map((bar, index) => {
         const pick = rule
-          ? resolveExposureLimit(rule.thresholds, fund.id, bar.key, index + 1, rule.fallback, asOf)
+          ? resolveExposureLimit(rule.thresholds, fund.id, bar.key, index + 1, asOf)
           : { limitPct: null, softPct: null, thresholdId: null };
         return {
           ...bar,
