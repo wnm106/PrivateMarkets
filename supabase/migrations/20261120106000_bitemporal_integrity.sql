@@ -353,7 +353,151 @@ CREATE TRIGGER aa_guard_value_rows
     BEFORE INSERT OR UPDATE ON golden_master.entity_attribute_values
     FOR EACH ROW EXECUTE FUNCTION golden_master.guard_value_rows();
 
-ALTER FUNCTION public.load_batch_revert(UUID, UUID, UUID) SET golden_master.trusted_writer = 'on';
+CREATE OR REPLACE FUNCTION public.load_batch_revert(p_batch_id uuid, p_client_id uuid, p_user_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'entity_instances', 'golden_master', 'pg_catalog'
+AS $$
+DECLARE
+  v_batch entity_instances.load_batches%ROWTYPE;
+  v_open CONSTANT TIMESTAMPTZ := '9999-12-31 23:59:59';
+  v_now TIMESTAMPTZ := clock_timestamp();
+  v_entry RECORD;
+  v_rows INTEGER;
+  v_values_retired INTEGER := 0;
+  v_values_kept INTEGER := 0;
+  v_restored INTEGER := 0;
+  v_not_restored INTEGER := 0;
+  v_links_removed INTEGER := 0;
+  v_records_deactivated INTEGER := 0;
+  v_records_kept INTEGER := 0;
+  v_result JSONB;
+BEGIN
+    -- Restoring an earlier state rewrites value rows as they were, which the
+    -- row guard allows only for trusted writers. The mark lasts until this
+    -- call's transaction ends. (A function-level SET of a custom setting needs
+    -- a superuser, which Supabase migrations do not run as.)
+    PERFORM set_config('golden_master.trusted_writer', 'on', TRUE);
+    -- A signed-in caller may revert only their own client's batches, needs the
+    -- permission to promote loads, and is recorded as themselves.
+    IF NOT tenancy.is_backend_caller() THEN
+        IF NOT COALESCE(p_client_id IN (SELECT tenancy.current_client_ids()), FALSE)
+           OR NOT COALESCE(tenancy.has_permission(p_client_id, 'load.promote'), FALSE) THEN
+            RAISE EXCEPTION 'Batch not found';
+        END IF;
+        p_user_id := auth.uid();
+    END IF;
+  SELECT * INTO v_batch
+  FROM entity_instances.load_batches
+  WHERE id = p_batch_id AND client_id = p_client_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Batch not found';
+  END IF;
+  IF v_batch.status NOT IN ('PROMOTED', 'FAILED') THEN
+    RAISE EXCEPTION 'Only a promoted batch can be reverted. This one is %.', lower(v_batch.status);
+  END IF;
+
+  -- Values a later load rewrote in place are no longer this batch's to retire.
+  SELECT count(*) INTO v_values_kept
+  FROM golden_master.entity_attribute_values eav
+  WHERE eav.load_batch_id = p_batch_id
+    AND eav.system_to = v_open
+    AND EXISTS (
+      SELECT 1 FROM entity_instances.load_batch_journal j
+      WHERE j.target_id = eav.id AND j.batch_id <> p_batch_id AND j.kind = 'VALUE_UPDATE'
+    );
+
+  UPDATE golden_master.entity_attribute_values eav
+     SET system_to = v_now
+   WHERE eav.load_batch_id = p_batch_id
+     AND eav.system_to = v_open
+     AND NOT EXISTS (
+       SELECT 1 FROM entity_instances.load_batch_journal j
+       WHERE j.target_id = eav.id AND j.batch_id <> p_batch_id AND j.kind = 'VALUE_UPDATE'
+     );
+  GET DIAGNOSTICS v_values_retired = ROW_COUNT;
+
+  -- Put back what was changed in place, newest change first.
+  FOR v_entry IN
+    SELECT * FROM entity_instances.load_batch_journal WHERE batch_id = p_batch_id ORDER BY id DESC
+  LOOP
+    v_rows := 0;
+    IF v_entry.kind = 'VALUE_CLOSE' THEN
+      UPDATE golden_master.entity_attribute_values
+         SET valid_to = (v_entry.before->>'valid_to')::date
+       WHERE id = v_entry.target_id
+         AND system_to = v_open
+         AND valid_to = (v_entry.after->>'valid_to')::date;
+      GET DIAGNOSTICS v_rows = ROW_COUNT;
+    ELSIF v_entry.kind = 'VALUE_UPDATE' THEN
+      UPDATE golden_master.entity_attribute_values
+         SET golden_value = v_entry.before->>'golden_value',
+             golden_value_numeric = (v_entry.before->>'golden_value_numeric')::numeric,
+             golden_value_date = (v_entry.before->>'golden_value_date')::date
+       WHERE id = v_entry.target_id
+         AND system_to = v_open
+         AND golden_value IS NOT DISTINCT FROM (v_entry.after->>'golden_value');
+      GET DIAGNOSTICS v_rows = ROW_COUNT;
+    ELSIF v_entry.kind = 'LINK_CLOSE' THEN
+      UPDATE entity_instances.entity_relationships
+         SET valid_to = (v_entry.before->>'valid_to')::date
+       WHERE id = v_entry.target_id
+         AND valid_to = (v_entry.after->>'valid_to')::date;
+      GET DIAGNOSTICS v_rows = ROW_COUNT;
+    ELSIF v_entry.kind = 'RECORD_RENAME' THEN
+      UPDATE entity_instances.master_entities
+         SET entity_name = v_entry.before->>'entity_name', updated_at = v_now
+       WHERE id = v_entry.target_id
+         AND entity_name = (v_entry.after->>'entity_name');
+      GET DIAGNOSTICS v_rows = ROW_COUNT;
+    END IF;
+    IF v_rows > 0 THEN
+      v_restored := v_restored + 1;
+    ELSE
+      v_not_restored := v_not_restored + 1;
+    END IF;
+  END LOOP;
+
+  DELETE FROM entity_instances.entity_relationships WHERE load_batch_id = p_batch_id;
+  GET DIAGNOSTICS v_links_removed = ROW_COUNT;
+
+  UPDATE entity_instances.master_entities me
+     SET is_active = FALSE, updated_at = v_now
+   WHERE me.load_batch_id = p_batch_id
+     AND me.is_active IS TRUE
+     AND NOT EXISTS (
+       SELECT 1 FROM golden_master.entity_attribute_values eav
+       WHERE eav.entity_id = me.id AND eav.system_to = v_open
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM entity_instances.entity_relationships er
+       WHERE (er.parent_entity_id = me.id OR er.child_entity_id = me.id) AND er.system_to = v_open
+     );
+  GET DIAGNOSTICS v_records_deactivated = ROW_COUNT;
+
+  SELECT count(*) INTO v_records_kept
+  FROM entity_instances.master_entities me
+  WHERE me.load_batch_id = p_batch_id AND me.is_active IS TRUE;
+
+  v_result := jsonb_build_object(
+    'valuesRetired', v_values_retired,
+    'valuesLeft', v_values_kept,
+    'changesRestored', v_restored,
+    'changesLeft', v_not_restored,
+    'linksRemoved', v_links_removed,
+    'recordsDeactivated', v_records_deactivated,
+    'recordsLeft', v_records_kept
+  );
+
+  UPDATE entity_instances.load_batches
+     SET status = 'REVERTED', reverted_by = p_user_id, reverted_at = v_now, revert_result = v_result
+   WHERE id = p_batch_id;
+
+  RETURN v_result;
+END;
+$$;
 
 -- History is never deleted from the API. Values end; they are not removed.
 DROP POLICY IF EXISTS "Golden master deletable per entity access" ON golden_master.entity_attribute_values;
