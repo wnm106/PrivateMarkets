@@ -46,6 +46,60 @@ const SIGNOFF_BY_LABEL: Record<string, string> = { 'Not started': 'NOT_STARTED',
 
 const head = <T,>(rows: T[], limit: number) => rows.slice(0, limit);
 
+/** The name, purpose and reading notes of each tab, published whether or not the close has loaded. */
+const REC_TAB_INFO = {
+  close: {
+    label: 'Close status',
+    purpose: 'Where this period\'s NAV close stands: the steps to certify, who owns them, what blocks certification and which review items are still undecided.',
+    howToRead: 'health and certifyBlock say whether the NAV can be certified now. steps are the close steps in order. items are the review items from the fees, marks and drift tabs; decision is null while undecided.',
+  },
+  stmt: {
+    label: 'NAV statement',
+    purpose: 'The administrator\'s NAV statements compared line by line with our own figures for the period.',
+    howToRead: 'current is the fund administrator\'s figure, internal is ours, and variance is administrator minus internal where both are on file.',
+  },
+  roll: {
+    label: 'Position roll-forward',
+    purpose: 'Whether the position roll-forward from the prior period ties to the NAV statement.',
+    howToRead: 'rows are positions and columns are the movements. ties compares each rolled-forward line with the statement: Ties, Break or Missing.',
+  },
+  cash: {
+    label: 'Cash reconciliation',
+    purpose: 'Whether the fund\'s cash flows agree with the bank: matched, proposed and open items and what is left unexplained.',
+    howToRead: 'positionTotal is cash per our records and bankTotal is per the bank. residual is the unexplained difference. flows and transactions that are open have no match yet.',
+  },
+  integrity: {
+    label: 'Statement integrity',
+    purpose: 'Whether the statements tie to one another: each check compares two figures that must agree.',
+    howToRead: 'result is Ties, Break or Missing. difference is a minus b. breaks counts the checks that do not tie.',
+  },
+  fees: {
+    label: 'Fees',
+    purpose: 'Whether the management and performance fees the administrator charged agree with our recalculation.',
+    howToRead: 'admin is the administrator\'s fee and recalculated is ours. difference is the gap. perfFee follows the waterfall: profit over the hurdle, then catch-up and carry.',
+  },
+  val: {
+    label: 'Marks and accruals',
+    purpose: 'Whether the administrator\'s valuation marks and accruals agree with our own, and the effect of each difference on NAV.',
+    howToRead: 'admin is the administrator\'s mark and agent is the agent\'s. effect is the NAV impact of the difference. flagged marks are outside tolerance.',
+  },
+  drift: {
+    label: 'Period drift',
+    purpose: 'How each statement line moved since the prior period, and which large moves are explained.',
+    howToRead: 'change is current minus prior. flagged lines moved more than the threshold; explained says why, when known.',
+  },
+  inputs: {
+    label: 'Rec inputs',
+    purpose: 'Whether everything the reconciliation needs is on file for the period.',
+    howToRead: 'A required input with ok false blocks the reconciliation. readyForRec is true when none do.',
+  },
+} satisfies Record<string, Omit<TabPayload, 'data'>>;
+
+/** Every tab with data: null, for while the close is still loading. */
+function pendingRecTabs(): Record<string, TabPayload> {
+  return Object.fromEntries(Object.entries(REC_TAB_INFO).map(([key, tab]) => [key, { ...tab, data: null }]));
+}
+
 /**
  * What each tab tells the assistant, built from the one load that feeds every tab,
  * so it sees all of them at once. Amounts are in dollars.
@@ -55,9 +109,7 @@ function recTabs(rec: FundRec, cash: CashRec | null, insights: RecInsight[] | nu
   const item = (row: FundRec['items'][number]) => ({ title: row.title, tab: row.tab, administrator: row.admin, ours: row.ours, effect: row.effect, unit: row.unit, why: row.why, decision: row.decision, note: row.note });
   return withoutSources({
     close: {
-      label: 'Close status',
-      purpose: 'Where this period\'s NAV close stands: the steps to certify, who owns them, what blocks certification and which review items are still undecided.',
-      howToRead: 'health and certifyBlock say whether the NAV can be certified now. steps are the close steps in order. items are the review items from the fees, marks and drift tabs; decision is null while undecided.',
+      ...REC_TAB_INFO.close,
       data: {
         fund: rec.fundName, period: rec.periodLabel, periodEnd: rec.periodEnd, health: rec.health, healthNote: rec.healthNote,
         certified: rec.certified, canCertify: rec.canCertify, certifyBlock: rec.certifyBlock, targetDate: rec.targetDate, daysToTarget: rec.daysToTarget,
@@ -68,21 +120,15 @@ function recTabs(rec: FundRec, cash: CashRec | null, insights: RecInsight[] | nu
       },
     },
     stmt: {
-      label: 'NAV statement',
-      purpose: 'The administrator\'s NAV statements compared line by line with our own figures for the period.',
-      howToRead: 'current is the fund administrator\'s figure, internal is ours, and variance is administrator minus internal where both are on file.',
+      ...REC_TAB_INFO.stmt,
       data: { period: rec.periodLabel, statements: rec.statements.map((statement) => ({ kind: statement.kind, title: statement.title, lines: head(statement.lines, 100) })) },
     },
     roll: {
-      label: 'Position roll-forward',
-      purpose: 'Whether the position roll-forward from the prior period ties to the NAV statement.',
-      howToRead: 'rows are positions and columns are the movements. ties compares each rolled-forward line with the statement: Ties, Break or Missing.',
+      ...REC_TAB_INFO.roll,
       data: { present: rec.roll.present, tied: rec.roll.tied, columns: rec.roll.columns, rows: head(rec.roll.rows, 120), total: rec.roll.total, statement: rec.roll.statement, ties: rec.roll.ties },
     },
     cash: {
-      label: 'Cash reconciliation',
-      purpose: 'Whether the fund\'s cash flows agree with the bank: matched, proposed and open items and what is left unexplained.',
-      howToRead: 'positionTotal is cash per our records and bankTotal is per the bank. residual is the unexplained difference. flows and transactions that are open have no match yet.',
+      ...REC_TAB_INFO.cash,
       data: cash ? {
         summary: cash.summary,
         matches: head(cash.matches, 60),
@@ -92,33 +138,23 @@ function recTabs(rec: FundRec, cash: CashRec | null, insights: RecInsight[] | nu
       } : null,
     },
     integrity: {
-      label: 'Statement integrity',
-      purpose: 'Whether the statements tie to one another: each check compares two figures that must agree.',
-      howToRead: 'result is Ties, Break or Missing. difference is a minus b. breaks counts the checks that do not tie.',
+      ...REC_TAB_INFO.integrity,
       data: { breaks: rec.breaks, missing: rec.missing, checks: rec.checks },
     },
     fees: {
-      label: 'Fees',
-      purpose: 'Whether the management and performance fees the administrator charged agree with our recalculation.',
-      howToRead: 'admin is the administrator\'s fee and recalculated is ours. difference is the gap. perfFee follows the waterfall: profit over the hurdle, then catch-up and carry.',
+      ...REC_TAB_INFO.fees,
       data: { mgmtFee: rec.mgmtFee, perfFee: rec.perfFee, items: rec.items.filter((row) => row.tab === 'fees').map(item) },
     },
     val: {
-      label: 'Marks and accruals',
-      purpose: 'Whether the administrator\'s valuation marks and accruals agree with our own, and the effect of each difference on NAV.',
-      howToRead: 'admin is the administrator\'s mark and agent is the agent\'s. effect is the NAV impact of the difference. flagged marks are outside tolerance.',
+      ...REC_TAB_INFO.val,
       data: { marks: head(rec.marks, 100), accruals: head(rec.accruals, 100), items: rec.items.filter((row) => row.tab === 'val').map(item) },
     },
     drift: {
-      label: 'Period drift',
-      purpose: 'How each statement line moved since the prior period, and which large moves are explained.',
-      howToRead: 'change is current minus prior. flagged lines moved more than the threshold; explained says why, when known.',
+      ...REC_TAB_INFO.drift,
       data: { drift: head(rec.drift, 120), items: rec.items.filter((row) => row.tab === 'drift').map(item) },
     },
     inputs: {
-      label: 'Rec inputs',
-      purpose: 'Whether everything the reconciliation needs is on file for the period.',
-      howToRead: 'A required input with ok false blocks the reconciliation. readyForRec is true when none do.',
+      ...REC_TAB_INFO.inputs,
       data: { readyForRec: rec.readyForRec, readiness: rec.readiness },
     },
   });
@@ -180,7 +216,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
     try { await work(); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Could not save'); } finally { setBusy(false); }
   };
 
-  usePublishTabs(rec ? recTabs(rec, cash, insights) : {});
+  usePublishTabs(rec ? recTabs(rec, cash, insights) : pendingRecTabs());
 
   if (!rec) return error ? <div className="xp-error">{error}</div> : <div className="xp-empty">Loading close…</div>;
 
