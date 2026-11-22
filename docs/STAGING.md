@@ -9,7 +9,7 @@ Staging is on the review screen of a file at `/imports`, as the last two steps: 
 | Part | Where | What it does |
 |---|---|---|
 | Tables and functions | `supabase/migrations/20261119100000_load_batches.sql` | `load_batches` and its records, values and journal; `load_batch_quality`; `load_batch_revert`; the `load.promote` permission; a `load_batch_id` column on values, links and records |
-| What the loader tells | `packages/mcp-server/src/feeds/feed-loader.ts` (`LoadRecorder`) | A dry run reports each record and value it would write. A real load reports each live row it changes in place |
+| What the loader tells | `packages/mcp-server/src/feeds/feed-loader.ts` (`LoadRecorder`) | A dry run reports each record and value it would write. A real load reports each live row it replaces |
 | Batch rows | `packages/mcp-server/src/feeds/load-batch-store.ts` | Opening a batch for a load that was not staged, the journal, corrections laid over the file's rows, drift |
 | Staging flow | `packages/mcp-server/src/feeds/load-batches.ts` | Stage, read, correct, promote, revert, discard |
 | Agent tools | `packages/mcp-server/src/tools/position-file-tools.ts` | `stage_position_file_import`, `list_load_batches`, `get_load_batch`, `get_load_batch_values`, `edit_staged_value`, `promote_load_batch`, `revert_load_batch`, `discard_load_batch` |
@@ -82,13 +82,16 @@ Until the migration is applied, loads run exactly as before with no batch, and S
 | What the batch did | Revert |
 |---|---|
 | Added a value | Retires it by closing its system time, so history keeps it. Left alone if a later load rewrote it |
-| Changed a value in place, or closed its period | Puts it back as the journal recorded it. Left alone if it has changed again |
+| Changed a value, or ended its period (`VALUE_SUPERSEDE`) | Retires the replacement and makes the earlier row current again. Left alone if something written since holds that period for that source |
+| Changed a value in place, or closed its period (`VALUE_UPDATE`, `VALUE_CLOSE`, batches loaded before 2026-11-22) | Puts it back as the journal recorded it. Left alone if it has changed again |
 | Added a link | Removes it |
 | Closed a link | Reopens it |
 | Renamed a record | Restores the name, unless it was renamed again |
 | Created a record | Makes it inactive when it holds no other current value or link |
 
 The result counts what was reverted and what was left alone.
+
+A load never changes a value row in place. To correct a value or end its period it calls `golden_master.supersede_value`, which ends the row as current knowledge and writes a changed copy, so a question asked as of an earlier Knowledge date still gets the answer known then ([BI_TEMPORAL.md](BI_TEMPORAL.md)).
 
 ## Not built yet
 

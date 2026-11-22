@@ -817,7 +817,11 @@ export interface LoadRecorder {
     column?: string;
   }): void;
   journal?(event: {
-    kind: 'VALUE_UPDATE' | 'VALUE_CLOSE' | 'LINK_CLOSE' | 'RECORD_RENAME';
+    /**
+     * VALUE_SUPERSEDE: a value row was retired and a changed copy written (after.replacement_id).
+     * VALUE_UPDATE and VALUE_CLOSE are what older loads recorded when they changed rows in place.
+     */
+    kind: 'VALUE_SUPERSEDE' | 'VALUE_UPDATE' | 'VALUE_CLOSE' | 'LINK_CLOSE' | 'RECORD_RENAME';
     targetId: string;
     before: Record<string, unknown>;
     after: Record<string, unknown>;
@@ -860,6 +864,20 @@ export async function executeParsedFeed(
   const actorId = !dry && options.actorId && UUID.test(options.actorId) ? options.actorId : null;
   const createdBy: { created_by?: string; updated_by?: string } = actorId ? { created_by: actorId, updated_by: actorId } : {};
   const updatedBy: { updated_by?: string } = actorId ? { updated_by: actorId } : {};
+  /**
+   * Changes a value row the bi-temporal way: the row stops being current
+   * knowledge and a copy with the change is written, so an earlier knowledge
+   * date still sees what was known then. Never update value or period columns
+   * in place. Returns the new row's id.
+   */
+  const supersedeValue = async (id: string, patch: Record<string, unknown>): Promise<{ id: string | null; error: string | null }> => {
+    const { data, error } = await db.schema('golden_master').rpc('supersede_value', {
+      p_id: id,
+      p_patch: patch,
+      p_load_batch_id: batchTag.load_batch_id ?? null,
+    });
+    return error ? { id: null, error: error.message } : { id: String(data), error: null };
+  };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
     throw new Error('As-of date must be YYYY-MM-DD');
   }
@@ -1363,28 +1381,28 @@ export async function executeParsedFeed(
               if (touch.error) errors.push(touch.error.message);
               continue;
             }
-            const update = dry ? { error: null } : await db.schema('golden_master').from('entity_attribute_values').update({
+            const update = dry ? { id: null, error: null } : await supersedeValue(slice.id, {
               ...value,
-              golden_source_id: valueSource.id,
               precedence_rank: valueSource.rank,
               last_received_at: receivedAt,
               metadata: valueMetadata,
-              ...updatedBy,
-            }).eq('id', slice.id);
-            if (update.error) errors.push(update.error.message);
+            });
+            if (update.error) errors.push(update.error);
             else {
               changed = true;
-              if (!dry) {
+              if (!dry && update.id) {
                 recorder?.journal?.({
-                  kind: 'VALUE_UPDATE',
+                  kind: 'VALUE_SUPERSEDE',
                   targetId: slice.id,
                   before: {
                     golden_value: slice.golden_value ?? null,
                     golden_value_numeric: slice.golden_value_numeric ?? null,
                     golden_value_date: slice.golden_value_date ?? null,
                   },
-                  after: value,
+                  after: { ...value, replacement_id: update.id },
                 });
+                // Later steps of this load refer to the row that is current now.
+                slice.id = update.id;
               }
             }
           }
@@ -1416,19 +1434,17 @@ export async function executeParsedFeed(
           const covering = slices.find((row) => row.id === planned.closeId);
           const queuedRow = planned.closeId.startsWith('pending:') ? (covering as any)?.queued : null;
           if (queuedRow) queuedRow.valid_to = planned.closeTo;
-          const close = dry || queuedRow ? { error: null } : await db.schema('golden_master').from('entity_attribute_values').update({
-            valid_to: planned.closeTo,
-            ...updatedBy,
-          }).eq('id', planned.closeId);
-          if (close.error) errors.push(close.error.message);
+          const close = dry || queuedRow ? { id: null, error: null } : await supersedeValue(planned.closeId, { valid_to: planned.closeTo });
+          if (close.error) errors.push(close.error);
           else if (covering) {
-            if (!dry && !queuedRow) {
+            if (!dry && !queuedRow && close.id) {
               recorder?.journal?.({
-                kind: 'VALUE_CLOSE',
+                kind: 'VALUE_SUPERSEDE',
                 targetId: planned.closeId,
                 before: { valid_to: String(covering.valid_to).slice(0, 10) },
-                after: { valid_to: planned.closeTo },
+                after: { valid_to: planned.closeTo, replacement_id: close.id },
               });
+              covering.id = close.id;
             }
             covering.valid_to = planned.closeTo;
           }
