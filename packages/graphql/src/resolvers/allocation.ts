@@ -34,11 +34,12 @@ async function build(
   asOfDate: string | null | undefined,
   holdInput: any[] | null | undefined,
   adjustmentInput: any[] | null | undefined,
+  knowledgeDate?: string | null,
 ): Promise<AllocationPreview> {
   // Always read the compliance capacities. Without them the engine falls back
   // to the fund's own issuer, sponsor and unfunded limits, and the first view
   // of the saved book shows allocations no compliance rule capped.
-  const draft = await loadAllocationDraft(context.supabase, dealId, asOfDate, holds(holdInput), adjustments(adjustmentInput));
+  const draft = await loadAllocationDraft(context.supabase, dealId, asOfDate, holds(holdInput), adjustments(adjustmentInput), knowledgeDate);
   return previewFromDraft(draft);
 }
 
@@ -46,11 +47,11 @@ export const allocationResolvers = {
   Query: {
     previewAllocation: async (
       _: unknown,
-      args: { dealId: string; asOfDate?: string | null; holds?: any[] | null; adjustments?: any[] | null },
+      args: { dealId: string; asOfDate?: string | null; knowledgeDate?: string | null; holds?: any[] | null; adjustments?: any[] | null },
       context: Context,
     ) => {
       try {
-        return { ...(await build(context, args.dealId, args.asOfDate, args.holds, args.adjustments)), errors: [] };
+        return { ...(await build(context, args.dealId, args.asOfDate, args.holds, args.adjustments, args.knowledgeDate)), errors: [] };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Could not preview the allocation';
         return emptyPreview(args.dealId, message);

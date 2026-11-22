@@ -5,6 +5,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { knowledgeInstant } from './fund-surface';
+import { knownAt } from './known-at';
 
 const CODES = [
   'DEAL_MEMO_STATUS', 'DEAL_TEAM', 'DEAL_IC_DATE', 'DEAL_SECTOR', 'DEAL_BASE_RATE', 'DEAL_HOLD_YEARS',
@@ -97,9 +99,6 @@ function asOfDate(value: string | null | undefined): string {
   return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : new Date().toISOString().slice(0, 10);
 }
 
-function isOpen(systemTo: string | null | undefined): boolean {
-  return !systemTo || String(systemTo).startsWith('9999');
-}
 
 function text(row: ValueRow | undefined): string {
   return row?.golden_value?.trim() || '';
@@ -127,11 +126,10 @@ async function attributeDefs(supabase: SupabaseClient): Promise<Map<string, Attr
   return defs;
 }
 
-async function valuesFor(supabase: SupabaseClient, entityIds: string[], defs: Map<string, AttributeDef>, asOf: string): Promise<Map<string, ValueRow>> {
+async function valuesFor(supabase: SupabaseClient, entityIds: string[], defs: Map<string, AttributeDef>, asOf: string, knowledge: string): Promise<Map<string, ValueRow>> {
   const out = new Map<string, ValueRow>();
   const attributeIds = [...defs.values()].map((def) => def.id);
   if (!entityIds.length || !attributeIds.length) return out;
-  const knowledge = new Date().toISOString();
   for (let index = 0; index < entityIds.length; index += 150) {
     const slice = entityIds.slice(index, index + 150);
     const { data, error } = await supabase.schema('golden_master').rpc('winning_attribute_values', {
@@ -147,15 +145,15 @@ async function valuesFor(supabase: SupabaseClient, entityIds: string[], defs: Ma
   return out;
 }
 
-async function linked(supabase: SupabaseClient, code: string, childIds: string[]) {
+async function linked(supabase: SupabaseClient, code: string, childIds: string[], knowledge: string) {
   if (!childIds.length) return [] as Array<{ id: string; name: string }>;
   const { data, error } = await supabase
     .from('entity_relationships')
-    .select('parent_entity_id, system_to')
+    .select('parent_entity_id, system_from, system_to')
     .eq('relationship_code', code)
     .in('child_entity_id', childIds);
   if (error) throw new Error(error.message);
-  const ids = (data || []).filter((row) => isOpen(row.system_to)).map((row) => row.parent_entity_id);
+  const ids = (data || []).filter((row) => knownAt(row.system_from, row.system_to, knowledge)).map((row) => row.parent_entity_id);
   if (!ids.length) return [];
   const { data: entities, error: entityError } = await supabase
     .from('master_entities')
@@ -196,8 +194,11 @@ export async function loadIcMemo(
   supabase: SupabaseClient,
   dealId: string,
   asOfInput: string | null | undefined,
+  knowledgeInput?: string | null,
 ): Promise<IcMemoDocument> {
   const asOf = asOfDate(asOfInput);
+  // What was known by the user's Knowledge date: a day means the end of it.
+  const knowledge = knowledgeInstant(knowledgeInput);
   const { data: deal, error: dealError } = await supabase
     .from('master_entities')
     .select('id, client_id, domain_code')
@@ -209,25 +210,25 @@ export async function loadIcMemo(
   const defs = await attributeDefs(supabase);
   const { data: issuerRel, error: issuerError } = await supabase
     .from('entity_relationships')
-    .select('child_entity_id, system_to')
+    .select('child_entity_id, system_from, system_to')
     .eq('relationship_code', 'DEAL_ISSUER')
     .eq('parent_entity_id', dealId);
   if (issuerError) throw new Error(issuerError.message);
-  const issuerId = (issuerRel || []).find((row) => isOpen(row.system_to))?.child_entity_id || '';
+  const issuerId = (issuerRel || []).find((row) => knownAt(row.system_from, row.system_to, knowledge))?.child_entity_id || '';
 
   const [points, capital, periods, approvals, items, tranches] = await Promise.all([
-    linked(supabase, 'MEMO_POINT_DEAL', [dealId]),
-    linked(supabase, 'CAPITAL_ITEM_DEAL', [dealId]),
-    linked(supabase, 'PERIOD_ISSUER', issuerId ? [issuerId] : []),
-    linked(supabase, 'APPROVAL_DEAL', [dealId]),
-    linked(supabase, 'OPEN_ITEM_DEAL', [dealId]),
-    linked(supabase, 'TRANCHE_DEAL', [dealId]),
+    linked(supabase, 'MEMO_POINT_DEAL', [dealId], knowledge),
+    linked(supabase, 'CAPITAL_ITEM_DEAL', [dealId], knowledge),
+    linked(supabase, 'PERIOD_ISSUER', issuerId ? [issuerId] : [], knowledge),
+    linked(supabase, 'APPROVAL_DEAL', [dealId], knowledge),
+    linked(supabase, 'OPEN_ITEM_DEAL', [dealId], knowledge),
+    linked(supabase, 'TRANCHE_DEAL', [dealId], knowledge),
   ]);
 
   const entityIds = [dealId, issuerId, ...points, ...capital, ...periods, ...approvals, ...items, ...tranches]
     .map((row) => (typeof row === 'string' ? row : row.id))
     .filter(Boolean);
-  const values = await valuesFor(supabase, entityIds, defs, asOf);
+  const values = await valuesFor(supabase, entityIds, defs, asOf, knowledge);
   const value = (id: string, code: string) => read(values, id, defs, code);
 
   return {

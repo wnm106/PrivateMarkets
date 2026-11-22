@@ -10,6 +10,7 @@ function draft(overrides: Partial<AllocationDraft> = {}): AllocationDraft {
     dealCode: 'DEAL-1',
     dealName: 'Deal One',
     asOf: ASOF,
+    knowledge: '2026-01-01T00:00:00.000Z',
     request: {
       tranches: [{ id: 'tl', name: 'Term Loan', size: 10, holdPct: 100, unfunded: false, instrumentType: 'LOAN' }],
       portfolios: [{

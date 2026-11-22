@@ -158,8 +158,8 @@ interface Preview {
 }
 
 const PREVIEW = `
-  query PreviewAllocation($dealId: ID!, $asOfDate: Date, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
-    previewAllocation(dealId: $dealId, asOfDate: $asOfDate, holds: $holds, adjustments: $adjustments) {
+  query PreviewAllocation($dealId: ID!, $asOfDate: Date, $knowledgeDate: DateTime, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
+    previewAllocation(dealId: $dealId, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate, holds: $holds, adjustments: $adjustments) {
       dealName description stage strategy borrower borrowerId sponsor sponsorId pricing oid leverage maturity closeDate
       facilitySize targetHold allocated unallocated
       tranches { id name label size holdPct targetAmount allocated unfunded instrumentType rank pricing callProtection equityLinked coverage tickingFee status securityId }
@@ -275,6 +275,7 @@ function EditableValue({
 
 export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName?: string }) {
   const asOfDate = useTemporalStore((state) => state.asOfDate);
+  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [holds, setHolds] = useState<Record<string, number>>({});
   const [baselineHolds, setBaselineHolds] = useState<Record<string, number>>({});
@@ -344,7 +345,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const load = useCallback(async (local: { holds: Record<string, number>; adjustments: Adjustment[] } | null) => {
     const id = ++requestId.current;
     setLoading(true);
-    const variables: Record<string, unknown> = { dealId, asOfDate };
+    const variables: Record<string, unknown> = { dealId, asOfDate, knowledgeDate: knowledgeDate || null };
     if (local) {
       variables.holds = Object.entries(local.holds).map(([trancheId, holdPct]) => ({ trancheId, holdPct }));
       variables.adjustments = local.adjustments.map((item) => ({
@@ -379,7 +380,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       setSeeded(true);
     }
     setLoading(false);
-  }, [asOfDate, dealId]);
+  }, [asOfDate, dealId, knowledgeDate]);
 
   const previewGate = useRef<string | null>(null);
   useEffect(() => {

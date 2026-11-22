@@ -5,11 +5,11 @@ export const icMemoResolvers = {
   Query: {
     icMemo: async (
       _: unknown,
-      args: { dealId: string; asOfDate?: string | null },
+      args: { dealId: string; asOfDate?: string | null; knowledgeDate?: string | null },
       context: Context,
     ) => {
       try {
-        return { ...(await loadIcMemo(context.supabase, args.dealId, args.asOfDate)), errors: [] };
+        return { ...(await loadIcMemo(context.supabase, args.dealId, args.asOfDate, args.knowledgeDate)), errors: [] };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Could not load the investment committee memo';
         return { ...emptyIcMemo(args.dealId), errors: [{ field: '', message, code: 'IC_MEMO' }] };

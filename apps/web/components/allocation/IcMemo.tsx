@@ -23,6 +23,7 @@ import {
   type MemoTrancheFace,
 } from '@tapestrai/graphql/src/lib/ic-memo-format';
 import { useLatestRequest } from '@/lib/use-latest-request';
+import { useTemporalStore } from '@/lib/store';
 
 /** What the IC memo tab is, for the assistant. The deal page publishes it before the tab has loaded. */
 export const MEMO_TAB = {
@@ -132,8 +133,8 @@ export interface MemoPreview {
 }
 
 const QUERY = `
-  query IcMemo($dealId: ID!, $asOfDate: Date) {
-    icMemo(dealId: $dealId, asOfDate: $asOfDate) {
+  query IcMemo($dealId: ID!, $asOfDate: Date, $knowledgeDate: DateTime) {
+    icMemo(dealId: $dealId, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate) {
       dealId clientId issuerId memoStatus team icDate sector
       baseRate holdYears expectedMoic blendedIrr recommendation
       points { id kind title body sortOrder }
@@ -188,10 +189,11 @@ export function IcMemo({
   const [busy, setBusy] = useState(false);
   const inspect = useAttributeInspect();
 
+  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const latest = useLatestRequest();
   const load = useCallback(async () => {
     const request = latest.begin();
-    const result = await graphqlQuery<{ icMemo: MemoDoc }>(QUERY, { dealId, asOfDate }, 'network-only', request.signal);
+    const result = await graphqlQuery<{ icMemo: MemoDoc }>(QUERY, { dealId, asOfDate, knowledgeDate: knowledgeDate || null }, 'network-only', request.signal);
     if (!request.current(result)) return;
     const doc = result.data?.icMemo;
     const message = result.error?.message || doc?.errors?.[0]?.message;
@@ -201,7 +203,7 @@ export function IcMemo({
     }
     setMemo(doc);
     setError(null);
-  }, [latest, asOfDate, dealId]);
+  }, [latest, asOfDate, dealId, knowledgeDate]);
 
   useEffect(() => { void load(); }, [load]);
 

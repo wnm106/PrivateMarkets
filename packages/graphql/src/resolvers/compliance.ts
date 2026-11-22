@@ -3,7 +3,7 @@ import { ComplianceEngine } from '../lib/compliance-engine';
 import { assertAllocationInputsOnDeal, loadAllocationDraft, loadDealScoreAnchors, stageAllocationWhatIf } from '../lib/allocation-store';
 import { adjustments as allocationAdjustments, holds as allocationHolds } from './allocation';
 import { assertMayScoreDeal, runDealHypo, type DealScoreArgs } from '../lib/deal-hypo';
-import { dealSurfaceResults, loadDealScorePlans, scoreDealFunds } from '../lib/deal-compliance';
+import { assertWhatIfKnowledge, dealSurfaceResults, loadDealScorePlans, ruleVersionsAt, scoreDealFunds } from '../lib/deal-compliance';
 import { conditionValueKey, type RelationshipHopRef } from '../lib/compliance-population';
 import { parseFundBoardResultPayload, selectLatestFundResults } from '../lib/fund-board-results';
 import { knowledgeInstant } from '../lib/fund-surface';
@@ -488,17 +488,19 @@ export const complianceResolvers = {
         if (holds == null && adjustments == null) {
           // The open page scores the book already saved on the deal. Nothing is
           // rebuilt or written: the funds holding it are read as the caller.
-          const anchors = await loadDealScoreAnchors(context.supabase, args.dealId, args.asOfDate);
+          // Scored as of the user's dates: the book as it was known then.
+          const anchors = await loadDealScoreAnchors(context.supabase, args.dealId, args.asOfDate, args.knowledgeDate);
           dealCode = anchors.dealCode;
           asOf = anchors.asOf;
           clientId = anchors.clientId;
           fundIds = new Set(anchors.fundIds);
-          knowledgeDate = new Date().toISOString();
+          knowledgeDate = anchors.knowledge;
         } else {
           // An edit is staged as a what-if the rules read at one knowledge instant.
           // The draft is read as the caller, so it holds only the tranches and funds
           // they can see, and the saved allocation is never changed.
-          const draft = await loadAllocationDraft(context.supabase, args.dealId, args.asOfDate, holds, adjustments);
+          const draft = await loadAllocationDraft(context.supabase, args.dealId, args.asOfDate, holds, adjustments, args.knowledgeDate);
+          assertWhatIfKnowledge(draft.knowledge);
           assertAllocationInputsOnDeal(draft, holds, adjustments);
           const staged = await stageAllocationWhatIf(writer, draft, userId);
           dealCode = draft.dealCode;
@@ -514,18 +516,7 @@ export const complianceResolvers = {
         // The service role sees every client's rules. Only the shared ones and the deal client's own are scored.
         const plans = await loadDealScorePlans(compliance, fundIds, asOf, clientId);
         if (!plans.length) throw new Error('No compliance rules with limits are assigned to the funds on this deal.');
-        const ruleIds = plans.map((plan) => plan.rule.id);
-        const { data: versionRows, error: versionError } = await compliance
-          .from('rule_versions')
-          .select('*')
-          .in('rule_id', ruleIds)
-          .eq('is_active', true);
-        if (versionError) throw new Error(versionError.message);
-        const versionByRule = new Map<string, any>();
-        for (const version of versionRows || []) {
-          const current = versionByRule.get(version.rule_id);
-          if (!current || version.version_number > current.version_number) versionByRule.set(version.rule_id, version);
-        }
+        const versionByRule = await ruleVersionsAt(compliance, plans.map((plan) => plan.rule.id), asOf, knowledgeDate);
 
         // Every rule in one database call. A staged what-if is readable at its knowledge instant only.
         const failures: string[] = [];
@@ -536,15 +527,29 @@ export const complianceResolvers = {
           .select('id')
           .eq('attribute_code', 'POSITION_SCENARIO_CODE')
           .maybeSingle();
-        const { data: scenarioRows } = scenarioAttribute
+        // This deal's proposal positions, as known at the score's knowledge instant. Read
+        // with the service role, so only positions held by the funds scored here count:
+        // a deal code is unique within a client, not across clients.
+        const { data: scenarioRows, error: scenarioError } = scenarioAttribute
           ? await writer
             .from('entity_attribute_values')
             .select('entity_id')
             .eq('attribute_id', scenarioAttribute.id)
             .eq('golden_value', dealCode)
-            .gte('system_to', new Date().toISOString())
-          : { data: [] };
-        const proposalIds = new Set((scenarioRows || []).map((row) => row.entity_id));
+            .lte('system_from', knowledgeDate)
+            .gte('system_to', knowledgeDate)
+          : { data: [], error: null };
+        if (scenarioError) throw new Error(scenarioError.message);
+        const scenarioIds = [...new Set((scenarioRows || []).map((row) => row.entity_id as string))];
+        const { data: ownPositions, error: ownError } = scenarioIds.length
+          ? await writer
+            .from('master_entities')
+            .select('id')
+            .in('id', scenarioIds)
+            .eq('client_id', clientId ?? '00000000-0000-0000-0000-000000000000')
+          : { data: [], error: null };
+        if (ownError) throw new Error(ownError.message);
+        const proposalIds = new Set((ownPositions || []).map((row) => row.id as string));
         const impacted = dealSurfaceResults(results, fundIds, proposalIds);
 
         return {
