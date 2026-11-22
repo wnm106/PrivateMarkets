@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import type { ColDef } from 'ag-grid-community';
 import { AppGrid } from '@/components/grid/AppGrid';
 import { graphqlQuery } from '@/lib/graphql';
+import { useTemporalStore } from '@/lib/store';
 import { attributeValueKey, type AttributePathHop, type TreeAttributeOption } from './ComplianceAttributeSelect';
 import type { ComplianceCondition } from './ComplianceRuleForm';
 
@@ -155,6 +156,10 @@ export function usePopulationPreview({
     }),
   ], [active, options, parentDomains, hasComposite]);
 
+  // The records the conditions select as of the user's dates, as the evaluator would read them.
+  const asOfDate = useTemporalStore((state) => state.asOfDate);
+  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+
   const load = async (nextPage: number) => {
     if (!domainCode) return;
     setLoading(true);
@@ -167,6 +172,8 @@ export function usePopulationPreview({
           conditions: active.map(conditionInput),
           offset: nextPage * pageSize,
           limit: pageSize,
+          asOfDate: asOfDate || null,
+          knowledgeDate: knowledgeDate || null,
         },
       },
       'network-only',

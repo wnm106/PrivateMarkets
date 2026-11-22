@@ -4,15 +4,9 @@ import { assertAllocationInputsOnDeal, loadAllocationDraft, loadDealScoreAnchors
 import { adjustments as allocationAdjustments, holds as allocationHolds } from './allocation';
 import { assertMayScoreDeal, runDealHypo, type DealScoreArgs } from '../lib/deal-hypo';
 import { dealSurfaceResults, loadDealScorePlans, scoreDealFunds } from '../lib/deal-compliance';
-import {
-  matchPopulationEntity,
-  targetsAlongPath,
-  textOfAttribute,
-  type PopulationCondition,
-  type RelationshipHopRef,
-  conditionExpressionReads,
-} from '../lib/compliance-population';
+import { conditionValueKey, type RelationshipHopRef } from '../lib/compliance-population';
 import { parseFundBoardResultPayload, selectLatestFundResults } from '../lib/fund-board-results';
+import { knowledgeInstant } from '../lib/fund-surface';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
 // through `.schema('compliance')` first (same convention as tenancy.ts /
@@ -1144,82 +1138,49 @@ function hopsFromDimension(dim: any): RelationshipHopRef[] {
     .filter((h: RelationshipHopRef) => h.relationshipCode);
 }
 
+/**
+ * The records a rule's conditions select, before the rule is saved. Matched by
+ * compliance.preview_population with the evaluator's own condition matcher, as
+ * of the user's dates. Nothing is interpreted here.
+ */
 async function previewPopulation(context: Context, input: any) {
   const domainCode = input?.domainCode;
   if (!domainCode) throw new Error('domainCode is required');
   const limit = Math.min(Math.max(Number(input.limit ?? 25) || 25, 1), 100);
   const offset = Math.max(Number(input.offset ?? 0) || 0, 0);
-  const asOf = new Date().toISOString().slice(0, 10);
-  const now = new Date().toISOString();
+  const asOf = input.asOfDate || new Date().toISOString().slice(0, 10);
+  // A Knowledge date of a day means what was known by the end of it.
+  const knowledge = knowledgeInstant(input.knowledgeDate);
 
-  const conditions: PopulationCondition[] = (input.conditions || [])
-    .filter((c: any) => c?.attributeCode)
-    .map((c: any) => ({
-      conditionGroup: c.conditionGroup,
-      conditionOrder: c.conditionOrder,
-      attributeCode: c.attributeCode,
-      operator: c.operator || 'equals',
-      value: c.value ?? null,
-      compareAttributeCode: c.compareAttributeCode || null,
-      attributePath: hopsFromDimension(c.attributeDimension),
-      comparePath: hopsFromDimension(c.compareDimension),
-      leftExpression: c.leftExpression ?? null,
-      rightExpression: c.rightExpression ?? null,
-      logicOperator: c.logicOperator || 'AND',
-    }));
-
-  const { rows, truncated } = await fetchDomainEntities(context.supabase, domainCode);
-  const hopMaps = await loadRelationshipMaps(context.supabase, conditions, asOf, now);
-
-  const attributes = new Map<string, any>();
-  const needed = new Set<string>();
-  for (const row of rows) {
-    for (const cond of conditions) {
-      const attributeHops = cond.attributePath || [];
-      const compareHops = cond.comparePath || [];
-      const attributeIds = cond.leftExpression
-        ? []
-        : attributeHops.length ? targetsAlongPath(row.entity_id, attributeHops, hopMaps) : [row.entity_id];
-      const compareIds = cond.compareAttributeCode
-        ? (compareHops.length ? targetsAlongPath(row.entity_id, compareHops, hopMaps) : [row.entity_id])
-        : [];
-      const exprIds = conditionExpressionReads(cond).flatMap((read) =>
-        read.path.length ? targetsAlongPath(row.entity_id, read.path, hopMaps) : [row.entity_id],
-      );
-      for (const id of [...attributeIds, ...compareIds, ...exprIds, row.entity_id]) needed.add(id);
-    }
-  }
-  const attributeCodes = [...new Set(conditions.flatMap((cond) => [
-    cond.leftExpression ? '' : cond.attributeCode,
-    cond.compareAttributeCode,
-    ...conditionExpressionReads(cond).map((read) => read.code),
-  ].filter((code): code is string => !!code)))];
-  await fetchAttributeValues(context.supabase, [...needed], attributeCodes, attributes, asOf, now);
-
-  const matches: Array<{ entityId: string; entityCode: string; entityName: string | null; values: Record<string, string | null> }> = [];
-  for (const row of rows) {
-    const result = matchPopulationEntity(
-      row.entity_id,
-      conditions,
-      (id, path) => targetsAlongPath(id, path, hopMaps),
-      (id, code) => textOfAttribute(attributes.get(id), code),
-      asOf,
-    );
-    if (result.match) {
-      matches.push({
-        entityId: row.entity_id,
-        entityCode: row.entity_code,
-        entityName: row.entity_name,
-        values: result.values,
-      });
-    }
-  }
-
-  const page = matches.slice(offset, offset + limit);
+  const active = (input.conditions || []).filter((c: any) => c?.attributeCode);
+  // The same row shape a saved condition is stored in.
+  const rows = active.map((c: any) => {
+    const { rule_version_id: _version, ...row } = conditionRow('', { ...c, appliesTo: 'BASE', operator: c.operator || 'equals' });
+    return row;
+  });
+  const { data, error } = await cx(context).rpc('preview_population', {
+    p_domain_code: domainCode,
+    p_conditions: rows,
+    p_as_of_date: asOf,
+    p_knowledge_date: knowledge,
+    p_limit: limit,
+    p_offset: offset,
+    p_cap: POPULATION_CAP,
+  });
+  if (error) throw new Error(error.message);
+  const result = (data || {}) as { total?: number; scanned?: number; truncated?: boolean; rows?: Array<{ entityId: string; entityCode: string; entityName: string | null; values: Array<string | null> }> };
+  // The form keys each column by the condition's path and attribute.
+  const keys = active.map((c: any) => conditionValueKey(hopsFromDimension(c.attributeDimension), c.attributeCode));
+  const page = (result.rows || []).map((row) => ({
+    entityId: row.entityId,
+    entityCode: row.entityCode,
+    entityName: row.entityName,
+    values: Object.fromEntries(keys.map((key: string, index: number) => [key, row.values?.[index] ?? null])),
+  }));
   return {
-    total: matches.length,
-    scanned: rows.length,
-    truncated,
+    total: result.total ?? 0,
+    scanned: result.scanned ?? 0,
+    truncated: Boolean(result.truncated),
     rows: await withParentRecords(context, domainCode, page),
   };
 }
@@ -1272,125 +1233,9 @@ async function withParentRecords<T extends { entityId: string }>(context: Contex
   });
 }
 
-async function fetchDomainEntities(supabase: Context['supabase'], domainCode: string) {
-  const pageSize = 1000;
-  const rows: Array<{ entity_id: string; entity_code: string; entity_name: string | null }> = [];
-  for (let from = 0; rows.length < POPULATION_CAP; from += pageSize) {
-    const { data, error } = await supabase
-      .schema('entity_instances')
-      .from('master_entities')
-      .select('id, entity_code, entity_name')
-      .eq('domain_code', domainCode)
-      .order('entity_code', { ascending: true })
-      .range(from, from + pageSize - 1);
-    if (error) throw new Error(`Failed to load ${domainCode} records: ${error.message}`);
-    rows.push(...(data || []).map((row: any) => ({ entity_id: row.id, entity_code: row.entity_code, entity_name: row.entity_name })));
-    if (!data || data.length < pageSize) return { rows, truncated: false };
-  }
-  return { rows: rows.slice(0, POPULATION_CAP), truncated: true };
-}
 
-async function loadRelationshipMaps(
-  supabase: Context['supabase'],
-  conditions: PopulationCondition[],
-  asOf: string,
-  now: string,
-) {
-  const hops = new Map<string, RelationshipHopRef>();
-  for (const cond of conditions) {
-    for (const hop of [...(cond.attributePath || []), ...(cond.comparePath || []), ...conditionExpressionReads(cond).flatMap((read) => read.path)]) {
-      hops.set(`${hop.direction}:${hop.relationshipCode}`, hop);
-    }
-  }
-  const maps = new Map<string, Map<string, string[]>>();
-  const seenCodes = new Set<string>();
-  for (const hop of hops.values()) {
-    if (seenCodes.has(hop.relationshipCode)) continue;
-    seenCodes.add(hop.relationshipCode);
-    const { up, down } = await loadBothDirections(supabase, hop.relationshipCode, asOf, now);
-    maps.set(`UP:${hop.relationshipCode}`, up);
-    maps.set(`DOWN:${hop.relationshipCode}`, down);
-  }
-  return maps;
-}
 
-async function loadBothDirections(supabase: Context['supabase'], relationshipCode: string, asOf: string, now: string) {
-  const up = new Map<string, string[]>();
-  const down = new Map<string, string[]>();
-  const pageSize = 1000;
-  for (let from = 0; from < 200000; from += pageSize) {
-    // public.entity_relationships keeps the caller's JWT. Switching schema with
-    // supabase-js drops that header and RLS then hides every row.
-    const { data, error } = await supabase
-      .from('entity_relationships')
-      .select('parent_entity_id, child_entity_id')
-      .eq('relationship_code', relationshipCode)
-      .lte('valid_from', asOf)
-      .gte('valid_to', asOf)
-      .lte('system_from', now)
-      .gte('system_to', now)
-      .order('id', { ascending: true })
-      .range(from, from + pageSize - 1);
-    if (error) throw new Error(`Failed to walk ${relationshipCode}: ${error.message}`);
-    for (const row of data || []) {
-      const parents = up.get(row.child_entity_id) || [];
-      parents.push(row.parent_entity_id);
-      up.set(row.child_entity_id, parents);
-      const children = down.get(row.parent_entity_id) || [];
-      children.push(row.child_entity_id);
-      down.set(row.parent_entity_id, children);
-    }
-    if (!data || data.length < pageSize) break;
-  }
-  return { up, down };
-}
 
-async function fetchAttributeValues(
-  supabase: Context['supabase'],
-  ids: string[],
-  codes: string[],
-  into: Map<string, any>,
-  asOf: string,
-  now: string,
-) {
-  if (!ids.length || !codes.length) return;
-  const { data: definitions, error: defError } = await supabase
-    .schema('metadata_register')
-    .from('attribute_register')
-    .select('id, attribute_code')
-    .in('attribute_code', codes);
-  if (defError) throw new Error(`Failed to resolve attributes: ${defError.message}`);
-  const codeById = new Map((definitions || []).map((row: any) => [row.id, row.attribute_code]));
-  const attributeIds = [...codeById.keys()];
-  if (!attributeIds.length) return;
-
-  // winning_attribute_values seeks idx_eav_entity_attr_source_asof once per
-  // (entity, attribute, source) instead of scanning every historical slice.
-  const chunk = 200;
-  for (let i = 0; i < ids.length; i += chunk) {
-    const slice = ids.slice(i, i + chunk);
-    const { data, error } = await supabase
-      .schema('golden_master')
-      .rpc('winning_attribute_values', {
-        p_entity_ids: slice,
-        p_attribute_ids: attributeIds,
-        p_as_of: asOf,
-        p_knowledge: now,
-        p_require_text: false,
-      });
-    if (error) throw new Error(`Failed to load attribute values: ${error.message}`);
-    for (const row of data || []) {
-      const code = codeById.get(row.attribute_id);
-      if (!code) continue;
-      const bag = into.get(row.entity_id) || {};
-      const current = bag[code];
-      if (!current || row.precedence_rank < current.rank) {
-        bag[code] = { value: row.golden_value, rank: row.precedence_rank };
-      }
-      into.set(row.entity_id, bag);
-    }
-  }
-}
 
 async function loadResultContributors(context: Context, resultId: string) {
   const { data: result, error } = await cx(context).from('rule_evaluation_results').select('*').eq('id', resultId).maybeSingle();
@@ -1434,53 +1279,27 @@ async function loadResultContributors(context: Context, resultId: string) {
     return { resultId, baseDomainCode: null, numeratorAggregation: null, columns: [], rows, total: rows.length };
   }
 
-  const ids: string[] = result.contributing_entity_ids || [];
-  const asOf = String(result.as_of_date).slice(0, 10);
-  const now = result.knowledge_date || new Date().toISOString();
+  // Each contributor's numerator as the evaluator read it (compliance.result_contributor_values).
   const aggregation = version.numerator_aggregation || null;
-  const counting = aggregation === 'COUNT' || aggregation === 'COUNT_DISTINCT';
-
-  const numeratorPath = hopsFromDimension(toCamelDim(version.numerator_dimension));
+  const { data: contributed, error: contributedError } = await cx(context).rpc('result_contributor_values', { p_result_id: resultId });
+  if (contributedError) throw new Error(`Could not load the records: ${contributedError.message}`);
   const reads = [
-    { code: version.numerator_attribute_code as string | null, role: 'NUMERATOR', path: numeratorPath },
-    { code: version.denominator_attribute_code as string | null, role: 'DENOMINATOR', path: hopsFromDimension(toCamelDim(version.denominator_dimension)) },
-    { code: version.group_by_attribute_code as string | null, role: 'GROUP', path: hopsFromDimension(toCamelDim(version.group_by_dimension)) },
+    { code: version.numerator_attribute_code as string | null, role: 'NUMERATOR', key: 'numerator_text' },
+    { code: version.denominator_attribute_code as string | null, role: 'DENOMINATOR', key: 'denominator_text' },
+    { code: version.group_by_attribute_code as string | null, role: 'GROUP', key: 'group_text' },
   ].filter((read) => !!read.code);
-
-  const conditions: PopulationCondition[] = reads
-    .filter((read) => read.path.length)
-    .map((read) => ({ attributeCode: read.code as string, operator: 'equals', value: null, attributePath: read.path }) as PopulationCondition);
-  const hopMaps = await loadRelationshipMaps(context.supabase, conditions, asOf, now);
-  const targetsFor = (id: string, path: RelationshipHopRef[]) => (path.length ? targetsAlongPath(id, path, hopMaps) : [id]);
-
-  const needed = new Set<string>(ids);
-  for (const id of ids) for (const read of reads) for (const target of targetsFor(id, read.path)) needed.add(target);
-  const attributes = new Map<string, any>();
-  await fetchAttributeValues(context.supabase, [...needed], [...new Set(reads.map((r) => r.code as string))], attributes, asOf, now);
-
-  const entityInfo = new Map<string, { code: string; name: string | null }>();
-  for (let i = 0; i < ids.length; i += 200) {
-    const { data } = await context.supabase.schema('entity_instances').from('master_entities').select('id, entity_code, entity_name').in('id', ids.slice(i, i + 200));
-    for (const row of data || []) entityInfo.set(row.id, { code: row.entity_code, name: row.entity_name });
-  }
-
-  const readValues = (id: string, read: { code: string | null; path: RelationshipHopRef[] }) => {
-    const texts = targetsFor(id, read.path).map((target) => textOfAttribute(attributes.get(target), read.code as string)).filter((t): t is string => t != null);
-    return texts.length ? texts.join(', ') : null;
-  };
-  const numeric = (text: string | null) => {
-    if (text == null) return null;
-    const parts = text.split(', ').map((part) => Number(part.replace(/,/g, ''))).filter((n) => Number.isFinite(n));
-    return parts.length ? parts.reduce((a, b) => a + b, 0) : null;
-  };
-
-  const numeratorRead = reads.find((read) => read.role === 'NUMERATOR');
-  const rows = ids.map((id) => {
+  const ids: string[] = result.contributing_entity_ids || [];
+  const rows = ((contributed || []) as any[]).map((row) => {
     const values: Record<string, string | null> = {};
-    for (const read of reads) values[read.code as string] = readValues(id, read);
-    const info = entityInfo.get(id);
-    const contribution = counting ? 1 : numeratorRead ? numeric(values[numeratorRead.code as string]) : null;
-    return { entityId: id, entityCode: info?.code || id, entityName: info?.name ?? null, numeratorValue: contribution, sharePercent: null as number | null, values };
+    for (const read of reads) values[read.code as string] = row[read.key] ?? null;
+    return {
+      entityId: row.entity_id as string,
+      entityCode: (row.entity_code as string) || row.entity_id,
+      entityName: (row.entity_name as string | null) ?? null,
+      numeratorValue: row.numerator_value == null ? null : Number(row.numerator_value),
+      sharePercent: null as number | null,
+      values,
+    };
   });
   const total = rows.reduce((sum, row) => sum + (row.numeratorValue ?? 0), 0);
   for (const row of rows) row.sharePercent = total && row.numeratorValue != null ? (row.numeratorValue / total) * 100 : null;

@@ -1400,6 +1400,9 @@ input CompliancePopulationPreviewInput {
   conditions: [ComplianceRuleConditionInput!]!
   offset: Int
   limit: Int
+  # Read the records as of these dates. Default today and now.
+  asOfDate: Date
+  knowledgeDate: DateTime
 }
 
 type CompliancePopulationRow {
