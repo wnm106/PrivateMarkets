@@ -855,7 +855,7 @@ function graphOf(nodes: Array<[string, string, Record<string, unknown>?]>, edges
 }
 
 function fakeOutbound() {
-  const sent: Array<{ kind: string; to?: string[]; subject?: string; text: string }> = [];
+  const sent: Array<{ kind: string; to?: string[]; subject?: string; text: string; idempotencyKey?: string }> = [];
   return {
     sent,
     outbound: {
@@ -863,8 +863,8 @@ function fakeOutbound() {
         sent.push({ kind: 'http', text: call.path });
         return { status: 200, body: { ok: true } };
       },
-      async email(to: string[], subject: string, text: string) {
-        sent.push({ kind: 'email', to, subject, text });
+      async email(to: string[], subject: string, text: string, idempotencyKey?: string) {
+        sent.push({ kind: 'email', to, subject, text, ...(idempotencyKey ? { idempotencyKey } : {}) });
       },
       async slack(_clientId: string, text: string) {
         sent.push({ kind: 'slack', text });
@@ -976,10 +976,51 @@ describe('paths, splits, forms, and messages', () => {
     const memory = memoryStore(graph(true), { to: 'a@example.com, b@example.com', fund: 'HSCF2' });
     const { outbound, sent } = fakeOutbound();
     expect(await advanceRun('run-1', 'job-1', deps(memory.store, { outbound }).deps)).toMatchObject({ status: 'SUCCEEDED' });
-    expect(sent).toEqual([{ kind: 'email', to: ['a@example.com', 'b@example.com'], subject: 'Close for HSCF2', text: 'The close for HSCF2 is done.' }]);
+    expect(sent).toEqual([{ kind: 'email', to: ['a@example.com', 'b@example.com'], subject: 'Close for HSCF2', text: 'The close for HSCF2 is done.', idempotencyKey: 'run-1:tell' }]);
 
     const refused = memoryStore(graph(false), { to: 'a@example.com', fund: 'X' });
     expect(await advanceRun('run-1', 'job-1', deps(refused.store, { outbound }).deps)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('sends') });
+  });
+});
+
+describe('steps that send or write after a restart', () => {
+  const graph = (node: [string, string, Record<string, unknown>]) => graphOf([['start', 'start'], node, ['end', 'end']], [['start', node[0]], [node[0], 'end']]);
+  const interrupted = (memory: ReturnType<typeof memoryStore>, nodeId: string, calling: string) => {
+    // An earlier job finished Start, marked the step, made the call, and died before saving what came back.
+    memory.steps.set('start', { nodeId: 'start', status: 'SUCCEEDED', outcome: null, output: {}, state: null });
+    memory.steps.set(nodeId, { nodeId, status: 'RUNNING', outcome: null, output: null, state: { calling } });
+    memory.run.status = 'RUNNING';
+  };
+
+  it('does not email again when the worker stopped mid-send', async () => {
+    const memory = memoryStore(graph(['tell', 'message', { channel: 'email', to: 'a@example.com', body: 'Done.', allowSend: true }]));
+    interrupted(memory, 'tell', 'emailing a@example.com');
+    const { outbound, sent } = fakeOutbound();
+    expect(await advanceRun('run-1', 'job-2', deps(memory.store, { outbound }).deps)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('may already have happened') });
+    expect(sent).toEqual([]);
+  });
+
+  it('does not post to a connection again, and sends one key for every attempt', async () => {
+    const node: [string, string, Record<string, unknown>] = ['post', 'http', { connection: 'erp', method: 'POST', path: '/navs', body: {}, allowSend: true }];
+    const keys: Array<string | undefined> = [];
+    const outbound = { ...fakeOutbound().outbound, async http(call: { idempotencyKey?: string }) { keys.push(call.idempotencyKey); return { status: 200, body: null }; } };
+
+    const fresh = memoryStore(graph(node));
+    expect(await advanceRun('run-1', 'job-1', deps(fresh.store, { outbound }).deps)).toMatchObject({ status: 'SUCCEEDED' });
+    expect(keys).toEqual(['run-1:post']);
+
+    const cut = memoryStore(graph(node));
+    interrupted(cut, 'post', 'sending POST erp/navs');
+    expect(await advanceRun('run-1', 'job-2', deps(cut.store, { outbound }).deps)).toMatchObject({ status: 'FAILED' });
+    expect(keys).toHaveLength(1);
+  });
+
+  it('still reads again after a restart, since a read changes nothing', async () => {
+    const memory = memoryStore(graph(['scan', 'tool', { tool: 'list_dq_exceptions', args: {} }]));
+    interrupted(memory, 'scan', 'running list_dq_exceptions');
+    const { deps: engine, calls } = deps(memory.store);
+    expect(await advanceRun('run-1', 'job-2', engine)).toMatchObject({ status: 'SUCCEEDED' });
+    expect(calls.filter((call) => call.name === 'list_dq_exceptions')).toHaveLength(1);
   });
 });
 

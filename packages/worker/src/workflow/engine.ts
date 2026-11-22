@@ -148,6 +148,8 @@ export interface HttpCall {
   method: string;
   path: string;
   body: unknown;
+  /** The same for every attempt at one step, so the far end can refuse a repeat. Sent as Idempotency-Key. */
+  idempotencyKey?: string;
 }
 
 /**
@@ -156,7 +158,8 @@ export interface HttpCall {
  */
 export interface Outbound {
   http(call: HttpCall): Promise<{ status: number; body: unknown }>;
-  email(to: string[], subject: string, text: string): Promise<void>;
+  /** `idempotencyKey`, when given, is the same for every attempt at one step, so a repeat is not delivered twice. */
+  email(to: string[], subject: string, text: string, idempotencyKey?: string): Promise<void>;
   slack(clientId: string, text: string): Promise<void>;
   /** The full address of a form's private link. */
   formLink(token: string): string;
@@ -281,13 +284,37 @@ interface StepContext {
   signal?: AbortSignal;
 }
 
+/**
+ * Makes a call that changes something, at most once without someone deciding to
+ * make it again.
+ *
+ * The step is marked before the call, as runApply marks each change. A step
+ * found still RUNNING with that mark was cut off mid-call (the worker crashed or
+ * lost its claim), and the call may or may not have gone through. It is not made
+ * again: the step fails and says to check first. Running the step again after
+ * that, or after any failure, is a person's decision, and the call is then made.
+ *
+ * The key handed to `call` is the same for every attempt at this step, so a far
+ * end that honours Idempotency-Key can refuse a repeat even then.
+ */
+async function callOnce<T>(node: WorkflowNode, ctx: StepContext, what: string, call: (idempotencyKey: string) => Promise<T>): Promise<T> {
+  const earlier = record(ctx.step?.state).calling;
+  if (ctx.step?.status === 'RUNNING' && earlier) {
+    throw new Error(`The worker stopped while it was ${String(earlier)}, so it may already have happened. Check, then run this step again if it did not.`);
+  }
+  if (ctx.signal?.aborted) throw new Halted();
+  if (!(await ctx.deps.store.saveStep(ctx.run.id, ctx.owner, node.id, { state: { calling: what } }))) throw new Halted();
+  return call(`${ctx.run.id}:${node.id}`);
+}
+
 async function runTool(node: WorkflowNode, ctx: StepContext): Promise<StepOutcome> {
   const tool = String(node.config.tool || '');
   const args = record(resolveTemplates(node.config.args || {}, ctx.scope));
   const write = !isReadTool(tool);
   if (write && node.config.allowWrite !== true) throw new Error(`"${tool}" changes data and this step is not allowed to.`);
   const actor: Actor = { userId: ctx.run.startedBy, clientId: ctx.run.clientId };
-  const output = clampOutput(await ctx.deps.tools.run(tool, args, actor, write ? 'write' : 'read', ctx.run.id));
+  const run = () => ctx.deps.tools.run(tool, args, actor, write ? 'write' : 'read', ctx.run.id);
+  const output = clampOutput(write ? await callOnce(node, ctx, `running ${tool}`, run) : await run());
   await ctx.deps.store.event(ctx.run.id, node.id, 'tool.called', 'SYSTEM', ctx.run.startedBy, `Ran ${tool}`, { tool, args });
   return { outcome: null, output };
 }
@@ -627,7 +654,9 @@ async function runHttp(node: WorkflowNode, ctx: StepContext): Promise<StepOutcom
   const path = String(resolveTemplates(node.config.path || '', ctx.scope) ?? '');
   const body = method === 'GET' ? undefined : resolveTemplates(node.config.body ?? {}, ctx.scope);
   const connection = String(node.config.connection || '');
-  const result = await outbound.http({ clientId: ctx.run.clientId, connection, method, path, body });
+  const call = (idempotencyKey?: string) => outbound.http({ clientId: ctx.run.clientId, connection, method, path, body, idempotencyKey });
+  // A GET changes nothing, so it is simply made again.
+  const result = method === 'GET' ? await call() : await callOnce(node, ctx, `sending ${method} ${connection}${path}`, call);
   await ctx.deps.store.event(ctx.run.id, node.id, 'http.called', 'SYSTEM', ctx.run.startedBy, `${method} ${connection}${path}: ${result.status}`, { connection, method, path, status: result.status });
   return { outcome: null, output: clampOutput(result) };
 }
@@ -652,7 +681,7 @@ async function runMessage(node: WorkflowNode, ctx: StepContext): Promise<StepOut
   const text = String(resolveTemplates(node.config.body || '', ctx.scope) ?? '');
   if (!text.trim()) throw new Error('The message is empty once the run\'s values are filled in.');
   if (node.config.channel === 'slack') {
-    await outbound.slack(ctx.run.clientId, text);
+    await callOnce(node, ctx, 'posting to Slack', () => outbound.slack(ctx.run.clientId, text));
     await ctx.deps.store.event(ctx.run.id, node.id, 'message.sent', 'SYSTEM', ctx.run.startedBy, 'Posted to Slack', { channel: 'slack' });
     return { outcome: null, output: { channel: 'slack', sent: true } };
   }
@@ -662,7 +691,7 @@ async function runMessage(node: WorkflowNode, ctx: StepContext): Promise<StepOut
   if (bad.length > 0) throw new Error(`Not an email address: ${bad.join(', ')}.`);
   if (to.length > 50) throw new Error('A message step emails at most 50 people.');
   const subject = String(resolveTemplates(node.config.subject || node.label, ctx.scope) ?? node.label).slice(0, 200);
-  await outbound.email(to, subject, text);
+  await callOnce(node, ctx, `emailing ${to.join(', ')}`, (key) => outbound.email(to, subject, text, key));
   await ctx.deps.store.event(ctx.run.id, node.id, 'message.sent', 'SYSTEM', ctx.run.startedBy, `Emailed ${to.join(', ')}`, { channel: 'email', to, subject });
   return { outcome: null, output: { channel: 'email', to, subject, sent: true } };
 }

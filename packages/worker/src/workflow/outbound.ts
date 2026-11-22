@@ -69,7 +69,12 @@ export function workflowOutbound(deps: OutboundDeps): Outbound {
       if (String(connection.kind) !== 'HTTP') throw new Error(`"${call.connection}" is not an HTTP connection.`);
       const config = (connection.config || {}) as Row;
       const url = connectionUrl(String(config.baseUrl || ''), call.path);
-      const headers = { accept: 'application/json', ...(call.body === undefined ? {} : { 'content-type': 'application/json' }), ...authFor(config, typeof found?.secret === 'string' ? found.secret : null) };
+      const headers = {
+        accept: 'application/json',
+        ...(call.body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...(call.idempotencyKey ? { 'idempotency-key': call.idempotencyKey } : {}),
+        ...authFor(config, typeof found?.secret === 'string' ? found.secret : null),
+      };
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
       try {
@@ -104,11 +109,12 @@ export function workflowOutbound(deps: OutboundDeps): Outbound {
       }
     },
 
-    async email(to, subject, text) {
+    async email(to, subject, text, idempotencyKey) {
       if (!env.resendApiKey || !env.emailFrom) throw new Error('The worker has no RESEND_API_KEY and NOTIFY_EMAIL_FROM, so it cannot send email.');
       const response = await (fetcher as unknown as Fetch)('https://api.resend.com/emails', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.resendApiKey}` },
+        // Resend keeps a key for 24 hours and does not send a second email with it.
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.resendApiKey}`, ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
         body: JSON.stringify({ from: env.emailFrom, to, subject, text }),
       });
       if (!response.ok) throw new Error(`The email was not sent: HTTP ${response.status} ${(await response.text().catch(() => '')).slice(0, 200)}`);

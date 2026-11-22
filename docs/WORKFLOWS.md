@@ -525,6 +525,7 @@ Every run keeps an append-only log: each step starting and finishing, each tool 
 - **A step fails.** The run is `FAILED` and names the step. Retry on the run page continues from that step. Steps before it are not run again.
 - **The worker dies mid-run.** The job's lease expires and another worker takes the run. Finished steps are read back. An agent step continues from its last saved round.
 - **The worker dies while applying a change.** That one change is reported as unconfirmed ("Check the record before applying it again") instead of being made a second time. The changes after it still run.
+- **The worker dies while sending or writing.** A Call a connection step (other than GET), a Send a message step, or a Run a tool step that may change data is marked before the call. Found still marked after a restart, it fails with "it may already have happened" instead of sending again. Check, then Retry. Every attempt at one step sends the same `Idempotency-Key` (the run and step), so a connection or the email service that honours it does not act on a repeat.
 - **A run is cancelled.** A step already running finishes; nothing after it starts. Changes already applied stay.
 
 ## Scheduling
