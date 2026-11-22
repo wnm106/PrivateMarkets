@@ -55,14 +55,23 @@ export function checkServerUrl(raw: string, allowPrivate = privateAddressesAllow
   return null;
 }
 
-/** Throws when the address's host resolves to a private address. */
-export async function assertPublicHost(raw: string, allowPrivate = privateAddressesAllowed()): Promise<void> {
+/**
+ * Throws when the address's host resolves to a private address. Returns the
+ * addresses it checked, so the connection can be made to them and no other
+ * (pinnedFetch); empty when private addresses are allowed.
+ */
+export async function assertPublicHost(
+  raw: string,
+  allowPrivate = privateAddressesAllowed(),
+  resolve: (host: string) => Promise<string[]> = async (host) => (await lookup(host, { all: true })).map((entry) => entry.address),
+): Promise<string[]> {
   const problem = checkServerUrl(raw, allowPrivate);
   if (problem) throw new Error(problem);
-  if (allowPrivate) return;
+  if (allowPrivate) return [];
   const host = new URL(raw).hostname.replace(/^\[|\]$/g, '');
-  const addresses = isIP(host) ? [{ address: host }] : await lookup(host, { all: true });
-  if (!addresses.length || addresses.some((a) => isPrivateAddress(a.address))) {
+  const addresses = isIP(host) ? [host] : await resolve(host);
+  if (!addresses.length || addresses.some((address) => isPrivateAddress(address))) {
     throw new Error('The server address resolves to a private network, which the assistant may not reach.');
   }
+  return addresses;
 }
