@@ -17,13 +17,31 @@ A **section** has:
 | `measures` | Derived columns per row: `{query, alias, expr}` |
 | `screens` | Thresholds applied to every row, computed not judged: `{key, label, query, when, severity}` |
 | `scenarios` | What-ifs aggregated across rows: `{key, label, query, expr, agg, params, rankBy, top}` (rate shock, "two largest stop paying") |
-| `blocks` | Expected output: markdown, kpis, table, scorecard, chart (bar, line, pie, stacked, waterfall, heatmap), insights, callouts, sources |
+| `blocks` | Expected output: markdown, hero, kpis, table, scorecard, chart (bar, line, pie, stacked, waterfall, heatmap), insights, callouts, sources |
+| `layout` | `fixed` (default): produce exactly `blocks`, in order. `free`: `blocks` is a palette, and the writer designs the section (see below) |
 | `agentic` | `{enabled, maxRounds}`: lets the section call read-only tools for what the queries cannot reach |
 | `research` | `{queries, maxSources}`: web research. Runs only when the narrative sets `allow_external_search` |
 | `dependsOn` | Sections written first. An executive summary depends on all the others; it is shown first and written last |
 | `batch` | `{query, size}`: compose a long list a group at a time, then stitch (borrower-by-borrower) |
 
 Expressions (`expr`, `when`) are arithmetic, comparisons, `&& || !`, and `abs min max round coalesce if isnull`. There is no `eval`. A missing input makes a measure null and a test not evaluable; the run counts those and the composer reports them as "data not available".
+
+### Designing a section (layout "free")
+A fixed section always comes out the same shape, whatever its content. A free section lists a palette of blocks with guidance; the writer picks the blocks, their order and their width that tell that section's story, under `DESIGN_RULES` in `narrative-spec.ts`: open with the answer (a hero figure or one sentence), choose the visual from the shape of the content (a line for change over time, a horizontal bar for a ranking, a waterfall for a walk, a table with deltas and sparklines for before-and-after), say each figure once, and use as few blocks as the story needs. Batched sections keep their declared blocks, because batches are stitched by block key.
+
+The tools a story uses:
+
+| Tool | Where | What it does |
+|---|---|---|
+| `hero` block | any section | One large figure with a label, a delta coloured by `good`, and a sentence |
+| `width: "half"` | any block | Two half blocks in a row sit side by side (they stack on a narrow screen) |
+| `note` | any block | One line under the block saying what to take from it |
+| Typed columns | table, scorecard | `{label, kind, format, good}`: `delta` (arrow coloured by whether the direction is good), `bar` (inline bar), `spark` (the cell is a series), `status` (pill), `number`; formats `usd_m`, `percent`, `pp`, `bps`, `multiple` |
+| `highlights` | table, scorecard | `[{row, tone, note}]`: tinted rows with a numbered footnote |
+| `spark`, `good` | kpis items | A sparkline under the card; arrows coloured by whether up is good |
+| `format`, `highlight`, `annotations`, `orientation` | chart | Values and axes in $M or %; the subject in colour and the rest muted; labelled points on a line |
+
+The renderer (`apps/web/components/reporting/NarrativeChart.tsx`, `StoryTable.tsx`, helpers in `lib/narrative-visual.ts`) lays a chart out at the width it is shown, turns bars with name labels and crowded waterfalls horizontal, wraps long labels instead of squeezing them, and draws tables of 40 rows or fewer as story tables (longer ones stay in the data grid). Older runs, written before these fields existed, render as before.
 
 ### Rules every section follows
 Only use supplied figures; write "data not available" for gaps; state as-of dates; lead with the insight; pair weaknesses with actions; cite external claims with dates; quote computed screens and scenarios exactly. Add more per narrative in `rules`. The defaults live in `packages/graphql/src/lib/narrative-spec.ts` (`DEFAULT_RULES`).

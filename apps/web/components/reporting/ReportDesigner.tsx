@@ -452,7 +452,7 @@ export function ReportDesigner({ kind, initial }: ReportDesignerProps) {
               />
               <JsonField
                 label="Sections"
-                hint='Ordered sections: { "key", "title", "purpose", "instructions", "dataQueries", "comparisons", "measures", "screens", "scenarios", "blocks", "agentic": {"enabled":true}, "research": {"queries":[...]}, "dependsOn": [keys], "batch": {"query","size"} }. Block types: markdown, kpis, table, scorecard, chart, insights, callouts, sources. Leave empty to use the single-section form below.'
+                hint='Ordered sections: { "key", "title", "purpose", "instructions", "dataQueries", "comparisons", "measures", "screens", "scenarios", "blocks", "agentic": {"enabled":true}, "research": {"queries":[...]}, "dependsOn": [keys], "batch": {"query","size"}, "layout": "fixed"|"free" }. With layout "free" the blocks are a palette and the writer designs the section. Block types: markdown, hero, kpis, table, scorecard, chart, insights, callouts, sources. Leave empty to use the single-section form below.'
                 value={draft.sections}
                 onChange={(v) => patch({ sections: Array.isArray(v) ? v : [] })}
                 rows={26}

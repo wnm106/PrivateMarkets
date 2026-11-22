@@ -2,14 +2,20 @@ import type { DataQuerySpec, DataQueryResult } from '@tapestrai/graphql/src/lib/
 import { readBrowserAccessToken } from '@/lib/auth-token';
 import type { RunReview, ReviewIssue } from '@tapestrai/graphql/src/lib/narrative-review';
 import type {
+  ColumnSpec,
+  GoodDirection,
   NarrativeBlock,
   NarrativeSection,
   OutputBlockSpec,
   OutputBlockType,
+  RowHighlight,
+  Tone,
+  ValueFormat,
 } from '@tapestrai/graphql/src/lib/narrative-spec';
 
 export type { RunReview, ReviewIssue };
 export type { DataQuerySpec, DataQueryResult, NarrativeBlock, NarrativeSection, OutputBlockSpec, OutputBlockType };
+export type { ColumnSpec, GoodDirection, RowHighlight, Tone, ValueFormat };
 
 // ---------------------------------------------------------------------------
 // Types

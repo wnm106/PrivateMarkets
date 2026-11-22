@@ -10,7 +10,7 @@
  * The in-app runner follows the same rules (see narrative-spec DEFAULT_RULES), so a
  * report composed in the app and one composed by an outside client read alike.
  */
-import { BLOCK_FORMAT_DOC, DEFAULT_RULES } from '@tapestrai/graphql/src/lib/narrative-spec';
+import { BLOCK_FORMAT_DOC, DEFAULT_RULES, DESIGN_RULES } from '@tapestrai/graphql/src/lib/narrative-spec';
 import { QUERY_DATA_GUIDE_CORE } from '../tools/query-data';
 
 export const NARRATIVE_COMPOSE_GUIDE = `# Composing a narrative or large analytical report
@@ -61,7 +61,8 @@ ${DEFAULT_RULES.map((r, i) => `${i + 1}. ${r}`).join('\n')}
 
 ## 5. Output standard
 - Lead every section with its key insight in one or two sentences, then the evidence.
-- Tables and scorecards for exposures and borrowers; prose for the story and the "why". Suggest a chart where a picture beats a table: NAV bridge (waterfall), composition over time (stacked), covenant headroom (heatmap), risk-rating migration.
+- A section whose layout is "fixed" gets exactly its listed blocks, in order. A section whose layout is "free" lists a palette: you design the section, choosing the blocks, their order and their width for the content, following these design rules:
+${DESIGN_RULES.map((r) => `  - ${r}`).join('\n')}
 - Every metric carries its as-of date. Where comparison dates exist, show them side by side.
 - Every weakness is paired with a mitigant or an action. Name problems before the reader has to ask.
 - Close with: Data gaps and assumptions (everything under mustDisclose, plus anything you could not find), and Sources (title, publisher, publication date, link).

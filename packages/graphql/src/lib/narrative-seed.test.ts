@@ -6,22 +6,22 @@ import {
   applyMeasures, evaluateScenarios, evaluateScreens, narrativeSections, resolveAsOfSet, sectionRunOrder, type NarrativeSection,
 } from './narrative-spec';
 
-// The current definition of the seeded LP review (the investor-facing redesign).
-const sql = readFileSync(
-  resolve(__dirname, '../../../../supabase/migrations/20261121160000_lp_review_investor_redesign.sql'),
-  'utf8',
-);
+// The seeded LP review: inputs from the investor redesign, sections and rules from the latest
+// migration that replaces them (the story layout).
+const migration = (file: string) => readFileSync(resolve(__dirname, '../../../../supabase/migrations', file), 'utf8');
+const redesign = migration('20261121160000_lp_review_investor_redesign.sql');
+const latest = migration('20261121170000_lp_review_story_layout.sql');
 
-function dollarQuoted(tag: string): any {
+function dollarQuoted(sql: string, tag: string): any {
   const match = sql.match(new RegExp(`\\$${tag}\\$([\\s\\S]*?)\\$${tag}\\$`));
   if (!match) throw new Error(`No $${tag}$ block in the migration`);
   return JSON.parse(match[1]);
 }
 
 describe('seeded LP portfolio review', () => {
-  const sections = dollarQuoted('s') as NarrativeSection[];
-  const rules = dollarQuoted('r') as string[];
-  const parameters = dollarQuoted('p') as Array<{ name: string }>;
+  const sections = dollarQuoted(latest, 's') as NarrativeSection[];
+  const rules = dollarQuoted(latest, 'r') as string[];
+  const parameters = dollarQuoted(redesign, 'p') as Array<{ name: string }>;
   const spec = { narrativeName: 'LP Portfolio Review', domainCode: 'FUND', sections, rules };
   const section = (key: string) => sections.find((s) => s.key === key)!;
 
@@ -85,6 +85,26 @@ describe('seeded LP portfolio review', () => {
     expect(by.largest2_loss_50.value).toBeCloseTo(0.4);
     // Grouped rows have no entity_name: the names come from the grouped column.
     expect(by.largest2_loss_50.names).toEqual(['A', 'B']);
+  });
+
+  it('lets each story section design its layout, with story tools in its palette', () => {
+    const free = sections.filter((s) => s.layout === 'free').map((s) => s.key);
+    expect(free).toEqual(['at_a_glance', 'nav_trend', 'returns', 'drivers', 'allocation', 'concentration', 'loan_book', 'credit', 'limits']);
+    // The questions and the appendix keep their fixed form.
+    expect(section('lp_qa').layout).toBeUndefined();
+    expect(section('data_room').layout).toBeUndefined();
+    const palette = sections.flatMap((s) => s.blocks);
+    expect(palette.filter((b) => b.type === 'hero').length).toBeGreaterThanOrEqual(4);
+    expect(palette.some((b) => /spark/.test(b.guidance ?? ''))).toBe(true);
+    expect(palette.some((b) => /delta/.test(b.guidance ?? ''))).toBe(true);
+    expect(palette.some((b) => /[Hh]ighlight/.test(b.guidance ?? ''))).toBe(true);
+  });
+
+  it('names windows, never calls the largest exposure a cap, and judges the appendix against the report', () => {
+    expect(rules.some((r) => /window of every change/.test(r))).toBe(true);
+    expect(rules.some((r) => /not a cap, a limit/.test(r))).toBe(true);
+    expect(section('data_room').instructions).toMatch(/never quote its percentages/);
+    expect(section('data_room').dependsOn).toContain('credit');
   });
 
   it('computes TVPI, DPI and income yield from the NAV statement', () => {

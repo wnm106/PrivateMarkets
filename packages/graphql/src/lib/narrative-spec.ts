@@ -18,7 +18,7 @@ import type { DataQuerySpec } from './data-query-engine';
 // ---------------------------------------------------------------------------
 
 export type OutputBlockType =
-  | 'markdown' | 'table' | 'scorecard' | 'kpis' | 'chart' | 'insights' | 'callouts' | 'sources';
+  | 'markdown' | 'hero' | 'table' | 'scorecard' | 'kpis' | 'chart' | 'insights' | 'callouts' | 'sources';
 
 export interface OutputBlockSpec {
   type: OutputBlockType;
@@ -82,6 +82,12 @@ export interface NarrativeSection {
   screens?: NarrativeScreen[];
   scenarios?: NarrativeScenario[];
   blocks: OutputBlockSpec[];
+  /**
+   * fixed (default): produce exactly `blocks`, in order.
+   * free: `blocks` is a palette. The composer designs the section: it picks the blocks, their order and
+   * width for the content, following DESIGN_RULES, and may skip or add blocks.
+   */
+  layout?: 'fixed' | 'free';
   /** Let the composer call read-only tools (query_data, get_model_map, ...) to fill gaps. */
   agentic?: { enabled: boolean; maxRounds?: number };
   /** Search the web. Only runs when the narrative also allows external search. */
@@ -138,18 +144,36 @@ export const DEFAULT_RULES: string[] = [
 ];
 
 export const BLOCK_FORMAT_DOC = `
-Each block has "type", "key", "title" and type-specific fields:
+Each block has "type", "key", "title" and type-specific fields. Any block may also carry "width":"full"|"half" (two half blocks in a row sit side by side) and "note" (one line under the block saying what to take from it).
 - markdown:  { "type":"markdown", "key", "title", "text":"<markdown prose>" }
-- kpis:      { "type":"kpis", "key", "title", "items":[ { "label", "value", "detail"?, "trend"?:"up"|"down"|"flat" } ] }   headline figures, already formatted
-- table:     { "type":"table", "key", "title", "columns":["A","B"], "rows":[["a",1]] }
-- scorecard: { "type":"scorecard", "key", "title", "columns":[...], "rows":[[...]], "statusColumn"?:"Status" }   one row per subject, e.g. a borrower; statusColumn holds Performing / Watchlist / Underperforming / Non-accrual
-- chart:     { "type":"chart", "key", "title", "chartType":"bar"|"line"|"pie"|"stacked"|"waterfall"|"heatmap", "labels":[...], "series":[ { "name", "values":[...] } ], "totals"?:[indexes] }
-             waterfall: values are deltas, "totals" lists the indexes drawn as running totals. heatmap: labels are columns, each series is a row.
+- hero:      { "type":"hero", "key", "value":"9.3%", "label":"Net IRR since inception", "text"?:"one sentence of context", "delta"?:"-0.5 pts vs a year ago", "trend"?:"up"|"down"|"flat", "good"?:"up"|"down", "tone"?:"positive"|"neutral"|"warning"|"critical" }   the one number that answers the section's question
+- kpis:      { "type":"kpis", "key", "title", "items":[ { "label", "value", "detail"?, "trend"?:"up"|"down"|"flat", "good"?:"up"|"down", "spark"?:[numbers, oldest first] } ] }   a few headline figures, already formatted
+- table:     { "type":"table", "key", "title", "columns":[ "Borrower", { "label":"Exposure ($M)", "kind":"number", "format":"usd_m" }, ... ], "rows":[["a",1]], "highlights"?:[ { "row":0, "tone":"warning", "note":"why this row matters" } ] }
+             A column is a label string (text) or { "label", "kind", "format"?, "good"? }.
+             kind: "text" | "number" | "delta" (a change; drawn with an arrow, coloured by whether it is good) | "bar" (a share or size drawn as an inline bar) | "spark" (the cell is an array of numbers, oldest first, drawn as a sparkline) | "status" (a status word drawn as a pill).
+             format: "usd_m" ($M) | "percent" (percent units, 3.5 = 3.5%) | "pp" (percentage points) | "bps" | "multiple" (x) | "number".
+             good: "up" (default) or "down" says which direction of a delta or trend is good: leverage going up is bad, so its good is "down".
+- scorecard: same as table, one row per subject, plus "statusColumn"?:"Status" naming the column that holds Performing / Watchlist / Underperforming / Non-accrual.
+- chart:     { "type":"chart", "key", "title", "chartType":"bar"|"line"|"pie"|"stacked"|"waterfall"|"heatmap", "labels":[...], "series":[ { "name", "values":[...] } ], "totals"?:[indexes], "format"?:<format above>, "orientation"?:"vertical"|"horizontal", "highlight"?:[label indexes to emphasise; the rest are drawn muted], "annotations"?:[ { "index", "text" } ] }
+             waterfall: values are deltas, "totals" lists the indexes drawn as running totals. heatmap: labels are columns, each series is a row. horizontal suits names and rankings.
 - insights:  { "type":"insights", "key", "title", "items":[ { "title", "detail", "severity":"info"|"positive"|"warning"|"critical" } ] }
 - callouts:  { "type":"callouts", "key", "title", "items":[ { "title", "severity":"high"|"medium"|"low"|"info"|"positive", "fields":[ { "label", "value" } ] } ] }   structured findings, e.g. a risk call-out or an LP question with its answer
 - sources:   { "type":"sources", "key", "title", "items":[ { "title", "url"?, "publisher"?, "date"?, "note"? } ] }   every external source used
-Numbers in table, scorecard and chart cells are raw numbers, not formatted strings. Percentages are fractions only when the column header says so.
+Numbers in table, scorecard and chart cells are raw numbers, not formatted strings; the format says how to show them. Percentages are in percent units unless the column says otherwise.
 `.trim();
+
+/** How to design a section whose layout is free. Sent with every free section. */
+export const DESIGN_RULES: string[] = [
+  'The goal is a compelling story, not a display of information. Decide what this section\'s single most important finding is, then design the section around proving it to this reader.',
+  'Open with the answer: a hero block (one number that answers the key question) or one short markdown sentence that states the finding. Then the evidence, then the detail a careful reader wants.',
+  'Choose each visual from the shape of the content. Change over time: a line, with an annotation at the turning point. Ranking or names: a horizontal bar with the subject of the story highlighted. Parts of a whole: a bar (a pie only with five slices or fewer). A walk from a start figure to an end figure: a waterfall. Each subject before and after: a table with a delta column and a spark column. A few exceptions among many: a table with those rows highlighted and a note on each. A single figure: a hero or a sentence, never a chart.',
+  'Use as few blocks as the story needs, usually two to five. One strong visual beats three weak ones. Do not fall back on the same pattern (cards, then prose, then alerts, then a table) in every section; a section that is one number and one sentence is a good section.',
+  'Say each figure once, where it carries the story. Do not repeat a card\'s number in the prose and again in a table.',
+  'Tables are read across. Keep them to 12 rows or fewer, give every numeric column a kind and a format, show changes as delta columns with the right good direction, series as spark columns and shares as bar columns, and highlight the one to three rows the prose talks about, each with a note.',
+  'Charts must be legible. At most 12 categories (combine the rest into "Other"), labels of 18 characters or fewer (abbreviate), horizontal orientation when labels are names, a format so values read as $M or %, and highlight the bar or point the title is about. Never put a long series of near-equal bars in a chart; a sentence says it better.',
+  'Put two half-width blocks side by side only when they are read together, such as a chart and the table or sentence that explains it.',
+  'Every chart and table gets a title that states the finding with its figure, and a note when the reader needs to be told what to look at.',
+];
 
 // ---------------------------------------------------------------------------
 // Dates
@@ -583,7 +607,7 @@ export function sectionRunOrder(sections: NarrativeSection[]): string[] {
   return order;
 }
 
-const BLOCK_TYPES: OutputBlockType[] = ['markdown', 'table', 'scorecard', 'kpis', 'chart', 'insights', 'callouts', 'sources'];
+const BLOCK_TYPES: OutputBlockType[] = ['markdown', 'hero', 'table', 'scorecard', 'kpis', 'chart', 'insights', 'callouts', 'sources'];
 
 export function validateNarrativeSpec(spec: NarrativeSpec, validateQueries?: (q: unknown) => string[]): string[] {
   const errors: string[] = [];
@@ -624,6 +648,7 @@ export function validateNarrativeSpec(spec: NarrativeSpec, validateQueries?: (q:
       if (!(s.batch.size >= 1)) errors.push(`${w}: batch size must be at least 1`);
     }
     if (s.research && !Array.isArray(s.research.queries)) errors.push(`${w}: research.queries must be an array`);
+    if (s.layout !== undefined && s.layout !== 'fixed' && s.layout !== 'free') errors.push(`${w}: layout must be "fixed" or "free"`);
     if ((s.comparisons?.length ?? 0) > MAX_COMPARISONS) {
       errors.push(`${w}: at most ${MAX_COMPARISONS} comparison dates (has ${s.comparisons!.length}); the rest would be ignored`);
     }
@@ -638,18 +663,46 @@ export function validateNarrativeSpec(spec: NarrativeSpec, validateQueries?: (q:
 
 export const MAX_TABLE_ROWS = 200;
 
+/** How a number is written: $M, percent units, percentage points, basis points, a multiple, or plain. */
+export type ValueFormat = 'usd_m' | 'percent' | 'pp' | 'bps' | 'multiple' | 'number';
+export type ColumnKind = 'text' | 'number' | 'delta' | 'bar' | 'spark' | 'status';
+export type Trend = 'up' | 'down' | 'flat';
+/** Which direction is good for a delta or trend: leverage rising is bad, so its good is "down". */
+export type GoodDirection = 'up' | 'down';
+export type Tone = 'positive' | 'neutral' | 'warning' | 'critical' | 'info';
+
+export interface ColumnSpec { label: string; kind: ColumnKind; format?: ValueFormat; good?: GoodDirection }
+export interface RowHighlight { row: number; tone: Tone; note?: string }
+
+/** Fields every block may carry: its width in a two-up row, and a one-line takeaway. */
+interface BlockBase { key: string; title?: string; width?: 'full' | 'half'; note?: string }
+
 export type NarrativeBlock =
-  | { type: 'markdown'; key: string; title?: string; text: string }
-  | { type: 'table'; key: string; title?: string; columns: string[]; rows: any[][] }
-  | { type: 'scorecard'; key: string; title?: string; columns: string[]; rows: any[][]; statusColumn?: string }
-  | { type: 'kpis'; key: string; title?: string; items: Array<{ label: string; value: string; detail?: string; trend?: 'up' | 'down' | 'flat' }> }
-  | { type: 'chart'; key: string; title?: string; chartType: 'bar' | 'line' | 'pie' | 'stacked' | 'waterfall' | 'heatmap'; labels: string[]; series: Array<{ name: string; values: number[] }>; totals?: number[] }
-  | { type: 'insights'; key: string; title?: string; items: Array<{ title: string; detail: string; severity: 'info' | 'positive' | 'warning' | 'critical' }> }
-  | { type: 'callouts'; key: string; title?: string; items: Array<{ title: string; severity: 'high' | 'medium' | 'low' | 'info' | 'positive'; fields: Array<{ label: string; value: string }> }> }
-  | { type: 'sources'; key: string; title?: string; items: Array<{ title: string; url?: string; publisher?: string; date?: string; note?: string }> };
+  | (BlockBase & { type: 'markdown'; text: string })
+  | (BlockBase & { type: 'hero'; value: string; label: string; text?: string; delta?: string; trend?: Trend; good?: GoodDirection; tone?: Tone })
+  | (BlockBase & { type: 'table'; columns: string[]; columnSpecs?: ColumnSpec[]; rows: any[][]; highlights?: RowHighlight[] })
+  | (BlockBase & { type: 'scorecard'; columns: string[]; columnSpecs?: ColumnSpec[]; rows: any[][]; highlights?: RowHighlight[]; statusColumn?: string })
+  | (BlockBase & { type: 'kpis'; items: Array<{ label: string; value: string; detail?: string; trend?: Trend; good?: GoodDirection; spark?: number[] }> })
+  | (BlockBase & {
+      type: 'chart'; chartType: 'bar' | 'line' | 'pie' | 'stacked' | 'waterfall' | 'heatmap'; labels: string[];
+      series: Array<{ name: string; values: number[] }>; totals?: number[]; format?: ValueFormat;
+      orientation?: 'vertical' | 'horizontal'; highlight?: number[]; annotations?: Array<{ index: number; text: string }>;
+    })
+  | (BlockBase & { type: 'insights'; items: Array<{ title: string; detail: string; severity: 'info' | 'positive' | 'warning' | 'critical' }> })
+  | (BlockBase & { type: 'callouts'; items: Array<{ title: string; severity: 'high' | 'medium' | 'low' | 'info' | 'positive'; fields: Array<{ label: string; value: string }> }> })
+  | (BlockBase & { type: 'sources'; items: Array<{ title: string; url?: string; publisher?: string; date?: string; note?: string }> });
 
 const str = (v: unknown, max = 4000): string => (v === null || v === undefined ? '' : String(v).slice(0, max));
 const cell = (c: unknown) => (c === null || c === undefined ? '' : typeof c === 'object' ? JSON.stringify(c) : (c as string | number | boolean));
+const FORMATS: ValueFormat[] = ['usd_m', 'percent', 'pp', 'bps', 'multiple', 'number'];
+const KINDS: ColumnKind[] = ['text', 'number', 'delta', 'bar', 'spark', 'status'];
+const TONES: Tone[] = ['positive', 'neutral', 'warning', 'critical', 'info'];
+const pick = <T extends string>(v: unknown, allowed: readonly T[]): T | undefined => (allowed.includes(v as T) ? (v as T) : undefined);
+const numList = (v: unknown, max = 60): number[] | undefined => {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.slice(0, max).map(Number).filter((n) => Number.isFinite(n));
+  return out.length >= 2 ? out : undefined;
+};
 const safeUrl = (u: unknown): string | undefined => {
   const s = str(u, 500).trim();
   return /^https?:\/\//i.test(s) ? s : undefined;
@@ -659,6 +712,7 @@ const safeUrl = (u: unknown): string | undefined => {
 function hasContent(b: NarrativeBlock): boolean {
   switch (b.type) {
     case 'markdown': return b.text.trim().length > 0;
+    case 'hero': return b.value.trim().length > 0 && !GAP.test(b.value);
     case 'table': case 'scorecard': return b.columns.length > 0 && b.rows.length > 0;
     case 'chart': return b.labels.length > 0 && b.series.some((s) => s.values.length > 0);
     default: return b.items.length > 0;
@@ -677,12 +731,16 @@ function collapseGapRows(blocks: NarrativeBlock[]): NarrativeBlock[] {
     if (b.type !== 'table' && b.type !== 'scorecard') { out.push(b); continue; }
     const kept: any[][] = [];
     const gone: string[] = [];
-    for (const row of b.rows) {
+    const newIndex = new Map<number, number>();
+    b.rows.forEach((row, i) => {
       const rest = row.slice(1);
       const allGap = rest.length > 0 && rest.every((c) => c === '' || GAP.test(String(c)));
-      if (allGap) gone.push(String(row[0] ?? '').trim()); else kept.push(row);
-    }
-    out.push({ ...b, rows: kept });
+      if (allGap) gone.push(String(row[0] ?? '').trim());
+      else { newIndex.set(i, kept.length); kept.push(row); }
+    });
+    // A highlight points at a row by position, so it follows the row or goes with it.
+    const highlights = b.highlights?.flatMap((h) => (newIndex.has(h.row) ? [{ ...h, row: newIndex.get(h.row)! }] : []));
+    out.push({ ...b, rows: kept, ...(b.highlights ? { highlights } : {}) });
     if (gone.length) {
       out.push({ type: 'markdown', key: `${b.key}_gaps`, text: `**Data not available:** ${gone.filter(Boolean).join('; ')}.` });
     }
@@ -710,8 +768,10 @@ export function collapseGapColumns(blocks: NarrativeBlock[]): NarrativeBlock[] {
     if (keep.length < 2) { out.push(note); continue; }
     const columns = keep.map((i) => b.columns[i]);
     const rows = b.rows.map((r) => keep.map((i) => r[i]));
+    const columnSpecs = b.columnSpecs ? keep.map((i) => b.columnSpecs![i]) : undefined;
     const statusColumn = b.type === 'scorecard' && b.statusColumn && columns.includes(b.statusColumn) ? b.statusColumn : undefined;
-    out.push(b.type === 'scorecard' ? { ...b, columns, rows, ...(statusColumn ? { statusColumn } : { statusColumn: undefined }) } : { ...b, columns, rows });
+    const trimmed = { ...b, columns, rows, ...(columnSpecs ? { columnSpecs } : {}) };
+    out.push(b.type === 'scorecard' ? { ...trimmed, ...(statusColumn ? { statusColumn } : { statusColumn: undefined }) } as NarrativeBlock : trimmed as NarrativeBlock);
     out.push(note);
   }
   return out;
@@ -726,28 +786,69 @@ function normalizeAllBlocks(raw: unknown): NarrativeBlock[] {
   const out: NarrativeBlock[] = [];
   for (const b of list) {
     if (!b || typeof b !== 'object') continue;
-    const base = { key: str(b.key, 80) || `block_${out.length + 1}`, ...(b.title ? { title: str(b.title, 200) } : {}) };
+    const base = {
+      key: str(b.key, 80) || `block_${out.length + 1}`,
+      ...(b.title ? { title: str(b.title, 200) } : {}),
+      ...(b.width === 'half' ? { width: 'half' as const } : {}),
+      ...(b.note ? { note: str(b.note, 300) } : {}),
+    };
     switch (b.type) {
       case 'markdown':
         out.push({ type: 'markdown', ...base, text: str(b.text, 30000) });
         break;
+      case 'hero': {
+        const trend = pick<Trend>(b.trend, ['up', 'down', 'flat']);
+        const good = pick<GoodDirection>(b.good, ['up', 'down']);
+        const tone = pick<Tone>(b.tone, TONES);
+        out.push({
+          type: 'hero', ...base, value: str(b.value, 40), label: str(b.label, 120),
+          ...(b.text ? { text: str(b.text, 600) } : {}), ...(b.delta ? { delta: str(b.delta, 80) } : {}),
+          ...(trend ? { trend } : {}), ...(good ? { good } : {}), ...(tone ? { tone } : {}),
+        });
+        break;
+      }
       case 'table':
       case 'scorecard': {
-        const columns = (Array.isArray(b.columns) ? b.columns : []).map((c: unknown) => str(c, 80));
+        const rawColumns: unknown[] = Array.isArray(b.columns) ? b.columns : [];
+        const columnSpecs: ColumnSpec[] = rawColumns.map((c: any) => {
+          if (c && typeof c === 'object') {
+            const kind = pick(c.kind, KINDS) ?? 'text';
+            const format = pick(c.format, FORMATS);
+            const good = pick<GoodDirection>(c.good, ['up', 'down']);
+            return { label: str(c.label, 80), kind, ...(format ? { format } : {}), ...(good ? { good } : {}) };
+          }
+          return { label: str(c, 80), kind: 'text' as const };
+        });
+        const columns = columnSpecs.map((c) => c.label);
+        const typed = columnSpecs.some((c) => c.kind !== 'text');
         const rows = (Array.isArray(b.rows) ? b.rows : []).slice(0, MAX_TABLE_ROWS)
-          .map((r: unknown) => (Array.isArray(r) ? r.map(cell) : [str(r)]));
+          .map((r: unknown) => (Array.isArray(r)
+            // A spark cell keeps its series; any other object cell becomes text.
+            ? r.map((c, i) => (columnSpecs[i]?.kind === 'spark' ? (numList(c) ?? '') : cell(c)))
+            : [str(r)]));
+        const highlights: RowHighlight[] = (Array.isArray(b.highlights) ? b.highlights : []).flatMap((h: any) => {
+          const row = Number(h?.row);
+          if (!Number.isInteger(row) || row < 0 || row >= rows.length) return [];
+          return [{ row, tone: pick(h?.tone, TONES) ?? 'info', ...(h?.note ? { note: str(h.note, 240) } : {}) }];
+        }).slice(0, 12);
+        const extras = { ...(typed ? { columnSpecs } : {}), ...(highlights.length ? { highlights } : {}) };
         if (b.type === 'scorecard') {
           const statusColumn = columns.includes(str(b.statusColumn)) ? str(b.statusColumn) : undefined;
-          out.push({ type: 'scorecard', ...base, columns, rows, ...(statusColumn ? { statusColumn } : {}) });
-        } else out.push({ type: 'table', ...base, columns, rows });
+          out.push({ type: 'scorecard', ...base, columns, rows, ...extras, ...(statusColumn ? { statusColumn } : {}) });
+        } else out.push({ type: 'table', ...base, columns, rows, ...extras });
         break;
       }
       case 'kpis': {
         const items = (Array.isArray(b.items) ? b.items : []).slice(0, 12).flatMap((i: any) => {
           const label = str(i?.label, 60); const value = str(i?.value, 60);
           if (!label || !value) return [];
-          const trend = ['up', 'down', 'flat'].includes(i?.trend) ? i.trend : undefined;
-          return [{ label, value, ...(i?.detail ? { detail: str(i.detail, 160) } : {}), ...(trend ? { trend } : {}) }];
+          const trend = pick<Trend>(i?.trend, ['up', 'down', 'flat']);
+          const good = pick<GoodDirection>(i?.good, ['up', 'down']);
+          const spark = numList(i?.spark);
+          return [{
+            label, value, ...(i?.detail ? { detail: str(i.detail, 160) } : {}), ...(trend ? { trend } : {}),
+            ...(good ? { good } : {}), ...(spark ? { spark } : {}),
+          }];
         });
         out.push({ type: 'kpis', ...base, items });
         break;
@@ -760,7 +861,19 @@ function normalizeAllBlocks(raw: unknown): NarrativeBlock[] {
           values: (Array.isArray(s?.values) ? s.values : []).map((v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0)),
         }));
         const totals = Array.isArray(b.totals) ? b.totals.map(Number).filter((n: number) => Number.isInteger(n) && n >= 0) : undefined;
-        out.push({ type: 'chart', ...base, chartType, labels, series, ...(totals && totals.length ? { totals } : {}) });
+        const inRange = (n: number) => Number.isInteger(n) && n >= 0 && n < labels.length;
+        const highlight = Array.isArray(b.highlight) ? b.highlight.map(Number).filter(inRange).slice(0, 12) : [];
+        const annotations = (Array.isArray(b.annotations) ? b.annotations : []).flatMap((a: any) => {
+          const index = Number(a?.index);
+          return inRange(index) && a?.text ? [{ index, text: str(a.text, 60) }] : [];
+        }).slice(0, 4);
+        const format = pick(b.format, FORMATS);
+        const orientation = pick<'vertical' | 'horizontal'>(b.orientation, ['vertical', 'horizontal']);
+        out.push({
+          type: 'chart', ...base, chartType, labels, series, ...(totals && totals.length ? { totals } : {}),
+          ...(format ? { format } : {}), ...(orientation ? { orientation } : {}),
+          ...(highlight.length ? { highlight } : {}), ...(annotations.length ? { annotations } : {}),
+        });
         break;
       }
       case 'insights': {
@@ -844,10 +957,21 @@ function collectNumbers(value: unknown, into: number[], depth = 0): void {
 }
 
 function textOf(block: NarrativeBlock): string[] {
+  const note = block.note ? [block.note] : [];
+  return [...note, ...bodyTextOf(block)];
+}
+
+function bodyTextOf(block: NarrativeBlock): string[] {
   switch (block.type) {
     case 'markdown': return [block.text];
-    case 'table': case 'scorecard': return block.rows.flat().map((c) => (typeof c === 'number' ? String(c) : String(c ?? '')));
-    case 'kpis': return block.items.flatMap((i) => [i.value, i.detail ?? '']);
+    case 'hero': return [block.value, block.delta ?? '', block.text ?? ''];
+    case 'table': case 'scorecard':
+      // A spark cell is an array: each of its points is a figure of its own.
+      return [
+        ...block.rows.flat(2).map((c) => (typeof c === 'number' ? String(c) : String(c ?? ''))),
+        ...(block.highlights ?? []).map((h) => h.note ?? ''),
+      ];
+    case 'kpis': return block.items.flatMap((i) => [i.value, i.detail ?? '', ...(i.spark ?? []).map(String)]);
     case 'insights': return block.items.map((i) => `${i.title} ${i.detail}`);
     case 'callouts': return block.items.flatMap((i) => [i.title, ...i.fields.map((f) => f.value)]);
     case 'chart': return block.series.flatMap((s) => s.values.map(String));
@@ -904,6 +1028,7 @@ export function verifyBlocks(blocks: NarrativeBlock[], evidence: unknown[], allo
 function mdCell(v: unknown): string {
   if (v === null || v === undefined) return '';
   if (typeof v === 'number') return v.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (Array.isArray(v)) return v.length ? `${mdCell(v[0])} → ${mdCell(v[v.length - 1])}` : '';
   return String(v).replace(/\|/g, '/').replace(/\n/g, ' ');
 }
 
@@ -913,6 +1038,7 @@ export function blocksToMarkdown(blocks: NarrativeBlock[]): string {
     if (b.title) lines.push(`#### ${b.title}`, '');
     switch (b.type) {
       case 'markdown': lines.push(b.text, ''); break;
+      case 'hero': lines.push(`**${b.value}** ${b.label}${b.delta ? ` (${b.delta})` : ''}`, ...(b.text ? [b.text] : []), ''); break;
       case 'kpis': lines.push(...b.items.map((i) => `- **${i.label}:** ${i.value}${i.detail ? ` (${i.detail})` : ''}`), ''); break;
       case 'table': case 'scorecard':
         if (b.columns.length) {
@@ -933,6 +1059,11 @@ export function blocksToMarkdown(blocks: NarrativeBlock[]): string {
         lines.push(...b.items.map((i) => `- ${i.title}${i.publisher ? `, ${i.publisher}` : ''}${i.date ? ` (${i.date})` : ''}${i.url ? ` <${i.url}>` : ''}`), '');
         break;
     }
+    if ((b.type === 'table' || b.type === 'scorecard') && b.highlights?.length) {
+      for (const h of b.highlights) if (h.note) lines.push(`- _${mdCell(b.rows[h.row]?.[0])}:_ ${h.note}`);
+      lines.push('');
+    }
+    if (b.note) lines.push(`_${b.note}_`, '');
   }
   return lines.join('\n').trim();
 }
@@ -943,13 +1074,18 @@ export function blocksToMarkdown(blocks: NarrativeBlock[]): string {
 
 export function narrativeSystemPrompt(spec: NarrativeSpec): string {
   const rules = [...DEFAULT_RULES, ...(spec.rules ?? [])];
+  const anyFree = narrativeSections(spec).some((s) => s.layout === 'free');
   return [
     spec.persona || 'You are a careful private-markets analyst writing structured reports from master data.',
     spec.audience ? `The reader is: ${spec.audience}.` : '',
     `## Rules\n${rules.map((r, i) => `${i + 1}. ${r}`).join('\n')}`,
-    `## Output\nRespond with ONLY a JSON object { "blocks": [ ... ] }. Produce exactly the requested blocks, in order, with their keys.\n${BLOCK_FORMAT_DOC}`,
+    anyFree ? `## Design (sections whose layout is yours to design)\n${DESIGN_RULES.map((r, i) => `${i + 1}. ${r}`).join('\n')}` : '',
+    `## Output\nRespond with ONLY a JSON object { "blocks": [ ... ] }. The section brief says whether its blocks are fixed or yours to design.\n${BLOCK_FORMAT_DOC}`,
   ].filter(Boolean).join('\n\n');
 }
+
+/** Most blocks a free-layout section may produce. */
+export const MAX_FREE_BLOCKS = 7;
 
 export interface SectionPromptInput {
   section: NarrativeSection;
@@ -967,14 +1103,19 @@ export interface SectionPromptInput {
 
 export function sectionUserPrompt(input: SectionPromptInput): string {
   const { section } = input;
-  const requested = section.blocks
+  const listed = section.blocks
     .map((b, i) => `${i + 1}. type=${b.type} key=${b.key} title="${b.title || ''}"${b.guidance ? ` guidance: ${b.guidance}` : ''}`)
     .join('\n');
+  // A batch is stitched by block key, so a batched section keeps the blocks it declares.
+  const free = section.layout === 'free' && !input.batchLabel;
+  const blocksBrief = free
+    ? `# Design this section\nThe layout is yours. Choose the blocks, their order and their width that tell this section's story best for this content, following the Design rules: up to ${MAX_FREE_BLOCKS} blocks, usually two to five. The palette below lists blocks that suit this section, with guidance on what each should show. Use, adapt, reorder or skip them, and use any other block type when it tells the story better. Keep a palette block's key when you use it; give a new block a new short key.\n## Palette\n${listed}`
+    : `# Requested output blocks\nProduce exactly these blocks, in order, with their keys.\n${listed}`;
   return [
     `# Section: ${section.title}${input.batchLabel ? ` (${input.batchLabel})` : ''}`,
     section.purpose ? `Key question: ${section.purpose}` : '',
     `# Instructions\n${section.instructions}`,
-    `# Requested output blocks\n${requested}`,
+    blocksBrief,
     input.mustCover?.length
       ? `# Coverage\nEvery one of these must have its own row in each table or scorecard and its own view. Do not skip or merge any: ${input.mustCover.join('; ')}`
       : '',

@@ -28,6 +28,7 @@ import {
 } from '@tapestrai/graphql/src/lib/narrative-review';
 import {
   BLOCK_FORMAT_DOC,
+  DESIGN_RULES,
   DEFAULT_RULES,
   applyMeasures,
   blocksToMarkdown,
@@ -356,6 +357,9 @@ const runNarrativeSectionData: ToolDefinition = {
         ? { enabled: true, note: 'Fill gaps with get_model_map, query_data, analyze_rows, compare_asof, get_data_coverage, and the compliance tools before composing.' }
         : { enabled: false },
       blockFormat: BLOCK_FORMAT_DOC,
+      layout: section.layout === 'free'
+        ? { mode: 'free', note: 'The blocks listed for this section are a palette. Design the section: choose the blocks, order and width that tell its story best, following designRules.', designRules: DESIGN_RULES }
+        : { mode: 'fixed', note: 'Produce exactly the listed blocks, in order, with their keys.' },
       next: 'Compose the blocks, then save_narrative_section(runId, sectionKey, blocks, sources).',
     };
   },

@@ -310,3 +310,78 @@ describe('verification', () => {
     expect(verifyBlocks(blocks, [], ['Flag cushion under 15%']).unmatched).toEqual([]);
   });
 });
+
+describe('story blocks', () => {
+  it('keeps typed columns, spark series, highlights and a hero, and drops what is malformed', () => {
+    const blocks = normalizeBlocks({ blocks: [
+      { type: 'hero', key: 'h', value: '9.3%', label: 'Net IRR', delta: '-0.5 pts', trend: 'down', good: 'up', tone: 'sideways', width: 'half', note: 'Since inception' },
+      {
+        type: 'table', key: 't', title: 'Movers',
+        columns: ['Borrower', { label: 'Change ($M)', kind: 'delta', format: 'usd_m' }, { label: 'Trend', kind: 'spark' }, { label: 'Odd', kind: 'nope', format: 'furlongs' }],
+        rows: [['A', 2.9, [1, 2, 3], 'x'], ['B', -2.6, 'not a series', 'y']],
+        highlights: [{ row: 1, tone: 'warning', note: 'Down 14.5%' }, { row: 9, tone: 'warning' }],
+      },
+      { type: 'chart', key: 'c', chartType: 'bar', labels: ['a', 'b'], series: [{ name: 's', values: [1, 2] }], format: 'percent', highlight: [1, 7], annotations: [{ index: 0, text: 'low' }, { index: 5, text: 'gone' }], orientation: 'diagonal' },
+    ] });
+    const hero = blocks.find((b) => b.type === 'hero')!;
+    expect(hero).toMatchObject({ value: '9.3%', trend: 'down', good: 'up', width: 'half', note: 'Since inception' });
+    expect(hero).not.toHaveProperty('tone');
+    const table = blocks.find((b) => b.type === 'table') as Extract<ReturnType<typeof normalizeBlocks>[number], { type: 'table' }>;
+    expect(table.columns).toEqual(['Borrower', 'Change ($M)', 'Trend', 'Odd']);
+    expect(table.columnSpecs?.map((c) => [c.kind, c.format])).toEqual([['text', undefined], ['delta', 'usd_m'], ['spark', undefined], ['text', undefined]]);
+    expect(table.rows[0][2]).toEqual([1, 2, 3]);
+    expect(table.rows[1][2]).toBe('');
+    expect(table.highlights).toEqual([{ row: 1, tone: 'warning', note: 'Down 14.5%' }]);
+    const chart = blocks.find((b) => b.type === 'chart')!;
+    expect(chart).toMatchObject({ format: 'percent', highlight: [1], annotations: [{ index: 0, text: 'low' }] });
+    expect(chart).not.toHaveProperty('orientation');
+  });
+
+  it('keeps highlights and column formats on their rows and columns when gaps are collapsed', () => {
+    const [table] = normalizeBlocks([{
+      type: 'table', key: 't',
+      columns: ['Name', { label: 'Gone', kind: 'number' }, { label: 'Share', kind: 'bar', format: 'percent' }],
+      rows: [['A', 'data not available', 'data not available'], ['B', 'data not available', 4.2]],
+      highlights: [{ row: 0, tone: 'info', note: 'dropped' }, { row: 1, tone: 'warning', note: 'kept' }],
+    }]);
+    expect(table.type).toBe('table');
+    const t = table as any;
+    expect(t.rows).toEqual([['B', 'data not available', 4.2]]);
+    expect(t.highlights).toEqual([{ row: 0, tone: 'warning', note: 'kept' }]);
+    const [narrowed] = collapseGapColumns([table]);
+    expect((narrowed as any).columns).toEqual(['Name', 'Share']);
+    expect((narrowed as any).columnSpecs.map((c: any) => c.kind)).toEqual(['text', 'bar']);
+  });
+
+  it('lets a free section design its own layout, and holds a fixed or batched section to its blocks', () => {
+    const base: NarrativeSection = {
+      key: 's', title: 'S', instructions: 'x',
+      blocks: [{ type: 'kpis', key: 'k', guidance: 'cards' }, { type: 'table', key: 't' }],
+    };
+    const fixed = sectionUserPrompt({ section: base, params: {}, asOfDate: '2026-11-21', evidence: {} });
+    expect(fixed).toMatch(/Produce exactly these blocks/);
+    const free = sectionUserPrompt({ section: { ...base, layout: 'free' }, params: {}, asOfDate: '2026-11-21', evidence: {} });
+    expect(free).toMatch(/# Design this section/);
+    expect(free).toMatch(/## Palette/);
+    const batched = sectionUserPrompt({ section: { ...base, layout: 'free' }, params: {}, asOfDate: '2026-11-21', evidence: {}, batchLabel: 'group 1 of 3' });
+    expect(batched).toMatch(/Produce exactly these blocks/);
+    expect(narrativeSystemPrompt({ sections: [{ ...base, layout: 'free' }] })).toMatch(/## Design/);
+    expect(narrativeSystemPrompt({ sections: [base] })).not.toMatch(/## Design/);
+    expect(validateNarrativeSpec({ sections: [{ ...base, layout: 'grid' as any }] }).join(' ')).toMatch(/layout must be/);
+  });
+
+  it('traces every point of a sparkline, and writes the story fields into markdown', () => {
+    const blocks = normalizeBlocks([
+      { type: 'hero', key: 'h', value: '1.30x', label: 'TVPI', note: 'Paid-in $1,140.0M' },
+      { type: 'table', key: 't', columns: ['Name', { label: 'NAV', kind: 'spark' }], rows: [['Fund', [1156.6, 1164.6]]], highlights: [{ row: 0, tone: 'info', note: 'Up $8.0M' }] },
+    ]);
+    // Evidence is in dollars; "$1,140.0M" in the text is read as 1,140,000,000.
+    const v = verifyBlocks(blocks, [{ a: 1156.6, b: 1164.6, c: 1.3, d: 1_140_000_000, e: 8_000_000 }]);
+    expect(v.unmatched).toEqual([]);
+    const md = blocksToMarkdown(blocks);
+    expect(md).toMatch(/\*\*1\.30x\*\* TVPI/);
+    expect(md).toMatch(/1,156\.6 → 1,164\.6/);
+    expect(md).toMatch(/_Fund:_ Up \$8\.0M/);
+    expect(md).toMatch(/_Paid-in \$1,140\.0M_/);
+  });
+});
