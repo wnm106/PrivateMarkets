@@ -81,8 +81,11 @@ export const complianceResolvers = {
       if (args.filter?.status) query = query.eq('status', args.filter.status);
       if (args.filter?.runId?.equals) query = query.eq('run_id', args.filter.runId.equals);
 
-      const first = args.pagination?.first || 50;
-      query = query.limit(first);
+      // The same offset cursor the other connections use. At most 500 a page.
+      const first = Math.min(Math.max(Number(args.pagination?.first) || 50, 1), 500);
+      const after = args.pagination?.after ? parseInt(atob(args.pagination.after), 10) : -1;
+      const offset = Number.isFinite(after) && after >= 0 ? after + 1 : 0;
+      query = query.range(offset, offset + first - 1);
 
       const { data, error, count } = await query;
       if (error) {
@@ -90,12 +93,12 @@ export const complianceResolvers = {
         throw new Error('Failed to fetch compliance results');
       }
 
-      const edges = (data || []).map((row: any) => ({ node: mapResult(row), cursor: row.id }));
+      const edges = (data || []).map((row: any, index: number) => ({ node: mapResult(row), cursor: btoa(String(offset + index)) }));
       return {
         edges,
         pageInfo: {
-          hasNextPage: (count || 0) > edges.length,
-          hasPreviousPage: false,
+          hasNextPage: (count || 0) > offset + edges.length,
+          hasPreviousPage: offset > 0,
           startCursor: edges[0]?.cursor ?? null,
           endCursor: edges[edges.length - 1]?.cursor ?? null,
         },
