@@ -129,6 +129,21 @@ describe('server addresses', () => {
     expect(checkServerUrl('https://metadata.google.internal', false)).toMatch(/public/);
   });
 
+  it('refuses IPv4 carried inside IPv6, however the URL parser rewrites it', () => {
+    for (const url of [
+      'https://[::ffff:127.0.0.1]/mcp',
+      'https://[::ffff:169.254.169.254]/latest',
+      'https://[::ffff:a9fe:a9fe]/',
+      'https://[64:ff9b::a9fe:a9fe]/',
+      'https://[::127.0.0.1]/',
+      'https://[2002:7f00:1::1]/',
+      'https://[fe80::1]/',
+    ]) {
+      expect(checkServerUrl(url, false), url).toMatch(/public/);
+    }
+    expect(checkServerUrl('https://[2606:4700::1111]/mcp', false)).toBeNull();
+  });
+
   it('allows local servers when development opts in', () => {
     expect(checkServerUrl('http://localhost:8787/mcp', true)).toBeNull();
   });
