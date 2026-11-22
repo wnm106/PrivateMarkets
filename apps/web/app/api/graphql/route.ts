@@ -1,6 +1,5 @@
 import { createYoga } from 'graphql-yoga';
-import { createClient } from '@supabase/supabase-js';
-import { schema, useQueryLimits } from '@tapestrai/graphql';
+import { createRequestContext, GRAPHQL_CORS, schema, useQueryLimits } from '@tapestrai/graphql';
 import { NextRequest } from 'next/server';
 import { accessTokenFromCookieHeader, supabaseProjectRef } from '@/lib/auth-token';
 // GraphQL route.
@@ -56,58 +55,15 @@ const yoga = createYoga({
   maskedErrors: false,
   // Depth and alias limits, checked before a query runs.
   plugins: [useQueryLimits()],
-  cors: {
-    origin: '*',
-    credentials: true,
-    methods: ['POST', 'GET', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  },
-  context: async ({ request }) => {
-    const authHeader = request.headers.get('Authorization');
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
-
-    // IMPORTANT: `supabase` is scoped to the CALLER's own JWT (not the service
-    // role key). This is what makes Row Level Security (multi-tenant isolation,
-    // per-entity ACLs) actually take effect -- Postgres resolves auth.uid() from
-    // this token on every query. See supabase/migrations/00026-00030 for the
-    // tenancy schema + RLS policies this depends on.
-    //
-    // Previously this client was created with the SERVICE_ROLE_KEY, which has
-    // BYPASSRLS and silently ignored every RLS policy in the database.
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-
-    // A small number of privileged, audited operations (e.g. inviting a user via
-    // supabase.auth.admin.*) genuinely require the service role. Resolvers should
-    // reach for `supabaseAdmin` only for those specific calls, never for normal
-    // data access -- RLS must remain the source of truth for row visibility.
-    const supabaseAdmin = supabaseServiceRoleKey
-      ? createClient(supabaseUrl, supabaseServiceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } })
-      : null;
-
-    let user = null;
-    if (token) {
-      const { data: { user: authUser } } = await supabase.auth.getUser(token);
-      if (authUser) {
-        user = {
-          id: authUser.id,
-          email: authUser.email || '',
-          role: (authUser.user_metadata?.role as any) || 'readonly',
-          metadata: authUser.user_metadata,
-        };
-      }
-    }
-
-    return {
-      supabase,
-      supabaseAdmin,
-      user,
-      requestId: crypto.randomUUID(),
-      loaders: {} as any,
-    };
-  },
+  cors: GRAPHQL_CORS,
+  // The caller's own JWT, so row security applies. The service role is kept for the
+  // few audited calls that need it. See packages/graphql/src/request-context.ts.
+  context: ({ request }) =>
+    createRequestContext(request, {
+      supabaseUrl,
+      supabaseAnonKey,
+      supabaseServiceRoleKey,
+    }),
 });
 
 export async function GET(request: NextRequest) {

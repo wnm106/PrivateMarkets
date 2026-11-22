@@ -13,6 +13,18 @@ import { requireUuid } from '../lib/input-guards';
 // Always the caller's JWT. The service role bypasses row level security, so
 // tenancy reads and writes go through `supabase` and Postgres policies.
 // `supabaseAdmin` is reserved for auth.admin invite lookups.
+/**
+ * The Supabase address and service key for SSO registration. From the entry
+ * point's own config (on Workers they are on `env`, not process.env), else the
+ * Node process environment.
+ */
+function serviceConfig(context: Context): { supabaseUrl: string; serviceRoleKey: string } {
+  return {
+    supabaseUrl: context.config?.supabaseUrl || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
+    serviceRoleKey: context.config?.serviceRoleKey || process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  };
+}
+
 function tn(context: Context) {
   return context.supabase.schema('tenancy');
 }
@@ -632,8 +644,7 @@ export const tenancyResolvers = {
         if (!registers) return { success: true, errors: [] };
 
         const registration = await syncIdentityProvider({
-          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
-          serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+          ...serviceConfig(context),
           row: {
             provider: write.provider,
             emailDomain: write.emailDomain,
@@ -678,8 +689,7 @@ export const tenancyResolvers = {
         if (error) throw error;
         if (!row) return { success: true, errors: [] };
         await removeRegisteredProvider({
-          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
-          serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+          ...serviceConfig(context),
           provider: row.provider,
           ssoProviderId: row.sso_provider_id,
           oidcIdentifier: row.oidc_identifier,
