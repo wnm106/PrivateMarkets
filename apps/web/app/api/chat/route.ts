@@ -18,7 +18,8 @@ import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrativ
 import { registerExternalIdTools } from '@tapestrai/mcp-server/src/tools/external-id-tools';
 import { loadExternalServers } from '@tapestrai/mcp-server/src/external/load';
 import { serviceClient } from '@/lib/assistant-connections-server';
-import { buildExternalToolset, externalServersPrompt, type ExternalToolset } from '@tapestrai/mcp-server/src/external/toolset';
+import { buildExternalToolset, ConfirmationRequired, externalServersPrompt, type ExternalToolset } from '@tapestrai/mcp-server/src/external/toolset';
+import { holdAction, type HeldAction } from '@/lib/held-actions';
 import { NARRATIVE_COMPOSE_GUIDE } from '@tapestrai/mcp-server/src/lib/narrative-guide';
 import { formatLessons, lessonFromRow, matchLessons } from '@tapestrai/mcp-server/src/lib/chat-lessons';
 import { getContextProfile, isCategoryAllowed } from '@tapestrai/mcp-server/src/lib/context-profiles';
@@ -276,8 +277,10 @@ export async function POST(request: NextRequest) {
     const clientId = await callerClientId(auth.supabase);
     bindAgentContext({ userId: auth.userId, clientId, feature: 'chat', activity: 'chat.turn' });
     const audits: AgentAudit[] = [];
+    /** Outside writes the model asked for this turn. Each runs only if the person presses Confirm. */
+    const heldActions: HeldAction[] = [];
     const withUsage = (payload: Record<string, unknown>, status = 200) =>
-      NextResponse.json({ ...payload, usage: usageForClient(audits) }, { status });
+      NextResponse.json({ ...payload, usage: usageForClient(audits), ...(heldActions.length ? { heldActions } : {}) }, { status });
 
     // Convert messages to Gemini format (accept both `content` and `text`)
     const incoming: Array<{ role: 'user' | 'model'; content?: string; text?: string }> = messages || [];
@@ -569,6 +572,28 @@ export async function POST(request: NextRequest) {
           callCache.set(cacheKey, outcome);
           results.set(call, outcome);
         } catch (error: any) {
+          // An outside write: held for the person, never run here.
+          if (error instanceof ConfirmationRequired && clientId) {
+            let held: HeldAction | null = null;
+            try {
+              held = holdAction({ name, args: args || {}, serverName: error.serverName, tool: error.tool }, { userId: auth.userId, clientId });
+            } catch (holdError) {
+              console.error('[Chat API] Could not hold a change for confirmation:', holdError);
+            }
+            if (held) heldActions.push(held);
+            const outcome = held
+              ? {
+                  ok: true,
+                  value: {
+                    status: 'awaiting_user_confirmation',
+                    note: `Not run. The user is shown this exact ${error.tool} call in ${error.serverName} with a Confirm button below your reply, and it runs only if they press it. Say in one or two sentences what it will change and ask them to confirm below. Do not call it again and do not say it is done.`,
+                  },
+                }
+              : { ok: false, error: `${error.tool} could not be held for confirmation, so it was not run. Tell the user.` };
+            callCache.set(cacheKey, outcome);
+            results.set(call, outcome);
+            continue;
+          }
           // Tell the model not to simply retry a failing call, which otherwise
           // burns every remaining round on the same broken tool.
           const outcome = {

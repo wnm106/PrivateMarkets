@@ -46,7 +46,7 @@ Set it up in **Admin → Assistant connections** (`/admin/assistant-connections`
    - Say when a live figure is not as of the user's As Of date.
    - Give both figures when Tapestry and the other system disagree.
 5. A server is connected only when one of its tools is called. The session is reused for the rest of the turn and closed when the turn ends.
-6. A write tool is declared with an extra `confirmedByUser` argument. It is refused unless that argument is true. The argument is removed before the call reaches the server.
+6. A write tool is never run by the assistant. When the model calls one, the chat route holds the exact call and the panel shows it with **Confirm** and **Decline**. Only the person's Confirm runs it, through `POST /api/chat/confirm`. The held call is signed for that person and client, expires after 15 minutes, and cannot be edited: changing the tool or an argument breaks the signature. The tool must still be enabled when it is confirmed. There is no argument the model can set to say the user agreed, so text in a document or a tool result that talks the model into a write gets no further than a button the person sees (`apps/web/lib/held-actions.ts`).
 7. Results come back with a `provenance` note and are capped at 20,000 characters. The tool calls are stored with the turn in `chat_messages.tool_calls`, as Tapestry's own tool calls are.
 
 A server that cannot be loaded or reached does not break the turn. The assistant still has Tapestry's own tools.

@@ -61,6 +61,19 @@ export interface ChatResponse {
   skillState?: SkillState | null;
   /** The model calls this turn made, for the person who asked. */
   usage?: ChatUsage | null;
+  /** Outside changes the assistant asked for this turn, waiting for the person to confirm. */
+  heldActions?: HeldActionView[];
+}
+
+/** An outside change the assistant asked for. It runs only if the person presses Confirm. */
+export interface HeldActionView {
+  id: string;
+  name: string;
+  tool: string;
+  serverName: string;
+  args: Record<string, unknown>;
+  expiresAt: string;
+  token: string;
 }
 
 export interface ChatUsage {
@@ -130,5 +143,18 @@ export async function sendGeminiMessage(
     skill: data.skill ?? null,
     skillState: data.skillState ?? null,
     usage: data.usage ?? null,
+    heldActions: Array.isArray(data.heldActions) ? data.heldActions : [],
   };
+}
+
+/** Runs a held change because the person confirmed it. Returns the text to show. */
+export async function confirmHeldAction(token: string, conversationId?: string | null): Promise<{ ok: boolean; text: string }> {
+  const response = await fetch('/api/chat/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ token, conversationId: conversationId ?? undefined }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `API error: ${response.status}`);
+  return { ok: data.ok === true, text: String(data.text || '') };
 }

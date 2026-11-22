@@ -5,10 +5,12 @@
  * the list never reaches a server. A server is connected only when the model
  * calls one of its tools, and the session is reused for the rest of the turn.
  *
- * A tool an administrator marked as a write tool is declared with an extra
- * `confirmedByUser` argument. The call is refused unless the model sets it,
- * which it is told to do only after the user has agreed to that exact change.
- * The argument is removed before the call goes to the server.
+ * A tool an administrator marked as a write tool is never run by the model.
+ * `execute` refuses it. The chat route holds the call instead and shows the
+ * person a Confirm button for that exact call; only their click runs it,
+ * through `executeConfirmed`. The model cannot confirm on the person's behalf,
+ * so text in a document or a tool result that talks it into a write gets no
+ * further than a button the person sees.
  */
 
 import { toGeminiParameters } from './gemini-schema';
@@ -16,7 +18,12 @@ import { externalToolName } from './names';
 import { callTool, openSession, type ServerSession } from './client';
 import type { ExternalServer, ExternalToolResult, IdentifierHint } from './types';
 
-export const CONFIRM_ARGUMENT = 'confirmedByUser';
+/** Thrown by `execute` for a write tool. The chat route holds the call for the person to confirm. */
+export class ConfirmationRequired extends Error {
+  constructor(readonly tool: string, readonly serverName: string) {
+    super(`${tool} changes data in ${serverName}, so it runs only when the user confirms it`);
+  }
+}
 const MAX_TOOL_DESCRIPTION = 900;
 
 export interface GeminiDeclaration {
@@ -34,7 +41,10 @@ interface Entry {
 export interface ExternalToolset {
   declarations: GeminiDeclaration[];
   has(name: string): boolean;
+  /** Runs a read tool. A write tool throws ConfirmationRequired. */
   execute(name: string, args: Record<string, any>): Promise<ExternalToolResult>;
+  /** Runs any tool. Only for a call the person confirmed themselves, never for one the model asked for. */
+  executeConfirmed(name: string, args: Record<string, any>): Promise<ExternalToolResult>;
   /** The server and tool behind a declared name, for audit records. */
   describe(name: string): { serverCode: string; tool: string; write: boolean } | null;
   close(): Promise<void>;
@@ -69,17 +79,8 @@ export function buildExternalToolset(servers: ExternalServer[]): ExternalToolset
         `[${server.serverName}, outside Tapestry]`,
         tool.description || tool.name,
         hints.length ? `Identifiers: ${hints.join('; ')}.` : '',
-        write ? `This changes data in ${server.serverName}. Call it only after the user has agreed to this exact change in this conversation, and set ${CONFIRM_ARGUMENT} to true.` : '',
+        write ? `This changes data in ${server.serverName}. Calling it does not run it: the user is shown the exact call with a Confirm button, and it runs only if they press it. Call it once, when the user has asked for this change, and tell them to confirm it below.` : '',
       ];
-      if (write) {
-        parameters.properties = {
-          ...parameters.properties,
-          [CONFIRM_ARGUMENT]: {
-            type: 'BOOLEAN',
-            description: 'True only when the user has explicitly agreed to this change in this conversation.',
-          },
-        };
-      }
       declarations.push({ name, description: trimText(parts.filter(Boolean).join(' '), MAX_TOOL_DESCRIPTION), parameters });
       entries.set(name, { server, tool: tool.name, write });
     }
@@ -107,14 +108,15 @@ export function buildExternalToolset(servers: ExternalServer[]): ExternalToolset
     async execute(name, args) {
       const entry = entries.get(name);
       if (!entry) throw new Error(`Unknown tool: ${name}`);
-      const { [CONFIRM_ARGUMENT]: confirmed, ...rest } = args || {};
-      if (entry.write && confirmed !== true) {
-        throw new Error(
-          `${entry.tool} changes data in ${entry.server.serverName}. Describe the change to the user and ask them to confirm before calling it`,
-        );
-      }
+      if (entry.write) throw new ConfirmationRequired(entry.tool, entry.server.serverName);
       const session = await sessionFor(entry.server);
-      return callTool(session, entry.server.serverName, entry.tool, rest);
+      return callTool(session, entry.server.serverName, entry.tool, args || {});
+    },
+    async executeConfirmed(name, args) {
+      const entry = entries.get(name);
+      if (!entry) throw new Error(`Unknown tool: ${name}`);
+      const session = await sessionFor(entry.server);
+      return callTool(session, entry.server.serverName, entry.tool, args || {});
     },
     async close() {
       const open = [...sessions.values()];

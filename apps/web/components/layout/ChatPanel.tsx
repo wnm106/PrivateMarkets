@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { sendGeminiMessage, ChatMessage, ChatContext } from '@/lib/gemini';
+import { confirmHeldAction, sendGeminiMessage, ChatMessage, ChatContext, type HeldActionView } from '@/lib/gemini';
 import { followInternalLink, markdownToHtml } from '@/lib/markdown';
 import { CHAT_VOICES, readStoredChatVoice } from '@/lib/chat-voice';
 import { useTemporalStore } from '@/lib/store';
@@ -58,7 +58,11 @@ interface PanelMessage extends ChatMessage {
   attachments?: Array<{ id?: string; file_name: string; mime_type: string; previewUrl?: string | null }>;
   /** Fenced json proposals parsed from the assistant's reply. */
   proposals?: Array<{ raw: string; value: Record<string, any> }>;
+  /** Outside changes the assistant asked for. Each runs only if the person presses Confirm. */
+  heldActions?: HeldActionView[];
 }
+
+type HeldState = { status: 'running' | 'done' | 'declined' | 'failed'; text?: string };
 
 interface ChatPanelProps {
   context?: ChatContext;
@@ -120,6 +124,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const [viewFocus, setViewFocus] = useState<ViewFocus | null>(() => getViewContext().focus);
   const [pageData, setPageData] = useState<Record<string, unknown> | null>(() => getViewContext().pageData);
   const [appliedProposals, setAppliedProposals] = useState<Record<string, boolean>>({});
+  const [heldStates, setHeldStates] = useState<Record<string, HeldState>>({});
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [skillView, setSkillView] = useState<SkillView | null>(null);
   const skillStateRef = useRef<SkillState | null>(null);
@@ -463,6 +468,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
           timestamp: Date.now(),
           proposals: extractProposals(response.text),
           usage: response.usage,
+          heldActions: response.heldActions,
         },
       ]);
 
@@ -616,6 +622,18 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
     if (!activeDesigner) return;
     applyProposalToDesigner(proposal);
     setAppliedProposals((prev) => ({ ...prev, [key]: true }));
+  };
+
+  /** Runs an outside change the person confirmed. Once started it cannot be pressed again. */
+  const confirmHeld = async (held: HeldActionView) => {
+    if (heldStates[held.id]) return;
+    setHeldStates((prev) => ({ ...prev, [held.id]: { status: 'running' } }));
+    try {
+      const result = await confirmHeldAction(held.token, conversationId);
+      setHeldStates((prev) => ({ ...prev, [held.id]: { status: result.ok ? 'done' : 'failed', text: result.text } }));
+    } catch (error) {
+      setHeldStates((prev) => ({ ...prev, [held.id]: { status: 'failed', text: error instanceof Error ? error.message : 'The change could not be run.' } }));
+    }
   };
 
   const clearChat = () => setMessages([]);
@@ -960,6 +978,46 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
                   )}
                 </div>
               ))}
+              {msg.heldActions?.map((held) => {
+                const state = heldStates[held.id];
+                return (
+                  <div key={held.id} className="chat-proposal">
+                    <div className="chat-proposal-head">
+                      Change in {held.serverName}: {held.tool}
+                    </div>
+                    <details open>
+                      <summary>Exactly what will be sent</summary>
+                      <pre>{JSON.stringify(held.args, null, 2)}</pre>
+                    </details>
+                    {!state && (
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="btn btn-primary btn-sm" onClick={() => { void confirmHeld(held); }}>
+                          Confirm
+                        </button>
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => setHeldStates((prev) => ({ ...prev, [held.id]: { status: 'declined' } }))}
+                        >
+                          Decline
+                        </button>
+                      </div>
+                    )}
+                    {state?.status === 'running' && <div className="chat-proposal-hint">Running…</div>}
+                    {state?.status === 'declined' && <div className="chat-proposal-hint">Declined. Nothing was sent.</div>}
+                    {(state?.status === 'done' || state?.status === 'failed') && (
+                      <div className="chat-proposal-hint" style={state.status === 'failed' ? { color: 'var(--badge-bad-fg)' } : undefined}>
+                        {state.text}
+                      </div>
+                    )}
+                    {!state && (
+                      <div className="chat-proposal-hint">
+                        The assistant cannot run this itself. It runs only if you press Confirm, before{' '}
+                        {new Date(held.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               <div className="chat-timestamp">
                 {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </div>

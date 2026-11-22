@@ -3,7 +3,7 @@ import { externalToolName, isExternalToolName, isValidServerCode, serverCodeFrom
 import { toGeminiParameters } from './gemini-schema';
 import { checkServerUrl, isPrivateAddress } from './url-guard';
 import { authHeaders, shapeToolResult, toDiscoveredTool } from './client';
-import { buildExternalToolset, CONFIRM_ARGUMENT, externalServersPrompt } from './toolset';
+import { buildExternalToolset, ConfirmationRequired, externalServersPrompt } from './toolset';
 import { cleanIdentifierHints, serverFromRuntimeRow } from './rows';
 import { isCategoryAllowed } from '../lib/context-profiles';
 import type { ExternalServer } from './types';
@@ -196,17 +196,19 @@ describe('the toolset for one turn', () => {
     const toolset = buildExternalToolset([server()]);
     const read = toolset.declarations.find((d) => d.name === 'ext__CRM__get_company')!;
     expect(read.description).toMatch(/company_id takes DEALCLOUD/);
-    expect(read.parameters.properties[CONFIRM_ARGUMENT]).toBeUndefined();
+    expect(read.parameters.properties.confirmedByUser).toBeUndefined();
   });
 
-  it('treats marked and destructive tools as write tools that need confirmation', async () => {
+  it('never runs a marked or destructive tool for the model, whatever it claims', async () => {
     const toolset = buildExternalToolset([server()]);
     for (const name of ['ext__CRM__update_stage', 'ext__CRM__delete_note']) {
       const declaration = toolset.declarations.find((d) => d.name === name)!;
-      expect(declaration.parameters.properties[CONFIRM_ARGUMENT].type).toBe('BOOLEAN');
-      expect(declaration.description).toMatch(/changes data/);
-      // Refused before any connection is opened.
-      await expect(toolset.execute(name, { stage: 'won' })).rejects.toThrow(/confirm/);
+      // There is no argument the model can set to say the user agreed.
+      expect(declaration.parameters.properties.confirmedByUser).toBeUndefined();
+      expect(declaration.description).toMatch(/changes data.*Confirm button/);
+      // Refused before any connection is opened, even with the old flag set.
+      await expect(toolset.execute(name, { stage: 'won', confirmedByUser: true })).rejects.toBeInstanceOf(ConfirmationRequired);
+      expect(toolset.describe(name)?.write).toBe(true);
     }
     await toolset.close();
   });
