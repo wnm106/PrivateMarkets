@@ -373,14 +373,80 @@ function exposureStory(bar: Bar) {
   };
 }
 
+/** The name, purpose and reading notes of each tab, published whether or not the fund has loaded. */
+const FUND_TAB_INFO = {
+  nav: {
+    label: 'NAV',
+    purpose: 'What the fund is worth at the reporting date: NAV, how it rolls forward and what it is made of.',
+    howToRead: 'Amounts are in dollars from the administrator. navChart is quarter-end NAV. rollforward is the administrator\'s NAV roll-forward. composition lists the lines behind the NAV.',
+  },
+  pacing: {
+    label: 'Capital pacing',
+    purpose: 'Whether capital is being called on plan: called to date against the deployment plan, and the call needed to reach the target by the end of the investment period.',
+    howToRead: 'behindPts above zero means behind plan. requiredCallPerQuarter is what must be called each quarter to hit the target; compare it with the trailing four-quarter average.',
+  },
+  activity: {
+    label: 'Capital activity',
+    purpose: 'Capital calls and distributions: totals to date, the next projected call and each call or distribution.',
+    howToRead: 'status is funded, paid, scheduled or projected. outstanding is what is still to be received on a call.',
+  },
+  review: {
+    label: 'NAV statement review',
+    purpose: 'Whether the administrator\'s NAV statements agree with our own calculation, line by line, and what must be resolved before the NAV is certified.',
+    howToRead: 'variance is the difference between the administrator\'s figure and our own calculation (shadow). A line outside the tolerance is flagged. reviewOpen counts the flagged lines not yet resolved. certified means the NAV is signed off.',
+  },
+  returns: {
+    label: 'Returns',
+    purpose: 'How the fund has performed: gross to net IRR, TVPI, DPI and RVPI, and the return on each position against cost.',
+    howToRead: 'IRRs are since inception. netIrr is after fees, expenses and the carry accrual. TVPI = (NAV + distributions) / paid-in; DPI = distributions / paid-in; RVPI = NAV / paid-in.',
+  },
+  liquidity: {
+    label: 'Liquidity',
+    purpose: 'Whether the fund can meet its obligations: cash, facility availability, unfunded commitments both ways and a four-quarter cash forecast.',
+    howToRead: 'liquidityCoverage = (cash + facility availability) / unfunded borrower commitments, to be compared with liquidityMin. forecast rows are by quarter.',
+  },
+  investors: {
+    label: 'Investors',
+    purpose: 'Who has invested in the fund: each investor\'s commitment, called and unfunded capital, distributions and NAV share.',
+    howToRead: 'NAV is allocated to investors pro rata to commitments. pastDue is called capital not yet received.',
+  },
+  exposure: {
+    label: 'Exposure',
+    purpose: 'How concentrated the investments are by strategy, sector and issuer, against their limits, and the active positions behind them.',
+    howToRead: 'sharePct is the share of investments at fair value. limitPct is the hard limit from the compliance rule for that strategy, sector, or issuer (ruleCode). status is OVER above the hard limit and NEAR above the warning.',
+  },
+  accounts: {
+    label: 'Capital accounts',
+    purpose: 'Each investor\'s capital account in a closed-end fund: commitment, called, unfunded, distributions and NAV.',
+  },
+  filings: {
+    label: 'Shareholder filings',
+    purpose: 'The statements that go into a public BDC\'s shareholder report, and whether the NAV behind them is certified.',
+  },
+} satisfies Record<string, Omit<TabPayload, 'data'>>;
+
+/** Tabs shown only for one fund structure. */
+const STRUCTURE_TABS: Partial<Record<keyof typeof FUND_TAB_INFO, string>> = { accounts: 'CLOSED_END', filings: 'PUBLIC_BDC' };
+
+/**
+ * Every tab with data: null, for while the fund is still loading. A structure tab
+ * is listed only when the structure is already known from the surface rules.
+ */
+function pendingFundTabs(structure: string): Record<string, TabPayload> {
+  return Object.fromEntries(Object.entries(FUND_TAB_INFO)
+    .filter(([key]) => {
+      const only = STRUCTURE_TABS[key as keyof typeof FUND_TAB_INFO];
+      return !only || only === structure;
+    })
+    .map(([key, tab]) => [key, { ...tab, data: null }]));
+}
+
 function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> {
   const navPer100 = fund.commitments ? (fund.nav / fund.commitments) * 100 : null;
   const line = (row: Line) => ({ label: row.label, administrator: row.administrator, shadow: row.shadow, variance: row.variance, variancePct: row.variancePct, status: row.status });
   return {
     nav: {
-      label: 'NAV',
-      purpose: 'What the fund is worth at the reporting date: NAV, how it rolls forward and what it is made of.',
-      howToRead: 'Amounts are in dollars from the administrator. navChart is quarter-end NAV. rollforward is the administrator\'s NAV roll-forward. composition lists the lines behind the NAV.',
+      ...FUND_TAB_INFO.nav,
       data: {
         fund: fund.fundName, reportingDate: fund.reportingDate, nav: fund.nav, navPer100Committed: navPer100,
         investmentsFairValue: fund.investmentsFairValue, activePositions: fund.activePositions,
@@ -391,9 +457,7 @@ function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> 
       },
     },
     pacing: {
-      label: 'Capital pacing',
-      purpose: 'Whether capital is being called on plan: called to date against the deployment plan, and the call needed to reach the target by the end of the investment period.',
-      howToRead: 'behindPts above zero means behind plan. requiredCallPerQuarter is what must be called each quarter to hit the target; compare it with the trailing four-quarter average.',
+      ...FUND_TAB_INFO.pacing,
       data: {
         pacing: fund.pacing, called: fund.called, commitments: fund.commitments, targetCalledPct: fund.targetCalledPct,
         investmentPeriodEnd: fund.investmentPeriodEnd, monthsRemaining: fund.monthsRemaining,
@@ -402,9 +466,7 @@ function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> 
       },
     },
     activity: {
-      label: 'Capital activity',
-      purpose: 'Capital calls and distributions: totals to date, the next projected call and each call or distribution.',
-      howToRead: 'status is funded, paid, scheduled or projected. outstanding is what is still to be received on a call.',
+      ...FUND_TAB_INFO.activity,
       data: {
         called: fund.called, distributed: fund.distributed, netPaidIn: fund.netPaidIn, nextCall: fund.nextCall,
         chart: fund.activityChart,
@@ -412,9 +474,7 @@ function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> 
       },
     },
     review: {
-      label: 'NAV statement review',
-      purpose: 'Whether the administrator\'s NAV statements agree with our own calculation, line by line, and what must be resolved before the NAV is certified.',
-      howToRead: 'variance is the difference between the administrator\'s figure and our own calculation (shadow). A line outside the tolerance is flagged. reviewOpen counts the flagged lines not yet resolved. certified means the NAV is signed off.',
+      ...FUND_TAB_INFO.review,
       data: {
         period: fund.periodLabel, certified: fund.certified, tolerancePct: fund.tolerancePct,
         flagged: fund.reviewFlagged, open: fund.reviewOpen,
@@ -423,9 +483,7 @@ function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> 
       },
     },
     returns: {
-      label: 'Returns',
-      purpose: 'How the fund has performed: gross to net IRR, TVPI, DPI and RVPI, and the return on each position against cost.',
-      howToRead: 'IRRs are since inception. netIrr is after fees, expenses and the carry accrual. TVPI = (NAV + distributions) / paid-in; DPI = distributions / paid-in; RVPI = NAV / paid-in.',
+      ...FUND_TAB_INFO.returns,
       data: {
         grossIrr: fund.grossIrr, netIrr: fund.netIrr, feeDrag: fund.feeDrag, expenseDrag: fund.expenseDrag, carryDrag: fund.carryDrag,
         tvpi: fund.tvpi, dpi: fund.dpi, rvpi: fund.rvpi,
@@ -433,9 +491,7 @@ function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> 
       },
     },
     liquidity: {
-      label: 'Liquidity',
-      purpose: 'Whether the fund can meet its obligations: cash, facility availability, unfunded commitments both ways and a four-quarter cash forecast.',
-      howToRead: 'liquidityCoverage = (cash + facility availability) / unfunded borrower commitments, to be compared with liquidityMin. forecast rows are by quarter.',
+      ...FUND_TAB_INFO.liquidity,
       data: {
         cash: fund.cash, facilityAvailability: fund.facilityAvailability, availableLiquidity: fund.availableLiquidity,
         callableInvestorCommitments: fund.unfunded, unfundedBorrowerCommitments: fund.unfundedBorrower,
@@ -445,9 +501,7 @@ function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> 
       },
     },
     investors: {
-      label: 'Investors',
-      purpose: 'Who has invested in the fund: each investor\'s commitment, called and unfunded capital, distributions and NAV share.',
-      howToRead: 'NAV is allocated to investors pro rata to commitments. pastDue is called capital not yet received.',
+      ...FUND_TAB_INFO.investors,
       data: {
         investorCount: fund.investorCount, commitments: fund.commitments, commitmentsClosed: fund.commitmentsClosed,
         largestInvestor: fund.largestInvestor, pastDue: fund.pastDue,
@@ -456,9 +510,7 @@ function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> 
       },
     },
     exposure: {
-      label: 'Exposure',
-      purpose: 'How concentrated the investments are by strategy, sector and issuer, against their limits, and the active positions behind them.',
-      howToRead: 'sharePct is the share of investments at fair value. limitPct is the hard limit from the compliance rule for that strategy, sector, or issuer (ruleCode). status is OVER above the hard limit and NEAR above the warning.',
+      ...FUND_TAB_INFO.exposure,
       data: {
         activePositions: fund.activePositions, sectors: fund.sectorCount, floatingRatePct: fund.floatingRatePct,
         weightedLeverage: fund.weightedLeverage, weightedMark: fund.weightedMark, marksBelow97: fund.marksBelow,
@@ -468,8 +520,7 @@ function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> 
     },
     ...(structure === 'CLOSED_END' ? {
       accounts: {
-        label: 'Capital accounts',
-        purpose: 'Each investor\'s capital account in a closed-end fund: commitment, called, unfunded, distributions and NAV.',
+        ...FUND_TAB_INFO.accounts,
         data: {
           commitments: fund.commitments, called: fund.called, unfunded: fund.unfunded, distributions: fund.distributed,
           accounts: cap(fund.investors, 120).map((item) => ({ name: item.name, commitment: item.commitment, called: item.called, unfunded: item.unfunded, distributions: item.distributions, nav: item.nav })),
@@ -478,8 +529,7 @@ function fundTabs(fund: Surface, structure: string): Record<string, TabPayload> 
     } : {}),
     ...(structure === 'PUBLIC_BDC' ? {
       filings: {
-        label: 'Shareholder filings',
-        purpose: 'The statements that go into a public BDC\'s shareholder report, and whether the NAV behind them is certified.',
+        ...FUND_TAB_INFO.filings,
         data: {
           nav: fund.nav, navPer100Committed: navPer100, period: fund.periodLabel, certified: fund.certified,
           filings: fund.statements.map((statement) => ({ title: statement.title, period: statement.period, status: fund.certified ? 'Certified' : 'Open' })),
@@ -617,7 +667,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
       ]
     : [{ label: 'Fund surface' }]);
 
-  usePublishTabs(surface ? fundTabs(surface, effectiveStructure) : {});
+  usePublishTabs(surface ? fundTabs(surface, effectiveStructure) : pendingFundTabs(effectiveStructure));
 
   if (loading && !surface) return <div className="xp-empty">Loading fund…</div>;
   if (!surface) return <div className="xp-error">{error || 'Fund not found'}</div>;

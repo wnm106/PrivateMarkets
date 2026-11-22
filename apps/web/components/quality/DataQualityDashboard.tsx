@@ -399,15 +399,64 @@ function publishedScore(weights: ScoreWeights | null | undefined) {
   };
 }
 
+/** Who the dashboard covers, in words. */
+function qualityScope(scope: { domainCode: string; entityId?: string }) {
+  return scope.entityId ? 'this record' : scope.domainCode ? `every ${scope.domainCode} record` : 'every record';
+}
+
+/** The name, purpose and reading notes of each tab, published whether or not the dashboard has loaded. */
+function qualityTabInfo(where: string) {
+  return {
+    'dq-availability': {
+      label: 'Data quality: Availability',
+      purpose: `Whether the required attributes have values for ${where}, by attribute.`,
+      howToRead: `Required attributes come from the entity template. missing is a required value with no value. resolved means a gap at the start of the period now has a value. introduced means a value at the start is now missing. ${SCORE_READING}`,
+    },
+    'dq-quality': {
+      label: 'Data quality: Quality',
+      purpose: `Whether ${where} pass the data quality rules, by rule.`,
+      howToRead: `A rule expression is true for records that fail it. failing counts records failing the rule, accepted are failures someone has accepted. resolved and introduced compare with the start of the period. ${SCORE_READING}`,
+    },
+    'dq-trajectory': {
+      label: 'Data quality: Trajectory',
+      purpose: `Which attribute values changed over the period for ${where}.`,
+      howToRead: `changeCount counts values that differ between the start and the end of the period. Each example shows the previous and current value. ${SCORE_READING}`,
+    },
+    'dq-handoff': {
+      label: 'Data quality: Handoff',
+      purpose: `Manual overrides on ${where} that can be released because a priority source now matches the manual value.`,
+      howToRead: `ready means the priority source's value matches the override as of the end of the period, so the manual value can be cleared. ${SCORE_READING}`,
+    },
+    'dq-freshness': {
+      label: 'Data quality: Freshness',
+      purpose: `Which prevailing values for ${where} have not been received recently.`,
+      howToRead: `A value is stale when its source has not sent it in olderThanDays days as of the date shown. ageDays is days since it was received. The freshness used in the score is fixed at 30 days and does not follow this panel's older-than control. ${SCORE_READING}`,
+    },
+    'dq-consensus': {
+      label: 'Data quality: Consensus',
+      purpose: `Where the golden source for ${where} disagrees with another active value of the same attribute.`,
+      howToRead: `A conflict is one active source value that does not match the golden source. The consensus score counts an attribute as passing only when every other active value agrees, and leaves out an attribute that has no second active value. ${SCORE_READING}`,
+    },
+  } satisfies Record<string, Omit<TabPayload, 'data'>>;
+}
+
 function qualityTabs(
   dashboard: Dashboard | null,
   stale: StaleReport | null,
   scope: { fromDate: string; toDate: string; domainCode: string; entityId?: string },
 ): Record<string, TabPayload> {
-  if (!dashboard) return {};
-  const { summary } = dashboard;
-  const where = scope.entityId ? 'this record' : scope.domainCode ? `every ${scope.domainCode} record` : 'every record';
+  const where = qualityScope(scope);
   const ref = (row: { entityCode: string; entityName: string; domainCode: string }) => ({ code: row.entityCode, name: row.entityName, domain: row.domainCode });
+  const info = qualityTabInfo(where);
+  // The freshness tab loads on its own, so it can publish before the dashboard does.
+  const freshness = stale ? {
+    scope: where, asOfDate: stale.asOfDate, olderThanDays: stale.olderThanDays, staleValues: stale.count,
+    values: top(stale.attributes, 80).map((row) => ({ ...ref(row), attribute: row.attributeName, source: row.sourceName, value: row.value, receivedAt: row.receivedAt, ageDays: row.ageDays })),
+  } : null;
+  if (!dashboard) {
+    return Object.fromEntries(Object.entries(info).map(([key, tab]) => [key, { ...tab, data: key === 'dq-freshness' ? freshness : null }]));
+  }
+  const { summary } = dashboard;
   const entityTypeScores = [...(dashboard.entityTypeScores ?? [])]
     .map((row) => ({
       domain: row.domainCode,
@@ -443,9 +492,7 @@ function qualityTabs(
   };
   return {
     'dq-availability': {
-      label: 'Data quality: Availability',
-      purpose: `Whether the required attributes have values for ${where}, by attribute.`,
-      howToRead: `Required attributes come from the entity template. missing is a required value with no value. resolved means a gap at the start of the period now has a value. introduced means a value at the start is now missing. ${SCORE_READING}`,
+      ...info['dq-availability'],
       data: {
         ...common, availabilityPercent: summary.availabilityPercent, requiredValues: summary.requiredSlots, populated: summary.populatedSlots, missing: summary.missingSlots,
         entitiesMissingRequired: summary.entitiesMissingRequired, filledIn: summary.availabilityResolvedCount, nowMissing: summary.availabilityIntroducedCount,
@@ -455,9 +502,7 @@ function qualityTabs(
       },
     },
     'dq-quality': {
-      label: 'Data quality: Quality',
-      purpose: `Whether ${where} pass the data quality rules, by rule.`,
-      howToRead: `A rule expression is true for records that fail it. failing counts records failing the rule, accepted are failures someone has accepted. resolved and introduced compare with the start of the period. ${SCORE_READING}`,
+      ...info['dq-quality'],
       data: {
         ...common, qualityPercent: summary.qualityPercent, rulesEvaluated: summary.rulesEvaluated, passingChecks: summary.passingChecks, failingChecks: summary.failingChecks,
         entitiesFailingRules: summary.entitiesFailingRules, nowPassing: summary.qualityResolvedCount, nowFailing: summary.qualityIntroducedCount,
@@ -469,9 +514,7 @@ function qualityTabs(
       },
     },
     'dq-trajectory': {
-      label: 'Data quality: Trajectory',
-      purpose: `Which attribute values changed over the period for ${where}.`,
-      howToRead: `changeCount counts values that differ between the start and the end of the period. Each example shows the previous and current value. ${SCORE_READING}`,
+      ...info['dq-trajectory'],
       data: {
         ...common, valuesChanged: summary.attributeChangeCount, recordsChanged: summary.changedEntityCount, attributesChanged: summary.changedAttributeCount,
         attributes: top(dashboard.trajectory, 60).map((row) => ({
@@ -481,27 +524,18 @@ function qualityTabs(
       },
     },
     'dq-handoff': {
-      label: 'Data quality: Handoff',
-      purpose: `Manual overrides on ${where} that can be released because a priority source now matches the manual value.`,
-      howToRead: `ready means the priority source's value matches the override as of the end of the period, so the manual value can be cleared. ${SCORE_READING}`,
+      ...info['dq-handoff'],
       data: {
         ...common, overridesReady: summary.overrideMatchCount,
         overrides: top(dashboard.overrideMatches, 80).map((row) => ({ ...ref(row), attribute: row.attributeName, override: row.overrideValue, reason: row.overrideReason, prioritySource: row.prioritySourceName, priorityValue: row.priorityValue, ready: row.ready })),
       },
     },
     'dq-freshness': {
-      label: 'Data quality: Freshness',
-      purpose: `Which prevailing values for ${where} have not been received recently.`,
-      howToRead: `A value is stale when its source has not sent it in olderThanDays days as of the date shown. ageDays is days since it was received. The freshness used in the score is fixed at 30 days and does not follow this panel's older-than control. ${SCORE_READING}`,
-      data: stale ? {
-        scope: where, asOfDate: stale.asOfDate, olderThanDays: stale.olderThanDays, staleValues: stale.count,
-        values: top(stale.attributes, 80).map((row) => ({ ...ref(row), attribute: row.attributeName, source: row.sourceName, value: row.value, receivedAt: row.receivedAt, ageDays: row.ageDays })),
-      } : null,
+      ...info['dq-freshness'],
+      data: freshness,
     },
     'dq-consensus': {
-      label: 'Data quality: Consensus',
-      purpose: `Where the golden source for ${where} disagrees with another active value of the same attribute.`,
-      howToRead: `A conflict is one active source value that does not match the golden source. The consensus score counts an attribute as passing only when every other active value agrees, and leaves out an attribute that has no second active value. ${SCORE_READING}`,
+      ...info['dq-consensus'],
       data: {
         ...common,
         conflictCount: (dashboard.consensusConflicts ?? []).length,
