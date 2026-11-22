@@ -10,6 +10,12 @@ import { useTemporalStore } from '@/lib/store';
 import { usePublishTab } from '@/lib/view-context';
 import { useLatestRequest } from '@/lib/use-latest-request';
 
+/** What the Syndicate tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const SYNDICATE_TAB = {
+  label: 'Syndicate',
+  purpose: 'Who holds the facility: our hold, outside lenders and orders, and how much is still to place.',
+};
+
 const ROLE: Record<string, string> = {
   PARTICIPANT: 'Participant',
   ADMINISTRATIVE_AGENT: 'Administrative agent',
@@ -285,8 +291,7 @@ export function DealSyndicate({
   ];
 
   usePublishTab('syndicate', {
-    label: 'Syndicate',
-    purpose: 'Who holds the facility: our hold, outside lenders and orders, and how much is still to place.',
+    ...SYNDICATE_TAB,
     howToRead: 'gap is the facility not yet placed: positive means still to place, negative means placed above the facility. ours, outside and ordered are per tranche.',
     data: {
       status: status || null,

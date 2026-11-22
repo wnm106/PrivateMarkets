@@ -25,6 +25,12 @@ import {
 } from '@tapestrai/graphql/src/lib/statement-book';
 import { useLatestRequest } from '@/lib/use-latest-request';
 
+/** What the Financials tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const FINANCIALS_TAB = {
+  label: 'Financials',
+  purpose: 'The borrower\'s financial statements by period: actuals and the projection, for the open statement section.',
+};
+
 interface Rel {
   childEntityId: string;
   relationshipCode: string;
@@ -295,8 +301,7 @@ export function DealFinancials({
     .flatMap((name) => linesForSection(attributes, name, grain))
     .filter((line) => line.role !== 'section');
   usePublishTab('financials', {
-    label: 'Financials',
-    purpose: 'The borrower\'s financial statements by period: actuals and the projection, for the open statement section.',
+    ...FINANCIALS_TAB,
     howToRead: 'Each column is a period. actual is true for reported periods and false for projected ones. headlines are the latest reported figures. Only the open section\'s lines are included.',
     data: loading ? null : {
       borrower: borrowerName || null,

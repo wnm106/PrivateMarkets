@@ -7,7 +7,7 @@ import { EntityReports } from '@/components/reporting/EntityReports';
 import { DOMAIN_TYPES_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, graphqlQuery } from '@/lib/graphql';
 import { definingParentDomains, mergeParentColumns, parentEntityColumns, toParentLinkCounts, type ParentEntityColumn } from '@/lib/parent-entities';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
-import { useWarmTabs } from '@/lib/view-context';
+import { usePublishTab, useWarmTabs } from '@/lib/view-context';
 import { EntityAttributeTable, type RelatedAttributeColumn } from './EntityAttributeTable';
 
 type HomeTab = 'records' | 'dashboards' | 'quality';
@@ -39,6 +39,13 @@ export function EntityHome({
   const warmed = useWarmTabs(['records', 'dashboards', 'quality'], tab);
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
   const [discovered, setDiscovered] = useState<ParentEntityColumn[]>([]);
+  // With a record chosen, EntityReports publishes the Dashboards tab. Without one the
+  // tab shows only a prompt, and says so (docs/SURFACE_TABS.md).
+  usePublishTab('dashboards', selected ? null : {
+    label: 'Dashboards',
+    purpose: 'The dashboards and narratives defined for this type of record, run for the record being viewed.',
+    data: { note: 'No record is chosen. Dashboards and narratives run for one record: choose one on the Records tab.' },
+  });
 
   useEffect(() => {
     setSelected(null);

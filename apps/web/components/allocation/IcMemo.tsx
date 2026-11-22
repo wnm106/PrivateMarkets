@@ -24,6 +24,12 @@ import {
 } from '@tapestrai/graphql/src/lib/ic-memo-format';
 import { useLatestRequest } from '@/lib/use-latest-request';
 
+/** What the IC memo tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const MEMO_TAB = {
+  label: 'IC memo',
+  purpose: 'The investment committee memorandum: recommendation, thesis, sources and uses, financial summary, approvals and open items.',
+};
+
 const SECTIONS = [
   ['recommendation', 'Recommendation'],
   ['overview', 'Transaction overview'],
@@ -355,8 +361,7 @@ export function IcMemo({
   };
 
   usePublishTab('memo', {
-    label: 'IC memo',
-    purpose: 'The investment committee memorandum: recommendation, thesis, sources and uses, financial summary, approvals and open items.',
+    ...MEMO_TAB,
     howToRead: 'section is the part of the memo the reader has open. capital lists sources and uses. approvals are the committee members\' decisions.',
     data: memo ? {
       section: active,

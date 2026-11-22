@@ -6,6 +6,12 @@ import { graphqlMutation } from '@/lib/graphql';
 import { dealCheckResults, resultsForAssignedRules, resultsForFund } from '@/lib/deal-compliance-view';
 import { usePublishTab } from '@/lib/view-context';
 
+/** What the Compliance tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const COMPLIANCE_TAB = {
+  label: 'Compliance',
+  purpose: 'How this deal scores against each compliance rule, pro forma, for the fund selected in the tab, and what the last Hypo run did to each fund\'s rules.',
+};
+
 export interface ComplianceFundRef {
   fundId: string;
   fundName: string;
@@ -509,8 +515,7 @@ export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds, sc
   }, [selectedResults, rules, query, category, bucket, sort]);
 
   usePublishTab('compliance', {
-    label: 'Compliance',
-    purpose: 'How this deal scores against each compliance rule, pro forma, for the fund selected in the tab, and what the last Hypo run did to each fund\'s rules.',
+    ...COMPLIANCE_TAB,
     howToRead: `tally counts the rules across the deal. rules lists the selected fund only. value is the rule's computed pro forma figure and hardLimit its limit. ${hypoHowToRead}`.trim(),
     data: {
       hypoRun,

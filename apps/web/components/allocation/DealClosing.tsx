@@ -10,6 +10,12 @@ import { useTemporalStore } from '@/lib/store';
 import { usePublishTab } from '@/lib/view-context';
 import { useLatestRequest } from '@/lib/use-latest-request';
 
+/** What the Closing tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const CLOSING_TAB = {
+  label: 'Closing',
+  purpose: 'Whether the deal is on track to close and fund: closing conditions, documents and each fund\'s cash for the funding call.',
+};
+
 const WORKSTREAM: Record<string, string> = {
   LEGAL: 'Legal and documentation',
   DILIGENCE: 'Diligence and approvals',
@@ -292,8 +298,7 @@ export function DealClosing({
             : `${Math.abs(away)} days past`;
 
   usePublishTab('closing', {
-    label: 'Closing',
-    purpose: 'Whether the deal is on track to close and fund: closing conditions, documents and each fund\'s cash for the funding call.',
+    ...CLOSING_TAB,
     howToRead: 'onTrack, overdue and blocked count the closing conditions. funding is per fund: cash and credit line available against the call.',
     data: {
       closeDate: closeDate || null,

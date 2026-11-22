@@ -11,6 +11,12 @@ import { projectPerformance, type PerformanceCase, type PerformanceFees } from '
 import { usePublishTab } from '@/lib/view-context';
 import { useLatestRequest } from '@/lib/use-latest-request';
 
+/** What the Performance tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const PERFORMANCE_TAB = {
+  label: 'Performance',
+  purpose: 'Projected returns on our allocated position, gross to net, from the servicing cash flows, plus the actual returns once the deal has funded.',
+};
+
 /** Stored attribute behind each line of the gross-to-net bridge. */
 const BRIDGE: Record<string, { amount: string; irr?: string; moic?: string }> = {
   'Gross profit': { amount: 'DEAL_GROSS_PROFIT', irr: 'DEAL_GROSS_IRR', moic: 'DEAL_GROSS_MOIC' },
@@ -274,8 +280,7 @@ export function DealPerformance({
   const T = (row: { id: string; name: string }, code: string, name: string) => attrBind(row.id, 'DEAL_TRANCHE', code, name, row.name);
 
   usePublishTab('performance', {
-    label: 'Performance',
-    purpose: 'Projected returns on our allocated position, gross to net, from the servicing cash flows, plus the actual returns once the deal has funded.',
+    ...PERFORMANCE_TAB,
     howToRead: 'Pro forma until the deal closes. bridge walks gross profit down to net profit to investors through fees and expenses. tranches show returns by debt tranche.',
     data: model ? {
       grossIrr: model.grossIrr,

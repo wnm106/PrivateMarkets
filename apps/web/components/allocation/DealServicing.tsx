@@ -11,6 +11,12 @@ import { usePublishTab } from '@/lib/view-context';
 import { addMonths, heldShare, monthKey, projectSchedule, spreadFromPricing, type ScheduleDraw, type ScheduleMonth } from '@/lib/servicing-schedule';
 import { useLatestRequest } from '@/lib/use-latest-request';
 
+/** What the Servicing tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const SERVICING_TAB = {
+  label: 'Servicing',
+  purpose: 'How the facility runs after close: terms and coupon, draws on the unfunded commitments, covenants and reporting due.',
+};
+
 const COVENANT_TESTS = `
   query DealCovenantTests($dealId: ID!, $asOfDate: Date) {
     dealCovenantTests(dealId: $dealId, asOfDate: $asOfDate) {
@@ -375,8 +381,7 @@ export function DealServicing({
     .filter((row) => row.funded > 0 || row.unfunded > 0);
 
   usePublishTab('servicing', {
-    label: 'Servicing',
-    purpose: 'How the facility runs after close: terms and coupon, draws on the unfunded commitments, covenants and reporting due.',
+    ...SERVICING_TAB,
     howToRead: "Pro forma until the deal funds. funds shows funded and unfunded commitments per fund. draws are scheduled or actual, by status. covenants: calculated is the value under the deal's own definition, certificate is the borrower's reported figure, house is the same borrower under the house standard; status is Pass, Watch (inside a 10% cushion) or Breach.",
     data: {
       terms,
