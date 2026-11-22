@@ -3,7 +3,7 @@ import { runAsFeedClient } from '../agent/harness';
 import { assertLocalSupabase, executeParsedFeed, localSupabase, type LoadRecorder } from './feed-loader';
 import { applyCellEdits, dropBatch, finishDirectBatch, openDirectBatch, writeJournal, type CellEdit, type JournalEntry } from './load-batch-store';
 import { reviewColumns, type ReviewContext } from './semantic-review';
-import { intakeFile, type IntakeTable } from './intake-file';
+import { intakeFile, readReportTables, type IntakeTable } from './intake-file';
 import { ensureSource, materialize } from './load-sessions';
 import { profileDocument, formatOf, type DocumentProfile } from './llama-parse';
 import { parseWorkbook } from './parse-table';
@@ -806,7 +806,7 @@ function activeStoredTable(row: { tables?: unknown; table_id?: string | null }):
 
 /** A document read by an outside reader is not read again. Its stored tables are used. */
 function storedUpload(row: { intake_method?: string | null; tables?: unknown; table_id?: string | null }): UploadTable | null {
-  if (!row.intake_method || !['llamaparse', 'azure_layout', 'agent'].includes(row.intake_method)) return null;
+  if (!row.intake_method || !['llamaparse', 'azure_layout', 'agent', 'financial_report'].includes(row.intake_method)) return null;
   const tables = (Array.isArray(row.tables) ? row.tables : []) as StoredImportTable[];
   if (tables.length === 0) return null;
   return uploadFromTables(
@@ -822,6 +822,11 @@ async function readUpload(fileName: string, mediaType: string, bytes: Buffer, fo
   const textual = lower.endsWith('.html') || lower.endsWith('.htm') || lower.endsWith('.json');
 
   if (isDocument) {
+    // A filed report (a 10-Q, a 10-K) is read statement by statement, whatever its length.
+    const report = await readReportTables(fileName, bytes);
+    if (report) {
+      return uploadFromTables(report.tables, { method: 'financial_report', note: report.note, profile: await profileDocument(fileName, bytes) }, report.selected);
+    }
     // A short statement with a text layer is read here, which keeps its column hints.
     const profile = await profileDocument(fileName, bytes);
     if (formatOf(fileName) === 'pdf' && profile.route === 'local') {

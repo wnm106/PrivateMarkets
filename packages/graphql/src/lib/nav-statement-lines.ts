@@ -5,6 +5,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { readInBatches } from './read-batches';
 
 export interface SourceValue {
   entity_id: string;
@@ -30,6 +31,8 @@ export interface NavLineAttribute {
   order: number;
   reviewable: boolean;
   composition: boolean;
+  /** Dollars, a share count, or a per-share amount. */
+  unit: 'AMOUNT' | 'SHARES' | 'PER_SHARE';
 }
 
 type SourceRow = SourceValue & { source_id?: string };
@@ -54,6 +57,7 @@ export async function loadNavLineAttributes(supabase: SupabaseClient): Promise<N
       order: Number(row.display_group) || 0,
       reviewable: shape.reviewable === true,
       composition: shape.composition === true,
+      unit: shape.unit === 'SHARES' || shape.unit === 'PER_SHARE' ? shape.unit : 'AMOUNT',
     });
   }
   return lines.sort((left, right) => left.order - right.order || left.name.localeCompare(right.name));
@@ -102,17 +106,18 @@ export async function readSourceAmounts(
   const sourceIds = [...sourceById.keys()];
   if (!sourceIds.length) return out;
 
-  const { data, error } = await supabase
+  const data = await readInBatches<SourceRow>(ids, (batch, from, to) => supabase
     .schema('golden_master')
     .from('entity_attribute_values')
-    .select('entity_id, attribute_id, source_id, golden_value, golden_value_numeric, valid_from, valid_to, system_from, system_to')
-    .in('entity_id', ids)
+    .select('id, entity_id, attribute_id, source_id, golden_value, golden_value_numeric, valid_from, valid_to, system_from, system_to')
+    .in('entity_id', batch)
     .in('attribute_id', attributes)
-    .in('source_id', sourceIds);
-  if (error) throw new Error(error.message);
+    .in('source_id', sourceIds)
+    .order('id')
+    .range(from, to));
 
   const best = new Map<string, SourceRow>();
-  for (const row of (data || []) as SourceRow[]) {
+  for (const row of data) {
     const sourceCode = sourceById.get(row.source_id || '');
     if (!sourceCode || !inForce(row, asOf, knowledge)) continue;
     const key = sourceKey(row.entity_id, row.attribute_id, sourceCode);
@@ -154,11 +159,13 @@ function inForce(row: SourceRow, asOf: string, knowledge: string): boolean {
   return systemFrom <= known && systemTo >= known;
 }
 
-function navShape(rules: unknown): { section?: string; role?: string; indent?: number; reviewable?: boolean; composition?: boolean } | null {
+type NavShape = { section?: string; role?: string; indent?: number; reviewable?: boolean; composition?: boolean; unit?: string };
+
+function navShape(rules: unknown): NavShape | null {
   if (!rules || typeof rules !== 'object') return null;
   const nav = (rules as { navLine?: unknown }).navLine;
   if (!nav || typeof nav !== 'object') return null;
-  return nav as { section?: string; role?: string; indent?: number; reviewable?: boolean; composition?: boolean };
+  return nav as NavShape;
 }
 
 function later(candidate: SourceRow, current: SourceRow): boolean {

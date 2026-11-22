@@ -111,6 +111,34 @@ export const STAGE_SCREENS: readonly StageScreen[] = [
       },
     },
   },
+  {
+    code: 'nav.report',
+    label: 'Check a filed report',
+    description: 'Shows a stored financial report (a 10-Q, a 10-K, an annual report) beside how it maps onto the fund\'s NAV statement: each statement line at the period end and the date it compares with, the lines left out and why, the schedule of investments by asset class, the report\'s own checks, and what a trial load would write. The person confirms before anything loads.',
+    outcomes: ['confirmed', 'abandoned'],
+    permissions: {},
+    args: [
+      { key: 'importInstanceId', label: 'Stored file', help: 'The report, usually {{input.importInstanceId}}.' },
+      { key: 'fundId', label: 'Fund', help: 'The fund the report is for, usually {{steps.select.entityIds}}.' },
+      { key: 'periodEnd', label: 'Period end', help: 'Usually {{input.periodEnd}}. Blank is the report\'s latest balance sheet date.' },
+    ],
+    exit: {
+      outcomes: ['confirmed'],
+      tool: 'get_nav_report',
+      args: (stageArgs) => ({
+        instanceId: text(stageArgs.importInstanceId),
+        fundId: Array.isArray(stageArgs.fundId) ? String(stageArgs.fundId[0] ?? '') : text(stageArgs.fundId),
+        periodEnd: text(stageArgs.periodEnd) || undefined,
+        trial: false,
+      }),
+      problem: (output) => {
+        const report = record(output);
+        if (report.ready === true) return null;
+        const problems = Array.isArray(report.problems) ? report.problems.map(String).filter(Boolean) : [];
+        return problems.length ? problems.join(' ') : 'Nothing in this file maps onto the NAV statement at its period end.';
+      },
+    },
+  },
 ];
 
 export function stageScreen(code: unknown): StageScreen | null {

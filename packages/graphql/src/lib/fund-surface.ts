@@ -10,6 +10,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   acceptedLineCodes, FUND_ADMIN_SOURCE, INTERNAL_SOURCE, loadNavLineAttributes, readSourceAmounts, sourceAmount,
 } from './nav-statement-lines';
+import { readInBatches } from './read-batches';
 
 const CODES = [
   'NAV', 'FUND_CASH_BALANCE', 'FUND_STRATEGY', 'FUND_VINTAGE', 'FUND_REPORTING_DATE',
@@ -485,13 +486,14 @@ export async function links(
   knowledge: string,
 ): Promise<Rel[]> {
   if (!ids.length) return [];
-  const { data, error } = await supabase
+  const rows = await readInBatches<Rel>(ids, (batch, from, to) => supabase
     .from('entity_relationships')
     .select('parent_entity_id, child_entity_id, valid_from, valid_to, system_from, system_to')
     .eq('relationship_code', code)
-    .in(column, ids);
-  if (error) throw new Error(error.message);
-  return ((data || []) as Rel[]).filter((row) => inForce(row, asOf, knowledge));
+    .in(column, batch)
+    .order('id')
+    .range(from, to));
+  return rows.filter((row) => inForce(row, asOf, knowledge));
 }
 
 interface ExposureRule {
@@ -554,9 +556,12 @@ async function loadExposureRules(
 
 export async function loadEntities(supabase: SupabaseClient, ids: string[]): Promise<EntityRow[]> {
   if (!ids.length) return [];
-  const { data, error } = await supabase.from('master_entities').select('id, entity_code, entity_name').in('id', ids);
-  if (error) throw new Error(error.message);
-  return (data || []) as EntityRow[];
+  return readInBatches<EntityRow>(ids, (batch, from, to) => supabase
+    .from('master_entities')
+    .select('id, entity_code, entity_name')
+    .in('id', batch)
+    .order('id')
+    .range(from, to));
 }
 
 export async function loadFundSurface(

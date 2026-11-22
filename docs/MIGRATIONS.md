@@ -47,3 +47,9 @@ Still to do:
 - `20261121130100_retire_old_capacity_path` drops `compliance.fund_security_capacities`. Apply it only after the web app built from this change is deployed; the app deployed before it still calls that function.
 - `20261121120000 fund_thresholds_only` is applied on the hosted project but is in no branch of this repo. Its SQL is in `supabase_migrations.schema_migrations.statements`. Add it here as a file so a fresh database matches.
 - 23 other files here are still not applied (`npx supabase db push --dry-run` lists them). Review each as described above.
+
+## Pending: 20261122100000_nav_report_chart
+
+Adds the NAV chart lines a filed report needs, the report wording on every chart line, the statement's comparative date and report checks, and three fund settings (capital model, management fee basis, performance fee basis). Metadata only: no records. It replays cleanly on a fresh database, and a dry run on the hosted project in a rolled-back transaction applied cleanly (115 chart lines, every one with its rules).
+
+Not applied to the hosted project yet. Apply it with the web app built from the same change: the app deployed before it shows every chart line on the NAV statement tab, so the new lines would show there empty until the new app is out. Figures and checks are not affected.

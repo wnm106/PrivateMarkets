@@ -39,6 +39,22 @@ export interface RecLine {
   shadow: number | null;
   /** Fund administrator amount as of the prior certification. Null when that date has no earlier value. */
   prior: number | null;
+  /** Amounts are dollars; a share count or a per-share amount says so. */
+  unit?: 'AMOUNT' | 'SHARES' | 'PER_SHARE';
+}
+
+export type CapitalModel = 'DRAWDOWN' | 'EVERGREEN';
+export type MgmtFeeBasis = 'COMMITMENTS' | 'NET_ASSETS' | 'TOTAL_ASSETS';
+export type PerfFeeBasis = 'WATERFALL' | 'INCOME';
+
+/** A check the report made of itself when it was read: a schedule subtotal, a share-class NAV. */
+export interface RecSourceCheck {
+  label: string;
+  where: string;
+  reported: number | null;
+  computed: number | null;
+  difference: number | null;
+  result: 'Ties' | 'Break' | 'Missing';
 }
 
 export interface RecRoll {
@@ -150,6 +166,12 @@ export interface RecInput {
     catchUpPct: number | null;
     netIrr: number | null;
     hasFacility: boolean;
+    /** Blank is DRAWDOWN: capital calls and distribution notices. */
+    capitalModel?: CapitalModel;
+    /** Blank is COMMITMENTS. */
+    mgmtFeeBasis?: MgmtFeeBasis;
+    /** Blank is WATERFALL. */
+    perfFeeBasis?: PerfFeeBasis;
   };
   periodEnd: string;
   /** Valid date of the prior period. Comparative attributes are read as of this day. */
@@ -160,6 +182,13 @@ export interface RecInput {
   statement: { id: string; label: string; receivedDate: string | null; certified: boolean; tolerancePct: number } | null;
   lines: RecLine[];
   positions: RecPosition[];
+  /**
+   * The administrator's schedule of investments at the period end: positions
+   * whose administrator value is dated the period end. Null when none is loaded.
+   */
+  adminSchedule?: { total: number; count: number; sources: RecBind[] } | null;
+  /** The checks the report made of itself, kept on the statement when it was loaded. */
+  sourceChecks?: { total: number; ties: number; checks: RecSourceCheck[] } | null;
   evidence: {
     bank: number | null;
     lender: number | null;
@@ -248,6 +277,13 @@ export function periodLabel(frequency: Frequency, periodEnd: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
 
+/** Whole months from one period end to the next: March 31 to June 30 is 3. */
+export function monthSpan(from: string, to: string): number {
+  const start = utc(from);
+  const end = utc(to);
+  return (end.getUTCFullYear() - start.getUTCFullYear()) * 12 + (end.getUTCMonth() - start.getUTCMonth());
+}
+
 export function periodsPerYear(frequency: Frequency): number {
   return frequency === 'MONTHLY' ? 12 : 4;
 }
@@ -324,19 +360,31 @@ const MATCH = {
   cfUnrealized: { statement: 'CASH', label: /unrealized/i },
   cfContrib: { statement: 'CASH', label: /contributions/i },
   cfDist: { statement: 'CASH', label: /distributions/i },
+  cfFx: { statement: 'CASH', label: /^effect of exchange rate/i },
+  cfAccretion: { statement: 'CASH', label: /accretion/i },
+  chTotal: { statement: 'CHANGES', label: /^total increase in net assets/i },
+  chShares: { statement: 'CHANGES', label: /^net increase from share transactions/i },
+  servicing: { statement: 'OPS', label: /servicing fees/i },
 } satisfies Record<string, Matcher>;
 
 type MatchKey = keyof typeof MATCH;
 
+/**
+ * The chart line a figure is read from. When several lines fit (a statement
+ * that breaks realized gains into investments and currency, and totals them),
+ * the first that has a figure is used, so the investments line comes before the
+ * total and a report without the breakdown falls back to its total.
+ */
 function lineFor(lines: RecLine[], key: MatchKey): RecLine | undefined {
   const rule: Matcher = MATCH[key];
-  return lines.find((line) => (
+  const fits = lines.filter((line) => (
     line.statement === rule.statement
     && rule.label.test(line.label)
     && (!rule.role || rule.role.test(line.role))
     && line.role !== 'HEADER'
     && line.role !== 'NOTE'
   ));
+  return fits.find((line) => line.admin != null) ?? fits[0];
 }
 
 /** The same row on another statement version: same statement, same normalized label. */
@@ -346,6 +394,7 @@ export function lineKey(statement: string, label: string): string {
 
 const sum = (values: Array<number | null | undefined>) => values.reduce<number>((total, value) => total + (value ?? 0), 0);
 const money = (value: number) => (value / 1e6).toFixed(1);
+const money3 = (value: number) => (value / 1e6).toFixed(3);
 const signed = (value: number) => `${value < 0 ? '−' : '+'}${Math.abs(value / 1e6).toFixed(1)}`;
 const present = (value: number | null | undefined): value is number => value != null && Number.isFinite(value);
 
@@ -370,6 +419,8 @@ export interface RecBind {
 export interface RecCheck {
   id: string;
   group: 'statements' | 'evidence';
+  /** Where a check came from when it is not the reconciliation's own: the report's check of itself. */
+  origin?: 'report';
   label: string;
   compared: string;
   a: number | null;
@@ -433,6 +484,7 @@ export interface RecStatementLine {
   label: string;
   role: string;
   indent: number;
+  unit?: 'AMOUNT' | 'SHARES' | 'PER_SHARE';
   /** Fund administrator source at this period's as-of. */
   current: number | null;
   /** Internal source at this period's as-of. */
@@ -482,6 +534,8 @@ export interface RecReview {
   /** As-of date of the previous period. Prior figures are the same attributes read on this day. */
   priorPeriodEnd: string;
   periodLabel: string;
+  /** Months from the prior period end, or the statement's comparative date, to the period end. */
+  spanMonths: number;
   targetDate: string;
   daysToTarget: number;
   health: CloseHealth;
@@ -519,11 +573,14 @@ export interface RecReview {
     adminSources: RecBind[]; oursSources: RecBind[];
   }>;
   mgmtFee: {
+    basis: MgmtFeeBasis;
     rate: number | null; base: number | null; share: number; recalculated: number | null; admin: number | null;
     difference: number | null; differencePct: number | null; impliedBase: number | null;
     sources: { rate: RecBind[]; base: RecBind[]; recalculated: RecBind[]; admin: RecBind[]; difference: RecBind[]; impliedBase: RecBind[] };
   };
   perfFee: {
+    /** WATERFALL: profit is NAV plus distributions less contributions. INCOME: profit is pre-incentive net investment income, and nav is the opening NAV the hurdle is on. */
+    basis: PerfFeeBasis;
     contributions: number; distributions: number; nav: number; profit: number; hurdle: number; excess: number; carry: number; admin: number;
     prefPct: number; carryPct: number; catchUpPct: number; netIrr: number | null; ready: boolean;
     sources: {
@@ -877,12 +934,33 @@ function buildRoll(
   return { columns, rows, total, totalSources: stackSources(bodySources), statement, statementSources, ties, tied, present: true };
 }
 
+/** A balance sheet line's move from the prior date, or null when either figure is missing. */
+const moved = (line: RecLine | undefined) => (line && line.admin != null && line.prior != null ? line.admin - line.prior : null);
+
+/** Working capital the cash flow statement accounts for, line by line: trade settlements and accrued liabilities. */
+const UNSETTLED = /^receivable for investments sold$|^payable for investments purchased$/i;
+const ACCRUED = /^(accrued management fee|accrued incentive fee|interest and debt fees payable|distribution and servicing fees payable|accrued expenses and interest|other liabilities)$/i;
+
 function explainDrift(lines: RecLine[], roll: RecRollResult, checksByKey: Record<string, RecCheck>): Array<[RegExp, RegExp | null, (line: RecLine) => string | null]> {
   const a = (key: MatchKey) => lineFor(lines, key)?.admin ?? 0;
   const tie = (id: string) => checksByKey[id]?.result === 'Ties';
   const rollPresent = roll.present;
   const rollTotal = (index: number) => roll.total[index] ?? 0;
+  const cash = (label: RegExp) => lines.find((line) => line.statement === 'CASH' && label.test(line.label) && line.admin != null)?.admin ?? null;
+  // The cash flow statement's change in a group of working capital lines is the sum of their moves, with assets the other way round.
+  const workingCapital = (group: RegExp, flow: RegExp): string | null => {
+    const members = lines.filter((line) => line.statement.startsWith('BS_') && group.test(line.label) && line.admin != null && line.prior != null);
+    const reported = cash(flow);
+    if (!members.length || reported == null) return null;
+    const computed = sum(members.map((line) => (line.statement === 'BS_ASSET' ? -1 : 1) * (moved(line) ?? 0)));
+    return Math.abs(computed - reported) < TIE ? `Ties to the cash flow statement's change, ${signed(reported)}` : null;
+  };
   return [
+    [/^BS_/, UNSETTLED, () => workingCapital(UNSETTLED, /^change in unsettled trades$/i)],
+    [/^BS_LIABILITY$/, /^accrued incentive fee$|^interest and debt fees payable$|^distribution and servicing fees payable$|^accrued expenses and interest$|^other liabilities$/i, () => workingCapital(ACCRUED, /^increase in accrued liabilities$/i)],
+    [/^BS_ASSET$/, /^deferred financing costs$/i, () => (cash(/^other non-cash items$/i) != null ? 'Amortized through the non-cash items of the cash flow statement' : null)],
+    [/^BS_(ASSET|LIABILITY)$/, /^derivative (assets|liabilities)$/i, () => (cash(/^unrealized on currency and derivatives$/i) != null || cash(/^settlement of derivatives$/i) != null ? 'Revalued and settled through the cash flow statement' : null)],
+    [/^BS_ASSET$/, /^subscriptions receivable$/i, () => (cash(/^capital contributions$/i) != null ? 'Collected in the share issuance proceeds of the cash flow statement' : null)],
     [/^BS_ASSET$/, /^total investments/i, () => `Purchases ${money(-a('cfPurchases'))}, sales at cost (${money(a('cfProceeds') - a('realized'))}), PIK ${money(a('pik'))}, unrealized (${money(-a('unrealized'))})`],
     [/^BS_ASSET$/, /^cash/i, () => `Ties to cash flows, ${signed(a('cfNetCash'))}`],
     [/^BS_ASSET$/, /interest receivable/i, () => `Cash flows, ${a('cfRec') <= 0 ? 'increase' : 'decrease'} of ${money(Math.abs(a('cfRec')))}`],
@@ -917,19 +995,40 @@ function explainDrift(lines: RecLine[], roll: RecRollResult, checksByKey: Record
   ];
 }
 
+/**
+ * The chart lines a statement shows: those with a figure from either source or
+ * at the prior date, and the headings over them. The chart holds the lines of
+ * every kind of fund, so a partnership's pack and a BDC's 10-Q each show only
+ * their own.
+ */
+export function visibleLines(group: RecLine[]): RecLine[] {
+  const valued = (line: RecLine) => line.admin != null || line.shadow != null || line.prior != null;
+  return group.filter((line, index) => {
+    if (line.role !== 'HEADER' && line.role !== 'NOTE') return valued(line);
+    for (const next of group.slice(index + 1)) {
+      if (next.role === 'HEADER') return false;
+      if (next.role !== 'NOTE' && valued(next)) return true;
+    }
+    return false;
+  });
+}
+
 export function buildReview(input: RecInput): RecReview {
   const { fund, periodEnd, today, lines } = input;
   const A = (key: MatchKey) => lineFor(lines, key)?.admin ?? null;
   const P = (key: MatchKey) => lineFor(lines, key)?.prior ?? null;
   const hasStatement = input.statement != null && lines.length > 0;
-  const periods = periodsPerYear(fund.frequency);
   const closeName = input.close?.name || `${periodLabel(fund.frequency, periodEnd)} close`;
   const fundOf = (code: string) => attrBind(fund.id, fund.name, code);
   const statementOf = (code: string) => (input.statement ? attrBind(input.statement.id, input.statement.label, code) : null);
   const closeOf = (code: string) => (input.close ? attrBind(input.close.id, closeName, code) : null);
   const lineOf = (key: MatchKey) => dated(adminBind(lineFor(lines, key)), periodEnd, null);
   const priorOf = (key: MatchKey) => priorBind(lineFor(lines, key), input.priorAsOf, input.priorKnowledge);
-  const previous = priorPeriodEnd(fund.frequency, periodEnd);
+  // The prior date is the statement's comparative date when it has one: a 10-Q compares with the last fiscal year end.
+  const previous = input.priorAsOf || priorPeriodEnd(fund.frequency, periodEnd);
+  const spanMonths = Math.max(1, monthSpan(previous, periodEnd));
+  const capitalModel: CapitalModel = fund.capitalModel === 'EVERGREEN' ? 'EVERGREEN' : 'DRAWDOWN';
+  const drawdown = capitalModel === 'DRAWDOWN';
   const callOf = (call: { id?: string; name?: string }) => (call.id ? attrBind(call.id, call.name || 'Capital call', 'ACTIVITY_AMOUNT') : null);
   const periodCallSources = input.capital.calls.filter((call) => call.date > previous && call.date <= periodEnd).map(callOf);
   const callSources = input.capital.calls.filter((call) => call.date <= periodEnd).map(callOf);
@@ -951,27 +1050,61 @@ export function buildReview(input: RecInput): RecReview {
   const navReported = A('netAssets');
   const priorNav = P('netAssets') ?? (lineFor(lines, 'chBegin')?.admin ?? null);
   const priorCertified = P('netAssets');
-  const sleeves = lines.filter((line) => line.statement === 'BS_ASSET' && line.role === 'DETAIL');
+  const sleeves = lines.filter((line) => line.statement === 'BS_ASSET' && line.role === 'DETAIL' && line.admin != null);
   const priorInv = P('inv');
   const sales = present(A('cfProceeds')) && present(A('realized')) ? A('cfProceeds')! - A('realized')! : null;
 
   addCheck('balance', 'statements', 'Assets less liabilities equals net assets', 'Balance sheet',
     present(assets) && present(liabilities) ? assets - liabilities : null, navReported,
     binds(lineOf('assets'), lineOf('liabilities')), binds(lineOf('netAssets')));
-  addCheck('opening', 'statements', 'Opening net assets equal prior certified NAV', 'Prior certification',
+  // Each part of the balance sheet adds up to its own total. Only lines with a figure count.
+  const footing: Array<[string, string, string, MatchKey]> = [
+    ['assetsFoot', 'Asset lines add up to total assets', 'BS_ASSET', 'assets'],
+    ['liabilitiesFoot', 'Liability lines add up to total liabilities', 'BS_LIABILITY', 'liabilities'],
+    ['equityFoot', 'Capital lines add up to net assets', 'BS_NET', 'netAssets'],
+  ];
+  for (const [id, label, statement, totalKey] of footing) {
+    const total = lineFor(lines, totalKey);
+    const parts = lines.filter((line) => line.statement === statement && line !== total && line.admin != null && (line.role === 'LINE' || line.role === 'SUBTOTAL'));
+    if (!total || total.admin == null || !parts.length) continue;
+    addCheck(id, 'statements', label, 'Balance sheet', sum(parts.map((line) => line.admin)), total.admin,
+      binds(...parts.map((line) => dated(adminBind(line), periodEnd, null))), binds(lineOf(totalKey)));
+  }
+  addCheck('opening', 'statements', `Opening net assets equal NAV at ${previous}`, 'Prior certification',
     A('chBegin'), priorCertified, binds(lineOf('chBegin')), binds(priorOf('netAssets')));
-  addCheck('rollNav', 'statements', 'Roll-forward: opening + operations + capital = closing', 'Changes in net assets',
-    present(A('chBegin')) && present(A('chOps')) && present(A('chCapital')) ? A('chBegin')! + A('chOps')! + A('chCapital')! : null, A('chEnd'),
-    binds(lineOf('chBegin'), lineOf('chOps'), lineOf('chCapital')), binds(lineOf('chEnd')));
+  // A statement that prints its total change rolls on it; one that prints only operations and capital rolls on those.
+  if (present(A('chTotal'))) {
+    addCheck('rollNav', 'statements', 'Roll-forward: opening + total change = closing', 'Changes in net assets',
+      present(A('chBegin')) ? A('chBegin')! + A('chTotal')! : null, A('chEnd'),
+      binds(lineOf('chBegin'), lineOf('chTotal')), binds(lineOf('chEnd')));
+    // Distributions sit beside share transactions in a BDC's statement, and inside capital transactions in a partnership's.
+    const capitalParts = present(A('chShares'))
+      ? { value: present(A('chDist')) ? A('chDist')! + A('chShares')! : null, sources: binds(lineOf('chDist'), lineOf('chShares')) }
+      : { value: A('chCapital'), sources: binds(lineOf('chCapital')) };
+    addCheck('changesFoot', 'statements', 'Total change: operations + distributions and capital', 'Changes in net assets',
+      present(A('chOps')) && present(capitalParts.value) ? A('chOps')! + capitalParts.value! : null, A('chTotal'),
+      binds(lineOf('chOps'), capitalParts.sources), binds(lineOf('chTotal')));
+  } else {
+    addCheck('rollNav', 'statements', 'Roll-forward: opening + operations + capital = closing', 'Changes in net assets',
+      present(A('chBegin')) && present(A('chOps')) && present(A('chCapital')) ? A('chBegin')! + A('chOps')! + A('chCapital')! : null, A('chEnd'),
+      binds(lineOf('chBegin'), lineOf('chOps'), lineOf('chCapital')), binds(lineOf('chEnd')));
+  }
   addCheck('opsCash', 'statements', 'Net increase from operations, operations vs cash flows', 'Operations, cash flows',
     A('netInc'), A('cfNetOps'), binds(lineOf('netInc')), binds(lineOf('cfNetOps')));
-  addCheck('sleeves', 'statements', 'Strategy sleeves sum to total investments', 'Schedule of investments',
-    sleeves.length ? sum(sleeves.map((line) => line.admin)) : null, A('inv'),
-    binds(...sleeves.map((line) => dated(adminBind(line), periodEnd, null))), binds(lineOf('inv')));
+  if (sleeves.length) {
+    addCheck('sleeves', 'statements', 'Strategy sleeves sum to total investments', 'Schedule of investments',
+      sum(sleeves.map((line) => line.admin)), A('inv'),
+      binds(...sleeves.map((line) => dated(adminBind(line), periodEnd, null))), binds(lineOf('inv')));
+  }
+  if (input.adminSchedule && input.adminSchedule.count > 0) {
+    addCheck('schedule', 'statements', `Schedule of investments (${input.adminSchedule.count} positions) vs investments on the balance sheet`, 'Schedule of investments',
+      input.adminSchedule.total, A('inv'), input.adminSchedule.sources, binds(lineOf('inv')),
+      Math.max(TIE, input.adminSchedule.count * 500));
+  }
   const positionBook = input.positions.filter((item) => item.marketValue != null);
   const positionTotal = positionBook.length ? sum(positionBook.map((item) => item.marketValue)) : null;
   const investmentTie = Math.max(TIE, Math.abs(A('inv') ?? 0) * ((input.statement?.tolerancePct ?? 0.5) / 100));
-  addCheck('positions', 'statements', 'Investments vs position market value', 'Positions',
+  addCheck('positions', 'statements', 'Investments vs our position book', 'Positions',
     A('inv'), positionTotal,
     binds(lineOf('inv')),
     binds(...positionBook.map((item) => {
@@ -979,26 +1112,42 @@ export function buildReview(input: RecInput): RecReview {
       return bind && item.bookSource ? { ...bind, sourceCode: item.bookSource } : bind;
     })),
     investmentTie);
-  addCheck('invRoll', 'statements', 'Investments: prior + purchases − cost of sales + PIK + unrealized', 'Cash flows, operations',
-    present(priorInv) && present(A('cfPurchases')) && present(sales) && present(A('pik')) && present(A('unrealized'))
-      ? priorInv + -A('cfPurchases')! - sales + A('pik')! + A('unrealized')! : null,
-    A('inv'),
-    binds(priorOf('inv'), lineOf('cfPurchases'), lineOf('cfProceeds'), lineOf('realized'), lineOf('pik'), lineOf('unrealized')),
-    binds(lineOf('inv')));
+  // Capitalized PIK is the cash flow statement's add-back when it prints one; accretion of discount moves cost too.
+  const pikIn = present(A('cfPik')) ? -A('cfPik')! : A('pik');
+  const accretion = present(A('cfAccretion')) ? -A('cfAccretion')! : 0;
+  addCheck('invRoll', 'statements', present(A('cfAccretion'))
+    ? 'Investments: prior + purchases − cost of sales + PIK + accretion + unrealized'
+    : 'Investments: prior + purchases − cost of sales + PIK + unrealized', 'Cash flows, operations',
+  present(priorInv) && present(A('cfPurchases')) && present(sales) && present(pikIn) && present(A('unrealized'))
+    ? priorInv + -A('cfPurchases')! - sales + pikIn + accretion + A('unrealized')! : null,
+  A('inv'),
+  binds(priorOf('inv'), lineOf('cfPurchases'), lineOf('cfProceeds'), lineOf('realized'), present(A('cfPik')) ? lineOf('cfPik') : lineOf('pik'), lineOf('cfAccretion'), lineOf('unrealized')),
+  binds(lineOf('inv')));
   addCheck('cashCf', 'evidence', 'Closing cash, cash flows vs balance sheet', 'Cash flows, balance sheet',
-    present(A('cfBegin')) && present(A('cfNetCash')) ? A('cfBegin')! + A('cfNetCash')! : null, A('cash'),
-    binds(lineOf('cfBegin'), lineOf('cfNetCash')), binds(lineOf('cash')));
+    present(A('cfBegin')) && present(A('cfNetCash')) ? A('cfBegin')! + A('cfNetCash')! + (A('cfFx') ?? 0) : null, A('cash'),
+    binds(lineOf('cfBegin'), lineOf('cfNetCash'), lineOf('cfFx')), binds(lineOf('cash')));
   addCheck('bank', 'evidence', 'Closing cash vs bank statement', 'Bank statement', A('cash'), input.evidence.bank,
     binds(lineOf('cash')), binds(bankSource));
-  addCheck('contribNotice', 'evidence', 'Contributions in period vs capital call notices', 'Call notices',
-    A('chContrib'), input.capital.callsInPeriod, binds(lineOf('chContrib')), binds(...periodCallSources));
-  addCheck('distNotice', 'evidence', 'Distributions in period vs distribution notices', 'Distribution notices',
-    present(A('chDist')) ? Math.abs(A('chDist')!) : null, input.capital.distributionsInPeriod,
-    binds(lineOf('chDist')), binds(...distributionSources));
+  if (drawdown) {
+    addCheck('contribNotice', 'evidence', 'Contributions in period vs capital call notices', 'Call notices',
+      A('chContrib'), input.capital.callsInPeriod, binds(lineOf('chContrib')), binds(...periodCallSources));
+    addCheck('distNotice', 'evidence', 'Distributions in period vs distribution notices', 'Distribution notices',
+      present(A('chDist')) ? Math.abs(A('chDist')!) : null, input.capital.distributionsInPeriod,
+      binds(lineOf('chDist')), binds(...distributionSources));
+  }
   const priorFacility = P('fac');
   addCheck('facility', 'evidence', 'Credit facility: prior less repayment vs lender statement', 'Lender statement',
     present(priorFacility) && present(A('cfFacility')) ? priorFacility + A('cfFacility')! : null, input.evidence.lender,
     binds(priorOf('fac'), lineOf('cfFacility')), binds(lenderSource));
+  // The report's own checks: the ones that fail, and the headline totals, each with both figures.
+  const sourceBinds = binds(statementOf('STATEMENT_SOURCE_CHECKS'));
+  (input.sourceChecks?.checks || []).forEach((item, index) => {
+    checks.push({
+      id: `report:${index}`, group: 'statements', origin: 'report', label: item.label, compared: item.where,
+      a: item.reported, b: item.computed, difference: item.difference, result: item.result,
+      aSources: sourceBinds, bSources: sourceBinds,
+    });
+  });
   const checksByKey = Object.fromEntries(checks.map((check) => [check.id, check]));
   const evidenceChecks = checks.filter((check) => !(check.id === 'facility' && !fund.hasFacility));
   const scoped = checks.filter((check) => evidenceChecks.includes(check));
@@ -1027,17 +1176,24 @@ export function buildReview(input: RecInput): RecReview {
     });
   };
 
-  // management fee
-  const share = 1 / periods;
-  const feeBase = fund.commitments;
+  // management fee: the rate on its base for the months the statement covers.
+  const share = spanMonths / 12;
+  const mgmtFeeBasis: MgmtFeeBasis = fund.mgmtFeeBasis === 'NET_ASSETS' || fund.mgmtFeeBasis === 'TOTAL_ASSETS' ? fund.mgmtFeeBasis : 'COMMITMENTS';
+  const average = (now: number | null, then: number | null) => (present(now) && present(then) ? (now + then) / 2 : now);
+  const feeBase = mgmtFeeBasis === 'NET_ASSETS'
+    ? average(navReported, priorNav)
+    : mgmtFeeBasis === 'TOTAL_ASSETS' ? average(assets, P('assets')) : fund.commitments;
+  const basisLabel = mgmtFeeBasis === 'NET_ASSETS' ? 'average net assets' : mgmtFeeBasis === 'TOTAL_ASSETS' ? 'average total assets' : 'commitments';
   const feeRate = fund.feeRatePct;
   const mgmtAdmin = A('mgmt') ?? A('accFee');
   const recalculated = present(feeBase) && present(feeRate) ? feeBase * (feeRate / 100) * share : null;
   const mgmtDiff = present(mgmtAdmin) && present(recalculated) ? mgmtAdmin - recalculated : null;
   const mgmtPct = present(mgmtDiff) && recalculated ? mgmtDiff / recalculated : null;
-  const impliedBase = present(mgmtAdmin) && present(feeRate) && feeRate ? mgmtAdmin * periods / (feeRate / 100) : null;
+  const impliedBase = present(mgmtAdmin) && present(feeRate) && feeRate ? mgmtAdmin / share / (feeRate / 100) : null;
   const rateSource = fundOf('FUND_MGMT_FEE_RATE_PCT');
-  const baseSource = fundOf('FUND_TOTAL_COMMITMENTS');
+  const baseSource = mgmtFeeBasis === 'NET_ASSETS'
+    ? binds(lineOf('netAssets'), priorOf('netAssets'), fundOf('FUND_MGMT_FEE_BASIS'))
+    : mgmtFeeBasis === 'TOTAL_ASSETS' ? binds(lineOf('assets'), priorOf('assets'), fundOf('FUND_MGMT_FEE_BASIS')) : binds(fundOf('FUND_TOTAL_COMMITMENTS'));
   const frequencySource = fundOf('FUND_CLOSE_FREQUENCY');
   const mgmtLine = lineFor(lines, 'mgmt') ?? lineFor(lines, 'accFee');
   const mgmtAdminSource = adminBind(mgmtLine);
@@ -1046,42 +1202,54 @@ export function buildReview(input: RecInput): RecReview {
   if (present(mgmtPct) && Math.abs(mgmtPct) > 0.005) {
     addItem({
       id: 'fee', tab: 'fees', title: 'Management fee accrual', admin: mgmtAdmin!, ours: recalculated!, effect: mgmtAdmin! - recalculated!, unit: 'USD', drift: false,
-      why: `Admin implies a fee base of $${money(impliedBase!)}M against $${money(feeBase!)}M commitments. Check for a subsequent close or day-count difference.`,
+      why: mgmtFeeBasis === 'COMMITMENTS'
+        ? `Admin implies a fee base of $${money(impliedBase!)}M against $${money(feeBase!)}M commitments. Check for a subsequent close or day-count difference.`
+        : `The fee implies a base of $${money(impliedBase!)}M against $${money(feeBase!)}M ${basisLabel} over ${spanMonths} months. The fee is charged on each month's opening balance, so a large flow in the period moves it; ask for the monthly fee calculation.`,
       adminSources: binds(mgmtAdminSource), oursSources: feeOurs, effectSources: feeEffect,
     });
   }
 
-  // performance fee
+  // performance fee: carried interest on a liquidation waterfall, or an incentive fee on income over a hurdle.
+  const perfFeeBasis: PerfFeeBasis = fund.perfFeeBasis === 'INCOME' ? 'INCOME' : 'WATERFALL';
+  const income = perfFeeBasis === 'INCOME';
   const calls = input.capital.calls.filter((call) => call.date <= periodEnd);
   const contributions = present(A('contrib')) ? A('contrib')! : sum(calls.map((call) => call.amount));
   const distributions = present(A('cumDist')) ? Math.abs(A('cumDist')!) : 0;
   const prefPct = fund.prefPct ?? 0;
   const carryPct = fund.carryPct ?? 0;
   const catchUpPct = fund.catchUpPct ?? 100;
-  const hurdle = sum(calls.map((call) => call.amount * (prefPct / 100) * (daysBetween(call.date, periodEnd) / 365)));
-  const profit = (navReported ?? 0) + distributions - contributions;
+  const perfLineAdmin = A('perf');
+  // Pre-incentive net investment income is before the incentive fee and before the class distribution and servicing fees, which those classes bear alone.
+  const preIncentive = income && present(A('nii')) ? A('nii')! + (perfLineAdmin ?? 0) + (A('servicing') ?? 0) : null;
+  const openingNav = priorNav;
+  const hurdle = income
+    ? (present(openingNav) ? openingNav * (prefPct / 100) * (spanMonths / 12) : 0)
+    : sum(calls.map((call) => call.amount * (prefPct / 100) * (daysBetween(call.date, periodEnd) / 365)));
+  const profit = income ? (preIncentive ?? 0) : (navReported ?? 0) + distributions - contributions;
   const excess = Math.max(0, profit - hurdle);
   const carry = Math.max(0, Math.min(excess * (catchUpPct / 100), (carryPct / 100) * profit));
-  const perfAdmin = A('accPerf') ?? A('perf') ?? 0;
-  const perfReady = present(fund.carryPct) && present(fund.prefPct) && hasStatement;
+  const perfAdmin = income ? (perfLineAdmin ?? A('accPerf') ?? 0) : (A('accPerf') ?? perfLineAdmin ?? 0);
+  const perfReady = present(fund.carryPct) && present(fund.prefPct) && hasStatement && (!income || present(preIncentive));
   const contribSources = present(A('contrib')) ? binds(lineOf('contrib')) : binds(...callSources);
   const distributionLineSources = binds(lineOf('cumDist'));
-  const navSources = binds(lineOf('netAssets'));
+  const navSources = income ? binds(priorOf('netAssets'), lineOf('chBegin')) : binds(lineOf('netAssets'));
   const prefSource = fundOf('FUND_PREF_RETURN_PCT');
   const carryRateSource = fundOf('FUND_CARRY_PCT');
   const catchUpSource = fundOf('FUND_CATCH_UP_PCT');
   const irrSource = fundOf('FUND_NET_IRR');
-  const profitSources = binds(navSources, distributionLineSources, contribSources);
-  const hurdleSources = binds(...callSources, prefSource);
+  const profitSources = income ? binds(lineOf('nii'), lineOf('perf'), lineOf('servicing')) : binds(navSources, distributionLineSources, contribSources);
+  const hurdleSources = income ? binds(navSources, prefSource) : binds(...callSources, prefSource);
   const excessSources = binds(profitSources, hurdleSources);
-  const carrySources = binds(excessSources, carryRateSource, catchUpSource);
-  const perfAdminSource = adminBind(lineFor(lines, 'accPerf') ?? lineFor(lines, 'perf'));
+  const carrySources = binds(excessSources, carryRateSource, catchUpSource, fundOf('FUND_PERF_FEE_BASIS'));
+  const perfAdminSource = adminBind(income ? (lineFor(lines, 'perf') ?? lineFor(lines, 'accPerf')) : (lineFor(lines, 'accPerf') ?? lineFor(lines, 'perf')));
   if (perfReady && Math.abs(carry - perfAdmin) > PERF_FEE_FLOOR) {
     addItem({
-      id: 'perf', tab: 'fees', title: 'Performance fee accrual', admin: perfAdmin, ours: carry, effect: perfAdmin - carry, unit: 'USD', drift: false,
-      why: perfAdmin === 0
-        ? `No incentive accrual in the pack while the hypothetical waterfall implies ${money(carry)}M${fund.netIrr != null ? ` and net IRR is ${fund.netIrr}%` : ''}. Request the hypothetical liquidation waterfall.`
-        : 'Administrator accrual differs from the hypothetical liquidation waterfall. Request the waterfall.',
+      id: 'perf', tab: 'fees', title: income ? 'Incentive fee on income' : 'Performance fee accrual', admin: perfAdmin, ours: carry, effect: perfAdmin - carry, unit: 'USD', drift: false,
+      why: income
+        ? `${carryPct}% of pre-incentive net investment income of $${money(profit)}M, over a hurdle of $${money(hurdle)}M (${prefPct}% a year on opening net assets for ${spanMonths} months) with a ${catchUpPct}% catch-up, gives $${money3(carry)}M against $${money3(perfAdmin)}M in the statements. The fee is worked quarter by quarter on each quarter's opening net assets; ask for the quarterly incentive fee calculation.`
+        : perfAdmin === 0
+          ? `No incentive accrual in the pack while the hypothetical waterfall implies ${money(carry)}M${fund.netIrr != null ? ` and net IRR is ${fund.netIrr}%` : ''}. Request the hypothetical liquidation waterfall.`
+          : 'Administrator accrual differs from the hypothetical liquidation waterfall. Request the waterfall.',
       adminSources: binds(perfAdminSource), oursSources: carrySources, effectSources: binds(perfAdminSource, carrySources),
     });
   }
@@ -1154,7 +1322,7 @@ export function buildReview(input: RecInput): RecReview {
   const statements = statementKinds.map(([kind, title, belongs]) => ({
     kind,
     title,
-    lines: lines.filter(belongs).sort((left, right) => left.order - right.order).map((line) => {
+    lines: visibleLines(lines.filter(belongs).sort((left, right) => left.order - right.order)).map((line) => {
       const current = line.admin;
       const prior = line.prior;
       const comparable = current != null && prior != null && line.role !== 'HEADER' && line.role !== 'NOTE' && kind !== 'CHANGES';
@@ -1184,7 +1352,7 @@ export function buildReview(input: RecInput): RecReview {
         });
       }
       return {
-        id: line.id, label: line.label, role: line.role, indent: line.indent,
+        id: line.id, label: line.label, role: line.role, indent: line.indent, unit: line.unit ?? 'AMOUNT',
         current, internal, variance, varianceFlagged, prior: line.prior, change,
         changePct: change != null && prior ? (change / Math.abs(prior)) * 100 : null,
         flagged, currentSources, internalSources, priorSources,
@@ -1209,12 +1377,15 @@ export function buildReview(input: RecInput): RecReview {
   ratio('leverage', 'Debt to net assets (x)', safe(P('fac'), P('netAssets')), safe(A('fac'), A('netAssets')),
     binds(lineOf('fac'), lineOf('netAssets')), binds(priorOf('fac'), priorOf('netAssets')),
     checksByKey.facility?.result === 'Ties' ? 'Facility paydown and new capital' : null);
-  ratio('yield', 'Cash yield on investments, annualized (%)', safe(P('cashInt'), P('inv'), 100 * periods), safe(A('cashInt'), A('inv'), 100 * periods),
+  const perYear = 12 / spanMonths;
+  ratio('yield', 'Cash yield on investments, annualized (%)', safe(P('cashInt'), P('inv'), 100 * perYear), safe(A('cashInt'), A('inv'), 100 * perYear),
     binds(lineOf('cashInt'), lineOf('inv')), binds(priorOf('cashInt'), priorOf('inv')));
-  ratio('expense', 'Expense ratio, annualized (%)', safe(P('totalExp'), P('netAssets'), 100 * periods), safe(A('totalExp'), A('netAssets'), 100 * periods),
+  ratio('expense', 'Expense ratio, annualized (%)', safe(P('totalExp'), P('netAssets'), 100 * perYear), safe(A('totalExp'), A('netAssets'), 100 * perYear),
     binds(lineOf('totalExp'), lineOf('netAssets')), binds(priorOf('totalExp'), priorOf('netAssets')));
-  ratio('feeRate', 'Management fee on commitments, annualized (%)', safe(P('mgmt') ?? P('accFee'), fund.commitments, 100 * periods), safe(mgmtAdmin, fund.commitments, 100 * periods),
-    binds(mgmtAdminSource, baseSource), binds(priorBind(mgmtLine, input.priorAsOf, input.priorKnowledge), baseSource));
+  if (mgmtFeeBasis === 'COMMITMENTS') {
+    ratio('feeRate', 'Management fee on commitments, annualized (%)', safe(P('mgmt') ?? P('accFee'), fund.commitments, 100 * perYear), safe(mgmtAdmin, fund.commitments, 100 * perYear),
+      binds(mgmtAdminSource, baseSource), binds(priorBind(mgmtLine, input.priorAsOf, input.priorKnowledge), baseSource));
+  }
   for (const row of drift.filter((item) => item.flagged)) {
     addItem({
       id: row.id, tab: 'drift', title: `${row.label.replace(/^[^:]+: /, '')} drift`, admin: row.current, ours: row.prior, effect: 0, unit: 'USD', drift: true,
@@ -1304,12 +1475,28 @@ export function buildReview(input: RecInput): RecReview {
   const readiness: RecReadiness[] = [
     { key: 'statement', label: 'Administrator NAV statement', ok: hasStatement, required: true, detail: hasStatement ? `${lines.length} statement lines` : 'No NAV statement for this period', sources: binds(statementOf('STATEMENT_PERIOD_END'), statementOf('STATEMENT_RECEIVED_DATE')) },
     { key: 'prior', label: 'Prior certification', ok: lines.some((line) => line.prior != null), required: true, detail: lines.some((line) => line.prior != null) ? `${lines.filter((line) => line.prior != null).length} values on file at the prior period end` : 'No earlier value for these statements', sources: binds(...lines.filter((line) => line.prior != null).map((line) => priorBind(line, input.priorAsOf, input.priorKnowledge))) },
-    { key: 'marks', label: 'Administrator and agent marks', ok: input.positions.length > 0 && positionsWithMarks === input.positions.length, required: true, detail: `${positionsWithMarks} of ${input.positions.length} positions`, sources: binds(...input.positions.flatMap((item) => [attrBind(item.id, item.name, 'POSITION_MARK'), attrBind(item.id, item.name, 'POSITION_AGENT_MARK')])) },
+    { key: 'marks', label: 'Administrator and agent marks', ok: input.positions.length > 0 && positionsWithMarks === input.positions.length, required: true, detail: input.positions.length ? `${positionsWithMarks} of ${input.positions.length} positions` : 'No positions in our own book for the period', sources: binds(...input.positions.flatMap((item) => [attrBind(item.id, item.name, 'POSITION_MARK'), attrBind(item.id, item.name, 'POSITION_AGENT_MARK')])) },
     { key: 'roll', label: 'Position roll-forward', ok: roll.present, required: true, detail: roll.present ? `${input.positions.filter((item) => item.roll).length} positions` : 'No roll-forward loaded', sources: binds(...input.positions.filter((item) => item.roll).map((item) => rollBind(item, 'ROLL_END_FV'))) },
     { key: 'bank', label: 'Bank cash statement', ok: present(input.evidence.bank), required: true, detail: present(input.evidence.bank) ? 'On file' : 'Not on file', sources: binds(bankSource) },
     { key: 'lender', label: 'Lender statement', ok: present(input.evidence.lender), required: fund.hasFacility, detail: !fund.hasFacility ? 'No credit facility' : present(input.evidence.lender) ? 'On file' : 'Not on file', sources: binds(lenderSource) },
-    { key: 'notices', label: 'Capital call and distribution notices', ok: input.capital.callsInPeriod > 0 || input.capital.distributionsInPeriod > 0 || (present(A('chContrib')) && A('chContrib') === 0 && A('chDist') === 0), required: true, detail: `${money(input.capital.callsInPeriod)}M called, ${money(input.capital.distributionsInPeriod)}M distributed in period`, sources: binds(...periodCallSources, ...distributionSources) },
-    { key: 'terms', label: 'Fee and waterfall terms', ok: present(fund.feeRatePct) && present(fund.commitments) && present(fund.carryPct) && present(fund.prefPct), required: true, detail: present(fund.feeRatePct) && present(fund.carryPct) ? 'Fee rate, base, preferred return, carry' : 'Fee or waterfall terms missing on the fund', sources: binds(rateSource, baseSource, prefSource, carryRateSource, catchUpSource) },
+    drawdown
+      ? { key: 'notices', label: 'Capital call and distribution notices', ok: input.capital.callsInPeriod > 0 || input.capital.distributionsInPeriod > 0 || (present(A('chContrib')) && A('chContrib') === 0 && A('chDist') === 0), required: true, detail: `${money(input.capital.callsInPeriod)}M called, ${money(input.capital.distributionsInPeriod)}M distributed in period`, sources: binds(...periodCallSources, ...distributionSources) }
+      : { key: 'notices', label: 'Capital call and distribution notices', ok: true, required: false, detail: 'Evergreen fund: shares are subscribed and repurchased, so there are no notices to tie', sources: binds(fundOf('FUND_CAPITAL_MODEL')) },
+    (() => {
+      const needsBase = mgmtFeeBasis === 'COMMITMENTS';
+      const ok = present(fund.feeRatePct) && (!needsBase || present(fund.commitments)) && present(fund.carryPct) && present(fund.prefPct);
+      const detail = !ok
+        ? 'Fee or waterfall terms missing on the fund'
+        : income ? `Fee rate on ${basisLabel}, incentive fee rate, hurdle and catch-up` : `Fee rate, ${basisLabel}, preferred return, carry`;
+      return { key: 'terms', label: income ? 'Fee and incentive fee terms' : 'Fee and waterfall terms', ok, required: true, detail, sources: binds(rateSource, baseSource, prefSource, carryRateSource, catchUpSource) };
+    })(),
+    ...(input.sourceChecks
+      ? [{
+        key: 'report', label: 'The report adds up', ok: input.sourceChecks.ties === input.sourceChecks.total, required: false,
+        detail: `${input.sourceChecks.ties} of ${input.sourceChecks.total} of the report's own subtotals, totals and share-class checks tie`,
+        sources: binds(statementOf('STATEMENT_SOURCE_CHECKS')),
+      }]
+      : []),
   ];
   const readyForRec = readiness.every((item) => !item.required || item.ok);
 
@@ -1363,6 +1550,7 @@ export function buildReview(input: RecInput): RecReview {
     periodEnd,
     priorPeriodEnd: previous,
     periodLabel: periodLabel(fund.frequency, periodEnd),
+    spanMonths,
     targetDate: target,
     daysToTarget,
     health,
@@ -1394,12 +1582,14 @@ export function buildReview(input: RecInput): RecReview {
     marks,
     accruals,
     mgmtFee: {
+      basis: mgmtFeeBasis,
       rate: feeRate, base: feeBase, share, recalculated, admin: mgmtAdmin, difference: mgmtDiff,
       differencePct: present(mgmtPct) ? mgmtPct * 100 : null, impliedBase,
-      sources: { rate: binds(rateSource), base: binds(baseSource), recalculated: feeOurs, admin: binds(mgmtAdminSource), difference: feeEffect, impliedBase: binds(mgmtAdminSource, rateSource) },
+      sources: { rate: binds(rateSource), base: baseSource, recalculated: feeOurs, admin: binds(mgmtAdminSource), difference: feeEffect, impliedBase: binds(mgmtAdminSource, rateSource) },
     },
     perfFee: {
-      contributions, distributions, nav: navReported ?? 0, profit, hurdle, excess, carry, admin: perfAdmin,
+      basis: perfFeeBasis,
+      contributions, distributions, nav: (income ? openingNav : navReported) ?? 0, profit, hurdle, excess, carry, admin: perfAdmin,
       prefPct, carryPct, catchUpPct, netIrr: fund.netIrr, ready: perfReady,
       sources: {
         contributions: contribSources, distributions: distributionLineSources, nav: navSources, profit: profitSources,

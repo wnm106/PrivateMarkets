@@ -36,6 +36,7 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 | Agent step | `packages/worker/src/workflow/agent.ts`, `claude.ts`, `gemini.ts` | The model loop and the two providers |
 | Tools | `packages/worker/src/workflow/tools.ts` | The chat assistant's tools, run as a person |
 | Reconciliation tools | `packages/mcp-server/src/tools/rec-tools.ts`, `packages/graphql/src/lib/rec-digest.ts`, `rec-actions.ts` | Reading a fund's NAV, position, and cash reconciliation, and recording decisions, cash pairs, adjustments, and notes |
+| Filed report tools | `packages/mcp-server/src/tools/nav-report-tools.ts`, `packages/mcp-server/src/feeds/nav-report.ts`, `packages/graphql/src/lib/nav-breaks.ts` | Reading a stored 10-Q or annual report onto a fund's NAV statement, loading it, and summarizing the breaks. See [NAV_REPORTS.md](NAV_REPORTS.md) |
 | Pack tables | `packages/mcp-server/src/feeds/pack-tables.ts` | Reading every table of a stored file, trying a mapping without writing, and loading one table |
 | API | `packages/graphql/src/resolvers/workflows.ts` | Queries and mutations the pages use |
 | Pages | `apps/web/app/workflows` | The list, the editor, and the run page with its review |
@@ -128,6 +129,7 @@ The templates, all built this way:
 | Required values check | Proposes missing required values. Needs filters | After review |
 | Data quality brief | Briefs on open exceptions | No |
 | NAV review | Names the checks and lines to look at before sign-off | No |
+| NAV reconciliation | Takes a fund's filed report (a 10-Q, a 10-K) from a stored file to a summary of the breaks: a person checks the mapping, the report loads, the reconciliation runs, and an agent explains what breaks. See [NAV_REPORTS.md](NAV_REPORTS.md) | After a person confirms the report; decisions and notes after review |
 | Cash tie-out | Says what ties to the bank and what does not | No |
 | Closing readiness | Says whether each deal can close and what is open | No |
 | Overcollateralization test, Single-name check | Score one compliance rule and explain the result | Stores the rule's results |
@@ -416,6 +418,7 @@ Later steps read what the person left as `{{steps.<step>.result.<key>}}`, and ea
 | Understand a file (`intake.understand`) | A stored file beside what was found in it: the kind of file, its tables, the records it holds, the record it is about, and whether it is indexed for search | `confirmed`, `abandoned` | Confirmed: the selected table has rows |
 | Map a file (`load.map`) | A stored file beside where each column goes, the as-of date, and a dry run | `confirmed`, `abandoned` | Confirmed: the file has an as-of date and a column that identifies each record |
 | Check staged values (`load.quality`) | A staged batch with its data quality checks, and corrections | `approved`, `discarded` | Approved: the batch is still staged, and no critical check fails because of it unless a reason was given. Approving needs `load.promote` |
+| Check a filed report (`nav.report`) | A stored 10-Q or annual report beside how it maps onto the fund's NAV statement: each line at both dates and the report lines behind it, the lines left out and why, the schedule of investments, the report's own checks, and a trial load | `confirmed`, `abandoned` | Confirmed: the report maps onto the NAV statement at its period end |
 
 **The engine checks, not the page.** When a person leaves a stage, the engine asks a read-only tool whether what the screen requires is true. If it is not, the stage is handed back to the person with the reason, and the run waits on it again. So a stage cannot be passed by calling the API directly.
 
@@ -575,7 +578,7 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 ## Not built yet
 
 - Loops. A graph runs each step once. A stage can be handed back to the person, but a run cannot go back to an earlier stage.
-- Stages for proposed new fields and a drafted template. Three screens exist: understanding a file, mapping it, and checking staged values.
+- Stages for proposed new fields and a drafted template. Four screens exist: understanding a file, mapping it, checking staged values, and checking a filed report.
 - Choosing the stored record a file's values load onto. The Understand screen links the document to a record; the loader still matches values by code, identifier and name.
 - Starting a guided run when a file arrives by a feed. It is started by hand from Load data.
 - Handing an overdue form or screen on to other roles. Reviews can be; forms and screens are only chased.

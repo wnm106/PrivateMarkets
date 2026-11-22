@@ -17,13 +17,15 @@ import {
   saveCashAdjustment, saveCashMatch, saveCashRules, unmatchCash,
   type CashRec, type CashRule,
 } from '@/lib/cash-rec';
+import { summarizeBreaks, type BreakEntry, type BreakSummary } from '@tapestrai/graphql/src/lib/nav-breaks';
 import { CashRecTab } from './CashRecTab';
 import { RecBit, RecCell, RecFact, RecInspectProvider, RecLabel, RecPress, joinSources } from './RecInspect';
 
-type TabKey = 'close' | 'stmt' | 'roll' | 'cash' | 'integrity' | 'fees' | 'val' | 'drift' | 'inputs';
+type TabKey = 'close' | 'breaks' | 'stmt' | 'roll' | 'cash' | 'integrity' | 'fees' | 'val' | 'drift' | 'inputs';
 
 const TABS: Array<[TabKey, string]> = [
   ['close', 'Close status'],
+  ['breaks', 'Breaks'],
   ['stmt', 'NAV statement'],
   ['roll', 'Position roll-forward'],
   ['cash', 'Cash reconciliation'],
@@ -50,7 +52,7 @@ const head = <T,>(rows: T[], limit: number) => rows.slice(0, limit);
  * What each tab tells the assistant, built from the one load that feeds every tab,
  * so it sees all of them at once. Amounts are in dollars.
  */
-function recTabs(rec: FundRec, cash: CashRec | null, insights: RecInsight[] | null): Record<string, TabPayload> {
+function recTabs(rec: FundRec, cash: CashRec | null, insights: RecInsight[] | null, breaks: BreakSummary): Record<string, TabPayload> {
   const undecided = rec.items.filter((item) => item.decision == null);
   const item = (row: FundRec['items'][number]) => ({ title: row.title, tab: row.tab, administrator: row.admin, ours: row.ours, effect: row.effect, unit: row.unit, why: row.why, decision: row.decision, note: row.note });
   return withoutSources({
@@ -67,10 +69,21 @@ function recTabs(rec: FundRec, cash: CashRec | null, insights: RecInsight[] | nu
         insights: insights?.map((point) => point) ?? null,
       },
     },
+    breaks: {
+      label: 'Breaks',
+      purpose: 'Everything that stands between this period\'s NAV and sign-off, in one list: checks that break, checks with a figure missing, review items still open, and inputs not on file.',
+      howToRead: 'Each entry has the two figures it compares (reported and expected), the difference, the cause, what settles it and who does that. kind is break, missing, item or gap; blocking entries stand in the way of certification. Amounts are dollars, or points for a mark. comparedWith is the date the period is compared with: the statement\'s comparative date when it has one, such as the last fiscal year end for a 10-Q.',
+      data: {
+        headline: breaks.headline, period: breaks.periodLabel, periodEnd: breaks.periodEnd, comparedWith: breaks.comparedWith, spanMonths: breaks.spanMonths,
+        nav: breaks.nav, counts: breaks.counts,
+        entries: head(breaks.entries, 60).map(({ id: _id, ...entry }) => entry),
+        tied: head(breaks.tied, 40),
+      },
+    },
     stmt: {
       label: 'NAV statement',
       purpose: 'The administrator\'s NAV statements compared line by line with our own figures for the period.',
-      howToRead: 'current is the fund administrator\'s figure, internal is ours, and variance is administrator minus internal where both are on file.',
+      howToRead: 'current is the fund administrator\'s figure, internal is ours, and variance is administrator minus internal where both are on file. Amounts are dollars, except lines whose unit is SHARES (a share count) or PER_SHARE (dollars a share). prior is the figure at the date the period is compared with.',
       data: { period: rec.periodLabel, statements: rec.statements.map((statement) => ({ kind: statement.kind, title: statement.title, lines: head(statement.lines, 100) })) },
     },
     roll: {
@@ -100,7 +113,7 @@ function recTabs(rec: FundRec, cash: CashRec | null, insights: RecInsight[] | nu
     fees: {
       label: 'Fees',
       purpose: 'Whether the management and performance fees the administrator charged agree with our recalculation.',
-      howToRead: 'admin is the administrator\'s fee and recalculated is ours. difference is the gap. perfFee follows the waterfall: profit over the hurdle, then catch-up and carry.',
+      howToRead: 'admin is the administrator\'s fee and recalculated is ours. difference is the gap. mgmtFee.basis says what the rate is charged on: commitments, or average net or total assets over the months the statement covers (share). perfFee.basis WATERFALL follows the liquidation waterfall: profit over the hurdle, then catch-up and carry. INCOME is an incentive fee: profit is pre-incentive net investment income, the hurdle is the preferred return on opening net assets (nav), and carry is the recalculated fee.',
       data: { mgmtFee: rec.mgmtFee, perfFee: rec.perfFee, items: rec.items.filter((row) => row.tab === 'fees').map(item) },
     },
     val: {
@@ -180,7 +193,8 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
     try { await work(); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Could not save'); } finally { setBusy(false); }
   };
 
-  usePublishTabs(rec ? recTabs(rec, cash, insights) : {});
+  const breaks = useMemo(() => (rec ? summarizeBreaks(rec) : null), [rec]);
+  usePublishTabs(rec && breaks ? recTabs(rec, cash, insights, breaks) : {});
 
   if (!rec) return error ? <div className="xp-error">{error}</div> : <div className="xp-empty">Loading close…</div>;
 
@@ -189,6 +203,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   const decided = rec.items.length - open.length;
   const tabCount = (key: TabKey) => (key === 'val' || key === 'fees' || key === 'drift'
     ? rec.items.filter((item) => item.tab === key && item.decision == null).length
+    : key === 'breaks' ? (breaks ? breaks.counts.breaks + breaks.counts.items : 0)
     : key === 'integrity' ? rec.breaks : key === 'roll' && rec.roll.present && !rec.roll.tied ? 1 : key === 'inputs' ? rec.readiness.filter((item) => item.required && !item.ok).length : key === 'cash' && cash ? cash.summary.openFlowCount + cash.summary.openTxnCount : 0);
 
   const proposed = millions(rec.navProposed);
@@ -244,6 +259,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
       <div className={tab === 'cash' ? 'da-main solo' : 'da-main'}>
         <div>
           {tab === 'close' && <CloseTab rec={rec} onOpen={setTab} onSignoff={(label) => run(() => setSignoff(ctx, SIGNOFF_BY_LABEL[label]))} />}
+          {tab === 'breaks' && breaks && <BreaksTab summary={breaks} onOpen={setTab} />}
           {tab === 'stmt' && <StatementTab rec={rec} />}
           {tab === 'roll' && <RollTab rec={rec} />}
           {tab === 'cash' && (cash
@@ -436,6 +452,90 @@ function CloseTab({ rec, onOpen, onSignoff }: { rec: FundRec; onOpen: (tab: TabK
   );
 }
 
+/** A statement figure: $ millions, or a share count, or dollars a share. */
+function lineAmount(value: number | null, unit?: string): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  if (unit === 'SHARES') return Math.round(value).toLocaleString('en-US');
+  if (unit === 'PER_SHARE') return `$${value.toFixed(2)}`;
+  return millions(value);
+}
+
+const BREAK_GROUPS: Array<[BreakEntry['kind'], string, string]> = [
+  ['break', 'Breaks', 'Two figures that must agree do not.'],
+  ['item', 'Open review items', 'Figures that need a decision: accept, adjust, or query the administrator.'],
+  ['missing', 'Checks with a figure missing', 'A check that cannot be made until the figure is on file. A gap, not a break.'],
+  ['gap', 'Not on file', 'Inputs the reconciliation needs for this period.'],
+];
+
+const BREAK_TAB: Partial<Record<BreakEntry['kind'], TabKey>> = { break: 'integrity', missing: 'integrity', gap: 'inputs', item: 'close' };
+
+function breakFigure(value: number | null, unit: BreakEntry['unit']): string {
+  if (value == null) return '—';
+  if (unit === 'POINTS') return value.toFixed(2);
+  if (unit === 'COUNT') return String(value);
+  return millions(value);
+}
+
+/** Everything between this period and sign-off: the same summary the NAV reconciliation workflow writes. */
+function BreaksTab({ summary, onOpen }: { summary: BreakSummary; onOpen: (tab: TabKey) => void }) {
+  const [showTied, setShowTied] = useState(false);
+  return (
+    <>
+      <section className="da-sec">
+        <div className="da-sechead">
+          <h2>Breaks</h2>
+          <p>{summary.headline} Compared with {longDate(summary.comparedWith)} ({summary.spanMonths} month{summary.spanMonths === 1 ? '' : 's'}). {summary.counts.ties} of {summary.counts.checks} checks tie.</p>
+        </div>
+        {summary.entries.length === 0 && <div className="xp-empty">Nothing breaks, nothing is missing and every review item is decided.</div>}
+      </section>
+      {BREAK_GROUPS.map(([kind, title, note]) => {
+        const entries = summary.entries.filter((entry) => entry.kind === kind);
+        if (!entries.length) return null;
+        const tab = BREAK_TAB[kind];
+        return (
+          <section className="da-sec" key={kind}>
+            <div className="da-sechead"><h2>{title}</h2><p>{note}</p></div>
+            <div className="da-gridwrap">
+              <table className="da-grid">
+                <thead><tr><th>What</th>{kind !== 'gap' && <><th className="num">Reported</th><th className="num">Expected</th><th className="num">Difference</th></>}<th>Cause and next step</th><th>Owner</th></tr></thead>
+                <tbody>
+                  {entries.map((entry) => (
+                    <tr key={entry.id} className={entry.kind === 'break' ? 'flag' : ''}>
+                      <td>
+                        {tab ? <button type="button" className="cr-link" onClick={() => onOpen(tab)}>{entry.title}</button> : entry.title}
+                        {entry.blocking && <span className="da-st breach da-gap">Blocks certification</span>}
+                      </td>
+                      {kind !== 'gap' && <>
+                        <td className="num">{breakFigure(entry.reported, entry.unit)}</td>
+                        <td className="num">{breakFigure(entry.expected, entry.unit)}</td>
+                        <td className={`num ${moveTone(entry.difference, entry.unit === 'USD')}`}>{breakFigure(entry.difference, entry.unit)}</td>
+                      </>}
+                      <td>{entry.cause} <b>Next:</b> {entry.action}</td>
+                      <td>{entry.owner}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        );
+      })}
+      {summary.tied.length > 0 && (
+        <section className="da-sec">
+          <div className="da-sechead">
+            <h2>What ties</h2>
+            <p>
+              {summary.tied.length} checks agree.{' '}
+              <button type="button" className="cr-link" onClick={() => setShowTied((value) => !value)} aria-expanded={showTied}>{showTied ? 'Hide them' : 'Show them'}</button>
+            </p>
+          </div>
+          {showTied && <ul className="da-note">{summary.tied.map((label) => <li key={label}>{label}</li>)}</ul>}
+        </section>
+      )}
+    </>
+  );
+}
+
 function StatementTab({ rec }: { rec: FundRec }) {
   if (!rec.statements.length) return <div className="xp-empty">No administrator statement for this period yet.</div>;
   return (
@@ -451,11 +551,13 @@ function StatementTab({ rec }: { rec: FundRec }) {
                   const cls = line.role === 'HEADER' ? 'band' : line.role === 'SUBTOTAL' ? 'sub' : line.role === 'TOTAL' ? 'total' : line.indent ? 'indent' : '';
                   const headerLike = line.role === 'HEADER' || line.role === 'NOTE';
                   const both = joinSources(line.currentSources, line.internalSources, line.priorSources);
-                  const adminText = headerLike ? '' : millions(line.current);
-                  const internalText = headerLike ? '' : millions(line.internal);
-                  const varianceText = headerLike || line.variance == null ? '' : signedMillions(line.variance);
-                  const priorText = headerLike ? '' : millions(line.prior);
-                  const changeText = line.change == null ? '' : signedMillions(line.change);
+                  const format = (value: number | null) => lineAmount(value, line.unit);
+                  const signedFormat = (value: number) => (line.unit && line.unit !== 'AMOUNT' ? `${value < 0 ? '−' : '+'}${lineAmount(Math.abs(value), line.unit)}` : signedMillions(value));
+                  const adminText = headerLike ? '' : format(line.current);
+                  const internalText = headerLike ? '' : format(line.internal);
+                  const varianceText = headerLike || line.variance == null ? '' : signedFormat(line.variance);
+                  const priorText = headerLike ? '' : format(line.prior);
+                  const changeText = line.change == null ? '' : signedFormat(line.change);
                   const pctText = line.changePct == null ? '' : percent(line.changePct, 1, true);
                   return (
                     <tr key={line.id} className={`${cls} ${line.flagged || line.varianceFlagged ? 'flag' : ''}`}>
@@ -612,7 +714,7 @@ function FeesTab({ rec }: { rec: FundRec }) {
   return (
     <>
       <section className="da-sec">
-        <div className="da-sechead"><h2>Management fee</h2><p>Recomputed from fund terms: {fee.rate == null ? 'no rate on file' : <><RecBit sources={fee.sources.rate} display={`${fee.rate}%`}>{fee.rate}%</RecBit> of <RecBit sources={fee.sources.base} display={millions(fee.base, 0)}>{millions(fee.base, 0)}M</RecBit> commitments, {(fee.share * 100).toFixed(1)}% of a year</>}. Edit terms on the <Link href={`/funds/${rec.fundId}/overview`}>fund record</Link>.</p></div>
+        <div className="da-sechead"><h2>Management fee</h2><p>Recomputed from fund terms: {fee.rate == null ? 'no rate on file' : <><RecBit sources={fee.sources.rate} display={`${fee.rate}%`}>{fee.rate}%</RecBit> of <RecBit sources={fee.sources.base} display={millions(fee.base, 0)}>{millions(fee.base, 0)}M</RecBit> {fee.basis === 'NET_ASSETS' ? 'average net assets' : fee.basis === 'TOTAL_ASSETS' ? 'average total assets' : 'commitments'}, {(fee.share * 100).toFixed(1)}% of a year</>}. Edit terms on the <Link href={`/funds/${rec.fundId}/overview`}>fund record</Link>.</p></div>
         <div className="da-gridwrap"><table className="da-grid"><thead><tr><th>Item</th><th className="num">$M</th></tr></thead><tbody>
           {row('Recalculated fee', millions(fee.recalculated, 3), fee.sources.recalculated)}
           {row('Administrator accrual', millions(fee.admin, 3), fee.sources.admin)}
@@ -621,8 +723,15 @@ function FeesTab({ rec }: { rec: FundRec }) {
         </tbody></table></div>
       </section>
       <section className="da-sec">
-        <div className="da-sechead"><h2>Performance fee</h2><p>{perf.ready ? 'Reasonableness estimate from NAV, distributions and capital calls. The admin waterfall governs.' : 'Preferred return and carry are not set on the fund, so no estimate is possible.'}</p></div>
+        <div className="da-sechead"><h2>{perf.basis === 'INCOME' ? 'Incentive fee on income' : 'Performance fee'}</h2><p>{!perf.ready ? 'Preferred return and carry are not set on the fund, so no estimate is possible.' : perf.basis === 'INCOME' ? 'Recalculated on pre-incentive net investment income over the hurdle for the months the statement covers. The adviser\'s quarterly calculation governs.' : 'Reasonableness estimate from NAV, distributions and capital calls. The admin waterfall governs.'}</p></div>
         <div className="da-gridwrap"><table className="da-grid"><thead><tr><th>Item</th><th className="num">$M</th></tr></thead><tbody>
+          {perf.basis === 'INCOME' ? <>
+            {row('Pre-incentive net investment income', millions(perf.profit), perf.sources.profit)}
+            {row(`Hurdle (${perf.prefPct}% a year on opening net assets of ${millions(perf.nav, 0)}M)`, millions(perf.hurdle), perf.sources.hurdle)}
+            {row('Income above the hurdle', millions(perf.excess), perf.sources.excess)}
+            {row(`Recalculated fee (${perf.carryPct}% with ${perf.catchUpPct}% catch-up)`, millions(perf.carry), joinSources(perf.sources.carry, perf.sources.carryRate, perf.sources.catchUp))}
+            {row('In the statements', millions(perf.admin), perf.sources.admin, perf.ready && Math.abs(perf.carry - perf.admin) > 50000 ? 'neg' : '')}
+          </> : <>
           {row('Net asset value plus distributions to date', millions(perf.nav + perf.distributions), joinSources(perf.sources.nav, perf.sources.distributions))}
           {row('Less contributions', millions(-perf.contributions), perf.sources.contributions)}
           {row('Profit to date', millions(perf.profit), perf.sources.profit)}
@@ -630,6 +739,7 @@ function FeesTab({ rec }: { rec: FundRec }) {
           {row('Profit above hurdle', millions(perf.excess), perf.sources.excess)}
           {row(`Estimated carry accrual (${perf.carryPct}% carry, ${perf.catchUpPct}% catch-up)`, millions(perf.carry), joinSources(perf.sources.carry, perf.sources.carryRate, perf.sources.catchUp))}
           {row('Administrator accrual', millions(perf.admin), perf.sources.admin, perf.ready && Math.abs(perf.carry - perf.admin) > 50000 ? 'neg' : '')}
+          </>}
         </tbody></table></div>
       </section>
     </>
