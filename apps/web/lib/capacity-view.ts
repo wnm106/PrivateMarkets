@@ -70,28 +70,44 @@ export function isProhibition(reading: CapacityReading): boolean {
   return reading.hardLimit === 0;
 }
 
+/**
+ * Breach and pass are decided exactly as compliance.evaluate_rule decides them:
+ * a hard breach only when the figure is past the hard limit (above it for a
+ * ceiling, below it for a floor), a soft breach only when it is past the soft
+ * limit. A figure exactly at the limit passes. EPSILON only absorbs floating
+ * point error in the sums made here; it is not a tolerance the evaluator has.
+ *
+ * "Near" and "At limit" are warnings within a pass. They never turn a figure
+ * the evaluator passes into a breach.
+ */
+const EPSILON = 1e-9;
+const NEAR_SHARE = 0.85;
+const AT_LIMIT_SHARE = 0.995;
+
+function past(value: number, limit: number, direction: 'MAX' | 'MIN'): boolean {
+  const slack = EPSILON * Math.max(1, Math.abs(limit));
+  return direction === 'MIN' ? value < limit - slack : value > limit + slack;
+}
+
 export function standingTone(value: number | null, reading: CapacityReading): { tone: CapacityTone; label: string } {
   if (isProhibition(reading)) {
     return value != null && value > 1e-6 ? { tone: 'breach', label: 'Not permitted, held' } : { tone: 'blocked', label: 'Not permitted' };
   }
   if (value == null || reading.hardLimit == null) return { tone: 'na', label: 'Not measured' };
+  const hard = reading.hardLimit;
+  const soft = reading.softLimit;
   if (reading.limitDirection === 'MIN') {
     // A floor: the figure must stay at or above the limit.
-    if (value < reading.hardLimit * 0.9995) return { tone: 'breach', label: 'Below limit' };
-    if (value <= reading.hardLimit * 1.005) return { tone: 'breach', label: 'At limit' };
-    if (reading.softLimit != null && reading.softLimit > reading.hardLimit && value < reading.softLimit) {
-      return { tone: 'near', label: 'Below soft limit' };
-    }
-    if (value <= reading.hardLimit / 0.85) return { tone: 'near', label: 'Near limit' };
+    if (past(value, hard, 'MIN')) return { tone: 'breach', label: 'Below limit' };
+    if (value <= hard / AT_LIMIT_SHARE) return { tone: 'near', label: 'At limit' };
+    if (soft != null && past(value, soft, 'MIN')) return { tone: 'near', label: 'Below soft limit' };
+    if (value <= hard / NEAR_SHARE) return { tone: 'near', label: 'Near limit' };
     return { tone: 'ok', label: 'Within limit' };
   }
-  const ratio = value / reading.hardLimit;
-  if (ratio > 1.0005) return { tone: 'breach', label: 'Over limit' };
-  if (ratio >= 0.995) return { tone: 'breach', label: 'At limit' };
-  if (reading.softLimit != null && reading.softLimit < reading.hardLimit && value > reading.softLimit) {
-    return { tone: 'near', label: 'Over soft limit' };
-  }
-  if (ratio >= 0.85) return { tone: 'near', label: 'Near limit' };
+  if (past(value, hard, 'MAX')) return { tone: 'breach', label: 'Over limit' };
+  if (value >= hard * AT_LIMIT_SHARE) return { tone: 'near', label: 'At limit' };
+  if (soft != null && past(value, soft, 'MAX')) return { tone: 'near', label: 'Over soft limit' };
+  if (value >= hard * NEAR_SHARE) return { tone: 'near', label: 'Near limit' };
   return { tone: 'ok', label: 'Within limit' };
 }
 
@@ -102,11 +118,12 @@ export function standing(reading: CapacityReading, used: number, ownerId: string
   const now = standingTone(current, reading);
   let after = standingTone(proForma, reading);
   // A rule that reports only room (a composite ratio) is read from the room.
+  // Using exactly the room passes, as the evaluator passes a figure at the limit.
   if (proForma == null && !isProhibition(reading)) {
-    if (reading.room <= 0) after = { tone: 'breach', label: 'No room' };
-    else if (roomUsed > 1.0005) after = { tone: 'breach', label: 'Over limit' };
-    else if (roomUsed >= 0.995) after = { tone: 'breach', label: 'At limit' };
-    else if (roomUsed >= 0.85) after = { tone: 'near', label: 'Near limit' };
+    const slack = EPSILON * Math.max(1, Math.abs(reading.room));
+    if (used > reading.room + slack) after = { tone: 'breach', label: reading.room <= 0 ? 'No room' : 'Over limit' };
+    else if (reading.room <= 0 || roomUsed >= AT_LIMIT_SHARE) after = { tone: 'near', label: 'At limit' };
+    else if (roomUsed >= NEAR_SHARE) after = { tone: 'near', label: 'Near limit' };
     else after = { tone: 'ok', label: 'Within limit' };
   }
   const utilisation = isProhibition(reading)

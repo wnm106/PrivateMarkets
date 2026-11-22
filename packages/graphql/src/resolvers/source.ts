@@ -1,4 +1,5 @@
 import { Context } from '../context';
+import { ok } from '../lib/db-result';
 
 export const sourceResolvers = {
   Query: {
@@ -178,11 +179,11 @@ export const sourceResolvers = {
 
         // Handle color and metadata together
         if (input.color !== undefined || input.metadata !== undefined) {
-          const { data: current } = await context.supabase
+          const { data: current } = ok(await context.supabase
             .schema('entity_instances').from('source_registry')
             .select('metadata')
             .eq('id', input.id)
-            .single();
+            .single());
           const currentMeta = (current?.metadata as Record<string, any>) || {};
           const newMeta = { ...currentMeta, ...(input.metadata || {}) };
           if (input.color !== undefined) {

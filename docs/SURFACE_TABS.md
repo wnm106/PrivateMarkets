@@ -20,18 +20,20 @@ Both hooks are in `apps/web/lib/view-context.ts`.
 **A surface that loads all its tabs' data in one request** builds a record of tabs and publishes it once with `usePublishTabs`. This is the preferred shape. See `fundTabs` in `components/funds/FundSurface.tsx` and `recTabs` in `components/fund-rec/FundRecWorkspace.tsx`.
 
 ```tsx
-usePublishTabs(surface ? {
+usePublishTabs({
   nav: {
     label: 'NAV',
     purpose: 'What the fund is worth at the reporting date.',
     howToRead: 'Amounts are dollars from the administrator.',
-    data: { nav: surface.nav, rollforward: surface.rollforward },
+    data: !surface ? null : { nav: surface.nav, rollforward: surface.rollforward },
   },
-  // ...one entry per tab
-} : {});
+  // ...one entry per tab, published before the data has loaded too
+});
 ```
 
-**A surface whose tabs each load their own data** has each tab component publish itself with `usePublishTab(key, payload)`, and keeps every tab mounted so all of them publish. Use `useWarmTabs(keys, activeTab)` and render each tab in `<div hidden={tab !== key}>` once `warmed.has(key)`. The open tab mounts at once and the others follow one at a time, so the page does not open with a burst of requests. See `components/allocation/AllocationBoard.tsx` and the `Deal*` tabs.
+Never publish `{}` while loading: the assistant would see no tabs at all. Publish every tab with `data: null` until it loads (rule 4).
+
+**A surface whose tabs each load their own data** has each tab component publish itself with `usePublishTab(key, payload)`, and keeps every tab mounted so all of them publish. Use `useWarmTabs(keys, activeTab)` and render each tab in `<div hidden={tab !== key}>` once `warmed.has(key)`. The open tab mounts at once and the others follow one at a time, so the page does not open with a burst of requests. See `components/allocation/AllocationBoard.tsx` and the `Deal*` tabs. A tab that has not mounted yet publishes nothing itself, so the surface also publishes a placeholder for every tab with `data: null` through `usePublishTabs`; the tab's own entry replaces it once it has data. Export each tab's `label` and `purpose` from its component so both use the same words (`DEAL_TAB_INFO` in `AllocationBoard.tsx`).
 
 **A surface built on the surface SDK** (`surfaces/<code>/`) calls `host.usePublishTabs(...)` with the same payload. It must not import from `apps/web`.
 

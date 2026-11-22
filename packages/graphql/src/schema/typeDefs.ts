@@ -1102,6 +1102,13 @@ type ComplianceFundBoard {
   rules: [ComplianceFundRule!]!
   thresholds: [ComplianceThreshold!]!
   results: [ComplianceEvaluationResult!]!
+  # The funds each rule is scored for today, as compliance.deal_score_plans decides.
+  enrollments: [ComplianceRuleEnrollment!]!
+}
+
+type ComplianceRuleEnrollment {
+  ruleId: ID!
+  fundIds: [ID!]!
 }
 
 input UpsertComplianceThresholdInput {
@@ -1393,6 +1400,9 @@ input CompliancePopulationPreviewInput {
   conditions: [ComplianceRuleConditionInput!]!
   offset: Int
   limit: Int
+  # Read the records as of these dates. Default today and now.
+  asOfDate: Date
+  knowledgeDate: DateTime
 }
 
 type CompliancePopulationRow {
@@ -3358,10 +3368,10 @@ type Query {
   mergeCandidates(filter: MergeCandidateFilter): MergeCandidateResult!
   mergePreview(survivorId: ID!, retiredId: ID!, ruleCode: String): MergePreview!
   entityGraph(entityId: ID!, depth: Int, relationshipCodes: [String!]): EntityGraph!
-  previewAllocation(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): AllocationPreview!
+  previewAllocation(dealId: ID!, asOfDate: Date, knowledgeDate: DateTime, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): AllocationPreview!
   # Returns over any period. No start date is inception to date. The codes are series calcs such as DEAL_IRR_ITD.
   periodReturns(entityIds: [ID!]!, attributeCodes: [String!]!, startDate: Date, endDate: Date): [PeriodReturn!]!
-  icMemo(dealId: ID!, asOfDate: Date): IcMemo!
+  icMemo(dealId: ID!, asOfDate: Date, knowledgeDate: DateTime): IcMemo!
   fundSurface(fundId: ID!, asOfDate: Date, knowledgeDate: DateTime): FundSurface!
   """Close board: every fund with a close calendar, its current close, status, breaks, and what is still open."""
   fundRecBoard(asOfDate: Date, knowledgeDate: DateTime): JSON!
@@ -3749,8 +3759,9 @@ type Mutation {
   createComplianceScopeAssignment(input: CreateComplianceScopeAssignmentInput!): CreateComplianceScopeAssignmentResult!
   deleteComplianceScopeAssignment(id: ID!): DeleteComplianceScopeAssignmentResult!
   evaluateComplianceRule(input: EvaluateComplianceRuleInput!): EvaluateComplianceRuleResult!
-  scoreDealCompliance(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealComplianceScore!
-  runDealHypo(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealHypoRun!
+  # Read as of the user's dates. Unsaved holds or adjustments can only be scored against what is known now.
+  scoreDealCompliance(dealId: ID!, asOfDate: Date, knowledgeDate: DateTime, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealComplianceScore!
+  runDealHypo(dealId: ID!, asOfDate: Date, knowledgeDate: DateTime, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealHypoRun!
   upsertComplianceThreshold(input: UpsertComplianceThresholdInput!): UpsertComplianceThresholdResult!
   deleteComplianceThreshold(id: ID!): DeleteComplianceThresholdResult!
 
@@ -4467,9 +4478,13 @@ type TemplateQualificationResult {
   matched: Boolean!
 }
 
+# The winner as golden_master.preference_decision decides it (golden_master.explain_golden_source).
 type EvaluateGoldenSourceResult {
   winningSource: String!
   winningSourceId: ID
+  # MANUAL_OVERRIDE, CALCULATED, TEMPLATE_SEQUENCE, ATTRIBUTE_SEQUENCE or DATA_SOURCE_SEQUENCE.
+  tier: String
+  # The tier's place in that order, 1 to 5. 0 when nothing holds a value.
   tierUsed: Int!
   isDefault: Boolean!
   resolutionVersion: Int!

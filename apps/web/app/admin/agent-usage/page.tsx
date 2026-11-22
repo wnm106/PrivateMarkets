@@ -212,21 +212,22 @@ function when(value: string): string {
 }
 
 /** What each tab tells the assistant, from the one load that feeds them all. Costs are US dollars. */
-function usageTabs(usage: Usage, drill: Drill | null): Record<string, TabPayload> {
+/** Every tab, loaded or not: a tab whose usage has not loaded publishes data: null. */
+function usageTabs(usage: Usage | null, drill: Drill | null): Record<string, TabPayload> {
   const bucket = (row: Bucket) => ({ name: row.key, feature: row.feature || null, provider: row.provider || null, calls: row.calls, inputTokens: row.inputTokens ?? null, outputTokens: row.outputTokens ?? null, thinkingTokens: row.thinkingTokens ?? null, totalTokens: row.totalTokens, costUsd: row.costUsd });
-  const period = drill ? `${usage.from} to ${usage.to}, narrowed to ${drill.kind} ${drill.label}` : `${usage.from} to ${usage.to}`;
+  const period = !usage ? '' : drill ? `${usage.from} to ${usage.to}, narrowed to ${drill.kind} ${drill.label}` : `${usage.from} to ${usage.to}`;
   return {
     overview: {
       label: 'Overview',
       purpose: 'How many model calls were made in the period, how many tokens they used and what they cost, day by day.',
       howToRead: 'Days are in America/New_York. thinkingTokens are the model\'s reasoning tokens and are counted in totalTokens. errors counts failed calls.',
-      data: { period, totals: usage.totals, byDay: usage.byDay },
+      data: !usage ? null : { period, totals: usage.totals, byDay: usage.byDay },
     },
     turns: {
       label: 'Turns',
       purpose: 'Each request added up: one chat reply, narrative section or workflow step, with all the model calls it made, newest first.',
       howToRead: 'calls is how many model calls the turn made. A chat reply that used tools makes one call per tool round. costUsd and totalTokens are the sum of those calls. latencyMs is time spent in model calls, not wall time.',
-      data: {
+      data: !usage ? null : {
         period, total: usage.totals.turns, shown: Math.min(usage.byTurn.length, 60),
         turns: usage.byTurn.slice(0, 60).map((row) => ({ at: row.startedAt, user: row.userLabel, feature: row.feature, activity: row.activity, agent: row.agent, subject: row.subjectType ? `${subjectName(row.subjectType)}: ${row.subjectLabel || row.subjectId}` : null, conversationId: row.conversationId, models: row.models, calls: row.calls, totalTokens: row.totalTokens, costUsd: row.costUsd, latencyMs: row.latencyMs, errors: row.errors })),
       },
@@ -234,39 +235,39 @@ function usageTabs(usage: Usage, drill: Drill | null): Record<string, TabPayload
     conversations: {
       label: 'Conversations',
       purpose: 'Cost of each chat conversation: how many replies (turns) and model calls it took, most recent first.',
-      data: { period, conversations: usage.byConversation.map((row) => ({ title: row.title, user: row.userLabel, lastAt: row.lastAt, turns: row.turns, calls: row.calls, totalTokens: row.totalTokens, costUsd: row.costUsd })) },
+      data: !usage ? null : { period, conversations: usage.byConversation.map((row) => ({ title: row.title, user: row.userLabel, lastAt: row.lastAt, turns: row.turns, calls: row.calls, totalTokens: row.totalTokens, costUsd: row.costUsd })) },
     },
     subjects: {
       label: 'Subjects',
       purpose: 'Cost by what the work was about: a document, narrative run, workflow run, feed, fund or file, costliest first.',
       howToRead: 'Only calls that name a subject appear here. Chat turns are under Conversations instead.',
-      data: { period, subjects: usage.bySubject.map((row) => ({ type: subjectName(row.type), name: row.label || row.key, feature: row.feature, turns: row.turns, calls: row.calls, totalTokens: row.totalTokens, costUsd: row.costUsd })) },
+      data: !usage ? null : { period, subjects: usage.bySubject.map((row) => ({ type: subjectName(row.type), name: row.label || row.key, feature: row.feature, turns: row.turns, calls: row.calls, totalTokens: row.totalTokens, costUsd: row.costUsd })) },
     },
     agents: {
       label: 'Agents',
       purpose: 'Token use and cost by named agent.',
-      data: { period, agents: usage.byAgent.map(bucket) },
+      data: !usage ? null : { period, agents: usage.byAgent.map(bucket) },
     },
     features: {
       label: 'Features',
       purpose: 'Token use and cost by the feature of the app that made the call, such as the chat or a narrative.',
-      data: { period, features: usage.byFeature.map(bucket) },
+      data: !usage ? null : { period, features: usage.byFeature.map(bucket) },
     },
     users: {
       label: 'Users',
       purpose: 'Token use and cost by person.',
-      data: { period, users: usage.byUser.map((row) => ({ name: row.label, calls: row.calls, totalTokens: row.totalTokens, costUsd: row.costUsd })) },
+      data: !usage ? null : { period, users: usage.byUser.map((row) => ({ name: row.label, calls: row.calls, totalTokens: row.totalTokens, costUsd: row.costUsd })) },
     },
     models: {
       label: 'Models',
       purpose: 'Token use and cost by model, with each model\'s input, output and thinking tokens.',
-      data: { period, models: usage.byModel.map(bucket) },
+      data: !usage ? null : { period, models: usage.byModel.map(bucket) },
     },
     calls: {
       label: 'Calls',
       purpose: 'The individual model calls, newest first: who made each, which model, tokens, cost, time taken and whether it failed.',
       howToRead: 'status is the call\'s outcome and error says why it failed. latencyMs is the time the call took.',
-      data: {
+      data: !usage ? null : {
         period, total: usage.totals.calls, shown: Math.min(usage.calls.length, 60),
         calls: usage.calls.slice(0, 60).map((call) => ({ at: call.createdAt, turnId: call.turnId, user: call.userLabel, client: call.clientName, feature: call.feature, activity: call.activity, agent: call.agent, model: call.model, totalTokens: call.totalTokens, costUsd: call.costUsd, status: call.status, error: call.error, latencyMs: call.latencyMs })),
       },
@@ -288,7 +289,7 @@ export default function AgentUsagePage() {
   const [selected, setSelected] = useState<CallDetail | null>(null);
   const [drill, setDrill] = useState<Drill | null>(null);
   usePublishViewContext({ activity: 'viewing', kind: 'agent usage', label: 'Agent usage', summary: 'Token use and cost of model calls' });
-  usePublishTabs(usage ? usageTabs(usage, drill) : {});
+  usePublishTabs(usageTabs(usage, drill));
 
   /** Narrows to one turn, conversation or subject and shows what it is made of. */
   const narrow = (next: Drill) => {

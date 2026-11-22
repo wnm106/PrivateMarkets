@@ -71,7 +71,18 @@ export function combinePageData(
   base: Record<string, unknown> | null,
   tabs: Array<{ key: string; entry: TabPayload | null }>,
 ): Record<string, unknown> | null {
-  const published = tabs.filter((item): item is { key: string; entry: TabPayload } => item.entry !== null);
+  // A key can be published twice: a surface's placeholder for a tab that has not
+  // loaded (data: null) and the tab's own entry once it has. The loaded one wins;
+  // otherwise the latest.
+  const byKey = new Map<string, TabPayload>();
+  for (const { key, entry } of tabs) {
+    if (entry === null) continue;
+    const held = byKey.get(key);
+    if (held && held.data !== null && entry.data === null) continue;
+    byKey.delete(key);
+    byKey.set(key, entry);
+  }
+  const published = [...byKey].map(([key, entry]) => ({ key, entry }));
   if (!published.length) return base;
   return {
     ...(base || {}),

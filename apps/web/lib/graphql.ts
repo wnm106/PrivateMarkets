@@ -2360,6 +2360,7 @@ export const COMPLIANCE_FUND_BOARD_QUERY = `
       rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode consolidateDescendants isActive }
       thresholds { id ruleId ruleCode ruleName entityId groupValue rankFrom rankTo limitDirection softLimitValue hardLimitValue applies notes }
       results { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
+      enrollments { ruleId fundIds }
     }
   }
 `;

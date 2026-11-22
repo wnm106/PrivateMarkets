@@ -130,13 +130,13 @@ describe('entity match for loads', () => {
     expect(hit.via).toBe('identifier');
   });
 
-  it('ignores the same name on another client and rejects a code owned by another client', () => {
+  it('ignores the same name and the same code on another client', () => {
     const index = indexWith([
       entity({ id: 'other', code: 'ISS-9', name: 'Bench Issuer 1', clientId: 'client-2' }),
     ]);
     expect(index.resolve({ code: 'NEW', name: 'Bench Issuer 1', attributes: new Map() }).kind).toBe('none');
-    const codeHit = index.resolve({ code: 'ISS-9', name: 'Different', attributes: new Map() });
-    expect(codeHit).toEqual({ kind: 'rejected', message: codeUnavailableMessage('ISS-9') });
+    // Codes are unique within a client: this client may create its own ISS-9.
+    expect(index.resolve({ code: 'ISS-9', name: 'Different', attributes: new Map() }).kind).toBe('none');
   });
 
   it('rejects a code that already belongs to another domain', () => {
@@ -308,12 +308,11 @@ describe('entity match keeps each client to its own records', () => {
     expect(hit.kind).toBe('none');
   });
 
-  it('refuses a code held elsewhere in words that say nothing of who holds it', () => {
+  it('lets a new record take a code another client holds, and says nothing of it', () => {
     const index = new EntityMatchIndex(identifierCatalog([['LEI']]), 'ISSUER', 'client-A');
     index.add({ ...base, id: 'B-entity', code: 'SECRET-DEAL', name: 'Project X', clientId: 'client-B' });
     const hit = index.resolve({ code: 'SECRET-DEAL', name: 'x', attributes: new Map() });
-    expect(hit).toEqual({ kind: 'rejected', message: 'SECRET-DEAL is not available as a record code. Use a different code.' });
-    expect(JSON.stringify(hit)).not.toMatch(/client|Project X|B-entity/i);
+    expect(hit).toEqual({ kind: 'none' });
   });
 
   it('refuses a code reserved by the database, unless the row is one of the client\'s own records', () => {

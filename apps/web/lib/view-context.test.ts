@@ -24,6 +24,16 @@ describe('combinePageData', () => {
     assert.match(result.tabs.returns.note, /not finished loading/);
   });
 
+  it('lets a loaded tab replace the surface\'s placeholder for it, whichever was published first', () => {
+    const placeholder = { label: 'NAV', purpose: 'What the fund is worth.', data: null };
+    for (const order of [[placeholder, nav], [nav, placeholder]]) {
+      const result = combinePageData(null, order.map((entry) => ({ key: 'nav', entry }))) as Record<string, any>;
+      assert.deepEqual(result.tabs.nav.data, { nav: 100 });
+    }
+    const pending = combinePageData(null, [{ key: 'nav', entry: placeholder }]) as Record<string, any>;
+    assert.match(pending.tabs.nav.note, /not finished loading/);
+  });
+
   it('leaves out howToRead when a tab has none', () => {
     const result = combinePageData(null, [{ key: 'returns', entry: returns }]) as Record<string, any>;
     assert.equal('howToRead' in result.tabs.returns, false);

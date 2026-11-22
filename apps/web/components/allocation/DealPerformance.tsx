@@ -9,6 +9,13 @@ import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { DealActualReturns } from './DealActualReturns';
 import { projectPerformance, type PerformanceCase, type PerformanceFees } from '@/lib/deal-performance';
 import { usePublishTab } from '@/lib/view-context';
+import { useLatestRequest } from '@/lib/use-latest-request';
+
+/** What the Performance tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const PERFORMANCE_TAB = {
+  label: 'Performance',
+  purpose: 'Projected returns on our allocated position, gross to net, from the servicing cash flows, plus the actual returns once the deal has funded.',
+};
 
 /** Stored attribute behind each line of the gross-to-net bridge. */
 const BRIDGE: Record<string, { amount: string; irr?: string; moic?: string }> = {
@@ -170,14 +177,17 @@ export function DealPerformance({
 
   const debt = useMemo(() => tranches.filter((tranche) => !tranche.equityLinked), [tranches]);
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     setLoading(true);
     setError(null);
     const result = await graphqlQuery<{
       draws: { edges: Array<{ node: Node }> };
       funds: { edges: Array<{ node: { id: string; attributes: Record<string, unknown> } }> };
       deal: { attributes: Record<string, unknown> } | null;
-    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only');
+    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     if (result.error?.message) {
       setError(result.error.message);
       setLoading(false);
@@ -259,7 +269,7 @@ export function DealPerformance({
     }) : null;
     setModel(projected);
     setLoading(false);
-  }, [asOfDate, closeDate, dealId, debt, knowledgeDate, oid, rows, stage]);
+  }, [latest, asOfDate, closeDate, dealId, debt, knowledgeDate, oid, rows, stage]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -270,8 +280,7 @@ export function DealPerformance({
   const T = (row: { id: string; name: string }, code: string, name: string) => attrBind(row.id, 'DEAL_TRANCHE', code, name, row.name);
 
   usePublishTab('performance', {
-    label: 'Performance',
-    purpose: 'Projected returns on our allocated position, gross to net, from the servicing cash flows, plus the actual returns once the deal has funded.',
+    ...PERFORMANCE_TAB,
     howToRead: 'Pro forma until the deal closes. bridge walks gross profit down to net profit to investors through fees and expenses. tranches show returns by debt tranche.',
     data: model ? {
       grossIrr: model.grossIrr,

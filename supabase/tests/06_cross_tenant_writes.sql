@@ -66,6 +66,19 @@ SELECT tests.expect_error('A steward cannot move an A record into client B',
 SELECT tests.expect_ok('A steward may create a record in client A',
     $$INSERT INTO entity_instances.master_entities (entity_code, domain_code, entity_name, client_id)
       VALUES ('A-FUND-NEW', 'FUND', 'Alpha new', 'aaaaaaaa-0000-0000-0000-000000000001')$$);
+-- Codes are unique within a client. A code client B uses tells client A nothing:
+-- client A can use it too, and its own second use is still refused.
+SELECT tests.expect_ok('A steward may use a code that client B already uses',
+    $$INSERT INTO entity_instances.master_entities (entity_code, domain_code, entity_name, client_id)
+      VALUES ('B-FUND-1', 'FUND', 'Alpha copy of a Bravo code', 'aaaaaaaa-0000-0000-0000-000000000001')$$);
+SELECT tests.expect_error('A steward cannot use one code twice in client A',
+    $$INSERT INTO entity_instances.master_entities (entity_code, domain_code, entity_name, client_id)
+      VALUES ('A-FUND-NEW', 'FUND', 'Alpha duplicate', 'aaaaaaaa-0000-0000-0000-000000000001')$$, '23505');
+SELECT tests.expect_value('A code read by an A steward names the A record, not the B one',
+    $$SELECT (entity_instances.entity_id_for_code('B-FUND-1', NULL) <> 'bbbbbbbb-0000-0000-0000-0000000000f1')::text$$, 'true');
+SELECT tests.expect_denied('A pro-forma leg naming a B security id is refused',
+    $$SELECT * FROM compliance.proforma_snapshot('aaaaaaaa-0000-0000-0000-0000000000f1',
+        '[{"security_id": "bbbbbbbb-0000-0000-0000-0000000000f1", "par": 1}]'::jsonb)$$);
 SELECT tests.expect_rows('A steward may rename an A record',
     $$UPDATE entity_instances.master_entities SET entity_name = 'Alpha Fund One (renamed)'
       WHERE id = 'aaaaaaaa-0000-0000-0000-0000000000f1' RETURNING 1$$, 1);

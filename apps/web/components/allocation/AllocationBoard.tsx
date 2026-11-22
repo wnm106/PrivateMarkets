@@ -5,20 +5,31 @@ import Link from 'next/link';
 import { graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION } from '@/lib/graphql';
 import { domainHref } from '@/lib/domain-routes';
 import { useTemporalStore } from '@/lib/store';
-import { IcMemo } from './IcMemo';
-import { ComplianceGaugeList, DealCompliance, useDealComplianceScore } from './DealCompliance';
+import { IcMemo, MEMO_TAB } from './IcMemo';
+import { COMPLIANCE_TAB, ComplianceGaugeList, DealCompliance, useDealComplianceScore } from './DealCompliance';
 import { DealHypoPanel, HYPO_HOW_TO_READ, hypoTabData, useDealHypo } from './DealHypo';
 import { CapacityRules, formatReading } from './CapacityRules';
 import { standingsForFund, type CapacityReading } from '@/lib/capacity-view';
-import { DealSyndicate } from './DealSyndicate';
-import { DealClosing } from './DealClosing';
-import { DealServicing } from './DealServicing';
-import { DealFinancials } from './DealFinancials';
-import { DealPerformance } from './DealPerformance';
+import { DealSyndicate, SYNDICATE_TAB } from './DealSyndicate';
+import { CLOSING_TAB, DealClosing } from './DealClosing';
+import { DealServicing, SERVICING_TAB } from './DealServicing';
+import { DealFinancials, FINANCIALS_TAB } from './DealFinancials';
+import { DealPerformance, PERFORMANCE_TAB } from './DealPerformance';
 import { DEAL_PANEL_KEYS, mountedPanel, tabReason, useLiveSurface } from '@/components/surfaces/useLiveSurface';
 import { useSurfaceNav } from '@/lib/surface-nav';
 import { attrBind, InspectValue, useInspectBind, type AttrBind } from '@/components/detail/InspectValue';
-import { usePublishTab, usePublishViewContext, useWarmTabs } from '@/lib/view-context';
+import { usePublishTab, usePublishTabs, usePublishViewContext, useWarmTabs, type TabPayload } from '@/lib/view-context';
+
+/** Each deal tab the page can show, as the assistant is told of it before it loads. */
+const DEAL_TAB_INFO: Record<string, { label: string; purpose: string }> = {
+  memo: MEMO_TAB,
+  syndicate: SYNDICATE_TAB,
+  closing: CLOSING_TAB,
+  servicing: SERVICING_TAB,
+  financials: FINANCIALS_TAB,
+  performance: PERFORMANCE_TAB,
+  compliance: COMPLIANCE_TAB,
+};
 
 const REASONS = [
   ['LIQ', 'Liquidity or reserve constraint'],
@@ -147,8 +158,8 @@ interface Preview {
 }
 
 const PREVIEW = `
-  query PreviewAllocation($dealId: ID!, $asOfDate: Date, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
-    previewAllocation(dealId: $dealId, asOfDate: $asOfDate, holds: $holds, adjustments: $adjustments) {
+  query PreviewAllocation($dealId: ID!, $asOfDate: Date, $knowledgeDate: DateTime, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
+    previewAllocation(dealId: $dealId, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate, holds: $holds, adjustments: $adjustments) {
       dealName description stage strategy borrower borrowerId sponsor sponsorId pricing oid leverage maturity closeDate
       facilitySize targetHold allocated unallocated
       tranches { id name label size holdPct targetAmount allocated unfunded instrumentType rank pricing callProtection equityLinked coverage tickingFee status securityId }
@@ -264,6 +275,7 @@ function EditableValue({
 
 export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName?: string }) {
   const asOfDate = useTemporalStore((state) => state.asOfDate);
+  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [holds, setHolds] = useState<Record<string, number>>({});
   const [baselineHolds, setBaselineHolds] = useState<Record<string, number>>({});
@@ -302,6 +314,16 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
     return (open.length ? open : [...DEAL_PANEL_KEYS]).filter((key) => key !== 'capital');
   }, [live.pages, releaseTabs]);
   const warmed = useWarmTabs(warmKeys, tab);
+  // Every tab is published from the start, as not loaded (docs/SURFACE_TABS.md rule 4).
+  // Each tab's own entry replaces its placeholder once it has loaded.
+  const shownKeys = useMemo(() => {
+    const open = live.pages.map((page) => mountedPanel(page, DEAL_PANEL_KEYS)).filter((key): key is string => Boolean(key));
+    return (open.length ? open : [...DEAL_PANEL_KEYS]).filter((key) => key in DEAL_TAB_INFO);
+  }, [live.pages]);
+  usePublishTabs(useMemo(
+    () => Object.fromEntries(shownKeys.map((key) => [key, { ...DEAL_TAB_INFO[key], data: null } satisfies TabPayload])),
+    [shownKeys],
+  ));
   // A full before-and-after test of every rule is a Hypo run the user starts. It never saves the allocation.
   const hypo = useDealHypo({ dealId, asOfDate, holds, adjustments });
   const complianceFunds = useMemo(() => (preview?.rows || []).map((row) => ({
@@ -323,7 +345,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const load = useCallback(async (local: { holds: Record<string, number>; adjustments: Adjustment[] } | null) => {
     const id = ++requestId.current;
     setLoading(true);
-    const variables: Record<string, unknown> = { dealId, asOfDate };
+    const variables: Record<string, unknown> = { dealId, asOfDate, knowledgeDate: knowledgeDate || null };
     if (local) {
       variables.holds = Object.entries(local.holds).map(([trancheId, holdPct]) => ({ trancheId, holdPct }));
       variables.adjustments = local.adjustments.map((item) => ({
@@ -358,7 +380,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       setSeeded(true);
     }
     setLoading(false);
-  }, [asOfDate, dealId]);
+  }, [asOfDate, dealId, knowledgeDate]);
 
   const previewGate = useRef<string | null>(null);
   useEffect(() => {

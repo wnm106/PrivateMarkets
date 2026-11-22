@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import type { ParsedTable } from './types';
+import { assertSafeSpreadsheet } from '@tapestrai/graphql/src/lib/spreadsheet-safety';
 
 export function parseDelimited(text: string, delimiter: ',' | '\t' | ';'): ParsedTable {
   const source = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -78,6 +79,7 @@ function cellToString(value: unknown): string {
 }
 
 export function parseXlsx(buffer: Buffer): ParsedTable {
+  assertSafeSpreadsheet(buffer);
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) return { headers: [], rows: [] };
@@ -135,6 +137,7 @@ function matrixToTable(matrix: (string | number | Date | null)[][]): ParsedTable
 }
 
 export function parseWorkbook(buffer: Buffer): NamedTable[] {
+  assertSafeSpreadsheet(buffer);
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   return workbook.SheetNames.map((name, index) => {
     const sheet = workbook.Sheets[name];

@@ -18,10 +18,22 @@ export type ToolCategory =
   | 'reconciliation'     // Fund close: NAV, position, and cash reconciliation
   | 'external';          // The client's own MCP servers, and remembering ids in those systems
 
+/**
+ * What calling a tool does, so who may call it is decided from data, not from its name.
+ *   read   changes nothing.
+ *   stage  writes only drafts and staging (a load session, a staged batch, a narrative run being
+ *          written, an evaluation run): nothing a live record, rule or setting reads.
+ *   write  changes live records, rules or settings. The assistant never runs one itself: the chat
+ *          holds the call for the person to confirm (apps/web/lib/held-actions.ts).
+ * Left out, a tool named like a read (get_, list_, search_ ...) is read and any other is write.
+ */
+export type ToolEffect = 'read' | 'stage' | 'write';
+
 export interface ToolDefinition {
   name: string;
   description: string;
   category: ToolCategory;
+  effect?: ToolEffect;
   inputSchema: JSONSchema7;
   execute: (args: Record<string, any>, supabase: SupabaseClient) => Promise<ToolExecutionResult>;
 }

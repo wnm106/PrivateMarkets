@@ -14,43 +14,22 @@
 
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { isPublicAddress } from '../lib/public-address';
 
 export function privateAddressesAllowed(): boolean {
   return process.env.ASSISTANT_MCP_ALLOW_PRIVATE === 'true';
 }
 
-function ipv4Parts(ip: string): number[] | null {
-  const parts = ip.split('.').map(Number);
-  return parts.length === 4 && parts.every((p) => Number.isInteger(p) && p >= 0 && p <= 255) ? parts : null;
-}
-
-/** True for loopback, private, link-local, carrier-grade NAT, multicast and reserved addresses. */
+/**
+ * True for any IP address that is not a host on the public internet: loopback,
+ * private, link-local, carrier-grade NAT, multicast, reserved, and IPv4 carried
+ * inside IPv6 (mapped, NAT64, 6to4, Teredo) however it is written. The URL
+ * parser rewrites [::ffff:127.0.0.1] as [::ffff:7f00:1], so both forms must be
+ * read the same way. False for text that is not an IP address.
+ */
 export function isPrivateAddress(ip: string): boolean {
-  const address = ip.replace(/^\[|\]$/g, '').toLowerCase();
-  const mapped = address.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  const v4 = ipv4Parts(mapped ? mapped[1] : address);
-  if (v4) {
-    const [a, b] = v4;
-    return (
-      a === 0 || a === 10 || a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 192 && b === 0) ||
-      (a === 198 && (b === 18 || b === 19)) ||
-      a >= 224
-    );
-  }
-  if (isIP(address) === 6) {
-    return (
-      address === '::' || address === '::1' ||
-      address.startsWith('fc') || address.startsWith('fd') ||
-      address.startsWith('fe8') || address.startsWith('fe9') || address.startsWith('fea') || address.startsWith('feb') ||
-      address.startsWith('ff')
-    );
-  }
-  return false;
+  const address = ip.replace(/^\[|\]$/g, '').split('%')[0];
+  return isIP(address) !== 0 && !isPublicAddress(address);
 }
 
 const PRIVATE_NAMES = /(^localhost$|\.localhost$|\.local$|\.internal$|\.lan$|^metadata\.google\.internal$)/i;
@@ -76,14 +55,23 @@ export function checkServerUrl(raw: string, allowPrivate = privateAddressesAllow
   return null;
 }
 
-/** Throws when the address's host resolves to a private address. */
-export async function assertPublicHost(raw: string, allowPrivate = privateAddressesAllowed()): Promise<void> {
+/**
+ * Throws when the address's host resolves to a private address. Returns the
+ * addresses it checked, so the connection can be made to them and no other
+ * (pinnedFetch); empty when private addresses are allowed.
+ */
+export async function assertPublicHost(
+  raw: string,
+  allowPrivate = privateAddressesAllowed(),
+  resolve: (host: string) => Promise<string[]> = async (host) => (await lookup(host, { all: true })).map((entry) => entry.address),
+): Promise<string[]> {
   const problem = checkServerUrl(raw, allowPrivate);
   if (problem) throw new Error(problem);
-  if (allowPrivate) return;
+  if (allowPrivate) return [];
   const host = new URL(raw).hostname.replace(/^\[|\]$/g, '');
-  const addresses = isIP(host) ? [{ address: host }] : await lookup(host, { all: true });
-  if (!addresses.length || addresses.some((a) => isPrivateAddress(a.address))) {
+  const addresses = isIP(host) ? [host] : await resolve(host);
+  if (!addresses.length || addresses.some((address) => isPrivateAddress(address))) {
     throw new Error('The server address resolves to a private network, which the assistant may not reach.');
   }
+  return addresses;
 }

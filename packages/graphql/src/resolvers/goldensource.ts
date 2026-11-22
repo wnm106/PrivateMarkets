@@ -1,5 +1,15 @@
 ﻿import { Context } from "../context";
-import { evaluatePrecedence } from "../lib/rule-engine";
+import { ok } from '../lib/db-result';
+
+/** The tiers of golden_master.preference_decision, in the order it tries them. */
+const DECISION_TIERS = ["MANUAL_OVERRIDE", "CALCULATED", "TEMPLATE_SEQUENCE", "ATTRIBUTE_SEQUENCE", "DATA_SOURCE_SEQUENCE"];
+const DECISION_TIER_NAMES: Record<string, string> = {
+  MANUAL_OVERRIDE: "Manual override",
+  CALCULATED: "Calculated value",
+  TEMPLATE_SEQUENCE: "Template source order",
+  ATTRIBUTE_SEQUENCE: "Attribute source order",
+  DATA_SOURCE_SEQUENCE: "Source registry rank",
+};
 
 const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -21,9 +31,9 @@ function receiptIsStale(receivedAt: string | null | undefined, sourceCode: strin
 export const goldenSourceResolvers = {
   Query: {
     goldenSource: async (_: any, args: { entityId: string; attributeCode: string }, context: Context) => {
-      const { data: attr } = await context.supabase
+      const { data: attr } = ok(await context.supabase
         .from("attribute_register").select("id, attribute_code, attribute_name")
-        .eq("attribute_code", args.attributeCode).single();
+        .eq("attribute_code", args.attributeCode).single());
       if (!attr) return null;
 
       const { data, error } = await context.supabase
@@ -75,12 +85,12 @@ export const goldenSourceResolvers = {
     },
 
     templatePrecedenceChain: async (_: any, args: { templateId: string; attributeCode: string }, context: Context) => {
-      const { data: attr } = await context.supabase
-        .from("attribute_register").select("id").eq("attribute_code", args.attributeCode).single();
+      const { data: attr } = ok(await context.supabase
+        .from("attribute_register").select("id").eq("attribute_code", args.attributeCode).single());
       if (!attr) return null;
-      const { data } = await context.supabase
+      const { data } = ok(await context.supabase
         .from("template_attribute_assignments").select("default_precedence_chain, chain_version")
-        .eq("template_id", args.templateId).eq("attribute_id", attr.id).maybeSingle();
+        .eq("template_id", args.templateId).eq("attribute_id", attr.id).maybeSingle());
       const sources = Array.isArray(data?.default_precedence_chain)
         ? (data.default_precedence_chain as string[]).filter((code) => code && code !== "MANUAL")
         : [];
@@ -92,13 +102,26 @@ export const goldenSourceResolvers = {
       return qualifyTemplate(context, args.entityId, args.domainCode);
     },
 
-    evaluateGoldenSource: async (_: any, args: { entityId: string; attributeCode: string; domainCode: string; templateId: string }, context: Context) => {
-      const result = await evaluatePrecedence(context.supabase, args.entityId, args.attributeCode, args.domainCode, args.templateId || null);
+    // The winner as golden_master.preference_decision decides it, the same decision the
+    // value triggers store. Nothing is interpreted here. domainCode and templateId are
+    // read from the record itself.
+    evaluateGoldenSource: async (_: any, args: { entityId: string; attributeCode: string }, context: Context) => {
+      const { data, error } = await context.supabase
+        .schema("golden_master")
+        .rpc("explain_golden_source", { p_entity_id: args.entityId, p_attribute_code: args.attributeCode });
+      if (error) throw new Error(error.message);
+      const explained = (data || {}) as { winningSource?: string | null; winningSourceId?: string | null; tier?: string | null; chainVersion?: number; candidates?: unknown[] };
+      const tier = explained.tier || null;
       return {
-        winningSource: result.winningSource, winningSourceId: result.winningSourceId,
-        tierUsed: result.tierUsed, isDefault: result.isDefault, resolutionVersion: result.resolutionVersion,
-        appliedRuleCode: result.appliedRule?.ruleCode || null, appliedRuleName: result.appliedRule?.ruleName || null,
-        allCandidates: result.allCandidates,
+        winningSource: explained.winningSource || "NONE",
+        winningSourceId: explained.winningSourceId || null,
+        tier,
+        tierUsed: tier ? DECISION_TIERS.indexOf(tier) + 1 : 0,
+        isDefault: tier === "ATTRIBUTE_SEQUENCE" || tier === "DATA_SOURCE_SEQUENCE",
+        resolutionVersion: explained.chainVersion ?? 0,
+        appliedRuleCode: tier,
+        appliedRuleName: tier ? DECISION_TIER_NAMES[tier] || tier : null,
+        allCandidates: explained.candidates || [],
       };
     },
   },
@@ -125,16 +148,16 @@ export const goldenSourceResolvers = {
     updateTemplatePrecedenceChain: async (_: any, args: { templateId: string; attributeCode: string; chain: string[] }, context: Context) => {
       try {
         const { templateId, attributeCode, chain } = args;
-        const { data: attr } = await context.supabase.from("attribute_register").select("id").eq("attribute_code", attributeCode).single();
+        const { data: attr } = ok(await context.supabase.from("attribute_register").select("id").eq("attribute_code", attributeCode).single());
         if (!attr) return { success: false, chainVersion: 0, entitiesResolved: 0, errors: [{ field: "attributeCode", message: "Attribute not found", code: "NOT_FOUND" }] };
 
         // Check if assignment exists; if not, create it
-        const { data: assignment } = await context.supabase
+        const { data: assignment } = ok(await context.supabase
           .from("template_attribute_assignments")
           .select("id, chain_version")
           .eq("template_id", templateId)
           .eq("attribute_id", attr.id)
-          .maybeSingle();
+          .maybeSingle());
 
         const sources = (chain || []).filter((code) => code && code !== "MANUAL");
         const storedChain = sources.length > 0 ? sources : null;
@@ -162,7 +185,7 @@ export const goldenSourceResolvers = {
           chainVersion = newAssignment?.chain_version || 1;
         }
 
-        const { data: template } = await context.supabase.from("domain_templates").select("domain_code, template_code").eq("id", templateId).single();
+        const { data: template } = ok(await context.supabase.from("domain_templates").select("domain_code, template_code").eq("id", templateId).single());
         let resolved = 0;
         if (template) resolved = await batchReresolve(context, template.domain_code, attributeCode, template.template_code);
 
@@ -176,40 +199,19 @@ export const goldenSourceResolvers = {
 
 // ─── Internal helpers ────────────────────────────────────────────────
 
+/** Re-decides one record's golden source with golden_master.reresolve_golden_sources and returns the winner. */
 async function resolveAndPersistGolden(
   context: Context, entityId: string, attributeCode: string,
   _domainCode: string, _templateId: string | null, _validFrom: string
 ): Promise<{ winningSource: string | null; goldenValueId: string | null; goldenValue: string | null }> {
-  const { data: attr } = await context.supabase.from("attribute_register").select("id").eq("attribute_code", attributeCode).single();
-  if (!attr) throw new Error(`Attribute not found: ${attributeCode}`);
-
-  const current = (columns: string) => context.supabase.from("entity_attribute_values")
-    .select(columns)
-    .eq("entity_id", entityId).eq("attribute_id", attr.id)
-    .eq("valid_to", "9999-12-31").eq("system_to", "9999-12-31 23:59:59");
-
-  const { data: sample, error: sampleError } = await current("id").limit(1).maybeSingle<{ id: string }>();
-  if (sampleError) throw sampleError;
-  if (!sample?.id) return { winningSource: null, goldenValueId: null, goldenValue: null };
-
-  const { error: touchError } = await context.supabase.from("entity_attribute_values")
-    .update({ resolved_at: new Date().toISOString() })
-    .eq("id", sample.id);
-  if (touchError) throw touchError;
-
-  const { data: rows, error } = await current("id, source_id, golden_source_id, golden_value")
-    .returns<Array<{ id: string; source_id: string | null; golden_source_id: string | null; golden_value: string | null }>>();
-  if (error) throw error;
-  const winner = (rows || []).find((row) => row.golden_source_id && row.source_id === row.golden_source_id);
-  let winningSource: string | null = null;
-  if (winner?.source_id) {
-    const { data: source } = await context.supabase.schema("entity_instances").from("source_registry")
-      .select("source_code").eq("id", winner.source_id).maybeSingle();
-    winningSource = source?.source_code ?? null;
-  }
-  return { winningSource, goldenValueId: winner?.id || null, goldenValue: winner?.golden_value || null };
+  const { data } = ok(await context.supabase
+    .schema("golden_master")
+    .rpc("reresolve_golden_sources", { p_entity_ids: [entityId], p_attribute_code: attributeCode }));
+  const winner = ((data || []) as Array<{ golden_value_id: string; winning_source: string | null; golden_value: string | null }>)[0];
+  return { winningSource: winner?.winning_source ?? null, goldenValueId: winner?.golden_value_id ?? null, goldenValue: winner?.golden_value ?? null };
 }
 
+/** Re-decides an attribute's golden source for every record of a domain (or template), a page of records a call. */
 async function batchReresolve(
   context: Context, domainCode: string, attributeCode: string, templateCode?: string
 ): Promise<number> {
@@ -223,24 +225,22 @@ async function batchReresolve(
   }
 
   let resolved = 0;
-  const validFrom = new Date().toISOString().split("T")[0];
-  const batchSize = 50;
   // PostgREST returns at most max_rows (1,000) rows per request, so the entities are read page by page.
   const pageSize = 1000;
+  const callSize = 500;
   for (let from = 0; ; ) {
-    let query = context.supabase.from("entity_master").select("entity_id, template_id, domain_code").eq("domain_code", domainCode);
+    let query = context.supabase.from("entity_master").select("entity_id").eq("domain_code", domainCode);
     if (templateId) query = query.eq("template_id", templateId);
     const { data: entities, error } = await query.order("entity_id", { ascending: true }).range(from, from + pageSize - 1);
     if (error) throw error;
-    const page = entities || [];
+    const page = (entities || []).map((entity: any) => entity.entity_id as string);
     if (page.length === 0) break;
-    for (let i = 0; i < page.length; i += batchSize) {
-      const batch = page.slice(i, i + batchSize);
-      const results = await Promise.all(batch.map(async (entity: any) => {
-        try { await resolveAndPersistGolden(context, entity.entity_id, attributeCode, domainCode, entity.template_id, validFrom); return true; }
-        catch (err) { console.error(`Failed to re-resolve for entity ${entity.entity_id}:`, err); return false; }
-      }));
-      resolved += results.filter(Boolean).length;
+    for (let i = 0; i < page.length; i += callSize) {
+      const ids = page.slice(i, i + callSize);
+      ok(await context.supabase
+        .schema("golden_master")
+        .rpc("reresolve_golden_sources", { p_entity_ids: ids, p_attribute_code: attributeCode }));
+      resolved += ids.length;
     }
     // Advance by what came back, so a lower row cap than pageSize skips nothing.
     from += page.length;
@@ -251,12 +251,12 @@ async function batchReresolve(
 async function qualifyTemplate(
   context: Context, entityId: string, domainCode: string
 ): Promise<{ templateId: string | null; templateCode: string | null; matched: boolean }> {
-  const { data: templates } = await context.supabase
+  const { data: templates } = ok(await context.supabase
     .from("domain_templates").select("*").eq("domain_code", domainCode).eq("is_active", true)
-    .order("qualification_priority", { ascending: true });
+    .order("qualification_priority", { ascending: true }));
   if (!templates || templates.length === 0) return { templateId: null, templateCode: null, matched: false };
 
-  const { data: entityAttrs } = await context.supabase.from("source_attribute_values").select("*").eq("entity_id", entityId);
+  const { data: entityAttrs } = ok(await context.supabase.from("source_attribute_values").select("*").eq("entity_id", entityId));
   const attributesByCode: Record<string, any> = {};
   (entityAttrs || []).forEach((attr: any) => { if (!attributesByCode[attr.attribute_code]) attributesByCode[attr.attribute_code] = attr.attribute_value; });
 

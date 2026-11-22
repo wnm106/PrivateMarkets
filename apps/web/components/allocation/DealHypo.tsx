@@ -21,10 +21,11 @@ import {
   type FundResult,
   type FundRule,
 } from './DealCompliance';
+import { useTemporalStore } from '@/lib/store';
 
 const HYPO = `
-  mutation RunDealHypo($dealId: ID!, $asOfDate: Date, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
-    runDealHypo(dealId: $dealId, asOfDate: $asOfDate, holds: $holds, adjustments: $adjustments) {
+  mutation RunDealHypo($dealId: ID!, $asOfDate: Date, $knowledgeDate: DateTime, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
+    runDealHypo(dealId: $dealId, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate, holds: $holds, adjustments: $adjustments) {
       scenarioCode asOfDate ranAt
       rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode groupLabel }
       before { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
@@ -77,7 +78,9 @@ export function useDealHypo({
   const [error, setError] = useState('');
   const [ranKey, setRanKey] = useState<string | null>(null);
   const request = useRef(0);
-  const key = JSON.stringify([asOfDate || null, holds, adjustments]);
+  // A Hypo writes its scenario now; the server refuses an earlier Knowledge date and says why.
+  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+  const key = JSON.stringify([asOfDate || null, knowledgeDate || null, holds, adjustments]);
 
   const start = useCallback(() => {
     const id = ++request.current;
@@ -87,6 +90,7 @@ export function useDealHypo({
     graphqlMutation<{ runDealHypo: DealHypoRun & { errors: Array<{ message: string }> } }>(HYPO, {
       dealId,
       asOfDate: asOfDate || null,
+      knowledgeDate: knowledgeDate || null,
       holds: Object.entries(holds).map(([trancheId, holdPct]) => ({ trancheId, holdPct })),
       adjustments: adjustments.map((item) => ({
         fundId: item.fundId,
@@ -112,7 +116,7 @@ export function useDealHypo({
     }).finally(() => {
       if (id === request.current) setRunning(false);
     });
-  }, [adjustments, asOfDate, dealId, holds, key]);
+  }, [adjustments, asOfDate, dealId, holds, key, knowledgeDate]);
 
   return { run, running, error, stale: Boolean(run && ranKey !== null && ranKey !== key), start };
 }

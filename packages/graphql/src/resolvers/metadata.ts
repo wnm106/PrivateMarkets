@@ -2,6 +2,7 @@ import { FormulaEngine, DerivationContext } from '../lib/formula-engine';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { Context } from '../context';
 import { withClientNames } from './schema-scope';
+import { ok } from '../lib/db-result';
 
 export const metadataResolvers = {
   Query: {
@@ -47,20 +48,20 @@ export const metadataResolvers = {
         // still place another entity's attribute on this screen.
         if (args.domainCode) {
           // Get all templates for this domain
-          const { data: domainTemplates } = await supabase
+          const { data: domainTemplates } = ok(await supabase
             .from('domain_templates')
             .select('id')
-            .eq('domain_code', args.domainCode);
+            .eq('domain_code', args.domainCode));
           
           const templateIds = (domainTemplates || []).map((t: any) => t.id);
           
           // Get all attribute assignments for these templates
           let assignedAttributeIds = new Set<string>();
           if (templateIds.length > 0) {
-            const { data: assignments } = await supabase
+            const { data: assignments } = ok(await supabase
               .from('template_attribute_assignments')
               .select('attribute_id')
-              .in('template_id', templateIds);
+              .in('template_id', templateIds));
             
             assignedAttributeIds = new Set(
               (assignments || []).map((a: any) => a.attribute_id)
@@ -246,10 +247,10 @@ export const metadataResolvers = {
         assignmentsByTemplate.get(a.template_id)!.push(a);
       });
 
-      const { data: sections } = await supabase
+      const { data: sections } = ok(await supabase
         .from('template_sections')
         .select('id, template_id, section_code, section_name, display_order, description')
-        .in('template_id', templateIds);
+        .in('template_id', templateIds));
       const sectionById = new Map<string, any>((sections || []).map((section: any) => [section.id, section]));
 
       return withClientNames(context, templates.map((t: any) => ({
@@ -628,12 +629,12 @@ export const metadataResolvers = {
       if (!domain) return sectionError('domainCode', 'Entity type not found.');
       const duplicate = await sectionNameTaken(supabase, domainCode, sectionName);
       if (duplicate) return sectionError('sectionName', 'That section name is already used for this entity type.');
-      const { data: last } = await supabase
+      const { data: last } = ok(await supabase
         .from('attribute_sections')
         .select('display_order')
         .eq('domain_code', domainCode)
         .order('display_order', { ascending: false })
-        .limit(1);
+        .limit(1));
       const displayOrder = (Number(last?.[0]?.display_order) || 0) + 10;
       const { data, error } = await supabase
         .from('attribute_sections')
@@ -873,19 +874,19 @@ export async function ensureAttributeSection(
   if (taken) return;
   let ownerId = clientId;
   if (ownerId === undefined) {
-    const { data: domain } = await supabase
+    const { data: domain } = ok(await supabase
       .from('domain_types')
       .select('client_id')
       .eq('domain_code', domainCode)
-      .maybeSingle();
+      .maybeSingle());
     ownerId = domain?.client_id ?? null;
   }
-  const { data: last } = await supabase
+  const { data: last } = ok(await supabase
     .from('attribute_sections')
     .select('display_order')
     .eq('domain_code', domainCode)
     .order('display_order', { ascending: false })
-    .limit(1);
+    .limit(1));
   const displayOrder = (Number(last?.[0]?.display_order) || 0) + 10;
   const { error } = await supabase.from('attribute_sections').insert({
     domain_code: domainCode,
@@ -970,10 +971,10 @@ function precedenceChainFromRow(row: any): string[] {
 async function attachPrecedenceMetadata(supabase: SupabaseClient, rows: any[]): Promise<any[]> {
   const missing = rows.filter((row) => row?.id && row.metadata == null);
   if (missing.length === 0) return rows;
-  const { data } = await supabase
+  const { data } = ok(await supabase
     .from('attribute_register')
     .select('id, metadata')
-    .in('id', missing.map((row) => row.id));
+    .in('id', missing.map((row) => row.id)));
   const byId = new Map((data || []).map((row: any) => [row.id, row.metadata]));
   return rows.map((row) => (
     row.metadata == null ? { ...row, metadata: byId.get(row.id) || {} } : row

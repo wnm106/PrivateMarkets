@@ -5,6 +5,13 @@ import Link from 'next/link';
 import { graphqlMutation } from '@/lib/graphql';
 import { dealCheckResults, resultsForAssignedRules, resultsForFund } from '@/lib/deal-compliance-view';
 import { usePublishTab } from '@/lib/view-context';
+import { useTemporalStore } from '@/lib/store';
+
+/** What the Compliance tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const COMPLIANCE_TAB = {
+  label: 'Compliance',
+  purpose: 'How this deal scores against each compliance rule, pro forma, for the fund selected in the tab, and what the last Hypo run did to each fund\'s rules.',
+};
 
 export interface ComplianceFundRef {
   fundId: string;
@@ -226,8 +233,8 @@ function tally(results: FundResult[], directionFor: (result: FundResult) => stri
 }
 
 const SCORE = `
-  mutation ScoreDealCompliance($dealId: ID!, $asOfDate: Date, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
-    scoreDealCompliance(dealId: $dealId, asOfDate: $asOfDate, holds: $holds, adjustments: $adjustments) {
+  mutation ScoreDealCompliance($dealId: ID!, $asOfDate: Date, $knowledgeDate: DateTime, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
+    scoreDealCompliance(dealId: $dealId, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate, holds: $holds, adjustments: $adjustments) {
       rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode groupLabel }
       results { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
       errors { message }
@@ -264,6 +271,8 @@ export function useDealComplianceScore({
   const [board, setBoard] = useState<Board | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState('');
+  // Scored as known at the user's Knowledge date. Unsaved edits are scored against what is known now.
+  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const holdKey = JSON.stringify(holds);
   const adjustmentKey = JSON.stringify(adjustments);
   const requestKey = live ? `${holdKey}|${adjustmentKey}` : 'saved';
@@ -285,17 +294,19 @@ export function useDealComplianceScore({
         // A saved amount is not a what-if override. Scoring never changes the saved allocation.
         saved: item.saved === true ? true : undefined,
       }));
-      const savedKey = `${dealId}|${asOfDate || ''}|saved`;
+      const savedKey = `${dealId}|${asOfDate || ''}|${knowledgeDate || ''}|saved`;
       const request = live
         ? graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>(SCORE, {
           dealId,
           asOfDate: asOfDate || null,
+          knowledgeDate: knowledgeDate || null,
           holds: holdList,
           adjustments: adjustmentList,
         })
         : savedScoreRequests.get(savedKey) || graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>(SCORE, {
           dealId,
           asOfDate: asOfDate || null,
+          knowledgeDate: knowledgeDate || null,
           holds: null,
           adjustments: null,
         });
@@ -322,7 +333,7 @@ export function useDealComplianceScore({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [dealId, asOfDate, enabled, requestKey]);
+  }, [dealId, asOfDate, knowledgeDate, enabled, requestKey]);
 
   return { board, loading, error };
 }
@@ -509,8 +520,7 @@ export function DealCompliance({ dealId, asOfDate, holds, adjustments, funds, sc
   }, [selectedResults, rules, query, category, bucket, sort]);
 
   usePublishTab('compliance', {
-    label: 'Compliance',
-    purpose: 'How this deal scores against each compliance rule, pro forma, for the fund selected in the tab, and what the last Hypo run did to each fund\'s rules.',
+    ...COMPLIANCE_TAB,
     howToRead: `tally counts the rules across the deal. rules lists the selected fund only. value is the rule's computed pro forma figure and hardLimit its limit. ${hypoHowToRead}`.trim(),
     data: {
       hypoRun,

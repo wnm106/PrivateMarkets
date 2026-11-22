@@ -9,6 +9,7 @@ import { FUND_PANEL_KEYS, mountedPanel, tabReason, useLiveSurface } from '@/comp
 import { useSurfaceNav } from '@/lib/surface-nav';
 import { usePublishTabs, type TabPayload } from '@/lib/view-context';
 import { attrBind, useInspectBind, type AttrBind } from '@/components/detail/InspectValue';
+import { useLatestRequest } from '@/lib/use-latest-request';
 
 const TABS = [
   ['nav', 'NAV'],
@@ -561,9 +562,12 @@ export function FundSurface({ fundId }: { fundId: string }) {
   const [query, setQuery] = useState('');
   const [group, setGroup] = useState<'strategy' | 'sector' | 'issuer'>('strategy');
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     setLoading(true);
-    const result = await graphqlQuery<{ fundSurface: Surface }>(QUERY, { fundId, asOfDate, knowledgeDate }, 'network-only');
+    const result = await graphqlQuery<{ fundSurface: Surface }>(QUERY, { fundId, asOfDate, knowledgeDate }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     const data = result.data?.fundSurface;
     if (result.error || !data) {
       setError(result.error?.message || 'Could not load the fund surface');
@@ -573,7 +577,7 @@ export function FundSurface({ fundId }: { fundId: string }) {
     setSurface(data);
     setError(data.errors?.[0]?.message || null);
     setLoading(false);
-  }, [asOfDate, fundId, knowledgeDate]);
+  }, [latest, asOfDate, fundId, knowledgeDate]);
 
   useEffect(() => { setStructureOverride(null); }, [fundId]);
 

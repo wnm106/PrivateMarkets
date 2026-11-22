@@ -5,6 +5,7 @@ import { visionJsonToStatementText } from '@tapestrai/graphql/src/lib/statement-
 import { invokeAgent, runWithAgentContext } from '@tapestrai/mcp-server/src/agent/harness';
 import { geminiAnswerText } from '@tapestrai/mcp-server/src/agent/usage';
 import { feedAuditClientId, requireFeedUser } from '@/lib/feeds/require-user';
+import { assertSafeSpreadsheet } from '@tapestrai/graphql/src/lib/spreadsheet-safety';
 
 export const dynamic = 'force-dynamic';
 
@@ -83,6 +84,7 @@ async function sourceFromFile(file: File) {
 }
 
 function workbookToText(bytes: Buffer): string {
+  assertSafeSpreadsheet(bytes);
   const workbook = XLSX.read(bytes, { type: 'buffer', cellDates: true });
   const blocks: string[] = [];
   for (const sheetName of workbook.SheetNames) {

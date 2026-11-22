@@ -11,6 +11,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { assertPublicHost } from './url-guard';
+import { pinnedFetch } from './pinned-fetch';
 import type { DiscoveredTool, ExternalToolResult, ServerConnection } from './types';
 
 const CLIENT_INFO = { name: 'tapestrai-assistant', version: '1.0.0' };
@@ -27,10 +28,11 @@ export function authHeaders(connection: ServerConnection): Record<string, string
   return header ? { [header]: secret } : {};
 }
 
+/** Checks the address, then connects only to the addresses it checked (pinned-fetch.ts). */
 const guardedFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-  await assertPublicHost(url);
-  return fetch(input, { ...init, redirect: 'error' });
+  const addresses = await assertPublicHost(url);
+  return pinnedFetch(input, { ...init, redirect: 'error' }, addresses);
 };
 
 function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {

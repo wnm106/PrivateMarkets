@@ -8,6 +8,8 @@ import { dirtyAttributeCodes } from './calculation';
 import { ensureAttributeSection } from './metadata';
 import { resolveEntityClientId, resolveSchemaClientId, withClientNames } from './schema-scope';
 import { OPEN_SYSTEM_TO, writeGoldenValue } from '../lib/golden-write';
+import { ok } from '../lib/db-result';
+import { groupBy, loaderFor } from '../lib/request-loaders';
 
 function normalizePrecedenceChain(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -280,7 +282,8 @@ export const entityResolvers = {
         
         // Apply pagination
         const limit = pagination?.first || 20;
-        const offset = pagination?.after ? parseInt(atob(pagination.after)) : 0;
+        // A cursor is the index of the last row returned, so the next page starts after it.
+        const offset = pagination?.after ? parseInt(atob(pagination.after), 10) + 1 : 0;
         
         query = query.range(offset, offset + limit - 1);
         query = query.order('entity_name');
@@ -534,37 +537,37 @@ export const entityResolvers = {
   
   Entity: {
     lineage: async (entity: any, _: any, context: Context) => {
-      const { data, error } = await context.supabase
-        .from('entity_attribute_values')
-        .select('*')
-        .eq('entity_id', entity.id)
-        .eq('valid_to', '9999-12-31')
-        .eq('system_to', '9999-12-31 23:59:59');
-      
-      if (error) throw error;
+      // Current values, with their attribute and source, for every entity asked about in this request at once.
+      const rows = await loaderFor(context, 'currentValuesByEntity', async (entityIds) => {
+        const { data } = ok(await context.supabase
+          .from('entity_attribute_values')
+          .select('*')
+          .in('entity_id', [...entityIds])
+          .eq('valid_to', '9999-12-31')
+          .eq('system_to', '9999-12-31 23:59:59+00'));
+        const values = (data || []) as any[];
+        const attributeIds = [...new Set(values.map((row) => row.attribute_id).filter(Boolean))];
+        const sourceIds = [...new Set(values.map((row) => row.source_id).filter(Boolean))];
+        const [{ data: attributes }, { data: sourceRows }] = await Promise.all([
+          attributeIds.length
+            ? context.supabase.from('attribute_register').select('id, attribute_code, attribute_name').in('id', attributeIds).then(ok)
+            : Promise.resolve({ data: [] as any[], error: null }),
+          sourceIds.length
+            ? context.supabase.schema('entity_instances').from('source_registry').select('id, source_code, source_name').in('id', sourceIds).then(ok)
+            : Promise.resolve({ data: [] as any[], error: null }),
+        ]);
+        const attributeById = new Map((attributes || []).map((attribute: any) => [attribute.id, attribute]));
+        const sourceById = new Map((sourceRows || []).map((source: any) => [source.id, source]));
+        const enriched = values.map((row) => ({
+          ...row,
+          attribute_code: attributeById.get(row.attribute_id)?.attribute_code,
+          attribute_name: attributeById.get(row.attribute_id)?.attribute_name,
+          source_code: sourceById.get(row.source_id)?.source_code,
+          source_name: sourceById.get(row.source_id)?.source_name,
+        })).filter((row) => row.attribute_code && row.source_code);
+        return groupBy(enriched, 'entity_id');
+      }, () => [] as any[]).load(entity.id);
 
-      const attributeIds = [...new Set((data || []).map((row: any) => row.attribute_id).filter(Boolean))];
-      const sourceIds = [...new Set((data || []).map((row: any) => row.source_id).filter(Boolean))];
-      const [{ data: attributes, error: attributeError }, { data: sourceRows, error: sourceError }] = await Promise.all([
-        attributeIds.length
-          ? context.supabase.from('attribute_register').select('id, attribute_code, attribute_name').in('id', attributeIds)
-          : Promise.resolve({ data: [], error: null }),
-        sourceIds.length
-          ? context.supabase.schema('entity_instances').from('source_registry').select('id, source_code, source_name').in('id', sourceIds)
-          : Promise.resolve({ data: [], error: null }),
-      ]);
-      if (attributeError) throw attributeError;
-      if (sourceError) throw sourceError;
-      const attributeById = new Map((attributes || []).map((attribute: any) => [attribute.id, attribute]));
-      const sourceById = new Map((sourceRows || []).map((source: any) => [source.id, source]));
-      const rows = (data || []).map((row: any) => ({
-        ...row,
-        attribute_code: attributeById.get(row.attribute_id)?.attribute_code,
-        attribute_name: attributeById.get(row.attribute_id)?.attribute_name,
-        source_code: sourceById.get(row.source_id)?.source_code,
-        source_name: sourceById.get(row.source_id)?.source_name,
-      })).filter((row: any) => row.attribute_code && row.source_code);
-      
       // Group by attribute
       const byAttribute = new Map<string, any[]>();
       rows.forEach((row: any) => {
@@ -629,11 +632,11 @@ export const entityResolvers = {
         // Get template_id if templateCode provided
         let templateId = null;
         if (input.templateCode) {
-          const { data: template } = await context.supabase
+          const { data: template } = ok(await context.supabase
             .from('domain_templates')
             .select('id')
             .eq('template_code', input.templateCode)
-            .single();
+            .single());
           templateId = template?.id;
         }
         
@@ -659,19 +662,19 @@ export const entityResolvers = {
         // Insert attributes into golden_master
         if (input.attributes) {
           for (const [attrCode, value] of Object.entries(input.attributes)) {
-            const { data: attr } = await context.supabase
+            const { data: attr } = ok(await context.supabase
               .from('attribute_register')
               .select('id, default_precedence_rank')
               .eq('attribute_code', attrCode)
-              .single();
+              .single());
             
             if (attr) {
-              const { data: source } = await context.supabase
+              const { data: source } = ok(await context.supabase
                 .schema('entity_instances')
                 .from('source_registry')
                 .select('id')
                 .eq('source_code', 'MANUAL')
-                .single();
+                .single());
               
               await context.supabase.from('entity_attribute_values').insert({
                 entity_id: entity.id,
@@ -717,11 +720,11 @@ export const entityResolvers = {
         }
         
         // Fetch the created entity from the view
-        const { data: createdEntity } = await context.supabase
+        const { data: createdEntity } = ok(await context.supabase
           .from('entity_master')
           .select('*')
           .eq('entity_id', entity.id)
-          .single();
+          .single());
         
         return { 
           entity: createdEntity ? mapEntityRow(createdEntity) : null, 
@@ -775,11 +778,11 @@ export const entityResolvers = {
         // Update attributes (bi-temporal split)
         if (input.attributes) {
           for (const [attrCode, value] of Object.entries(input.attributes)) {
-            const { data: attr } = await context.supabase
+            const { data: attr } = ok(await context.supabase
               .from('attribute_register')
               .select('id, default_precedence_rank')
               .eq('attribute_code', attrCode)
-              .single();
+              .single());
             
             if (attr) {
               const boxed = value && typeof value === 'object' && !Array.isArray(value) && 'value' in (value as Record<string, unknown>)
@@ -835,11 +838,11 @@ export const entityResolvers = {
         if (input.childRelationships) await replaceLinks(context, input.id, 'child', input.childRelationships);
         
         // Fetch the updated entity from the view
-        const { data: updatedEntity } = await context.supabase
+        const { data: updatedEntity } = ok(await context.supabase
           .from('entity_master')
           .select('*')
           .eq('entity_id', input.id)
-          .single();
+          .single());
         
         return { 
           entity: updatedEntity ? mapEntityRow(updatedEntity) : null, 
@@ -890,17 +893,17 @@ export const entityResolvers = {
         if (error) throw error;
         
         // Fetch related entities to build the relationship object
-        const { data: parentEntity } = await context.supabase
+        const { data: parentEntity } = ok(await context.supabase
           .from('master_entities')
           .select('entity_code, entity_name, domain_code')
           .eq('id', input.parentEntityId)
-          .single();
+          .single());
         
-        const { data: childEntity } = await context.supabase
+        const { data: childEntity } = ok(await context.supabase
           .from('master_entities')
           .select('entity_code, entity_name, domain_code')
           .eq('id', input.childEntityId)
-          .single();
+          .single());
         
         const relationship = {
           parentEntityId: data.parent_entity_id,
@@ -947,17 +950,17 @@ export const entityResolvers = {
         if (!data) throw new Error('That link was not found, or you may not edit it.');
         
         // Fetch related entities
-        const { data: parentEntity } = await context.supabase
+        const { data: parentEntity } = ok(await context.supabase
           .from('master_entities')
           .select('entity_code, entity_name, domain_code')
           .eq('id', data.parent_entity_id)
-          .single();
+          .single());
         
-        const { data: childEntity } = await context.supabase
+        const { data: childEntity } = ok(await context.supabase
           .from('master_entities')
           .select('entity_code, entity_name, domain_code')
           .eq('id', data.child_entity_id)
-          .single();
+          .single());
         
         const relationship = {
           parentEntityId: data.parent_entity_id,
@@ -1031,10 +1034,10 @@ export const entityResolvers = {
         const requestedGroup = Number(input.displayGroup);
         let displayGroup = Number.isFinite(requestedGroup) ? Math.round(requestedGroup) : null;
         if (displayGroup == null) {
-          const { data: peers } = await context.supabase
+          const { data: peers } = ok(await context.supabase
             .from('attribute_register')
             .select('display_group, display_section')
-            .eq('domain_code', domainCode);
+            .eq('domain_code', domainCode));
           const key = displaySection.toLowerCase();
           const highest = (peers || [])
             .filter((row) => String(row.display_section || 'General').trim().toLowerCase() === key)
@@ -1161,11 +1164,11 @@ export const entityResolvers = {
         if (error) throw error;
         
         // Fetch attribute details
-        const { data: attr } = await context.supabase
+        const { data: attr } = ok(await context.supabase
           .from('attribute_register')
           .select('*')
           .eq('id', input.attributeId)
-          .single();
+          .single());
         
         return {
           assignment: {
@@ -1223,11 +1226,11 @@ export const entityResolvers = {
 
         if (error) throw error;
 
-        const { data: attr } = await context.supabase
+        const { data: attr } = ok(await context.supabase
           .from('attribute_register')
           .select('*')
           .eq('id', input.attributeId)
-          .single();
+          .single());
 
         return {
           assignment: {
@@ -1377,10 +1380,10 @@ export const entityResolvers = {
 
         if (error) throw error;
 
-        const { data: assignments } = await context.supabase
+        const { data: assignments } = ok(await context.supabase
           .from('template_attribute_assignments')
           .select('*, attribute_register!inner(*)')
-          .eq('template_id', data.id);
+          .eq('template_id', data.id));
 
         return {
           template: {
@@ -1886,11 +1889,11 @@ export const entityResolvers = {
 };
 
 async function mapIdentifierRow(row: any, context: Context): Promise<any> {
-  const { data: domain } = await context.supabase
+  const { data: domain } = ok(await context.supabase
     .from('domain_types')
     .select('domain_name')
     .eq('domain_code', row.domain_code)
-    .single();
+    .single());
 
   return {
     id: row.id,

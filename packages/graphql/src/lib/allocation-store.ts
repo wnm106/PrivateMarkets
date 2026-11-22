@@ -20,6 +20,8 @@ import {
   type AllocationTranche,
 } from './allocation-engine';
 import { solveDealObservations, walkRankedCapacity, type DealObservationRow } from './compliance-capacity';
+import { knowledgeInstant } from './fund-surface';
+import { knownAt } from './known-at';
 
 
 const VALUE_CODES = [
@@ -46,6 +48,8 @@ export interface AllocationDraft {
   dealCode: string;
   dealName: string;
   asOf: string;
+  /** The knowledge instant the draft was read at. */
+  knowledge: string;
   request: AllocationRequest;
   tranches: LoadedTranche[];
   positions: LoadedPosition[];
@@ -217,11 +221,11 @@ async function valuesFor(
   entityIds: string[],
   defs: Map<string, AttributeDef>,
   asOf: string,
+  knowledge: string,
 ): Promise<Map<string, ValueRow>> {
   const out = new Map<string, ValueRow>();
   const attributeIds = [...defs.values()].map((def) => def.id);
   if (!entityIds.length || !attributeIds.length) return out;
-  const knowledge = new Date().toISOString();
   for (let index = 0; index < entityIds.length; index += 150) {
     const slice = entityIds.slice(index, index + 150);
     const { data, error } = await supabase.schema('golden_master').rpc('winning_attribute_values', {
@@ -242,15 +246,16 @@ function read(values: Map<string, ValueRow>, entityId: string, def: AttributeDef
   return values.get(`${entityId}|${def.id}`);
 }
 
-async function openRelationships(supabase: SupabaseClient, code: string, column: 'parent_entity_id' | 'child_entity_id', ids: string[]) {
-  if (!ids.length) return [] as Array<{ parent_entity_id: string; child_entity_id: string; system_to: string | null }>;
+/** The links of one type that were current knowledge at the knowledge instant. */
+async function openRelationships(supabase: SupabaseClient, code: string, column: 'parent_entity_id' | 'child_entity_id', ids: string[], knowledge: string) {
+  if (!ids.length) return [] as Array<{ parent_entity_id: string; child_entity_id: string; system_from: string | null; system_to: string | null }>;
   const { data, error } = await supabase
     .from('entity_relationships')
-    .select('parent_entity_id, child_entity_id, system_to')
+    .select('parent_entity_id, child_entity_id, system_from, system_to')
     .eq('relationship_code', code)
     .in(column, ids);
   if (error) throw new Error(error.message);
-  return (data || []).filter((row) => isOpen(row.system_to));
+  return (data || []).filter((row) => knownAt(row.system_from, row.system_to, knowledge));
 }
 
 /**
@@ -261,8 +266,10 @@ export async function loadDealScoreAnchors(
   supabase: SupabaseClient,
   dealId: string,
   asOfInput: string | null | undefined,
-): Promise<{ asOf: string; dealCode: string; clientId: string | null; fundIds: string[] }> {
+  knowledgeInput?: string | null,
+): Promise<{ asOf: string; knowledge: string; dealCode: string; clientId: string | null; fundIds: string[] }> {
   const asOf = asOfDate(asOfInput);
+  const knowledge = knowledgeInstant(knowledgeInput);
   const { data: deal, error: dealError } = await supabase
     .from('master_entities')
     .select('id, entity_code, client_id')
@@ -270,15 +277,15 @@ export async function loadDealScoreAnchors(
     .maybeSingle();
   if (dealError) throw new Error(dealError.message);
   if (!deal) throw new Error('Deal not found');
-  const trancheRels = await openRelationships(supabase, 'TRANCHE_DEAL', 'child_entity_id', [deal.id]);
+  const trancheRels = await openRelationships(supabase, 'TRANCHE_DEAL', 'child_entity_id', [deal.id], knowledge);
   const trancheIds = trancheRels.map((row) => row.parent_entity_id);
-  const positionRels = await openRelationships(supabase, 'POSITION_TRANCHE', 'child_entity_id', trancheIds);
+  const positionRels = await openRelationships(supabase, 'POSITION_TRANCHE', 'child_entity_id', trancheIds, knowledge);
   const positionIds = positionRels.map((row) => row.parent_entity_id);
-  const fundRels = await openRelationships(supabase, 'POSITION_FUND', 'parent_entity_id', positionIds);
+  const fundRels = await openRelationships(supabase, 'POSITION_FUND', 'parent_entity_id', positionIds, knowledge);
   const sleeveIds = [...new Set(fundRels.map((row) => row.child_entity_id))];
-  const parentRels = await openRelationships(supabase, 'FUND_PARENT', 'child_entity_id', sleeveIds);
+  const parentRels = await openRelationships(supabase, 'FUND_PARENT', 'child_entity_id', sleeveIds, knowledge);
   const fundIds = [...new Set([...sleeveIds, ...parentRels.map((row) => row.parent_entity_id)])];
-  return { asOf, dealCode: deal.entity_code, clientId: deal.client_id ?? null, fundIds };
+  return { asOf, knowledge, dealCode: deal.entity_code, clientId: deal.client_id ?? null, fundIds };
 }
 
 export async function loadAllocationDraft(
@@ -287,8 +294,11 @@ export async function loadAllocationDraft(
   asOfInput: string | null | undefined,
   holds: AllocationHold[] | null | undefined,
   adjustments: AllocationAdjustment[] | null | undefined,
+  knowledgeInput?: string | null,
 ): Promise<AllocationDraft> {
   const asOf = asOfDate(asOfInput);
+  // What was known by the user's Knowledge date: a day means the end of it.
+  const knowledge = knowledgeInstant(knowledgeInput);
   let fundQuery = supabase.from('master_entities').select('id, entity_code, entity_name, client_id').eq('domain_code', 'FUND').eq('is_active', true);
   const [dealResult, defs] = await Promise.all([
     supabase
@@ -304,9 +314,9 @@ export async function loadAllocationDraft(
   if (deal.client_id) fundQuery = fundQuery.eq('client_id', deal.client_id);
 
   const [trancheRels, issuerRels, sponsorRels, fundResult] = await Promise.all([
-    openRelationships(supabase, 'TRANCHE_DEAL', 'child_entity_id', [dealId]),
-    openRelationships(supabase, 'DEAL_ISSUER', 'parent_entity_id', [dealId]),
-    openRelationships(supabase, 'DEAL_SPONSOR', 'parent_entity_id', [dealId]),
+    openRelationships(supabase, 'TRANCHE_DEAL', 'child_entity_id', [dealId], knowledge),
+    openRelationships(supabase, 'DEAL_ISSUER', 'parent_entity_id', [dealId], knowledge),
+    openRelationships(supabase, 'DEAL_SPONSOR', 'parent_entity_id', [dealId], knowledge),
     fundQuery,
   ]);
   if (fundResult.error) throw new Error(fundResult.error.message);
@@ -319,9 +329,9 @@ export async function loadAllocationDraft(
     trancheIds.length
       ? supabase.from('master_entities').select('id, entity_code, entity_name').in('id', trancheIds)
       : Promise.resolve({ data: [] as Array<{ id: string; entity_code: string; entity_name: string }>, error: null }),
-    openRelationships(supabase, 'TRANCHE_SECURITY', 'parent_entity_id', trancheIds),
-    openRelationships(supabase, 'POSITION_TRANCHE', 'child_entity_id', trancheIds),
-    openRelationships(supabase, 'FUND_PARENT', 'parent_entity_id', fundIds),
+    openRelationships(supabase, 'TRANCHE_SECURITY', 'parent_entity_id', trancheIds, knowledge),
+    openRelationships(supabase, 'POSITION_TRANCHE', 'child_entity_id', trancheIds, knowledge),
+    openRelationships(supabase, 'FUND_PARENT', 'parent_entity_id', fundIds, knowledge),
     namedIds.length
       ? supabase.from('master_entities').select('id, entity_name').in('id', namedIds)
       : Promise.resolve({ data: [] as Array<{ id: string; entity_name: string }>, error: null }),
@@ -342,7 +352,7 @@ export async function loadAllocationDraft(
   const named = new Map((namedResult.data || []).map((row) => [row.id, row.entity_name]));
 
   const [fundRels, positionResult] = await Promise.all([
-    openRelationships(supabase, 'POSITION_FUND', 'parent_entity_id', positionIds),
+    openRelationships(supabase, 'POSITION_FUND', 'parent_entity_id', positionIds, knowledge),
     positionIds.length
       ? supabase.from('master_entities').select('id, entity_code').in('id', positionIds)
       : Promise.resolve({ data: [] as Array<{ id: string; entity_code: string }>, error: null }),
@@ -359,7 +369,7 @@ export async function loadAllocationDraft(
     ...fundIds,
     ...positionIds,
   ];
-  const values = await valuesFor(supabase, entityIds, defs, asOf);
+  const values = await valuesFor(supabase, entityIds, defs, asOf, knowledge);
   const def = (code: string) => defs.get(code);
 
   const loadedTranches: LoadedTranche[] = (trancheRows || []).map((row) => ({
@@ -464,6 +474,7 @@ export async function loadAllocationDraft(
     new Set(tranches.filter((tranche) => tranche.unfunded).map((tranche) => tranche.id)),
     deal.entity_code,
     asOf,
+    knowledge,
   );
 
   const positions: LoadedPosition[] = [];
@@ -528,6 +539,7 @@ export async function loadAllocationDraft(
     dealCode: deal.entity_code,
     dealName: deal.entity_name,
     asOf,
+    knowledge,
     request: {
       tranches,
       portfolios,
@@ -574,6 +586,7 @@ async function attachComplianceCapacity(
   unfundedTranches: ReadonlySet<string>,
   dealCode: string,
   asOf: string,
+  knowledge: string,
 ): Promise<CapacityReading[]> {
   const fundIds = [
     ...portfolios.map((portfolio) => portfolio.id),
@@ -606,7 +619,6 @@ async function attachComplianceCapacity(
     empty();
     return [];
   }
-  const knowledge = new Date().toISOString();
   const observe = async (funds: string[], legs: ReturnType<typeof legFor>[], ruleCodes: string[] | null, allGroups: boolean) => {
     const { data, error } = await supabase.schema('compliance').rpc('deal_capacity_observations', {
       p_fund_ids: funds,
@@ -959,17 +971,8 @@ async function createPosition(
 ): Promise<string> {
   const tranche = draft.tranches.find((item) => item.id === trancheId);
   const code = allocationPositionCode(draft, fundId, trancheId, hypo ? 'HYPO' : role);
-  // The upsert matches on the code alone, and scoring writes with the service role.
-  // A code that already names another client's record is refused, not taken over.
-  const { data: taken, error: takenError } = await supabase
-    .from('master_entities')
-    .select('id, client_id')
-    .eq('entity_code', code)
-    .maybeSingle();
-  if (takenError) throw new Error(takenError.message);
-  if (taken && (taken.client_id ?? null) !== draft.clientId) {
-    throw new Error('An allocation position code on this deal is already used by another record.');
-  }
+  // Codes are unique within a client, so the upsert can only ever match this client's own record.
+  if (!draft.clientId) throw new Error('This deal has no client, so its allocation positions cannot be written.');
   const { data: created, error } = await supabase.from('master_entities').upsert({
     entity_code: code,
     entity_name: `${draft.dealName}: ${fundName}`,
@@ -978,7 +981,7 @@ async function createPosition(
     description: hypo ? 'Hypo allocation for a compliance test' : role === 'LOCK' ? 'Portfolio allocation lock' : 'Proposed allocation',
     client_id: draft.clientId,
     created_by: userId,
-  }, { onConflict: 'entity_code' }).select('id').single();
+  }, { onConflict: 'client_id,entity_code' }).select('id').single();
   if (error || !created) throw new Error(error?.message || 'Could not create the allocation position');
   const links: Array<[string, string]> = [
     ['POSITION_FUND', fundId],

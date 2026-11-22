@@ -4,6 +4,7 @@ import { loadStatementCatalog } from '../lib/statement-template/catalog';
 import { statementKindCode } from '../lib/statement-template/entities';
 import { applyStatementTemplate, requireDomain } from '../lib/statement-template/persist';
 import type { StatementSource } from '../lib/statement-template/types';
+import { ok } from '../lib/db-result';
 
 function mapSection(row: any) {
   return {
@@ -35,7 +36,7 @@ async function loadSections(supabase: SupabaseClient, templateId: string) {
     .select('id, section_code, section_name, display_order, description')
     .eq('template_id', templateId)
     .order('display_order');
-  if (error) return [];
+  if (error) throw new Error(error.message);
   return (data || []).map(mapSection);
 }
 
@@ -44,7 +45,7 @@ async function loadAliases(supabase: SupabaseClient, templateId: string, domainC
     .from('template_attribute_assignments')
     .select('attribute_id')
     .eq('template_id', templateId);
-  if (assignmentError) return [];
+  if (assignmentError) throw new Error(assignmentError.message);
   const attributeIds = [...new Set((assignments || []).map((row: { attribute_id: string }) => row.attribute_id))];
   if (attributeIds.length === 0) return [];
 
@@ -56,15 +57,15 @@ async function loadAliases(supabase: SupabaseClient, templateId: string, domainC
   const safeDomain = String(domainCode || '').replace(/[^A-Z0-9_]/g, '');
   if (safeDomain) query = query.or(`domain_code.eq.${safeDomain},domain_code.is.null`);
   const { data, error } = await query;
-  if (error) return [];
+  if (error) throw new Error(error.message);
 
   const rows = data || [];
   if (rows.length === 0) return [];
   const ids = [...new Set(rows.map((row: any) => row.attribute_id))];
-  const { data: attributes } = await supabase
+  const { data: attributes } = ok(await supabase
     .from('attribute_register')
     .select('id, attribute_code, attribute_name')
-    .in('id', ids);
+    .in('id', ids));
   const byId = new Map((attributes || []).map((row: any) => [row.id, row]));
   return rows.map((row: any) => mapAlias({ ...row, attribute_register: byId.get(row.attribute_id) }));
 }

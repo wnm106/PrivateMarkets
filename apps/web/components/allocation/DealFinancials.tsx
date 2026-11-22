@@ -23,6 +23,13 @@ import {
   type StatementLayout,
   type StatementPeriod,
 } from '@tapestrai/graphql/src/lib/statement-book';
+import { useLatestRequest } from '@/lib/use-latest-request';
+
+/** What the Financials tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const FINANCIALS_TAB = {
+  label: 'Financials',
+  purpose: 'The borrower\'s financial statements by period: actuals and the projection, for the open statement section.',
+};
 
 interface Rel {
   childEntityId: string;
@@ -206,7 +213,9 @@ export function DealFinancials({
   const [section, setSection] = useState('all');
   const inspect = useAttributeInspect();
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     setLoading(true);
     setError(null);
     const result = await graphqlQuery<{
@@ -217,7 +226,8 @@ export function DealFinancials({
     }, {
       asOfDate?: string | null;
       knowledgeDate?: string | null;
-    }>(BOOK, { asOfDate, knowledgeDate }, 'network-only');
+    }>(BOOK, { asOfDate, knowledgeDate }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     if (result.error?.message) {
       setError(result.error.message);
       setLoading(false);
@@ -248,7 +258,8 @@ export function DealFinancials({
     if (periodIds.length > 0) {
       const chosen = await graphqlQuery<{
         effectiveTemplates: Array<{ entityId: string; templateId: string | null }>;
-      }, { entityIds: string[]; asOfDate?: string | null }>(TEMPLATES, { entityIds: periodIds, asOfDate }, 'network-only');
+      }, { entityIds: string[]; asOfDate?: string | null }>(TEMPLATES, { entityIds: periodIds, asOfDate }, 'network-only', request.signal);
+      if (!request.current(chosen)) return;
       const templateOf = new Map((chosen.data?.effectiveTemplates || []).map((row) => [row.entityId, row.templateId]));
       const templates = new Map((result.data?.domainTemplates || []).map((template) => [template.id, template]));
       const used: TemplateNode[] = [];
@@ -267,7 +278,7 @@ export function DealFinancials({
     setSections(result.data?.attributeSections || []);
     setPeriods(shown);
     setLoading(false);
-  }, [asOfDate, borrowerId, knowledgeDate]);
+  }, [latest, asOfDate, borrowerId, knowledgeDate]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -290,8 +301,7 @@ export function DealFinancials({
     .flatMap((name) => linesForSection(attributes, name, grain))
     .filter((line) => line.role !== 'section');
   usePublishTab('financials', {
-    label: 'Financials',
-    purpose: 'The borrower\'s financial statements by period: actuals and the projection, for the open statement section.',
+    ...FINANCIALS_TAB,
     howToRead: 'Each column is a period. actual is true for reported periods and false for projected ones. headlines are the latest reported figures. Only the open section\'s lines are included.',
     data: loading ? null : {
       borrower: borrowerName || null,
