@@ -250,6 +250,7 @@ const COL = {
   received: 'Received',
   label: 'Period label',
   checks: 'Report checks',
+  notes: 'Notes included',
   positionCode: 'Position code',
   positionName: 'Position name',
   assetClass: 'Asset class',
@@ -281,7 +282,7 @@ function periodLabel(report: FinancialReport, plan: NavReportPlan): string {
 
 function statementTable(plan: NavReportPlan, report: FinancialReport, statement: { code: string; name: string }, fund: FundRow, receivedDate: string, pages: PageSize[]): { table: ParsedTable; map: FeedMap } {
   const codes = [...new Set(plan.rows.flatMap((row) => row.values.map((value) => value.code)))];
-  const headers = [COL.statementCode, COL.statementName, COL.fund, COL.asOf, COL.periodEnd, COL.comparative, COL.received, COL.label, COL.checks, ...codes];
+  const headers = [COL.statementCode, COL.statementName, COL.fund, COL.asOf, COL.periodEnd, COL.comparative, COL.received, COL.label, COL.checks, COL.notes, ...codes];
   const rows: Record<string, string>[] = [];
   const locations: (CellLocation | null)[][] = [];
   for (const planned of plan.rows) {
@@ -297,6 +298,7 @@ function statementTable(plan: NavReportPlan, report: FinancialReport, statement:
       [COL.received]: current ? receivedDate : '',
       [COL.label]: current ? periodLabel(report, plan) : '',
       [COL.checks]: current ? sourceChecksJson(report) : '',
+      [COL.notes]: current && report.notes ? 'true' : '',
       ...Object.fromEntries(codes.map((code) => [code, byCode.has(code) ? String(byCode.get(code)!.value) : ''])),
     });
     locations.push(headers.map((header) => {
@@ -321,6 +323,7 @@ function statementTable(plan: NavReportPlan, report: FinancialReport, statement:
         { column: COL.received, attributeCode: 'STATEMENT_RECEIVED_DATE' },
         { column: COL.label, attributeCode: 'STATEMENT_PERIOD_LABEL' },
         { column: COL.checks, attributeCode: 'STATEMENT_SOURCE_CHECKS' },
+        { column: COL.notes, attributeCode: 'STATEMENT_NOTES_INCLUDED' },
         ...codes.map((code) => ({ column: code, attributeCode: code })),
       ],
       parents: [{ column: COL.fund, parentDomainCode: 'FUND', existing: true }],

@@ -2,6 +2,8 @@
 
 A fund's own filing (a 10-Q, a 10-K, an annual or semi-annual report) is the administrator's NAV in its fullest form: the four primary statements, the NAV per share by class, and the schedule of investments. The NAV reconciliation workflow takes one such file from Load data to a summary of the breaks a person signs off.
 
+The reconciliation also checks the rest of the administrator's NAV pack, part by part: the NAV bridge, trial balance, capital accounts, fees, waterfall, valuation support, calls and commitments, and FX. See [NAV_PACK.md](NAV_PACK.md).
+
 The run needs no one until there is something only a person can decide. A report that arrives is read, matched to its fund, loaded, reconciled and summarized on its own. A person is asked for two things only: to look at a report the run could not trust (the hold reasons below), and to decide breaks and open review items. A period where everything ties ends with its notes kept and no one asked.
 
 ## Parts

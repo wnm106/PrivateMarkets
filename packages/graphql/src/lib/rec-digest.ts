@@ -89,7 +89,9 @@ export function navDigest(review: Review) {
       b: round(check.b),
       difference: round(check.difference),
       result: check.result,
+      ...(check.component ? { packPart: check.component } : {}),
     })),
+    pack: packDigest(review),
     statementLinesFlagged: variances,
     itemsOpen: review.items.length - review.itemsDecided,
     queries: review.queries,
@@ -114,6 +116,7 @@ export function navDigest(review: Review) {
       difference: round(review.mgmtFee.difference),
       differencePct: round(review.mgmtFee.differencePct),
       impliedBase: round(review.mgmtFee.impliedBase),
+      segments: review.mgmtFee.segments.map((segment) => ({ from: segment.from, to: segment.to, share: round(segment.share), ratePct: segment.ratePct, basis: segment.basis, base: round(segment.base) })),
     },
     performanceFee: {
       ready: review.perfFee.ready,
@@ -134,6 +137,47 @@ export function navDigest(review: Review) {
       .map((row) => ({ id: row.id, label: row.label, prior: round(row.prior), current: round(row.current), change: round(row.change), changePct: round(row.changePct), explained: row.explained })),
     steps: review.steps.map((step) => ({ key: step.key, name: step.name, owner: step.owner, due: step.due, state: step.state, overdue: step.overdue, detail: step.detail })),
     notesOnFile: review.closeNotes ?? null,
+  };
+}
+
+/** The NAV pack, part by part, with each part's own figures. Lists are capped, largest first where order matters. */
+function packDigest(review: Review) {
+  const pack = review.pack;
+  return {
+    parts: pack.components.map((part) => ({ part: part.key, label: part.label, expected: part.expected, required: part.required, onFile: part.onFile, status: part.status, detail: part.detail, owner: part.owner })),
+    bridge: {
+      opening: round(pack.bridge.opening),
+      steps: pack.bridge.steps.map((step) => ({ step: step.label, amount: round(step.amount) })),
+      closing: round(pack.bridge.closing), reported: round(pack.bridge.reported), difference: round(pack.bridge.difference),
+    },
+    trialBalance: pack.trialBalance,
+    capitalAccounts: pack.capitalAccounts
+      ? {
+        investors: pack.capitalAccounts.investors,
+        totals: pack.capitalAccounts.totals,
+        notRolling: pack.capitalAccounts.rows.filter((row) => row.difference != null && Math.abs(row.difference) >= 5).slice(0, 25).map((row) => ({ investor: row.name, closing: round(row.closing), rolled: round(row.rolled), difference: round(row.difference) })),
+        feesOff: pack.capitalAccounts.rows.filter((row) => row.feeCharged != null && row.feeRecalculated != null && Math.abs(row.feeCharged - row.feeRecalculated) > Math.max(1000, Math.abs(row.feeRecalculated) * 0.005)).slice(0, 25)
+          .map((row) => ({ investor: row.name, charged: round(row.feeCharged), recalculated: round(row.feeRecalculated) })),
+        accounts: pack.capitalAccounts.rows.slice(0, 40).map((row) => ({ investor: row.name, gp: row.isGp, opening: round(row.opening), contributions: round(row.contributions), distributions: round(row.distributions), pnl: round(row.pnl), carry: round(row.carry), closing: round(row.closing), commitment: round(row.commitment), unfunded: round(row.unfunded), ownershipPct: row.ownershipPct })),
+      }
+      : null,
+    fees: { allocation: pack.fees.allocation, stepDown: pack.fees.stepDown, chargedToInvestors: round(pack.fees.charged), investorsRecalculated: pack.fees.perInvestor },
+    waterfall: pack.waterfall
+      ? { basis: pack.waterfall.basis, tiers: pack.waterfall.tiers.map((tier) => ({ tier: tier.label, amount: round(tier.total), toLimitedPartners: round(tier.lp), toGp: round(tier.gp) })), carry: round(pack.waterfall.carry), gpCarryOnFile: round(pack.waterfall.gpCarryOnFile) }
+      : null,
+    valuation: pack.valuation
+      ? {
+        total: round(pack.valuation.total), supported: round(pack.valuation.supported), coveragePct: round(pack.valuation.coveragePct), requiredPct: pack.valuation.requiredPct, thirdPartyPct: round(pack.valuation.thirdPartyPct),
+        unsupported: pack.valuation.unsupported.slice(0, 25).map((row) => ({ position: row.name, fairValue: round(row.fairValue) })),
+        unsupportedCount: pack.valuation.unsupported.length,
+        outsideSupport: pack.valuation.outside.slice(0, 25).map((row) => ({ position: row.name, fairValue: round(row.fairValue), low: round(row.low), high: round(row.high), concluded: round(row.concluded), source: row.source })),
+      }
+      : null,
+    capitalActivity: pack.capitalActivity
+      ? { ...pack.capitalActivity, pending: pack.capitalActivity.pending.slice(0, 20).map((row) => ({ notice: row.name, date: row.date, amount: round(row.amount) })) }
+      : null,
+    commitments: pack.commitments,
+    fx: pack.fx,
   };
 }
 

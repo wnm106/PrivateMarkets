@@ -127,3 +127,11 @@ Push in version order, all at once (`npx supabase db push --include-all`, after 
 
 `scripts/db-test.sh` without `--db-url` builds its own throwaway cluster from `supabase/tests/supabase_stub.sql` and applies every file as the Supabase CLI would. It stops at the shared 20261118210000 version and at the migrations `legacy.txt` lists, so use the replay for a full build.
 
+
+## Applied on 2026-11-22: 20261122200000_nav_pack
+
+The NAV pack's record types (trial balance lines, capital accounts, valuation support, FX translation), their lists, links, templates and column headings, the fund's pack and FX settings, a fee step-down, and the notes flag on a statement. Metadata only: no records. Every code it adds was checked to be new on the hosted project first, so its `ON CONFLICT ... DO UPDATE` touched nothing already there, and it runs twice without change. Applied through the Management API after a dry run in a rolled-back transaction, and recorded.
+
+It was first dated `20261122150000`, which `20261122150000_notify_collect_client_and_open_check` already uses, and the hosted project had `20261122160000` to `20261122190000` applied, so it was redated to run after them.
+
+Found on the hosted project: `20261122160000_entity_views`, `20261122170000_surface_blueprints`, `20261122180000_provisional_scopes` and `20261122190000_relationship_reads_set_check` are applied there but are in no file on master. Their SQL is in `supabase_migrations.schema_migrations.statements`. `20261122150000_notify_collect_client_and_open_check` is on master and not applied there.

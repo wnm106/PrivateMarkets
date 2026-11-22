@@ -15,6 +15,7 @@ import {
   type RecPosition,
 } from './fund-rec';
 import { summarizeBreaks } from './nav-breaks';
+import { emptyPack, type PackCapitalAccount } from './nav-pack';
 
 const M = 1e6;
 let order = 0;
@@ -200,6 +201,7 @@ describe('statement integrity', () => {
     expect(review.checks.map((check) => `${check.id}:${check.result}`)).toEqual([
       'balance:Ties', 'assetsFoot:Ties', 'liabilitiesFoot:Ties', 'equityFoot:Ties', 'opening:Ties', 'rollNav:Ties', 'opsCash:Ties',
       'sleeves:Ties', 'positions:Ties', 'invRoll:Ties', 'cashCf:Ties', 'bank:Ties', 'contribNotice:Ties', 'distNotice:Ties', 'facility:Ties',
+      'bridge:Ties',
     ]);
     expect(review.breaks).toBe(0);
   });
@@ -307,8 +309,12 @@ describe('close health', () => {
 
   it('lists every input the rec needs and shows them present for the sample fund', () => {
     const review = buildReview(input());
-    expect(review.readiness.map((item) => item.key)).toEqual(['statement', 'prior', 'marks', 'roll', 'bank', 'lender', 'notices', 'terms']);
+    expect(review.readiness.map((item) => item.key)).toEqual(['statement', 'prior', 'marks', 'roll', 'bank', 'lender', 'notices', 'terms', 'pack']);
     expect(review.readyForRec).toBe(true);
+    // A pack the fund does not require is reported, not enforced: the parts a drawdown fund's terms call for are expected.
+    const pack = review.readiness.find((item) => item.key === 'pack')!;
+    expect(pack).toMatchObject({ required: false, ok: false });
+    expect(pack.detail).toMatch(/Missing: Trial balance, Capital account summary \(PCAP\)/);
   });
 });
 
@@ -579,5 +585,37 @@ describe('the break summary', () => {
     const summary = summarizeBreaks({ ...review, items: [] });
     expect(summary.counts.breaks).toBe(0);
     expect(summary.headline).toMatch(/ties for Q2 2026/);
+  });
+});
+
+describe('the NAV pack in the reconciliation', () => {
+  const capital = (id: string, closing: number): PackCapitalAccount => ({
+    id, name: `Investor ${id}`, investorId: null, isGp: false, opening: null, contributions: null, distributions: null, pnl: null,
+    mgmtFee: null, feeRatePct: null, carry: null, carryBalance: null, other: null, closing, commitment: null, contributedItd: null,
+    unfunded: null, ownershipPct: null,
+  });
+
+  it('counts a pack check that breaks as a break of the period, and the summary says who settles it', () => {
+    const review = buildReview(input({ pack: { ...emptyPack(), capitalAccounts: [capital('A', 100 * M), capital('B', 50 * M)] } }));
+    const check = review.checks.find((item) => item.id === 'pcapNav')!;
+    expect(check).toMatchObject({ group: 'pack', component: 'CAPITAL_ACCOUNTS', result: 'Break', a: 150 * M });
+    expect(review.breaks).toBeGreaterThan(0);
+    expect(review.canCertify).toBe(false);
+    expect(review.pack.components.find((part) => part.key === 'CAPITAL_ACCOUNTS')).toMatchObject({ onFile: true, status: 'Breaks' });
+    const summary = summarizeBreaks(review);
+    expect(summary.entries.find((entry) => entry.id === 'pcapNav')).toMatchObject({ kind: 'break', owner: 'Investor services', blocking: true });
+    expect(summary.pack.find((part) => part.key === 'CAPITAL_ACCOUNTS')).toMatchObject({ status: 'Breaks' });
+    expect(summary.markdown).toMatch(/### The NAV pack/);
+  });
+
+  it('lists the parts the fund\'s terms call for that are not on file, and blocks only the ones it requires', () => {
+    const expectedOnly = summarizeBreaks(buildReview(input()));
+    expect(expectedOnly.entries.filter((entry) => entry.id.startsWith('pack:')).map((entry) => [entry.id, entry.blocking])).toEqual([
+      ['pack:TRIAL_BALANCE', false], ['pack:CAPITAL_ACCOUNTS', false], ['pack:CAPITAL_ACTIVITY', false], ['pack:COMMITMENTS', false],
+    ]);
+    const required = buildReview(input({ pack: { ...emptyPack(), required: ['TRIAL_BALANCE'] } }));
+    expect(required.readiness.find((item) => item.key === 'pack')).toMatchObject({ required: true, ok: false });
+    expect(required.readyForRec).toBe(false);
+    expect(summarizeBreaks(required).entries.find((entry) => entry.id === 'pack:TRIAL_BALANCE')).toMatchObject({ kind: 'gap', blocking: true, owner: 'Fund administrator' });
   });
 });

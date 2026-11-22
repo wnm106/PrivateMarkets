@@ -19,13 +19,15 @@ import {
 } from '@/lib/cash-rec';
 import { summarizeBreaks, type BreakEntry, type BreakSummary } from '@tapestrai/graphql/src/lib/nav-breaks';
 import { CashRecTab } from './CashRecTab';
+import { NavPackTab } from './NavPackTab';
 import { RecBit, RecCell, RecFact, RecInspectProvider, RecLabel, RecPress, joinSources } from './RecInspect';
 
-type TabKey = 'close' | 'breaks' | 'stmt' | 'roll' | 'cash' | 'integrity' | 'fees' | 'val' | 'drift' | 'inputs';
+type TabKey = 'close' | 'breaks' | 'pack' | 'stmt' | 'roll' | 'cash' | 'integrity' | 'fees' | 'val' | 'drift' | 'inputs';
 
 const TABS: Array<[TabKey, string]> = [
   ['close', 'Close status'],
   ['breaks', 'Breaks'],
+  ['pack', 'NAV pack'],
   ['stmt', 'NAV statement'],
   ['roll', 'Position roll-forward'],
   ['cash', 'Cash reconciliation'],
@@ -54,6 +56,11 @@ const REC_TAB_INFO = {
     label: 'Close status',
     purpose: 'Where this period\'s NAV close stands: the steps to certify, who owns them, what blocks certification and which review items are still undecided.',
     howToRead: 'health and certifyBlock say whether the NAV can be certified now. steps are the close steps in order. items are the review items from the fees, marks and drift tabs; decision is null while undecided.',
+  },
+  pack: {
+    label: 'NAV pack',
+    purpose: 'The administrator\'s NAV pack, part by part: the NAV bridge, trial balance, financial statements, investors\' capital accounts, management fee, carry and waterfall, valuation support, calls and distributions, commitments, and FX. What is on file for the period, what each part is checked against, and where it stands.',
+    howToRead: 'components lists the ten parts. status is Ties (on file and every check agrees), Breaks (a check disagrees), Open (a review item on it is undecided), Partial (on file but a figure or the notes are missing), Not on file (the fund\'s pack should hold it and it does not) or Not expected (the fund\'s terms do not call for it). required parts block certification when missing or breaking. Amounts are whole dollars. In the bridge, distributions and expenses are negative. In capital accounts, distributions are positive amounts taken off, and carry is negative for a limited partner and positive for the GP. FX rates are units of the base currency for one unit of the currency.',
   },
   breaks: {
     label: 'Breaks',
@@ -133,6 +140,30 @@ function recTabs(rec: FundRec, cash: CashRec | null, insights: RecInsight[] | nu
         nav: breaks.nav, counts: breaks.counts,
         entries: head(breaks.entries, 60).map(({ id: _id, ...entry }) => entry),
         tied: head(breaks.tied, 40),
+        pack: breaks.pack,
+      },
+    },
+    pack: {
+      ...REC_TAB_INFO.pack,
+      data: {
+        period: rec.periodLabel,
+        components: rec.pack.components.map(({ checks: _checks, items: _items, ...part }) => part),
+        bridge: { opening: rec.pack.bridge.opening, steps: rec.pack.bridge.steps.map(({ sources: _sources, ...step }) => step), closing: rec.pack.bridge.closing, reported: rec.pack.bridge.reported, difference: rec.pack.bridge.difference },
+        checks: rec.pack.checks.map((check) => ({ label: check.label, part: check.component, compared: check.compared, a: check.a, b: check.b, difference: check.difference, result: check.result })),
+        trialBalance: rec.pack.trialBalance,
+        capitalAccounts: rec.pack.capitalAccounts
+          ? { investors: rec.pack.capitalAccounts.investors, totals: rec.pack.capitalAccounts.totals, accounts: head(rec.pack.capitalAccounts.rows, 50).map(({ id: _id, ...row }) => row) }
+          : null,
+        fees: rec.pack.fees,
+        waterfall: rec.pack.waterfall,
+        valuation: rec.pack.valuation
+          ? { ...rec.pack.valuation, unsupported: head(rec.pack.valuation.unsupported, 25).map(({ id: _id, ...row }) => row), outside: head(rec.pack.valuation.outside, 25).map(({ id: _id, ...row }) => row) }
+          : null,
+        capitalActivity: rec.pack.capitalActivity
+          ? { ...rec.pack.capitalActivity, pending: head(rec.pack.capitalActivity.pending, 20).map(({ id: _id, ...row }) => row) }
+          : null,
+        commitments: rec.pack.commitments,
+        fx: rec.pack.fx,
       },
     },
     stmt: {
@@ -243,6 +274,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   const tabCount = (key: TabKey) => (key === 'val' || key === 'fees' || key === 'drift'
     ? rec.items.filter((item) => item.tab === key && item.decision == null).length
     : key === 'breaks' ? (breaks ? breaks.counts.breaks + breaks.counts.items : 0)
+    : key === 'pack' ? rec.pack.components.filter((part) => part.status === 'Breaks' || part.status === 'Not on file').length
     : key === 'integrity' ? rec.breaks : key === 'roll' && rec.roll.present && !rec.roll.tied ? 1 : key === 'inputs' ? rec.readiness.filter((item) => item.required && !item.ok).length : key === 'cash' && cash ? cash.summary.openFlowCount + cash.summary.openTxnCount : 0);
 
   const proposed = millions(rec.navProposed);
@@ -299,6 +331,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
         <div>
           {tab === 'close' && <CloseTab rec={rec} onOpen={setTab} onSignoff={(label) => run(() => setSignoff(ctx, SIGNOFF_BY_LABEL[label]))} />}
           {tab === 'breaks' && breaks && <BreaksTab summary={breaks} onOpen={setTab} />}
+          {tab === 'pack' && <NavPackTab pack={rec.pack} checks={rec.checks} />}
           {tab === 'stmt' && <StatementTab rec={rec} />}
           {tab === 'roll' && <RollTab rec={rec} />}
           {tab === 'cash' && (cash
@@ -512,6 +545,7 @@ function breakFigure(value: number | null, unit: BreakEntry['unit']): string {
   if (value == null) return '—';
   if (unit === 'POINTS') return value.toFixed(2);
   if (unit === 'COUNT') return String(value);
+  if (unit === 'PCT') return `${value.toFixed(2)}%`;
   return millions(value);
 }
 
@@ -541,7 +575,7 @@ function BreaksTab({ summary, onOpen }: { summary: BreakSummary; onOpen: (tab: T
                   {entries.map((entry) => (
                     <tr key={entry.id} className={entry.kind === 'break' ? 'flag' : ''}>
                       <td>
-                        {tab ? <button type="button" className="cr-link" onClick={() => onOpen(tab)}>{entry.title}</button> : entry.title}
+                        {tab ? <button type="button" className="cr-link" onClick={() => onOpen(entry.component ? 'pack' : tab)}>{entry.title}</button> : entry.title}
                         {entry.blocking && <span className="da-st breach da-gap">Blocks certification</span>}
                       </td>
                       {kind !== 'gap' && <>
