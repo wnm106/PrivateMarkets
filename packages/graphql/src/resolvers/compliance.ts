@@ -1023,7 +1023,9 @@ async function loadFundBoard(context: Context) {
   const rules = ruleResult.data || [];
   const ruleIds = rules.map((row) => row.id);
 
-  const [parentResult, versionResult, thresholdResult, latestResult] = await Promise.all([
+  // Which funds each rule is scored for is decided once, by compliance.deal_score_plans.
+  const today = new Date().toISOString().slice(0, 10);
+  const [parentResult, versionResult, thresholdResult, latestResult, planResult] = await Promise.all([
     fundIds.length
       ? context.supabase
         .schema('entity_instances')
@@ -1049,7 +1051,11 @@ async function loadFundBoard(context: Context) {
     ruleIds.length
       ? cx(context).rpc('latest_fund_board_results', { p_rule_ids: ruleIds })
       : Promise.resolve({ data: [] as unknown[], error: null }),
+    fundIds.length
+      ? cx(context).rpc('deal_score_plans', { p_fund_ids: fundIds, p_as_of_date: today })
+      : Promise.resolve({ data: [] as unknown[], error: null }),
   ]);
+  if (planResult.error) throw new Error(planResult.error.message);
   if (parentResult.error) throw new Error(parentResult.error.message);
   if (versionResult.error) throw new Error(versionResult.error.message);
   if (thresholdResult.error) throw new Error(thresholdResult.error.message);
@@ -1092,6 +1098,9 @@ async function loadFundBoard(context: Context) {
     results: (resultRows || [])
       .filter((row) => fundById.has(row.anchor_entity_id))
       .map(mapResult),
+    enrollments: ((planResult.data || []) as Array<{ rule_id: string; anchor_ids: string[] | null }>)
+      .filter((row) => ruleById.has(row.rule_id))
+      .map((row) => ({ ruleId: row.rule_id, fundIds: (row.anchor_ids || []).filter((id) => fundById.has(id)) })),
   };
 }
 

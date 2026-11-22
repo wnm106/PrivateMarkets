@@ -1102,6 +1102,13 @@ type ComplianceFundBoard {
   rules: [ComplianceFundRule!]!
   thresholds: [ComplianceThreshold!]!
   results: [ComplianceEvaluationResult!]!
+  # The funds each rule is scored for today, as compliance.deal_score_plans decides.
+  enrollments: [ComplianceRuleEnrollment!]!
+}
+
+type ComplianceRuleEnrollment {
+  ruleId: ID!
+  fundIds: [ID!]!
 }
 
 input UpsertComplianceThresholdInput {
