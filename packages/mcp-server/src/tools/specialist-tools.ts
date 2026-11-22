@@ -43,6 +43,7 @@ const listLoadSessionsTool: ToolDefinition = {
 
 const startLoadSessionTool: ToolDefinition = {
   name: 'start_load_session',
+  effect: 'stage',
   description: 'Read any CSV, Excel, JSON, or document and start a data-specialist interview. Returns the briefing, the questions that still need an answer, recommended new attributes or entities, and the map so far. Does not load until run_load_session.',
   category: 'import',
   inputSchema: {
@@ -69,6 +70,7 @@ const startLoadSessionTool: ToolDefinition = {
 
 const readLoadSessionTool: ToolDefinition = {
   name: 'read_load_session',
+  effect: 'read',
   description: 'Read one load session, including the specialist briefing, open questions, recommendations, column assignments, and load order.',
   category: 'import',
   inputSchema: {
@@ -81,6 +83,7 @@ const readLoadSessionTool: ToolDefinition = {
 
 const answerLoadSessionTool: ToolDefinition = {
   name: 'answer_load_session',
+  effect: 'stage',
   description: 'Answer the specialist. answers is a map of question id to option id (for example source, as_of, reuse_map, identity:FUND). Pass acceptedRecommendationIds to add an attribute, entity, or relationship. Pass dismissedRecommendationIds to leave a recommendation out. Re-reads the file with those decisions.',
   category: 'import',
   inputSchema: {
@@ -104,6 +107,7 @@ const answerLoadSessionTool: ToolDefinition = {
 
 const refreshLoadSessionTool: ToolDefinition = {
   name: 'refresh_load_session',
+  effect: 'stage',
   description: 'Re-read a stored file and run the current mapping on it. Use this when an older upload should be compared with saved maps again, including fields added since that map was written. Keeps the source, as-of date, and other answers already given. Does not load entities.',
   category: 'import',
   inputSchema: {

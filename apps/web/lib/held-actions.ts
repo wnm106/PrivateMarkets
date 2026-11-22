@@ -23,6 +23,8 @@ export interface HeldCall {
   /** What the person is shown. */
   serverName: string;
   tool: string;
+  /** Whose tool: one of the client's MCP servers, or one of Tapestry's own. */
+  kind?: 'external' | 'internal';
 }
 
 export interface HeldAction extends HeldCall {
@@ -39,6 +41,7 @@ interface Claims {
   a: Record<string, unknown>;
   s: string;
   t: string;
+  k: 'external' | 'internal';
   e: number;
 }
 
@@ -75,6 +78,7 @@ export function holdAction(
     a: call.args || {},
     s: call.serverName,
     t: call.tool,
+    k: call.kind === 'internal' ? 'internal' : 'external',
     e: now + HOLD_MINUTES * 60_000,
   };
   const body = b64url(JSON.stringify(claims));
@@ -110,5 +114,5 @@ export function releaseAction(
   if ((options.now ?? Date.now()) > claims.e) {
     throw new Error(`This change was held for ${HOLD_MINUTES} minutes and has expired. Ask the assistant again.`);
   }
-  return { id: claims.i, name: claims.n, args: claims.a, serverName: claims.s, tool: claims.t };
+  return { id: claims.i, name: claims.n, args: claims.a, serverName: claims.s, tool: claims.t, kind: claims.k === 'internal' ? 'internal' : 'external' };
 }

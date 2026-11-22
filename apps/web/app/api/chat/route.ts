@@ -1,21 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
-import { ToolRegistry } from '@tapestrai/mcp-server/src/lib/tool-registry';
-import { registerDomainTools } from '@tapestrai/mcp-server/src/tools/domain-tools';
-import { registerLineageTools } from '@tapestrai/mcp-server/src/tools/lineage-tools';
-import { registerDocumentTools } from '@tapestrai/mcp-server/src/tools/document-tools';
-import { registerOverrideTools } from '@tapestrai/mcp-server/src/tools/override-tools';
-import { registerDQTools } from '@tapestrai/mcp-server/src/tools/dq-tools';
-import { registerDQRuleTools } from '@tapestrai/mcp-server/src/tools/dq-rule-tools';
-import { registerWorkflowTools } from '@tapestrai/mcp-server/src/tools/workflow-tools';
-import { registerImportMapTools } from '@tapestrai/mcp-server/src/tools/import-map-tools';
-import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/position-file-tools';
-import { registerSpecialistTools } from '@tapestrai/mcp-server/src/tools/specialist-tools';
-import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/compliance-tools';
-import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
-import { QUERY_DATA_GUIDE, registerQueryTools } from '@tapestrai/mcp-server/src/tools/query-data';
-import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrative-tools';
-import { registerExternalIdTools } from '@tapestrai/mcp-server/src/tools/external-id-tools';
+import { QUERY_DATA_GUIDE } from '@tapestrai/mcp-server/src/tools/query-data';
+import { toolRegistry } from '@/lib/chat-tools';
 import { loadExternalServers } from '@tapestrai/mcp-server/src/external/load';
 import { serviceClient } from '@/lib/assistant-connections-server';
 import { buildExternalToolset, ConfirmationRequired, externalServersPrompt, type ExternalToolset } from '@tapestrai/mcp-server/src/external/toolset';
@@ -70,22 +56,7 @@ const MAX_STORED_CONTENT = 20000;
 // The tool registry holds no database client. Every tool call below passes the
 // caller's own client, so tenancy and row security decide what a tool may touch.
 // This route never holds the service role key.
-const toolRegistry = new ToolRegistry();
-registerDomainTools(toolRegistry);
-registerLineageTools(toolRegistry);
-registerDocumentTools(toolRegistry);
-registerOverrideTools(toolRegistry);
-registerDQTools(toolRegistry);
-registerDQRuleTools(toolRegistry);
-registerWorkflowTools(toolRegistry);
-registerImportMapTools(toolRegistry);
-registerPositionFileTools(toolRegistry);
-registerSpecialistTools(toolRegistry);
-registerComplianceTools(toolRegistry);
-registerReportingTools(toolRegistry);
-registerQueryTools(toolRegistry);
-registerNarrativeTools(toolRegistry);
-registerExternalIdTools(toolRegistry);
+// The tools are registered in lib/chat-tools.ts, shared with /api/chat/confirm.
 
 async function callGemini(
   body: Record<string, any>,
@@ -564,6 +535,11 @@ export async function POST(request: NextRequest) {
             results.set(call, outcome);
             continue;
           }
+          // A tool that changes live records, rules or settings is never run by the model:
+          // it is held like an outside write, and runs only on the person's Confirm.
+          if (!externalToolset?.has(name) && toolRegistry.effectOf(name) === 'write') {
+            throw new ConfirmationRequired(name, 'Tapestry', 'internal');
+          }
           const value = externalToolset?.has(name)
             ? await externalToolset.execute(name, args || {})
             : await toolRegistry.executeTool(name, args || {}, toolSupabase);
@@ -576,7 +552,7 @@ export async function POST(request: NextRequest) {
           if (error instanceof ConfirmationRequired && clientId) {
             let held: HeldAction | null = null;
             try {
-              held = holdAction({ name, args: args || {}, serverName: error.serverName, tool: error.tool }, { userId: auth.userId, clientId });
+              held = holdAction({ name, args: args || {}, serverName: error.serverName, tool: error.tool, kind: error.kind }, { userId: auth.userId, clientId });
             } catch (holdError) {
               console.error('[Chat API] Could not hold a change for confirmation:', holdError);
             }

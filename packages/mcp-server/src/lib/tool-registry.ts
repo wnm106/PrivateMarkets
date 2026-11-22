@@ -1,5 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
-import { ToolDefinition, ToolExecutionResult } from './types';
+import { ToolDefinition, ToolEffect, ToolExecutionResult } from './types';
 import { ToolContext, getContextProfile, isCategoryAllowed } from './context-profiles';
 
 /**
@@ -11,6 +11,9 @@ import { ToolContext, getContextProfile, isCategoryAllowed } from './context-pro
  * to a client of the registry's own, because that client would be the same for
  * every caller and, built from a service key, would see every tenant.
  */
+/** Tools named like this only read, unless they say otherwise. The same prefixes workflows use. */
+const READ_NAME = /^(get_|list_|search_|find_|preview_|analyze_|compare_|validate_|parse_|query_data$)/;
+
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
 
@@ -110,6 +113,13 @@ export class ToolRegistry {
       throw new Error(`Tool ${name} was called without a database client. Pass the client of the user the call runs as.`);
     }
     return tool.execute(args, supabase);
+  }
+
+  /** What calling the tool does (see ToolEffect). An unknown tool is a write. */
+  effectOf(name: string): ToolEffect {
+    const tool = this.tools.get(name);
+    if (!tool) return 'write';
+    return tool.effect ?? (READ_NAME.test(name) ? 'read' : 'write');
   }
 
   /** Names of the arguments a tool declares, or an empty set for an unknown tool. */

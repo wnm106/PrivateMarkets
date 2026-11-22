@@ -9,7 +9,9 @@ const call = { name: 'ext__CRM__update_stage', args: { company_id: 'C-1', stage:
 describe('held actions', () => {
   it('releases the exact call it held, for the person it was held for', () => {
     const held = holdAction(call, ada, { secret, now: 0 });
-    assert.deepEqual(releaseAction(held.token, ada, { secret, now: 60_000 }), { id: held.id, ...call });
+    assert.deepEqual(releaseAction(held.token, ada, { secret, now: 60_000 }), { id: held.id, ...call, kind: 'external' });
+    const own = holdAction({ ...call, name: 'create_entity', tool: 'create_entity', serverName: 'Tapestry', kind: 'internal' }, ada, { secret, now: 0 });
+    assert.equal(releaseAction(own.token, ada, { secret, now: 0 }).kind, 'internal');
   });
 
   it('refuses a call whose tool or arguments were changed after it was held', () => {

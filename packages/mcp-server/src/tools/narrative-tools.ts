@@ -211,6 +211,7 @@ const getNarrative: ToolDefinition = {
 
 const startNarrativeRun: ToolDefinition = {
   name: 'start_narrative_run',
+  effect: 'stage',
   description:
     'Begin a stored run of a narrative for one record. Needs narrativeCode, the record (entityCode or entityId, of a type the narrative is offered on), and asOfDate (YYYY-MM-DD; ask the user, do not assume today). params carries the narrative\'s inputs such as inceptionDate, as a JSON object string. Returns runId and the order to work the sections in. The run appears on the record\'s page in the app.',
   category: 'narrative',
@@ -285,6 +286,7 @@ const startNarrativeRun: ToolDefinition = {
 
 const runNarrativeSectionData: ToolDefinition = {
   name: 'run_narrative_section_data',
+  effect: 'read',
   description:
     'Gather one section\'s evidence for a run: every data query at every comparison date, derived measures, computed screens and scenarios, and mustDisclose (what is missing or truncated). Also returns the section\'s instructions, expected blocks, the text of the sections it depends on, and any research queries. Compose the section from this, then call save_narrative_section. For a section with a batch, pass batchIndex 0, 1, 2 ... until batchCount is reached.',
   category: 'narrative',
@@ -383,6 +385,7 @@ function figuresPool(section: NarrativeSection, spec: NarrativeSpec, run: any, e
 
 const saveNarrativeSection: ToolDefinition = {
   name: 'save_narrative_section',
+  effect: 'stage',
   description:
     'Store the section you composed. blocks is a JSON array (or {"blocks":[...]}) of the block types in the section\'s expected blocks; see blockFormat. sources is an optional JSON array of external sources used, each { title, publisher, url, date }. Every figure is checked against the evidence you were given: the result lists any figure it could not trace. Fix those (use the evidence value, or write data not available) and save again; saving replaces the section.',
   category: 'narrative',
@@ -469,6 +472,7 @@ const saveNarrativeSection: ToolDefinition = {
 
 const finishNarrativeRun: ToolDefinition = {
   name: 'finish_narrative_run',
+  effect: 'stage',
   description:
     'Close a run: assemble the saved sections into one report, aggregate sources and verification, and report any section still missing. Returns the report as markdown to present to the user. Safe to call again after saving a missing section.',
   category: 'narrative',
@@ -559,6 +563,7 @@ const getReviewBrief: ToolDefinition = {
 
 const saveRunReview: ToolDefinition = {
   name: 'save_run_review',
+  effect: 'stage',
   description:
     'Store your consistency review of a finished run. issues is a JSON array of { severity, kind, sections, quote, problem, suggestion }. Every issue must quote the exact words from the report; an issue whose quote is not found in the report is discarded. The result shows on the record page next to the report.',
   category: 'narrative',

@@ -20,7 +20,8 @@ import type { ExternalServer, ExternalToolResult, IdentifierHint } from './types
 
 /** Thrown by `execute` for a write tool. The chat route holds the call for the person to confirm. */
 export class ConfirmationRequired extends Error {
-  constructor(readonly tool: string, readonly serverName: string) {
+  /** kind: 'external' for a client's MCP server, 'internal' for one of Tapestry's own tools. */
+  constructor(readonly tool: string, readonly serverName: string, readonly kind: 'external' | 'internal' = 'external') {
     super(`${tool} changes data in ${serverName}, so it runs only when the user confirms it`);
   }
 }
