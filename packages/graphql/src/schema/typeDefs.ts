@@ -4474,9 +4474,13 @@ type TemplateQualificationResult {
   matched: Boolean!
 }
 
+# The winner as golden_master.preference_decision decides it (golden_master.explain_golden_source).
 type EvaluateGoldenSourceResult {
   winningSource: String!
   winningSourceId: ID
+  # MANUAL_OVERRIDE, CALCULATED, TEMPLATE_SEQUENCE, ATTRIBUTE_SEQUENCE or DATA_SOURCE_SEQUENCE.
+  tier: String
+  # The tier's place in that order, 1 to 5. 0 when nothing holds a value.
   tierUsed: Int!
   isDefault: Boolean!
   resolutionVersion: Int!

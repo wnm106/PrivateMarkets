@@ -1,5 +1,14 @@
 ﻿import { Context } from "../context";
-import { evaluatePrecedence } from "../lib/rule-engine";
+
+/** The tiers of golden_master.preference_decision, in the order it tries them. */
+const DECISION_TIERS = ["MANUAL_OVERRIDE", "CALCULATED", "TEMPLATE_SEQUENCE", "ATTRIBUTE_SEQUENCE", "DATA_SOURCE_SEQUENCE"];
+const DECISION_TIER_NAMES: Record<string, string> = {
+  MANUAL_OVERRIDE: "Manual override",
+  CALCULATED: "Calculated value",
+  TEMPLATE_SEQUENCE: "Template source order",
+  ATTRIBUTE_SEQUENCE: "Attribute source order",
+  DATA_SOURCE_SEQUENCE: "Source registry rank",
+};
 
 const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -92,13 +101,26 @@ export const goldenSourceResolvers = {
       return qualifyTemplate(context, args.entityId, args.domainCode);
     },
 
-    evaluateGoldenSource: async (_: any, args: { entityId: string; attributeCode: string; domainCode: string; templateId: string }, context: Context) => {
-      const result = await evaluatePrecedence(context.supabase, args.entityId, args.attributeCode, args.domainCode, args.templateId || null);
+    // The winner as golden_master.preference_decision decides it, the same decision the
+    // value triggers store. Nothing is interpreted here. domainCode and templateId are
+    // read from the record itself.
+    evaluateGoldenSource: async (_: any, args: { entityId: string; attributeCode: string }, context: Context) => {
+      const { data, error } = await context.supabase
+        .schema("golden_master")
+        .rpc("explain_golden_source", { p_entity_id: args.entityId, p_attribute_code: args.attributeCode });
+      if (error) throw new Error(error.message);
+      const explained = (data || {}) as { winningSource?: string | null; winningSourceId?: string | null; tier?: string | null; chainVersion?: number; candidates?: unknown[] };
+      const tier = explained.tier || null;
       return {
-        winningSource: result.winningSource, winningSourceId: result.winningSourceId,
-        tierUsed: result.tierUsed, isDefault: result.isDefault, resolutionVersion: result.resolutionVersion,
-        appliedRuleCode: result.appliedRule?.ruleCode || null, appliedRuleName: result.appliedRule?.ruleName || null,
-        allCandidates: result.allCandidates,
+        winningSource: explained.winningSource || "NONE",
+        winningSourceId: explained.winningSourceId || null,
+        tier,
+        tierUsed: tier ? DECISION_TIERS.indexOf(tier) + 1 : 0,
+        isDefault: tier === "ATTRIBUTE_SEQUENCE" || tier === "DATA_SOURCE_SEQUENCE",
+        resolutionVersion: explained.chainVersion ?? 0,
+        appliedRuleCode: tier,
+        appliedRuleName: tier ? DECISION_TIER_NAMES[tier] || tier : null,
+        allCandidates: explained.candidates || [],
       };
     },
   },

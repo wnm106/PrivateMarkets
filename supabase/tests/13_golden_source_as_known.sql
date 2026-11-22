@@ -47,6 +47,14 @@ SELECT tests.expect_value('An A analyst gets the same answers',
     $$SELECT pg_temp.nav_at(now()) || ' ' || pg_temp.nav_at(now() - interval '1 day')$$, '60 50');
 SELECT tests.expect_error('An A analyst cannot read the stamp history directly',
     $$SELECT 1 FROM golden_master.golden_source_history$$, '42501');
+SELECT tests.expect_value('explain_golden_source names the winner the stored record uses, and its tier',
+    $$SELECT (golden_master.explain_golden_source('aaaaaaaa-0000-0000-0000-0000000000f2', 'NAV') ->> 'winningSource')
+          || ' ' || (golden_master.explain_golden_source('aaaaaaaa-0000-0000-0000-0000000000f2', 'NAV') ->> 'tier')$$, 'MANUAL MANUAL_OVERRIDE');
+SELECT tests.expect_value('It lists both competing values, the winner first',
+    $$SELECT string_agg(c ->> 'value', ',') FROM jsonb_array_elements(golden_master.explain_golden_source('aaaaaaaa-0000-0000-0000-0000000000f2', 'NAV') -> 'candidates') AS c$$, '60,50');
+SELECT tests.login('b0000000-0000-0000-0000-00000000000a');
+SELECT tests.expect_error('A B analyst cannot have a client A record explained',
+    $$SELECT golden_master.explain_golden_source('aaaaaaaa-0000-0000-0000-0000000000f2', 'NAV')$$);
 
 SELECT tests.owner();
 SELECT tests.done();
