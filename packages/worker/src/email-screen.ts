@@ -127,7 +127,8 @@ export function contentProblem(extension: string, content: Buffer): string | nul
   if (extension === 'xlsx') {
     if (!content.subarray(0, 4).equals(ZIP)) return 'The file is not an Excel workbook.';
     // File names in a zip are stored as plain text, so a macro project is visible without unpacking.
-    if (content.includes('vbaProject.bin') || content.includes('macroEnabled')) return 'The workbook contains macros.';
+    // Every macro workbook has one. (Content types are inside compressed parts, so they are not read.)
+    if (content.includes('vbaProject.bin')) return 'The workbook contains macros.';
     // A zip whose parts would inflate far past the attachment itself is refused before anything unpacks it.
     return spreadsheetProblem(content);
   }

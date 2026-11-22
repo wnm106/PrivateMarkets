@@ -6,13 +6,19 @@ import { emailConnector, type ConnectionSpec } from './connectors';
 import { clamdScanner, emailScreenHandler, mailauthVerifier, storedNames, type DnsResolver } from './email';
 import { contentProblem, safeAttachmentName, screenMessage, senderAllowed, type AuthSummary, type ScreenInput } from './email-screen';
 import { JobError, type JobRun } from './worker';
+import * as SheetJS from 'xlsx';
 
 const NOW = new Date('2026-11-19T10:00:00Z');
 const MESSAGE_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const CONNECTION_ID = 'c0ffee00-0000-4000-8000-000000000002';
 const CLIENT_ID = 'client-a';
 
-const XLSX = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('[Content_Types].xml xl/workbook.xml')]);
+// A real workbook: screening reads the zip's contents list.
+const XLSX = (() => {
+  const book = SheetJS.utils.book_new();
+  SheetJS.utils.book_append_sheet(book, SheetJS.utils.aoa_to_sheet([['Fund', 'NAV'], ['A', 100]]), 'NAV');
+  return SheetJS.write(book, { type: 'buffer', bookType: 'xlsx', compression: true }) as Buffer;
+})();
 const CSV = Buffer.from('fund,nav\nF1,100\n');
 
 const signedOk: AuthSummary = { dkim: [{ domain: 'adminco.com', result: 'pass', aligned: true }], dkimAligned: 'adminco.com', dmarc: 'pass', spf: 'none', temporary: false };
@@ -97,6 +103,10 @@ describe('the content checks', () => {
 
   it('refuses workbooks with macros and PDFs with scripts', () => {
     expect(contentProblem('xlsx', Buffer.concat([XLSX, Buffer.from('xl/vbaProject.bin')]))).toBe('The workbook contains macros.');
+    // A workbook whose parts claim to unpack to gigabytes is refused before anything inflates it.
+    const bomb = Buffer.from(XLSX);
+    for (let at = 0; at + 46 <= bomb.length; at += 1) if (bomb.readUInt32LE(at) === 0x02014b50) bomb.writeUInt32LE(0x7fffffff, at + 24);
+    expect(contentProblem('xlsx', bomb)).toMatch(/MB once opened|too large/);
     const ole = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
     expect(contentProblem('xls', Buffer.concat([ole, Buffer.from('_VBA_PROJECT', 'utf16le')]))).toBe('The workbook contains macros.');
     expect(contentProblem('xls', ole)).toBeNull();
