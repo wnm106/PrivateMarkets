@@ -1004,7 +1004,7 @@ async function loadFundBoard(context: Context) {
     context.supabase
       .schema('entity_instances')
       .from('master_entities')
-      .select('id, entity_code, entity_name')
+      .select('id, entity_code, entity_name, metadata')
       .eq('domain_code', 'FUND')
       .eq('is_active', true)
       .order('entity_code'),
@@ -1017,7 +1017,8 @@ async function loadFundBoard(context: Context) {
   ]);
   if (fundResult.error) throw new Error(fundResult.error.message);
   if (ruleResult.error) throw new Error(ruleResult.error.message);
-  const funds = (fundResult.data || []).filter((row) => !String(row.entity_code).startsWith('BENCH-'));
+  // Benchmark records carry metadata.bench (supabase/seed/bench_compliance.sql). Decided from that flag, not the code.
+  const funds = (fundResult.data || []).filter((row) => (row.metadata as { bench?: unknown } | null)?.bench !== true);
   const fundIds = funds.map((row) => row.id);
   const rules = ruleResult.data || [];
   const ruleIds = rules.map((row) => row.id);

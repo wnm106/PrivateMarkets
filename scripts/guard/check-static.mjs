@@ -133,6 +133,10 @@ for (const [path, status] of changed) {
         || /\.in\(\s*['"](rule_code|client_code)['"]/.test(text)) {
         report(path, line, 'Behaviour keyed to a rule or client code. Read it from the rule (metadata, version) or the client record instead.');
       }
+      // A prefix, suffix or substring test on a code is the same thing: entity_code.startsWith('BENCH-').
+      if (/\b(rule_?code|ruleCode|client_?code|clientCode|entity_?code|entityCode)\)?\s*\.\s*(startsWith|endsWith|includes)\(\s*['"`]/.test(text)) {
+        report(path, line, 'Behaviour keyed to part of a rule, client or record code. Decide from a flag or metadata on the record instead.');
+      }
     }
   }
 }
