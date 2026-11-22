@@ -9,6 +9,7 @@ import {
 } from '@tapestrai/graphql/src/lib/import-intake';
 import type { ColumnHint } from './suggest';
 import type { ParsedTable } from './types';
+import { assertSafeSpreadsheet } from '@tapestrai/graphql/src/lib/spreadsheet-safety';
 
 export interface ImportRead extends InterpretedImport {
   table: ParsedTable;
@@ -62,6 +63,7 @@ function toHint(target: ImportTarget): ColumnHint {
 }
 
 function workbookSheets(bytes: Buffer): Array<{ name: string; rows: string[][] }> {
+  assertSafeSpreadsheet(bytes);
   const workbook = XLSX.read(bytes, { type: 'buffer', cellDates: true });
   return workbook.SheetNames.map((name) => {
     const sheet = workbook.Sheets[name];
