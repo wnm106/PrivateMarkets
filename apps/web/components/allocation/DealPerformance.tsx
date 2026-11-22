@@ -9,6 +9,7 @@ import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { DealActualReturns } from './DealActualReturns';
 import { projectPerformance, type PerformanceCase, type PerformanceFees } from '@/lib/deal-performance';
 import { usePublishTab } from '@/lib/view-context';
+import { useLatestRequest } from '@/lib/use-latest-request';
 
 /** Stored attribute behind each line of the gross-to-net bridge. */
 const BRIDGE: Record<string, { amount: string; irr?: string; moic?: string }> = {
@@ -170,14 +171,17 @@ export function DealPerformance({
 
   const debt = useMemo(() => tranches.filter((tranche) => !tranche.equityLinked), [tranches]);
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     setLoading(true);
     setError(null);
     const result = await graphqlQuery<{
       draws: { edges: Array<{ node: Node }> };
       funds: { edges: Array<{ node: { id: string; attributes: Record<string, unknown> } }> };
       deal: { attributes: Record<string, unknown> } | null;
-    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only');
+    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     if (result.error?.message) {
       setError(result.error.message);
       setLoading(false);
@@ -259,7 +263,7 @@ export function DealPerformance({
     }) : null;
     setModel(projected);
     setLoading(false);
-  }, [asOfDate, closeDate, dealId, debt, knowledgeDate, oid, rows, stage]);
+  }, [latest, asOfDate, closeDate, dealId, debt, knowledgeDate, oid, rows, stage]);
 
   useEffect(() => { void load(); }, [load]);
 

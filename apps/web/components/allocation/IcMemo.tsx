@@ -22,6 +22,7 @@ import {
   unfundedFootnote,
   type MemoTrancheFace,
 } from '@tapestrai/graphql/src/lib/ic-memo-format';
+import { useLatestRequest } from '@/lib/use-latest-request';
 
 const SECTIONS = [
   ['recommendation', 'Recommendation'],
@@ -181,8 +182,11 @@ export function IcMemo({
   const [busy, setBusy] = useState(false);
   const inspect = useAttributeInspect();
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
-    const result = await graphqlQuery<{ icMemo: MemoDoc }>(QUERY, { dealId, asOfDate }, 'network-only');
+    const request = latest.begin();
+    const result = await graphqlQuery<{ icMemo: MemoDoc }>(QUERY, { dealId, asOfDate }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     const doc = result.data?.icMemo;
     const message = result.error?.message || doc?.errors?.[0]?.message;
     if (message || !doc) {
@@ -191,7 +195,7 @@ export function IcMemo({
     }
     setMemo(doc);
     setError(null);
-  }, [asOfDate, dealId]);
+  }, [latest, asOfDate, dealId]);
 
   useEffect(() => { void load(); }, [load]);
 

@@ -9,6 +9,7 @@ import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useTemporalStore } from '@/lib/store';
 import { usePublishTab } from '@/lib/view-context';
 import { addMonths, heldShare, monthKey, projectSchedule, spreadFromPricing, type ScheduleDraw, type ScheduleMonth } from '@/lib/servicing-schedule';
+import { useLatestRequest } from '@/lib/use-latest-request';
 
 const COVENANT_TESTS = `
   query DealCovenantTests($dealId: ID!, $asOfDate: Date) {
@@ -229,7 +230,9 @@ export function DealServicing({
   const [error, setError] = useState<string | null>(null);
   const [trancheId, setTrancheId] = useState('ALL');
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     setLoading(true);
     setError(null);
     const result = await graphqlQuery<{
@@ -237,7 +240,8 @@ export function DealServicing({
       covenants: { edges: Array<{ node: Node }> };
       reports: { edges: Array<{ node: Node }> };
       deal: { attributes: Record<string, unknown> } | null;
-    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only');
+    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     if (result.error?.message) {
       setError(result.error.message);
       setLoading(false);
@@ -297,7 +301,7 @@ export function DealServicing({
       }))
       .sort((a, b) => a.due.localeCompare(b.due)));
     setLoading(false);
-  }, [asOfDate, dealId, knowledgeDate, rows, tranches]);
+  }, [latest, asOfDate, dealId, knowledgeDate, rows, tranches]);
 
   useEffect(() => { void load(); }, [load]);
 

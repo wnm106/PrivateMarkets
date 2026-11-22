@@ -23,6 +23,7 @@ import {
   type StatementLayout,
   type StatementPeriod,
 } from '@tapestrai/graphql/src/lib/statement-book';
+import { useLatestRequest } from '@/lib/use-latest-request';
 
 interface Rel {
   childEntityId: string;
@@ -206,7 +207,9 @@ export function DealFinancials({
   const [section, setSection] = useState('all');
   const inspect = useAttributeInspect();
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     setLoading(true);
     setError(null);
     const result = await graphqlQuery<{
@@ -217,7 +220,8 @@ export function DealFinancials({
     }, {
       asOfDate?: string | null;
       knowledgeDate?: string | null;
-    }>(BOOK, { asOfDate, knowledgeDate }, 'network-only');
+    }>(BOOK, { asOfDate, knowledgeDate }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     if (result.error?.message) {
       setError(result.error.message);
       setLoading(false);
@@ -248,7 +252,8 @@ export function DealFinancials({
     if (periodIds.length > 0) {
       const chosen = await graphqlQuery<{
         effectiveTemplates: Array<{ entityId: string; templateId: string | null }>;
-      }, { entityIds: string[]; asOfDate?: string | null }>(TEMPLATES, { entityIds: periodIds, asOfDate }, 'network-only');
+      }, { entityIds: string[]; asOfDate?: string | null }>(TEMPLATES, { entityIds: periodIds, asOfDate }, 'network-only', request.signal);
+      if (!request.current(chosen)) return;
       const templateOf = new Map((chosen.data?.effectiveTemplates || []).map((row) => [row.entityId, row.templateId]));
       const templates = new Map((result.data?.domainTemplates || []).map((template) => [template.id, template]));
       const used: TemplateNode[] = [];
@@ -267,7 +272,7 @@ export function DealFinancials({
     setSections(result.data?.attributeSections || []);
     setPeriods(shown);
     setLoading(false);
-  }, [asOfDate, borrowerId, knowledgeDate]);
+  }, [latest, asOfDate, borrowerId, knowledgeDate]);
 
   useEffect(() => { void load(); }, [load]);
 

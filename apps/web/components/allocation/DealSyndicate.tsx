@@ -8,6 +8,7 @@ import { domainHref } from '@/lib/domain-routes';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useTemporalStore } from '@/lib/store';
 import { usePublishTab } from '@/lib/view-context';
+import { useLatestRequest } from '@/lib/use-latest-request';
 
 const ROLE: Record<string, string> = {
   PARTICIPANT: 'Participant',
@@ -182,7 +183,9 @@ export function DealSyndicate({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     setLoading(true);
     setError(null);
     const result = await graphqlQuery<{
@@ -190,7 +193,8 @@ export function DealSyndicate({
       orders: { edges: Array<{ node: Node }> };
       lenders: { edges: Array<{ node: Node }> };
       deal: { attributes: Record<string, unknown> } | null;
-    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only');
+    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     if (result.error?.message) {
       setError(result.error.message);
       setLoading(false);
@@ -231,7 +235,7 @@ export function DealSyndicate({
     const stored = attributeText(result.data?.deal?.attributes?.SYNDICATE_STATUS);
     setStatus(STATUS[stored] || stored);
     setLoading(false);
-  }, [asOfDate, dealId, knowledgeDate]);
+  }, [latest, asOfDate, dealId, knowledgeDate]);
 
   useEffect(() => { void load(); }, [load]);
 

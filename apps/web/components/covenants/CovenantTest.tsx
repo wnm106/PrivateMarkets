@@ -8,6 +8,7 @@ import { domainHref } from '@/lib/domain-routes';
 import { usePublishTab } from '@/lib/view-context';
 import { COVENANT_MEASURE_LABELS, COVENANT_METRIC_LABELS, covenantTabPayload } from '@/lib/covenant-tab';
 import { covenantStatus, type CovenantComponentResult, type CovenantDefinitionChoice, type CovenantTest as CovenantTestResult } from '@tapestrai/graphql/src/lib/covenant-test';
+import { useLatestRequest } from '@/lib/use-latest-request';
 
 const TEST_FIELDS = `
   covenantId code name dealId dealName metric direction unit level firstTest beforeFirstTest
@@ -154,18 +155,21 @@ export function CovenantTest({ covenantId, publishAs, label = 'Test' }: { covena
   // A null entry publishes nothing, so a test shown outside a record tab stays quiet.
   usePublishTab(publishAs || 'covenant-test', publishAs ? covenantTabPayload(label, loading ? null : test) : null);
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     setLoading(true);
     setError(null);
     const result = await graphqlQuery<
       { covenantTest: CovenantTestResult | null; covenantLibrary: CovenantDefinitionChoice[] },
       { covenantId: string; asOfDate?: string }
-    >(TEST_QUERY, { covenantId, asOfDate: asOfDate || undefined }, 'network-only');
+    >(TEST_QUERY, { covenantId, asOfDate: asOfDate || undefined }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     if (result.error) setError(result.error.message || 'The covenant could not be read.');
     setTest(result.data?.covenantTest ?? null);
     setLibrary(result.data?.covenantLibrary ?? []);
     setLoading(false);
-  }, [asOfDate, covenantId]);
+  }, [latest, asOfDate, covenantId]);
 
   useEffect(() => { void load(); }, [load]);
 

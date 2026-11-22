@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
+import { useLatestRequest } from '@/lib/use-latest-request';
 
 interface Choice {
   id: string;
@@ -96,12 +97,15 @@ export function RecordTemplateChoices({ entityId, asOfDate }: { entityId: string
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     const result = await graphqlQuery<{ templateChoiceSlots: Slot[]; effectiveTemplates: Effective[] }, {
       entityId: string;
       entityIds: string[];
       asOfDate?: string | null;
-    }>(QUERY, { entityId, entityIds: [entityId], asOfDate: asOfDate || null }, 'network-only');
+    }>(QUERY, { entityId, entityIds: [entityId], asOfDate: asOfDate || null }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     if (result.error) {
       setSlots([]);
       return;
@@ -111,7 +115,7 @@ export function RecordTemplateChoices({ entityId, asOfDate }: { entityId: string
     setEffective(result.data?.effectiveTemplates?.[0] || null);
     setPicked(Object.fromEntries(next.map((slot) => [slot.relationshipCode || '', currentChoice(slot)?.templateId || ''])));
     setFrom({});
-  }, [asOfDate, entityId]);
+  }, [latest, asOfDate, entityId]);
 
   useEffect(() => { void load(); }, [load]);
 
