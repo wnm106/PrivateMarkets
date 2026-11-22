@@ -36,6 +36,7 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 | Agent step | `packages/worker/src/workflow/agent.ts`, `claude.ts`, `gemini.ts` | The model loop and the two providers |
 | Tools | `packages/worker/src/workflow/tools.ts` | The chat assistant's tools, run as a person |
 | Reconciliation tools | `packages/mcp-server/src/tools/rec-tools.ts`, `packages/graphql/src/lib/rec-digest.ts`, `rec-actions.ts` | Reading a fund's NAV, position, and cash reconciliation, and recording decisions, cash pairs, adjustments, and notes |
+| Filed report tools | `packages/mcp-server/src/tools/nav-report-tools.ts`, `packages/mcp-server/src/feeds/nav-report.ts`, `packages/graphql/src/lib/nav-breaks.ts` | Reading a stored 10-Q or annual report onto a fund's NAV statement, loading it, and summarizing the breaks. See [NAV_REPORTS.md](NAV_REPORTS.md) |
 | Pack tables | `packages/mcp-server/src/feeds/pack-tables.ts` | Reading every table of a stored file, trying a mapping without writing, and loading one table |
 | API | `packages/graphql/src/resolvers/workflows.ts` | Queries and mutations the pages use |
 | Pages | `apps/web/app/workflows` | The list, the editor, and the run page with its review |
@@ -128,6 +129,7 @@ The templates, all built this way:
 | Required values check | Proposes missing required values. Needs filters | After review |
 | Data quality brief | Briefs on open exceptions | No |
 | NAV review | Names the checks and lines to look at before sign-off | No |
+| NAV reconciliation | Takes a fund's filed report (a 10-Q, a 10-K) from a stored file to a summary of the breaks. It finds the fund from the report, loads it, reconciles and keeps the summary as notes on its own; a person is asked only to check a report it holds and to decide breaks. A `REPORT` trigger starts it when a report arrives. See [NAV_REPORTS.md](NAV_REPORTS.md) | Loads the report unless it is held; keeps the summary as notes; decisions after review |
 | Cash tie-out | Says what ties to the bank and what does not | No |
 | Closing readiness | Says whether each deal can close and what is open | No |
 | Overcollateralization test, Single-name check | Score one compliance rule and explain the result | Stores the rule's results |
@@ -416,6 +418,7 @@ Later steps read what the person left as `{{steps.<step>.result.<key>}}`, and ea
 | Understand a file (`intake.understand`) | A stored file beside what was found in it: the kind of file, its tables, the records it holds, the record it is about, and whether it is indexed for search | `confirmed`, `abandoned` | Confirmed: the selected table has rows |
 | Map a file (`load.map`) | A stored file beside where each column goes, the as-of date, and a dry run | `confirmed`, `abandoned` | Confirmed: the file has an as-of date and a column that identifies each record |
 | Check staged values (`load.quality`) | A staged batch with its data quality checks, and corrections | `approved`, `discarded` | Approved: the batch is still staged, and no critical check fails because of it unless a reason was given. Approving needs `load.promote` |
+| Check a filed report (`nav.report`) | A stored 10-Q or annual report the run held: why it was held, the fund to choose when the report names none on file, and how it maps onto the fund's NAV statement: each line at both dates and the report lines behind it, the lines left out and why, the schedule of investments, the report's own checks, and a trial load | `confirmed`, `abandoned` | Confirmed: the report has a fund and maps onto the NAV statement at its period end |
 
 **The engine checks, not the page.** When a person leaves a stage, the engine asks a read-only tool whether what the screen requires is true. If it is not, the stage is handed back to the person with the reason, and the run waits on it again. So a stage cannot be passed by calling the API directly.
 
@@ -536,7 +539,7 @@ It starts a run of the published version for the schedule's creator, who must ho
 
 ## Starting when something happens
 
-A trigger starts a workflow when a feed event arrives, or when a data quality scan finds new failures. Set one up under **Start automatically** on the workflow's page. It needs `workflow.manage` and `workflow.run`.
+A trigger starts a workflow when a feed event arrives, when a data quality scan finds new failures, when a rule is breached, when a value changes, or when a filed report arrives. Set one up under **Start automatically** on the workflow's page. It needs `workflow.manage` and `workflow.run`.
 
 | Source | Starts when | Narrowed by |
 |---|---|---|
@@ -544,19 +547,20 @@ A trigger starts a workflow when a feed event arrives, or when a data quality sc
 | A feed does something | A feed loads a file, has one waiting for review, fails, or is late | Which of those, feed codes |
 | A compliance rule is breached | A soft or hard breach where the result before it, for the same rule, record, and grouping, was not a breach | Rule codes, soft or hard |
 | A value changes | A new current value is recorded for one of the attributes the trigger names | 1 to 20 attribute codes (required), types of record |
+| A filed report arrives | A stored file is read as a filed report (a 10-Q, a 10-K, an annual report), whether uploaded or brought by a feed or email | Entity names, each matched anywhere in the name the report gives |
 
 Data quality is checked live, and the exceptions table holds only failures a person accepted. So "new" comes from the scan, which compares each record with the day before. Each `dq.scan` that finds something new records one `DQ_NEW_FAILURES` event listing those records (up to 500), with the rules they fail. Schedule the scan once a day: a second scan the same day reports the same new failures again.
 
 Events are not acted on one at a time. Everything new since the trigger last fired goes into **one run**, up to 500 events or records. A scan that finds 300 records failing starts one run, not 300.
 
-- **What the run covers.** A run started by data quality failures, a breach, or a value change is given those records as `filters.entityIds`, added to any filters in the trigger's input, so Select records picks them and nothing else. A record fits when one of its failing rules matches the trigger's severities and rule codes. A record that only lost a required value has no rule, so it fits only a trigger that names no severity or rule. A run started by a feed gets the trigger's input as it is, like a schedule's.
+- **What the run covers.** A run started by data quality failures, a breach, or a value change is given those records as `filters.entityIds`, added to any filters in the trigger's input, so Select records picks them and nothing else. A record fits when one of its failing rules matches the trigger's severities and rule codes. A record that only lost a required value has no rule, so it fits only a trigger that names no severity or rule. A run started by a feed gets the trigger's input as it is, like a schedule's. A run started by a report gets one report, the earliest waiting, as `importInstanceId`, added to the trigger's input; the next report waits for the next run.
 - **What started it.** Steps can read `{{input.trigger}}`: the trigger's name, its source, how many events or records there were, and up to 50 of them (the record, its rules and severities, and how many required values it lost; or the feed, file, and what happened).
 - **One run at a time.** While a run a trigger started is queued, running, or waiting for a review, the trigger starts nothing. New events wait, and the next run takes all of them. The trigger's line on the page says so.
 - **Who it runs as.** Runs start as whoever last saved the trigger, through the same `workflow.start` job a schedule uses, with the same checks. If that person can no longer run workflows, the start fails and the trigger shows why.
 - **Only the published version runs.** A trigger on an unpublished workflow starts nothing.
 - **Nothing earlier.** A new trigger acts only on what arrives after it is saved. Turning one back on does not act on what arrived while it was off.
 
-Underneath, the platform job `workflow.triggers` does the matching. It is queued the moment a feed or scan event is written, and also runs every 5 minutes from the `WORKFLOW_TRIGGERS` schedule. Each trigger keeps a cursor of what it has acted on. The tables and functions are in `supabase/migrations/20261117030000_workflow_triggers.sql`, which also changes `job_run_dq_scan` to record the event.
+Underneath, the platform job `workflow.triggers` does the matching. It is queued the moment a feed or scan event is written, and also runs every 5 minutes from the `WORKFLOW_TRIGGERS` schedule. Each trigger keeps a cursor of what it has acted on. The tables and functions are in `supabase/migrations/20261117030000_workflow_triggers.sql`, which also changes `job_run_dq_scan` to record the event. `supabase/migrations/20261122110000_report_trigger.sql` adds the `REPORT` source: a stored file whose intake method becomes `financial_report` records one `REPORT_RECEIVED` event.
 
 ## Permissions
 
@@ -575,7 +579,7 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 ## Not built yet
 
 - Loops. A graph runs each step once. A stage can be handed back to the person, but a run cannot go back to an earlier stage.
-- Stages for proposed new fields and a drafted template. Three screens exist: understanding a file, mapping it, and checking staged values.
+- Stages for proposed new fields and a drafted template. Four screens exist: understanding a file, mapping it, checking staged values, and checking a filed report.
 - Choosing the stored record a file's values load onto. The Understand screen links the document to a record; the loader still matches values by code, identifier and name.
 - Starting a guided run when a file arrives by a feed. It is started by hand from Load data.
 - Handing an overdue form or screen on to other roles. Reviews can be; forms and screens are only chased.

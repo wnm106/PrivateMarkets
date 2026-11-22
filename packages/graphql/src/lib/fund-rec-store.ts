@@ -10,7 +10,8 @@ import {
 } from './fund-surface';
 import {
   buildReview, cashflowBucket, periodEndOnOrBefore, priorPeriodEnd,
-  type FlowBucket, type Frequency, type RecBind, type RecDisposition, type RecInput, type RecLine, type RecPosition, type RecReview, type RecRoll, type StepState,
+  type CapitalModel, type FlowBucket, type Frequency, type MgmtFeeBasis, type PerfFeeBasis, type RecBind, type RecDisposition, type RecInput,
+  type RecLine, type RecPosition, type RecReview, type RecRoll, type RecSourceCheck, type StepState,
 } from './fund-rec';
 import {
   FUND_ADMIN_SOURCE, INTERNAL_SOURCE, loadNavLineAttributes, readSourceAmounts, sourceAmount, sourceText,
@@ -20,8 +21,10 @@ import {
 const CODES = [
   'FUND_STRATEGY', 'FUND_TOTAL_COMMITMENTS', 'FUND_NET_IRR', 'FUND_CLOSE_FREQUENCY', 'FUND_CLOSE_LAG_DAYS',
   'FUND_MGMT_FEE_RATE_PCT', 'FUND_PREF_RETURN_PCT', 'FUND_CARRY_PCT', 'FUND_CATCH_UP_PCT',
+  'FUND_CAPITAL_MODEL', 'FUND_MGMT_FEE_BASIS', 'FUND_PERF_FEE_BASIS',
   'STATEMENT_PERIOD_END', 'STATEMENT_PERIOD_LABEL', 'STATEMENT_TOLERANCE_PCT', 'STATEMENT_CERTIFIED', 'STATEMENT_RECEIVED_DATE',
-  'POSITION_STRATEGY', 'MARKET_VALUE', 'ACCRUED_CASH_INTEREST_AMOUNT', 'UNREALIZED_GAIN_LOSS', 'POSITION_MARK', 'POSITION_AGENT_MARK',
+  'STATEMENT_COMPARATIVE_DATE', 'STATEMENT_SOURCE_CHECKS',
+  'POSITION_STRATEGY', 'MARKET_VALUE', 'METRIC_DATE', 'ACCRUED_CASH_INTEREST_AMOUNT', 'UNREALIZED_GAIN_LOSS', 'POSITION_MARK', 'POSITION_AGENT_MARK',
   'ACTIVITY_DATE', 'ACTIVITY_KIND', 'ACTIVITY_AMOUNT', 'ACTIVITY_STATUS',
   'EVIDENCE_KIND', 'EVIDENCE_DATE', 'EVIDENCE_AMOUNT',
   'CLOSE_PERIOD_END', 'CLOSE_SIGNOFF', 'CLOSE_CERTIFIED_AT', 'CLOSE_CERTIFIED_BY', 'CLOSE_CERTIFIED_NAV',
@@ -86,6 +89,8 @@ class Facts {
     return { value: numeric(row), validFrom: row.valid_from, validTo: row.valid_to };
   }
   str(id: string, code: string) { return text(this.row(id, code)); }
+  /** Text of a value in another read, such as one taken at the period end. */
+  strIn(map: Map<string, ValueRow>, id: string, code: string) { return text(read(map, id, this.defs.get(code))); }
   bool(id: string, code: string) { return flag(this.row(id, code)); }
 }
 
@@ -102,6 +107,27 @@ export interface FundRecLoad {
   priorOpen: boolean;
   periods: string[];
   closeNotes: CloseNotes | null;
+}
+
+/** The report checks kept on a statement: { total, ties, checks: [...] }. Null when there are none or the text is not that. */
+export function parseSourceChecks(value: string): { total: number; ties: number; checks: RecSourceCheck[] } | null {
+  if (!value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value) as { total?: unknown; ties?: unknown; checks?: unknown };
+    const checks = Array.isArray(parsed.checks) ? parsed.checks : [];
+    const amount = (input: unknown) => (input == null || input === '' || !Number.isFinite(Number(input)) ? null : Number(input));
+    return {
+      total: Number(parsed.total) || checks.length,
+      ties: Number(parsed.ties) || 0,
+      checks: checks.map((raw) => {
+        const item = (raw || {}) as Record<string, unknown>;
+        const result = item.result === 'Ties' || item.result === 'Break' ? item.result : 'Missing';
+        return { label: String(item.label || ''), where: String(item.where || ''), reported: amount(item.reported), computed: amount(item.computed), difference: amount(item.difference), result };
+      }),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function dateOnly(value: string): string {
@@ -144,7 +170,6 @@ export async function loadFundRecInput(
   const frequency: Frequency = frequencyCode;
   const lagDays = facts.num(fund.id, 'FUND_CLOSE_LAG_DAYS') ?? 37;
   const periodEnd = periodEndInput ? periodEndInput.slice(0, 10) : periodEndOnOrBefore(frequency, today);
-  const previous = priorPeriodEnd(frequency, periodEnd);
   const tie = [today, knowledge] as const;
 
   const [statementRels, closeRels, evidenceRels, activityRels, positionRels, facilityRels] = await Promise.all([
@@ -173,6 +198,11 @@ export async function loadFundRecInput(
     ?? datedStatements[datedStatements.length - 1]?.id
     ?? null;
   const statementPeriod = statementId ? dateOnly(facts.str(statementId, 'STATEMENT_PERIOD_END')) : '';
+  /* What the statement says as of its own period end: the date its prior column is at, and the checks the report made of itself. */
+  const atPeriodEnd = statementId ? await facts.snapshot([statementId], periodEnd, knowledge) : new Map<string, ValueRow>();
+  const comparative = statementId ? dateOnly(facts.strIn(atPeriodEnd, statementId, 'STATEMENT_COMPARATIVE_DATE')) : '';
+  const previous = comparative && comparative < periodEnd ? comparative : priorPeriodEnd(frequency, periodEnd);
+  const sourceChecks = statementId ? parseSourceChecks(facts.strIn(atPeriodEnd, statementId, 'STATEMENT_SOURCE_CHECKS')) : null;
   const priorStatementId = statementFor(previous);
   const closeFor = (end: string) => closeIds.find((id) => dateOnly(facts.str(id, 'CLOSE_PERIOD_END')) === end) ?? null;
   const closeId = closeFor(periodEnd);
@@ -212,9 +242,10 @@ export async function loadFundRecInput(
     admin: sourceAmount(currentLines, statementId, line.attributeId, FUND_ADMIN_SOURCE),
     shadow: sourceAmount(currentLines, statementId, line.attributeId, INTERNAL_SOURCE),
     prior: sourceAmount(priorLines, statementId, line.attributeId, FUND_ADMIN_SOURCE),
+    unit: line.unit,
   })) : [];
   const BOOK_SOURCE = INTERNAL_SOURCE;
-  const positionCodes = ['MARKET_VALUE', 'ACCRUED_CASH_INTEREST_AMOUNT', 'UNREALIZED_GAIN_LOSS', 'POSITION_MARK', 'POSITION_AGENT_MARK', 'POSITION_STRATEGY'] as const;
+  const positionCodes = ['MARKET_VALUE', 'ACCRUED_CASH_INTEREST_AMOUNT', 'UNREALIZED_GAIN_LOSS', 'POSITION_MARK', 'POSITION_AGENT_MARK', 'POSITION_STRATEGY', 'METRIC_DATE'] as const;
   const positionAttrIds = positionCodes.map((code) => facts.attributeId(code)).filter((id): id is string => Boolean(id));
   const [positionNow, positionThen] = positionIds.length && positionAttrIds.length
     ? await Promise.all([
@@ -353,6 +384,27 @@ export async function loadFundRecInput(
     .filter((position) => position.roll || (position.marketValue ?? 0) > 0)
     .sort((left, right) => left.group.localeCompare(right.group) || left.name.localeCompare(right.name));
 
+  /*
+   * The administrator's schedule of investments at the period end: positions whose administrator value is
+   * dated the period end. A position that has left the schedule keeps its last value, but not this date.
+   */
+  const metricId = facts.attributeId('METRIC_DATE');
+  const marketId = facts.attributeId('MARKET_VALUE');
+  const scheduled = metricId && marketId
+    ? positionEntities.filter((entity) => sourceText(positionNow, entity.id, metricId, FUND_ADMIN_SOURCE).slice(0, 10) === periodEnd
+      && sourceAmount(positionNow, entity.id, marketId, FUND_ADMIN_SOURCE) != null)
+    : [];
+  const adminSchedule = scheduled.length
+    ? {
+      total: scheduled.reduce((total, entity) => total + (sourceAmount(positionNow, entity.id, marketId!, FUND_ADMIN_SOURCE) ?? 0), 0),
+      count: scheduled.length,
+      sources: scheduled.slice(0, 100).map((entity): RecBind => ({
+        entityId: entity.id, entityName: entity.entity_name, domainCode: 'POSITION', code: 'MARKET_VALUE', name: 'Market Value',
+        dataType: 'NUMBER', asOfDate: periodEnd, sourceCode: FUND_ADMIN_SOURCE,
+      })),
+    }
+    : null;
+
   /* outside evidence */
   const evidenceOn = (kind: string): { amount: number | null; id: string | null; name: string | null } => {
     const hit = evidenceIds.find((id) => facts.str(id, 'EVIDENCE_KIND') === kind && dateOnly(facts.str(id, 'EVIDENCE_DATE')) === periodEnd) ?? null;
@@ -415,6 +467,9 @@ export async function loadFundRecInput(
       catchUpPct: facts.num(fund.id, 'FUND_CATCH_UP_PCT'),
       netIrr: facts.num(fund.id, 'FUND_NET_IRR'),
       hasFacility: facilityRels.length > 0,
+      capitalModel: (facts.str(fund.id, 'FUND_CAPITAL_MODEL') || 'DRAWDOWN') as CapitalModel,
+      mgmtFeeBasis: (facts.str(fund.id, 'FUND_MGMT_FEE_BASIS') || 'COMMITMENTS') as MgmtFeeBasis,
+      perfFeeBasis: (facts.str(fund.id, 'FUND_PERF_FEE_BASIS') || 'WATERFALL') as PerfFeeBasis,
     },
     periodEnd,
     priorAsOf: previous,
@@ -431,6 +486,8 @@ export async function loadFundRecInput(
       : null,
     lines,
     positions,
+    adminSchedule,
+    sourceChecks,
     evidence: (() => {
       const bank = evidenceOn('BANK');
       const lender = evidenceOn('LENDER');

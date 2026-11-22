@@ -1,7 +1,7 @@
 import { extractTableWithAgent } from './agent-extract';
 import { azureConfigured, extractTablesWithAzure } from './azure-extract';
 import { readImportFile } from './intake';
-import { extractPdfFragments } from '@tapestrai/graphql/src/lib/import-intake';
+import { extractPdfFragments, readFinancialReport, reportTables, REPORT_SCHEDULE_TABLE } from '@tapestrai/graphql/src/lib/import-intake';
 import { refineLocations } from './locate';
 import { extractTablesWithLlamaParse, llamaParseConfigured, profileDocument, type DocumentProfile } from './llama-parse';
 import { parseFlexibleTable, parseJsonRecords, parseWorkbook, type NamedTable } from './parse-table';
@@ -14,7 +14,7 @@ export interface IntakeTable {
 }
 
 export interface FileIntake {
-  method: 'tabular' | 'json' | 'azure_layout' | 'llamaparse' | 'agent' | 'needs_extract';
+  method: 'tabular' | 'json' | 'azure_layout' | 'llamaparse' | 'agent' | 'needs_extract' | 'financial_report';
   note: string;
   tables: IntakeTable[];
   /** How a document was assessed and which reader it was sent to. */
@@ -74,6 +74,39 @@ export async function intakeFile(fileName: string, mediaType: string, bytes: Buf
 }
 
 /**
+ * A filed financial report with a text layer (a 10-Q, a 10-K, an annual
+ * report) read on this server: one table per primary statement, one per
+ * schedule of investments, and the report's checks of itself. Null when the
+ * file is not one. Nothing leaves the server, however long the report.
+ */
+export async function readReportTables(fileName: string, bytes: Buffer): Promise<{ tables: IntakeTable[]; note: string; selected: string } | null> {
+  if (!fileName.toLowerCase().endsWith('.pdf') && bytes.subarray(0, 5).toString() !== '%PDF-') return null;
+  let pages;
+  try {
+    pages = await extractPdfFragments(new Uint8Array(bytes));
+  } catch {
+    return null;
+  }
+  const report = readFinancialReport(pages);
+  if (!report) return null;
+  const tables = reportTables(report, pages.map((page) => ({ page: page.page, width: page.width, height: page.height })));
+  const investments = report.schedules.reduce((count, schedule) => count + schedule.rows.filter((row) => row.kind === 'investment').length, 0);
+  const ties = report.checks.filter((check) => check.result === 'Ties').length;
+  const note = [
+    `Read as a ${report.form ? `${report.form} ` : ''}financial report${report.entityName ? ` of ${report.entityName}` : ''}${report.periodEnd ? ` at ${report.periodEnd}` : ''}:`,
+    `${report.statements.length} statement${report.statements.length === 1 ? '' : 's'}`,
+    report.schedules.length ? `and ${report.schedules.length} schedule${report.schedules.length === 1 ? '' : 's'} of investments with ${investments} investments.` : 'and no schedule of investments.',
+    report.checks.length ? `${ties} of ${report.checks.length} of the report's own subtotals and totals tie.` : '',
+  ].filter(Boolean).join(' ');
+  const selected = tables.find((table) => table.id.startsWith(REPORT_SCHEDULE_TABLE))?.id ?? tables[0].id;
+  return {
+    tables: tables.map((table) => ({ id: table.id, name: table.name, table: { headers: table.headers, rows: table.rows, locations: table.locations, pages: table.pages } })),
+    note,
+    selected,
+  };
+}
+
+/**
  * Pick a reader for a document from what it looks like.
  * A short PDF with a text layer that already reads as a statement stays local.
  * Scans, images, Word files, and long or table-heavy PDFs go to LlamaParse when
@@ -84,6 +117,12 @@ async function intakeDocument(fileName: string, mediaType: string, bytes: Buffer
   const profile = await profileDocument(fileName, bytes);
   const type = mediaType || 'application/octet-stream';
   const notes: string[] = [];
+
+  // A filed report is read here, statement by statement, before it is judged too long for the built-in reader.
+  if (profile.format === 'pdf') {
+    const report = await readReportTables(fileName, bytes);
+    if (report) return { method: 'financial_report', note: report.note, tables: report.tables, profile };
+  }
 
   if (profile.route === 'local' && profile.format === 'pdf') {
     try {

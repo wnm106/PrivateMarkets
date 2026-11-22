@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
-import { BREACH_STATUSES, FEED_KINDS, SEVERITIES, TRIGGER_SOURCES, codeList, triggerSummary, type TriggerSource, type TriggerView } from '@/lib/workflow-triggers';
+import { BREACH_STATUSES, FEED_KINDS, SEVERITIES, TRIGGER_SOURCES, codeList, nameList, triggerSummary, type TriggerSource, type TriggerView } from '@/lib/workflow-triggers';
 import { when, type MutationErrors } from '@/lib/workflows';
 
 /**
@@ -24,6 +24,7 @@ interface Draft {
   kinds: string[];
   statuses: string[];
   attributeCodes: string;
+  entityNames: string;
   feedCodes: string;
   severities: string[];
   ruleCodes: string;
@@ -40,6 +41,7 @@ function draftFrom(trigger: TriggerView | null): Draft {
     kinds: trigger?.match.kinds ?? [],
     statuses: trigger?.match.statuses ?? [],
     attributeCodes: (trigger?.match.attributeCodes ?? []).join(', '),
+    entityNames: (trigger?.match.entityNames ?? []).join('; '),
     feedCodes: (trigger?.match.feedCodes ?? []).join(', '),
     severities: trigger?.match.severities ?? [],
     ruleCodes: (trigger?.match.ruleCodes ?? []).join(', '),
@@ -98,7 +100,9 @@ export function WorkflowTriggers({ workflowId, published, canManage }: Props) {
           ? { statuses: draft.statuses, ruleCodes: codeList(draft.ruleCodes) }
           : draft.source === 'VALUE_CHANGE'
             ? { attributeCodes: codeList(draft.attributeCodes), domainCodes: codeList(draft.domainCodes) }
-            : { severities: draft.severities, ruleCodes: codeList(draft.ruleCodes), domainCodes: codeList(draft.domainCodes) };
+            : draft.source === 'REPORT'
+              ? { entityNames: nameList(draft.entityNames) }
+              : { severities: draft.severities, ruleCodes: codeList(draft.ruleCodes), domainCodes: codeList(draft.domainCodes) };
     setSaving(true);
     setMessage('');
     const { data, error } = await graphqlMutation<{ saveWorkflowTrigger: { errors: MutationErrors } }>(SAVE_TRIGGER, {
@@ -226,7 +230,14 @@ export function WorkflowTriggers({ workflowId, published, canManage }: Props) {
               </label>
             </>
           )}
-          {draft.source === 'BREACH' || draft.source === 'VALUE_CHANGE' ? null : draft.source === 'FEED' ? (
+          {draft.source === 'REPORT' && (
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span style={label}>Reporting entities</span>
+              <input className="text-input" value={draft.entityNames} onChange={(event) => set({ entityNames: event.target.value })} placeholder="Blank for every report, or OHA Select; Harbor Street" />
+              <span style={hint}>A stored file read as a filed report (a 10-Q, a 10-K, an annual report) starts a run, whether it was uploaded or came by a feed or email. Each run gets one report as importInstanceId; the next report waits for it. Names are matched anywhere in the entity name the report gives; separate them with semicolons.</span>
+            </label>
+          )}
+          {draft.source === 'BREACH' || draft.source === 'VALUE_CHANGE' || draft.source === 'REPORT' ? null : draft.source === 'FEED' ? (
             <>
               <div style={{ display: 'grid', gap: 4 }}>
                 <span style={label}>The feed</span>

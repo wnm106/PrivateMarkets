@@ -13,6 +13,7 @@ import { registerOverrideTools } from '@tapestrai/mcp-server/src/tools/override-
 import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/position-file-tools';
 import { registerQueryTools } from '@tapestrai/mcp-server/src/tools/query-data';
 import { registerRecTools } from '@tapestrai/mcp-server/src/tools/rec-tools';
+import { registerNavReportTools } from '@tapestrai/mcp-server/src/tools/nav-report-tools';
 import { registerSelectionTools } from '@tapestrai/mcp-server/src/tools/selection-tools';
 import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
 import { registerSpecialistTools } from '@tapestrai/mcp-server/src/tools/specialist-tools';
@@ -77,6 +78,7 @@ export function buildRegistry(): ToolRegistry {
   registerListTools(registry);
   registerDqCheckTools(registry);
   registerRecTools(registry);
+  registerNavReportTools(registry);
   registerSelectionTools(registry);
   registerDocumentTools(registry);
   return registry;

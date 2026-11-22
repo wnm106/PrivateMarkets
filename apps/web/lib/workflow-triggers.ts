@@ -1,6 +1,6 @@
 /** What a workflow trigger watches, and how the page describes it. See docs/WORKFLOWS.md. */
 
-export type TriggerSource = 'FEED' | 'DQ_FAILURES' | 'BREACH' | 'VALUE_CHANGE';
+export type TriggerSource = 'FEED' | 'DQ_FAILURES' | 'BREACH' | 'VALUE_CHANGE' | 'REPORT';
 
 export interface TriggerMatch {
   kinds?: string[];
@@ -10,6 +10,7 @@ export interface TriggerMatch {
   domainCodes?: string[];
   statuses?: string[];
   attributeCodes?: string[];
+  entityNames?: string[];
 }
 
 export interface TriggerView {
@@ -32,6 +33,7 @@ export const TRIGGER_SOURCES: Array<{ code: TriggerSource; label: string }> = [
   { code: 'BREACH', label: 'A compliance rule is breached' },
   { code: 'VALUE_CHANGE', label: 'A value changes' },
   { code: 'FEED', label: 'A feed does something' },
+  { code: 'REPORT', label: 'A filed report arrives' },
 ];
 
 export const FEED_KINDS: Array<{ code: string; label: string }> = [
@@ -45,6 +47,11 @@ export const BREACH_STATUSES: Array<{ code: string; label: string }> = [
   { code: 'HARD_BREACH', label: 'Hard breach' },
   { code: 'SOFT_BREACH', label: 'Soft breach' },
 ];
+
+/** "OHA Select; Halyard" to ['OHA SELECT', 'HALYARD']: names, so only semicolons and new lines separate them. */
+export function nameList(text: string): string[] {
+  return [...new Set(text.split(/[;\n]+/).map((part) => part.trim().toUpperCase()).filter(Boolean))];
+}
 
 /** "FUND, HSCF2" to ['FUND', 'HSCF2']. */
 export function codeList(text: string): string[] {
@@ -63,6 +70,10 @@ export function triggerSummary(trigger: Pick<TriggerView, 'source' | 'match'>): 
     const statuses = (trigger.match.statuses || []).map((code) => BREACH_STATUSES.find((status) => status.code === code)?.label.toLowerCase() || code);
     const what = statuses.length > 0 ? statuses.join(' or ') : 'breach';
     return `When ${list(trigger.match.ruleCodes, 'any compliance rule')} has a new ${what}`;
+  }
+  if (trigger.source === 'REPORT') {
+    const names = trigger.match.entityNames && trigger.match.entityNames.length > 0 ? ` for ${trigger.match.entityNames.join(' or ')}` : '';
+    return `When a filed report${names} is stored in Load data, by upload, feed or email. One run for each report`;
   }
   if (trigger.source === 'VALUE_CHANGE') {
     return `When a new value is recorded for ${list(trigger.match.attributeCodes, 'no attribute yet')}${types}`;

@@ -59,7 +59,9 @@ describe('templates and the records they run on', () => {
         expect(settings).not.toMatch(/\{\{\s*input\.(filters|fund|domainCode|entity\w*)/);
         if (node.type === 'tool') {
           const args = (node.config.args || {}) as Record<string, unknown>;
-          expect(Object.keys(args).filter((key) => /^(domainCode|fundId|entityId|entityCode|entityCodes)$/.test(key))).toEqual([]);
+          // A record can come from an earlier step (the selection, a record a load reported, a person's choice on a screen), never from a literal or the run's input.
+          const named = Object.entries(args).filter(([key, value]) => /^(domainCode|fundId|entityId|entityCode|entityCodes)$/.test(key) && !/^\{\{\s*steps\.[\w.]+\s*\}\}$/.test(String(value)));
+          expect(named).toEqual([]);
           if ('entityIds' in args) expect(args.entityIds).toBe('{{steps.select.entityIds}}');
         }
       }

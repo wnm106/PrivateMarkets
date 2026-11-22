@@ -52,6 +52,12 @@ function newBreach(rows: DealObservationRow[], line: DealCapacityLine): boolean 
   return rows.some((row) => row.rule_code === line.ruleCode && row.probe_status === 'HARD_BREACH' && row.base_status !== 'HARD_BREACH');
 }
 
+/*
+ * Is Allocation Eligible is not time-varying (is_time_varying false): it is the
+ * fund's standing setting, read as it is now. 20261117190000 dates it from the
+ * day the database is built, so reading it at the fixed AS_OF found no fund on
+ * any database built after that date.
+ */
 async function eligibleFunds(db: Client): Promise<Array<{ id: string; code: string; parent: string | null }>> {
   const { rows } = await db.query(`
     SELECT f.id, f.entity_code AS code,
@@ -60,8 +66,8 @@ async function eligibleFunds(db: Client): Promise<Array<{ id: string; code: stri
                AND r.system_to >= TIMESTAMP '9999-01-01' LIMIT 1) AS parent
     FROM entity_instances.master_entities f
     WHERE f.domain_code = 'FUND' AND f.is_active
-      AND lower(COALESCE(compliance.get_text_value(f.id, 'FUND_IS_ALLOCATION_ELIGIBLE', $1::date, now(), 'GOLDEN'), '')) = 'true'
-    ORDER BY f.entity_code`, [AS_OF]);
+      AND lower(COALESCE(compliance.get_text_value(f.id, 'FUND_IS_ALLOCATION_ELIGIBLE', CURRENT_DATE, now(), 'GOLDEN'), '')) = 'true'
+    ORDER BY f.entity_code`);
   return rows;
 }
 

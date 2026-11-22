@@ -228,6 +228,45 @@ Use figures from the reconciliation only, with record names and codes, never rec
 
 One proposed change per decision, pair, or adjustment, so each can be approved on its own. HIGH confidence only when a second source confirms it. Start each change's summary line with the fund's code, so a reviewer can take the funds one at a time. Finish with a short summary for the reviewer, fund by fund: what ties, what does not and why, and which of your proposals need their judgement.`;
 
+const REPORT_FILE: RunInputField = { key: 'importInstanceId', label: 'Stored report', type: 'text', help: 'The id of the 10-Q, 10-K or financial statements in Load data.' };
+const REPORT_PERIOD: RunInputField = { key: 'periodEnd', label: 'Period end', type: 'date', help: 'Leave blank for the report\'s latest balance sheet date.' };
+
+const NAV_BREAKS_INSTRUCTIONS = `Explain what breaks or is open in this fund's NAV reconciliation, and propose the decisions.
+
+The run covers one fund and one filed report. The "Load the report" step says which fund (its fund.id and fund.code) and which period end; use those with every tool, and propose nothing on any other fund. The "Review the NAV" step summarized the reconciliation after the load: every check that breaks, every check with a figure missing, every review item still open, and every input not on file, each with both figures. The "Write the notes" step already kept that summary as the close's notes.
+
+Start by reading the summary yourself (get_nav_breaks with that fund and period end), then the reconciliation (get_nav_reconciliation) when you need the detail of a figure. What the report says about itself is in get_nav_report. Recalculate nothing by hand: the reconciliation already has every figure, and your job is to explain the difference from the statements, the fund's terms, and the report.
+
+For each break:
+- Say what the two figures are, where each comes from, and the difference.
+- Establish the cause from what is on file: a statement line that did not load or landed on the wrong chart line (compare get_nav_report's mapping), a subtotal in the report that does not add up, a comparative that was restated, currency translation on non-dollar positions, a restructuring or write-off. Say plainly when you cannot establish it.
+- A check with a figure missing is a gap in what is on file, not a break. Name what supplies it.
+
+For each open review item, propose one record_rec_decision:
+- ACCEPT when the figure in the statements is right or the difference is immaterial and explained. Say why in the note.
+- QUERY when the administrator, or the filer, has to explain or correct it. The note is the question, worded so it can be sent as it is: the line, both figures, the difference, and what you need back.
+- ADJUST only when our figure is right and you can show it from what is on file.
+Leave a decision a person has already made alone unless the figures have changed since. Do not propose anything on a certified period. Never sign off or certify.
+
+Show the reviewer the NAV reconciliation (show_reviewer, rec.nav) with focus on the items you decided, and say what they should check.
+
+Then propose one save_reconciliation_notes change, with dependsOn naming every other change you proposed, so it is applied after them and replaces the summary the run kept. Markdown, in this order:
+## Outcome
+Two or three sentences: does the NAV tie, how many breaks and open items, and what stands between here and certification, as it will stand once your proposed changes are applied.
+## What was received
+The report, its period end, the date it compares with, and what loaded: the statements, the positions, and the report's own checks.
+## Breaks
+Each break: the two figures, the difference, the cause, and what settles it.
+## Review items
+Each item: the decision you propose and why.
+## Not on file
+What could not be checked and who supplies it.
+## Queries
+Each query in full, ready to send.
+Use figures from the tools only, with record names and codes, never record ids.
+
+One proposed change per decision, so each can be approved on its own. HIGH confidence only when a second source confirms it. Finish with a short summary for the reviewer: what ties, what does not and why, and which of your proposals need their judgement.`;
+
 /**
  * For a step that only reports. An agent step with nothing listed may propose
  * any change, so a reporting step lists this one name, which is no tool's.
@@ -743,6 +782,130 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
         { id: 'e13', from: 'reviewRec', to: 'end', when: 'rejected' },
         { id: 'e14', from: 'record', to: 'after' },
         { id: 'e15', from: 'after', to: 'end' },
+      ],
+    },
+  },
+  {
+    code: 'NAV_RECONCILIATION',
+    name: 'NAV reconciliation',
+    description:
+      'Runs a fund\'s NAV reconciliation from its filed report (a 10-Q, a 10-K, an administrator\'s financial statements) with a person only where one is needed. It starts on its own when a report arrives (set up a trigger on filed reports), finds the fund the report names, and loads it when nothing needs a person: a person checks the report only when the fund is not found, the report does not add up, a line has nowhere to go, the trial load refuses records, or the report restates figures on file. The reconciliation runs, the break summary is kept as the close\'s notes, and the run ends there when nothing breaks and nothing is open. When something does, an agent explains it and proposes the decisions, and a person approves them. Certification stays with a person.',
+    inputExample: { filters: FILTERS_EXAMPLE, importInstanceId: '', periodEnd: '' },
+    graph: {
+      nodes: [
+        startStep({ appliesTo: 'FUND', inputs: [REPORT_FILE, REPORT_PERIOD] }),
+        selectRecords(220, 160),
+        {
+          id: 'read',
+          type: 'tool',
+          label: 'Read the report',
+          position: { x: 440, y: 160 },
+          config: { tool: 'get_nav_report', args: { instanceId: '{{input.importInstanceId}}', entityIds: '{{steps.select.entityIds}}', periodEnd: '{{input.periodEnd}}' }, allowWrite: false },
+        },
+        { id: 'auto', type: 'branch', label: 'Can it load on its own?', position: { x: 660, y: 160 }, config: { path: 'steps.read.autoLoad', op: 'truthy', value: null } },
+        {
+          id: 'check',
+          type: 'stage',
+          label: 'Check the report',
+          position: { x: 880, y: 300 },
+          config: {
+            screen: 'nav.report',
+            title: 'This report needs you before it loads',
+            instructions: 'The run stopped here for the reasons listed at the top. Choose the fund if it was not found, check what is held, and load the report or stop the run.',
+            args: { importInstanceId: '{{input.importInstanceId}}', entityIds: '{{steps.select.entityIds}}', periodEnd: '{{input.periodEnd}}' },
+            people: [],
+            roles: [],
+            dueInHours: 24,
+          },
+        },
+        { id: 'ready', type: 'join', label: 'Ready to load', position: { x: 1100, y: 160 }, config: {} },
+        {
+          id: 'load',
+          type: 'tool',
+          label: 'Load the report',
+          position: { x: 1320, y: 160 },
+          config: {
+            tool: 'load_nav_report',
+            args: {
+              instanceId: '{{input.importInstanceId}}',
+              entityIds: '{{steps.select.entityIds}}',
+              fundId: '{{steps.check.result.fundId}}',
+              confirmed: '{{steps.check.result.confirmed}}',
+              periodEnd: '{{steps.read.report.periodEnd}}',
+            },
+            allowWrite: true,
+          },
+        },
+        {
+          id: 'review',
+          type: 'tool',
+          label: 'Review the NAV',
+          position: { x: 1540, y: 160 },
+          config: { tool: 'get_nav_breaks', args: { fundId: '{{steps.load.fund.id}}', periodEnd: '{{steps.load.periodEnd}}' }, allowWrite: false },
+        },
+        {
+          id: 'notes',
+          type: 'tool',
+          label: 'Write the notes',
+          position: { x: 1760, y: 160 },
+          config: { tool: 'save_nav_notes', args: { fundId: '{{steps.load.fund.id}}', periodEnd: '{{steps.load.periodEnd}}' }, allowWrite: true },
+        },
+        { id: 'open', type: 'branch', label: 'Anything to decide?', position: { x: 1980, y: 160 }, config: { path: 'steps.review.needsDecision', op: 'truthy', value: null } },
+        {
+          id: 'explain',
+          type: 'agent',
+          label: 'Explain the breaks',
+          position: { x: 2200, y: 60 },
+          config: {
+            instructions: NAV_BREAKS_INSTRUCTIONS,
+            tools: ['get_nav_breaks', 'get_nav_reconciliation', 'get_position_reconciliation', 'get_nav_report', 'get_entity', 'get_field_lineage', 'get_temporal_history', 'query_data', 'get_model_map'],
+            proposable: ['record_rec_decision', 'save_reconciliation_notes'],
+            showable: ['rec.nav'],
+            maxRounds: 30,
+            provider: 'claude',
+          },
+        },
+        {
+          id: 'reviewRec',
+          type: 'review',
+          label: 'Decide the breaks',
+          position: { x: 2420, y: 60 },
+          config: {
+            source: 'explain',
+            title: 'Decide what breaks or is open',
+            instructions: 'Each change decides one item: accept the figure, query the administrator, or adjust. Approve what you agree with and edit a query before it is kept. The notes describe the reconciliation as it will stand if everything is approved. Sign-off and certification stay on the reconciliation page.',
+            skipWhenEmpty: true,
+          },
+        },
+        { id: 'record', type: 'apply', label: 'Record the decisions', position: { x: 2640, y: 0 }, config: { review: 'reviewRec' } },
+        {
+          id: 'after',
+          type: 'tool',
+          label: 'Where the NAV stands now',
+          position: { x: 2860, y: 0 },
+          config: { tool: 'get_nav_breaks', args: { fundId: '{{steps.load.fund.id}}', periodEnd: '{{steps.load.periodEnd}}' }, allowWrite: false },
+        },
+        { id: 'end', type: 'end', label: 'End', position: { x: 3080, y: 160 }, config: {} },
+      ],
+      edges: [
+        { id: 'e0', from: 'start', to: 'select' },
+        { id: 'e1', from: 'select', to: 'read' },
+        { id: 'e2', from: 'read', to: 'auto' },
+        { id: 'e3', from: 'auto', to: 'ready', when: 'true' },
+        { id: 'e4', from: 'auto', to: 'check', when: 'false' },
+        { id: 'e5', from: 'check', to: 'ready', when: 'confirmed' },
+        { id: 'e6', from: 'check', to: 'end', when: 'abandoned' },
+        { id: 'e7', from: 'ready', to: 'load' },
+        { id: 'e8', from: 'load', to: 'review' },
+        { id: 'e9', from: 'review', to: 'notes' },
+        { id: 'e10', from: 'notes', to: 'open' },
+        { id: 'e11', from: 'open', to: 'explain', when: 'true' },
+        { id: 'e12', from: 'open', to: 'end', when: 'false' },
+        { id: 'e13', from: 'explain', to: 'reviewRec' },
+        { id: 'e14', from: 'reviewRec', to: 'record', when: 'approved' },
+        { id: 'e15', from: 'reviewRec', to: 'end', when: 'rejected' },
+        { id: 'e16', from: 'record', to: 'after' },
+        { id: 'e17', from: 'after', to: 'end' },
       ],
     },
   },

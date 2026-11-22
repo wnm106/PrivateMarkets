@@ -5,6 +5,7 @@ import type { CheckProgress } from '@/lib/workflow-checklist';
 import type { StageView } from '@/lib/workflow-stages';
 import { LoadMapStage } from './LoadMapStage';
 import { LoadQualityStage } from './LoadQualityStage';
+import { NavReportStage } from './NavReportStage';
 import { UnderstandStage } from './UnderstandStage';
 
 export interface StageScreenProps {
@@ -29,4 +30,5 @@ export const STAGE_COMPONENTS: Record<string, ComponentType<StageScreenProps>> =
   'intake.understand': UnderstandStage,
   'load.map': LoadMapStage,
   'load.quality': LoadQualityStage,
+  'nav.report': NavReportStage,
 };

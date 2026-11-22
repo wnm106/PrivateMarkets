@@ -5493,9 +5493,9 @@ type WorkflowTrigger {
   clientId: ID!
   workflowId: ID!
   name: String!
-  """FEED, DQ_FAILURES, BREACH, or VALUE_CHANGE."""
+  """FEED, DQ_FAILURES, BREACH, VALUE_CHANGE, or REPORT."""
   source: String!
-  """FEED: { kinds, feedCodes }. DQ_FAILURES: { severities, ruleCodes, domainCodes }. BREACH: { ruleCodes, statuses }. VALUE_CHANGE: { attributeCodes, domainCodes }. An empty list matches everything, except attributeCodes."""
+  """FEED: { kinds, feedCodes }. DQ_FAILURES: { severities, ruleCodes, domainCodes }. BREACH: { ruleCodes, statuses }. VALUE_CHANGE: { attributeCodes, domainCodes }. REPORT: { entityNames }. An empty list matches everything, except attributeCodes."""
   match: JSON!
   """What each run starts with, as for a schedule. For every source but FEED, the records that started the run are added to filters.entityIds."""
   input: JSON!
