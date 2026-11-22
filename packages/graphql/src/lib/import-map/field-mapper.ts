@@ -352,7 +352,7 @@ function calculateMappingConfidence(
 
   // 5. Pattern matching (e.g., ISIN, CUSIP, LEI patterns)
   const patternScore = checkIdentifierPatterns(sourceField);
-  if (patternScore && targetAttr.attributeCode.toLowerCase().includes(patternScore)) {
+  if (patternScore && targetAttr.attributeCode.toLowerCase().includes(patternScore.toLowerCase())) {
     score += 0.2;
   }
 

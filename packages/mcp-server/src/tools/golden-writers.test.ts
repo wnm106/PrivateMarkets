@@ -73,7 +73,7 @@ describe('create_compliance_rule_version', () => {
 describe('MCP import update', () => {
   it('writes the imported value through write_value from today and never edits rows', async () => {
     const db = fakeSupabase((call) => {
-      if (call.table === 'attribute_register') return { data: { id: 'attr-nav', default_precedence_rank: 40 } };
+      if (call.table === 'attribute_register') return { data: [{ attribute_code: 'NAV', id: 'attr-nav', default_precedence_rank: 40 }] };
       if (call.table === 'source_registry') return { data: { id: 'src-import' } };
       if (call.fn === 'write_value') return { data: 'v' };
       return undefined;
@@ -87,10 +87,10 @@ describe('MCP import update', () => {
   });
 
   it('fails the record when the source is missing or the write is refused', async () => {
-    const missing = fakeSupabase((call) => (call.table === 'attribute_register' ? { data: { id: 'a' } } : undefined));
+    const missing = fakeSupabase((call) => (call.table === 'attribute_register' ? { data: [{ attribute_code: 'NAV', id: 'a' }] } : undefined));
     await expect(updateEntityAttributes('e1', { NAV: '1' }, missing.client)).rejects.toThrow(/IMPORT source is not registered/);
     const refused = fakeSupabase((call) => {
-      if (call.table === 'attribute_register') return { data: { id: 'a' } };
+      if (call.table === 'attribute_register') return { data: [{ attribute_code: 'NAV', id: 'a' }] };
       if (call.table === 'source_registry') return { data: { id: 's' } };
       return { error: { message: 'permission denied for function write_value' } };
     });
