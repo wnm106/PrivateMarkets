@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { RecCheck } from './fund-rec';
 import {
   buildPack, emptyPack, expectedComponents, feeSegments, rolledCapital, waterfallTiers,
   type PackCapitalAccount, type PackContext, type PackInput,
@@ -254,6 +255,13 @@ describe('what a fund\'s pack is expected to hold', () => {
 
   it('marks the statements partial when the notes are not in the pack', () => {
     expect(statusOf(buildPack(context(), pack({ notesIncluded: false }))).FINANCIAL_STATEMENTS).toBe('Partial');
+  });
+
+  it('says which checks lack a figure when a part on file is partial', () => {
+    const checks: RecCheck[] = [{ id: 'bank', group: 'evidence', label: 'Closing cash vs bank statement', compared: 'Bank statement', a: 1, b: null, difference: null, result: 'Missing', aSources: [], bSources: [] }];
+    const part = buildPack(context({ checks }), pack()).components.find((item) => item.key === 'FINANCIAL_STATEMENTS')!;
+    expect(part).toMatchObject({ status: 'Partial' });
+    expect(part.detail).toMatch(/with the notes\. Without a figure: Closing cash vs bank statement$/);
   });
 
   it('marks a part open while one of its review items is undecided', () => {

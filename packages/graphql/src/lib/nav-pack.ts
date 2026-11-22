@@ -869,9 +869,12 @@ export function buildPack(context: PackContext, pack: PackInput): PackReview {
     else if (openItems.length) status = 'Open';
     else if (needsNotes || mine.some((check) => check.result === 'Missing')) status = 'Partial';
     else status = 'Ties';
+    // A part that is on file but partial says which checks lack a figure.
+    const lacking = file.on ? mine.filter((check) => check.result === 'Missing').map((check) => check.label) : [];
+    const detail = lacking.length ? `${file.detail}. Without a figure: ${listOf(lacking)}` : file.detail;
     return {
       key: part.key, label: part.label, owner: part.owner, covers: part.covers,
-      expected: isExpected, required: required.has(part.key), onFile: file.on, status, detail: file.detail,
+      expected: isExpected, required: required.has(part.key), onFile: file.on, status, detail,
       checks: mine.map((check) => check.id), items: openItems,
     };
   });
