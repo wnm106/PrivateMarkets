@@ -93,6 +93,8 @@ function functionBodies(sql) {
 }
 
 const ENTITY_CODE = /'([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)'/g;
+// A to_char or to_date pattern such as 'YYYY-MM-DD' reads like a code but names nothing.
+const DATE_FORMAT = /^(?:YYYY|IYYY|YY|MM|MON|MONTH|DD|DY|HH24|HH12|HH|MI|SS|Q|IW|WW)(?:-(?:YYYY|IYYY|YY|MM|MON|MONTH|DD|DY|HH24|HH12|HH|MI|SS|Q|IW|WW))+$/;
 const CODE_COMPARE = /\b(client_code|rule_code|entity_code)\s*(?:=|<>|!=|IN\s*\()\s*'/i;
 const DATA_TABLES = /\b(INSERT\s+INTO|UPDATE)\s+(entity_instances\.master_entities|golden_master\.entity_attribute_values|entity_instances\.entity_relationships)\b/i;
 
@@ -110,7 +112,7 @@ for (const [path, status] of changed) {
         const line = body.line + offset;
         if (/^\s*--/.test(text)) return;
         if (CODE_COMPARE.test(text)) report(path, line, 'A function compares a client, rule or entity code to a literal. Decide from data (a flag, rule metadata, a threshold) or take the id as an argument.');
-        for (const found of text.matchAll(ENTITY_CODE)) report(path, line, `A function names the record ${found[1]}. Pass ids in, or find the record by a flag.`);
+        for (const found of text.matchAll(ENTITY_CODE)) if (!DATE_FORMAT.test(found[1])) report(path, line, `A function names the record ${found[1]}. Pass ids in, or find the record by a flag.`);
       });
     }
     // Statements outside function bodies: a function that writes records at run time is fine.
