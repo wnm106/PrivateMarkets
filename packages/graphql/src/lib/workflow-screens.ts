@@ -114,26 +114,28 @@ export const STAGE_SCREENS: readonly StageScreen[] = [
   {
     code: 'nav.report',
     label: 'Check a filed report',
-    description: 'Shows a stored financial report (a 10-Q, a 10-K, an annual report) beside how it maps onto the fund\'s NAV statement: each statement line at the period end and the date it compares with, the lines left out and why, the schedule of investments by asset class, the report\'s own checks, and what a trial load would write. The person confirms before anything loads.',
+    description: 'Shows a stored financial report (a 10-Q, a 10-K, an annual report) beside how it maps onto its fund\'s NAV statement, with the reasons it needs a person at the top: the fund to choose when the report does not name one on file, the report\'s own checks, the lines with nowhere to go, and what a trial load would refuse or restate. The person loads it or stops the run.',
     outcomes: ['confirmed', 'abandoned'],
     permissions: {},
     args: [
       { key: 'importInstanceId', label: 'Stored file', help: 'The report, usually {{input.importInstanceId}}.' },
-      { key: 'fundId', label: 'Fund', help: 'The fund the report is for, usually {{steps.select.entityIds}}.' },
+      { key: 'entityIds', label: 'Records the run was started on', help: 'Usually {{steps.select.entityIds}}. The first fund among them is the fund; with none, the fund the report names.' },
       { key: 'periodEnd', label: 'Period end', help: 'Usually {{input.periodEnd}}. Blank is the report\'s latest balance sheet date.' },
     ],
     exit: {
       outcomes: ['confirmed'],
       tool: 'get_nav_report',
-      args: (stageArgs) => ({
+      args: (stageArgs, result) => ({
         instanceId: text(stageArgs.importInstanceId),
-        fundId: Array.isArray(stageArgs.fundId) ? String(stageArgs.fundId[0] ?? '') : text(stageArgs.fundId),
+        fundId: text(result.fundId) || undefined,
+        entityIds: Array.isArray(stageArgs.entityIds) ? stageArgs.entityIds.map(String) : undefined,
         periodEnd: text(stageArgs.periodEnd) || undefined,
         trial: false,
       }),
       problem: (output) => {
         const report = record(output);
         if (report.ready === true) return null;
+        if (!report.fund) return text(report.fundNote) || 'Choose the fund the report is for.';
         const problems = Array.isArray(report.problems) ? report.problems.map(String).filter(Boolean) : [];
         return problems.length ? problems.join(' ') : 'Nothing in this file maps onto the NAV statement at its period end.';
       },

@@ -2,6 +2,8 @@
 
 A fund's own filing (a 10-Q, a 10-K, an annual or semi-annual report) is the administrator's NAV in its fullest form: the four primary statements, the NAV per share by class, and the schedule of investments. The NAV reconciliation workflow takes one such file from Load data to a summary of the breaks a person signs off.
 
+The run needs no one until there is something only a person can decide. A report that arrives is read, matched to its fund, loaded, reconciled and summarized on its own. A person is asked for two things only: to look at a report the run could not trust (the hold reasons below), and to decide breaks and open review items. A period where everything ties ends with its notes kept and no one asked.
+
 ## Parts
 
 | Part | Where | What it does |
@@ -12,8 +14,9 @@ A fund's own filing (a 10-Q, a 10-K, an annual or semi-annual report) is the adm
 | Load | `packages/mcp-server/src/feeds/nav-report.ts` | Reads a stored report back, and loads it through the standard loader as one batch |
 | Reconciliation | `packages/graphql/src/lib/fund-rec.ts`, `fund-rec-store.ts` | The same engine every fund close uses |
 | Break summary | `packages/graphql/src/lib/nav-breaks.ts` | What breaks, what is missing, what is open, with the cause, the next step and the owner |
-| Tools | `packages/mcp-server/src/tools/nav-report-tools.ts` | `get_nav_report`, `load_nav_report`, `get_nav_breaks` |
-| Screen | `apps/web/components/workflows/stages/NavReportStage.tsx` | Check a filed report (`nav.report`) |
+| Tools | `packages/mcp-server/src/tools/nav-report-tools.ts` | `get_nav_report`, `load_nav_report`, `get_nav_breaks`, `save_nav_notes` |
+| Screen | `apps/web/components/workflows/stages/NavReportStage.tsx` | Check a filed report (`nav.report`), only when a report is held |
+| Report trigger | `supabase/migrations/20261122110000_report_trigger.sql` | A stored report starts a run (trigger source `REPORT`) |
 | Page | `apps/web/components/fund-rec/FundRecWorkspace.tsx` | The Breaks tab of the fund's reconciliation |
 
 ## Reading a report
@@ -88,26 +91,49 @@ A schedule brings hundreds of positions. The readers behind the reconciliation n
 
 ## The workflow
 
-Template `NAV_RECONCILIATION`. Start it with the fund and the stored file:
+Template `NAV_RECONCILIATION`. A trigger starts it (below), or a person starts it with the stored file:
 
 ```json
-{ "filters": { "entityCodes": ["<fund code>"] }, "importInstanceId": "<stored file id>", "periodEnd": "" }
+{ "importInstanceId": "<stored file id>", "periodEnd": "" }
 ```
+
+Records are optional. The fund comes from the report: the entity name it gives is matched to a fund's name or one of its aliases, ignoring case, punctuation and "&" against "and". A fund the run was started on, or one given as `fundId`, wins over the name.
 
 | Step | Kind | What it does |
 |---|---|---|
-| Select records | Fixed | The fund |
-| Read the report | Fixed | `get_nav_report`: what the report holds and how it maps |
-| Check the report | Stage | `nav.report`: the report beside the mapping, the report's own checks, the lines left out, the schedule and a trial load. Confirming needs the report to map at its period end |
-| Load the report | Fixed | `load_nav_report` |
+| Select records | Fixed | The fund, when the run was started on one |
+| Read the report | Fixed | `get_nav_report`: the fund, how the report maps, a trial load, and whether anything holds it (`autoLoad`) |
+| Can it load on its own? | Fixed | Goes straight to the load when nothing holds the report |
+| Check the report | Stage | `nav.report`, only for a held report: why it was held, the fund to choose, the mapping, the report's own checks, the lines left out, the schedule and a trial load. Confirming loads it as checked by that person |
+| Load the report | Fixed | `load_nav_report`. Refuses a held report no one confirmed |
 | Review the NAV | Fixed | `get_nav_breaks` |
-| Anything breaks or open? | Fixed | Ends the run with the summary when nothing does |
-| Explain the breaks | Agent | Explains each break, proposes a decision or a query for each open item, and writes the notes |
-| Review the breaks | Human | Approve, edit or reject each decision and the notes |
+| Keep the summary | Fixed | `save_nav_notes`: the summary as the period's reconciliation notes, written from the reconciliation, not by a model. Refused on a certified period |
+| Anything to decide? | Fixed | Ends the run when nothing breaks and no review item is open |
+| Explain the breaks | Agent | Explains each break, proposes a decision or a query for each open item |
+| Decide the breaks | Human | Approve, edit or reject each decision and the notes |
 | Record the outcome | Fixed | Applies what was approved |
 | Where the NAV stands now | Fixed | `get_nav_breaks` again |
 
 No step signs off or certifies.
+
+### When a report is held
+
+A report loads on its own unless one of these is true. Each is a reason a load could be wrong without anyone seeing it:
+
+| Hold | Why a person is needed |
+|---|---|
+| No fund, or more than one, has the report's name | Which fund's books it goes on. Adding the name as an alias of the fund lets the next report find it |
+| A statement has no column for the period, or the flow statements do not span to the date the balance sheet is compared with | The figures would load at the wrong dates |
+| Nothing maps at the period end | The report was not read |
+| One of the report's own subtotals or totals does not add up | The report may have been read wrong |
+| A line of a primary statement has no place on the chart | A figure would be left out. Supplemental disclosures, share-class detail and blank lines do not hold |
+| The trial load refuses a record, matches one to more than one stored record, or changes a figure already on file for the period | A restatement, or a collision, someone should see before it is written |
+
+The reasons are in the run's step output and at the top of the screen, and confirming records who checked them.
+
+### Starting on its own
+
+A stored file read as a filed report (by upload, feed or email) records a `REPORT_RECEIVED` event with the entity, the form and the period end. A workflow trigger with source `REPORT` ("A filed report arrives") starts one run for each such report, given as `importInstanceId`. Its match lists entity names (`{ "entityNames": ["OHA SELECT"] }`), each matched anywhere in the name the report gives; an empty list takes every report. As with every trigger, the next report waits while a run is open.
 
 ### Setting up a fund
 
@@ -119,4 +145,5 @@ The fund needs a close calendar (`FUND_CLOSE_FREQUENCY`, `FUND_CLOSE_LAG_DAYS`) 
 - Loading the prior period's schedule of investments. It is read and checked, not loaded.
 - Ending a position that has left the schedule. The schedule check counts only positions dated the period end.
 - Fund terms from the report's notes. They are set on the fund record.
+- Creating the fund from a report that names none on file. The run holds and a person chooses it.
 - Matching the report's investments to positions already in our own book under other codes.

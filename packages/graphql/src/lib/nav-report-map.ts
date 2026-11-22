@@ -145,6 +145,8 @@ export interface UnmappedLine {
   label: string;
   section: string;
   reason: string;
+  /** One per report column, so a reader can tell a blank line from one with figures. */
+  values: Array<number | null>;
 }
 
 export interface StatementMapping {
@@ -190,7 +192,7 @@ export function mapStatement(statement: ReportStatement, chart: ChartLine[]): St
     const label = normalizeReportLabel(line.label);
     const section = normalizeReportLabel(line.section);
     if (SUPPLEMENTAL.test(section)) {
-      unmapped.push({ index, label: line.label, section: line.section, reason: 'Supplemental disclosure, not a line of the statement.' });
+      unmapped.push({ index, label: line.label, section: line.section, values: line.values, reason: 'Supplemental disclosure, not a line of the statement.' });
       continue;
     }
     const source: SourceLine = { index, label: line.label, section: line.section, values: line.values, cells: line.cells };
@@ -206,7 +208,7 @@ export function mapStatement(statement: ReportStatement, chart: ChartLine[]): St
     }
     if (placed) continue;
     if (SHARE_CLASS.test(section)) {
-      unmapped.push({ index, label: line.label, section: line.section, reason: 'Share-class detail. The report checks compare it with the fund total.' });
+      unmapped.push({ index, label: line.label, section: line.section, values: line.values, reason: 'Share-class detail. The report checks compare it with the fund total.' });
       continue;
     }
     const fallback = compiled.find((entry) => entry.fallback && entry.fallback.test(section) && !/^total\b/.test(label));
@@ -214,7 +216,7 @@ export function mapStatement(statement: ReportStatement, chart: ChartLine[]): St
       take(fallback.line.code, source, false);
       continue;
     }
-    unmapped.push({ index, label: line.label, section: line.section, reason: 'No line on the NAV chart takes this wording.' });
+    unmapped.push({ index, label: line.label, section: line.section, values: line.values, reason: 'No line on the NAV chart takes this wording.' });
   }
 
   const width = statement.columns.length;
@@ -226,7 +228,7 @@ export function mapStatement(statement: ReportStatement, chart: ChartLine[]): St
     const detail = entry.total.length ? entry.parts : [];
     if (chartLine.single && from.length > 1) {
       for (const extra of from.slice(1)) {
-        unmapped.push({ index: extra.index, label: extra.label, section: extra.section, reason: `${chartLine.name} takes one line, and “${from[0].label}” already fills it.` });
+        unmapped.push({ index: extra.index, label: extra.label, section: extra.section, values: extra.values, reason: `${chartLine.name} takes one line, and “${from[0].label}” already fills it.` });
       }
       from = from.slice(0, 1);
     }

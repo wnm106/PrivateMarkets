@@ -10,7 +10,12 @@
  * in the schedule, dated with the schedule. Everything is the administrator's
  * figure (FUND_ADMIN) and the whole load is one batch, so it can be reverted.
  *
- * The fund is chosen by the person; it is never guessed from the report.
+ * The fund is the one the run was given, or else the fund whose name or alias
+ * is the reporting entity's name, exactly. It is never guessed: no match, or
+ * more than one, is a hold for a person. So are a report that does not add up,
+ * a line with nowhere to go, a trial load that refuses records, and a report
+ * that would change figures already on file. A held report loads only once a
+ * person has confirmed it.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -103,6 +108,81 @@ export async function reportOfFile(database: SupabaseClient, instance: InstanceR
   }).eq('id', instance.id).eq('client_id', clientId);
   if (saved.error) throw new Error(saved.error.message);
   return report;
+}
+
+export interface FundChoice {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export interface FundResolution {
+  fund: FundRow | null;
+  /** How the fund was found: given to the run or chosen by a person, the run's selection, or the report's own name. */
+  matchedBy: 'chosen' | 'selection' | 'report' | null;
+  note: string;
+  /** The client's funds, closest to the report's name first, for a person to choose from. */
+  choices: FundChoice[];
+}
+
+/** A name as it is compared: lower case, "&" as "and", no punctuation. */
+export function comparableName(text: string): string {
+  return text.toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function overlap(left: string, right: string): number {
+  const a = new Set(comparableName(left).split(' ').filter(Boolean));
+  const b = new Set(comparableName(right).split(' ').filter(Boolean));
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const word of a) if (b.has(word)) shared += 1;
+  return shared / Math.max(a.size, b.size);
+}
+
+/**
+ * The fund a report is for. A fund given to the run wins, then the run's
+ * selection, then a fund whose name or alias is the report's entity name.
+ * Never a near match: those are offered as choices.
+ */
+export async function resolveFund(
+  database: SupabaseClient,
+  clientId: string,
+  input: { fundId?: string | null; entityIds?: string[] | null },
+  report: FinancialReport,
+): Promise<FundResolution> {
+  const { data, error } = await database
+    .schema('entity_instances')
+    .from('master_entities')
+    .select('id, entity_code, entity_name')
+    .eq('client_id', clientId)
+    .eq('domain_code', 'FUND')
+    .eq('is_active', true);
+  if (error) throw new Error(error.message);
+  const funds = (data || []) as FundRow[];
+  const name = report.entityName || '';
+  const choices = [...funds]
+    .sort((left, right) => overlap(right.entity_name, name) - overlap(left.entity_name, name) || left.entity_name.localeCompare(right.entity_name))
+    .slice(0, 25)
+    .map((fund) => ({ id: fund.id, code: fund.entity_code, name: fund.entity_name }));
+  const given = String(input.fundId || '').trim();
+  if (given) {
+    return { fund: await fundOf(database, clientId, given), matchedBy: 'chosen', note: 'The fund was given to the run.', choices };
+  }
+  const selected = (input.entityIds || []).map((id) => funds.find((fund) => fund.id === id)).find(Boolean);
+  if (selected) return { fund: selected, matchedBy: 'selection', note: 'The fund the run was started on.', choices };
+  if (!name) return { fund: null, matchedBy: null, note: 'The report does not name the entity it is for, so a person chooses the fund.', choices };
+  const wanted = comparableName(name);
+  const aliases = funds.length
+    ? await database.schema('entity_instances').from('entity_aliases').select('entity_id, alias_label').eq('is_active', true).in('entity_id', funds.map((fund) => fund.id))
+    : { data: [], error: null };
+  if (aliases.error) throw new Error(aliases.error.message);
+  const byAlias = new Set((aliases.data || []).filter((row) => comparableName(String(row.alias_label || '')) === wanted).map((row) => row.entity_id as string));
+  const matches = funds.filter((fund) => comparableName(fund.entity_name) === wanted || byAlias.has(fund.id));
+  if (matches.length === 1) return { fund: matches[0], matchedBy: 'report', note: `The report is for ${name}, which is ${matches[0].entity_name} (${matches[0].entity_code}).`, choices };
+  if (matches.length > 1) {
+    return { fund: null, matchedBy: null, note: `${matches.length} funds are named ${name}: ${matches.map((fund) => fund.entity_code).join(', ')}. A person chooses which.`, choices: [...matches.map((fund) => ({ id: fund.id, code: fund.entity_code, name: fund.entity_name })), ...choices.filter((choice) => !matches.some((fund) => fund.id === choice.id))] };
+  }
+  return { fund: null, matchedBy: null, note: `No fund is named ${name}. A person chooses the fund, or adds the name as an alias of it so the next report finds it.`, choices };
 }
 
 async function fundOf(database: SupabaseClient, clientId: string, ref: string): Promise<FundRow> {
@@ -296,7 +376,10 @@ function positionTable(plan: NavReportPlan, fund: FundRow, pages: PageSize[]): {
 /* ------------------------------------------------------------------- read */
 
 export interface NavReportInput {
-  fundId: string;
+  /** The fund, when the run was given one or a person chose it. */
+  fundId?: string | null;
+  /** The run's selection. The first fund among them is the fund. */
+  entityIds?: string[] | null;
   periodEnd?: string | null;
   /** The date the report arrived. Defaults to today. */
   receivedDate?: string | null;
@@ -324,14 +407,55 @@ function digestLoad(result: FeedLoadResult) {
 async function prepare(database: SupabaseClient, instanceId: string, clientId: string, input: NavReportInput, save = false) {
   const instance = await instanceOf(database, instanceId, clientId);
   const report = await reportOfFile(database, instance, clientId, save);
-  const fund = await fundOf(database, clientId, input.fundId);
+  const resolution = await resolveFund(database, clientId, input, report);
   const chart = await chartOf(database);
-  const plan = planNavReport(report, chart, { fundCode: fund.entity_code, periodEnd: input.periodEnd || null });
-  const statement = await statementOf(database, fund);
+  const plan = planNavReport(report, chart, { fundCode: resolution.fund?.entity_code || 'FUND', periodEnd: input.periodEnd || null });
+  const statement = resolution.fund ? await statementOf(database, resolution.fund) : null;
   const stored = Array.isArray(instance.tables) ? instance.tables : [];
   const pages = stored.find((table) => Array.isArray(table.pages) && table.pages.length)?.pages ?? [];
   const allPages = [...new Map(stored.flatMap((table) => table.pages || []).map((page) => [page.page, page])).values()];
-  return { instance, report, fund, plan, statement, pages: allPages.length ? allPages : pages };
+  return { instance, report, resolution, plan, statement, pages: allPages.length ? allPages : pages };
+}
+
+/** Lines left out because nothing on the chart takes their wording, with a figure in a column that loads. */
+function unplacedLines(plan: NavReportPlan): string[] {
+  const out: string[] = [];
+  for (const statement of plan.statements) {
+    const columns = [statement.periodColumn, statement.comparativeColumn].filter((column): column is number => column != null);
+    for (const entry of statement.unmapped) {
+      if (!/^No line on the NAV chart/.test(entry.reason)) continue;
+      if (columns.some((column) => (entry.values[column] ?? 0) !== 0)) out.push(`${statement.title}: ${entry.section ? `${entry.section}: ` : ''}${entry.label}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * Why a report needs a person before it loads. Empty when it can load on its own.
+ * Each says what a person has to look at.
+ */
+export function holdsFor(
+  plan: NavReportPlan,
+  resolution: FundResolution,
+  reportChecks: Array<{ label: string; result: string }>,
+  trial: { statement: ReturnType<typeof digestLoad>; positions: ReturnType<typeof digestLoad> | null } | null,
+): string[] {
+  const holds: string[] = [];
+  if (!resolution.fund) holds.push(resolution.note);
+  holds.push(...plan.problems);
+  if (!plan.rows.length || !plan.rows[0].values.length) holds.push('Nothing in the report maps onto the NAV statement at its period end.');
+  const broken = reportChecks.filter((check) => check.result === 'Break');
+  if (broken.length) holds.push(`${broken.length} of the report's own subtotals or totals do not add up (${broken.slice(0, 3).map((check) => check.label).join('; ')}${broken.length > 3 ? '; …' : ''}). Check that the report was read right before it loads.`);
+  const unplaced = unplacedLines(plan);
+  if (unplaced.length) holds.push(`${unplaced.length} line${unplaced.length === 1 ? ' has' : 's have'} no place on the NAV statement: ${unplaced.slice(0, 3).join('; ')}${unplaced.length > 3 ? '; …' : ''}.`);
+  for (const [what, load] of [['NAV statement', trial?.statement], ['Positions', trial?.positions]] as const) {
+    if (!load) continue;
+    const refused = load.records.reduce((total, record) => total + record.failed, 0) + load.rejectCount;
+    if (refused) holds.push(`${what}: the trial load refuses ${refused} record${refused === 1 ? '' : 's'} or value${refused === 1 ? '' : 's'}.`);
+    if (load.resolutions) holds.push(`${what}: ${load.resolutions} record${load.resolutions === 1 ? ' matches' : 's match'} more than one stored record.`);
+    if (load.values.updated) holds.push(`${what}: the report changes ${load.values.updated} figure${load.values.updated === 1 ? '' : 's'} already on file for this period, so it restates them.`);
+  }
+  return holds;
 }
 
 /**
@@ -341,7 +465,8 @@ async function prepare(database: SupabaseClient, instanceId: string, clientId: s
  */
 export async function readNavReport(instanceId: string, clientId: string, input: NavReportInput, client?: SupabaseClient) {
   const database = db(client);
-  const { instance, report, fund, plan, statement, pages } = await prepare(database, instanceId, clientId, input);
+  const { instance, report, resolution, plan, statement, pages } = await prepare(database, instanceId, clientId, input);
+  const fund = resolution.fund;
   const schedule = report.schedules.find((item) => item.date === plan.periodEnd) ?? null;
   const investments = schedule ? schedule.rows.filter((row) => row.kind === 'investment') : [];
   const classes = [...new Set(investments.map((row) => row.assetClass))].map((name) => {
@@ -352,8 +477,10 @@ export async function readNavReport(instanceId: string, clientId: string, input:
     instanceId: instance.id,
     fileName: instance.file_name,
     fileStatus: instance.status,
-    fund: { id: fund.id, code: fund.entity_code, name: fund.entity_name },
-    statement: { code: statement.code, name: statement.name, exists: statement.exists },
+    fund: fund ? { id: fund.id, code: fund.entity_code, name: fund.entity_name, matchedBy: resolution.matchedBy } : null,
+    fundNote: resolution.note,
+    fundChoices: resolution.choices,
+    statement: statement ? { code: statement.code, name: statement.name, exists: statement.exists } : null,
     report: {
       entityName: report.entityName,
       form: report.form,
@@ -400,10 +527,14 @@ export async function readNavReport(instanceId: string, clientId: string, input:
       source: ADMIN_SOURCE,
     },
     problems: plan.problems,
-    ready: plan.problems.length === 0 && plan.rows.length > 0 && plan.rows[0].values.length > 0,
+    ready: Boolean(fund) && plan.problems.length === 0 && plan.rows.length > 0 && plan.rows[0].values.length > 0,
     trial: null as null | { statement: ReturnType<typeof digestLoad>; positions: ReturnType<typeof digestLoad> | null },
+    /** Why a person has to look before it loads. Empty when it loads on its own. */
+    holds: [] as string[],
+    /** True when nothing needs a person: the workflow loads it without asking. */
+    autoLoad: false,
   };
-  if (input.trial !== false && out.ready) {
+  if (input.trial !== false && out.ready && fund && statement) {
     const received = input.receivedDate || new Date().toISOString().slice(0, 10);
     const first = statementTable(plan, report, statement, fund, received, pages);
     const second = plan.positions.length ? positionTable(plan, fund, pages) : null;
@@ -411,6 +542,9 @@ export async function readNavReport(instanceId: string, clientId: string, input:
     const positionTrial = second ? await executeParsedFeed(second.map, instance.file_name, second.table, plan.periodEnd, database, clientId, ADMIN_SOURCE, { dryRun: true }) : null;
     out.trial = { statement: digestLoad(statementTrial), positions: positionTrial ? digestLoad(positionTrial) : null };
   }
+  out.holds = holdsFor(plan, resolution, report.checks, out.trial);
+  if (input.trial === false && out.ready) out.holds.push('The trial load was not run.');
+  out.autoLoad = out.ready && out.holds.length === 0;
   return out;
 }
 
@@ -451,9 +585,29 @@ function combined(results: FeedLoadResult[], plan: NavReportPlan, fileName: stri
  * batch, journaled, so Load data can revert it. Loading the same report again
  * changes nothing that is already on file.
  */
-export async function loadNavReport(instanceId: string, clientId: string, input: NavReportInput & { userId?: string | null }, client?: SupabaseClient) {
+export async function loadNavReport(
+  instanceId: string,
+  clientId: string,
+  input: NavReportInput & { userId?: string | null; confirmed?: boolean },
+  client?: SupabaseClient,
+) {
   const database = db(client);
-  const { instance, report, fund, plan, statement, pages } = await prepare(database, instanceId, clientId, input, true);
+  const { instance, report, resolution, plan, statement: found, pages } = await prepare(database, instanceId, clientId, input, true);
+  const fund = resolution.fund;
+  if (!fund || !found) throw new Error(`${resolution.note} Nothing was loaded.`);
+  const statement = found;
+  if (input.confirmed !== true) {
+    // Loading without a person is allowed only when nothing needs one: the same holds the read step reports.
+    const received = input.receivedDate || new Date().toISOString().slice(0, 10);
+    const first = statementTable(plan, report, statement, fund, received, pages);
+    const second = plan.positions.length ? positionTable(plan, fund, pages) : null;
+    const trial = {
+      statement: digestLoad(await executeParsedFeed(first.map, instance.file_name, first.table, plan.periodEnd, database, clientId, ADMIN_SOURCE, { dryRun: true })),
+      positions: second ? digestLoad(await executeParsedFeed(second.map, instance.file_name, second.table, plan.periodEnd, database, clientId, ADMIN_SOURCE, { dryRun: true })) : null,
+    };
+    const holds = holdsFor(plan, resolution, report.checks, trial);
+    if (holds.length) throw new Error(`This report needs a person before it loads. ${holds.join(' ')} Nothing was loaded.`);
+  }
   if (!plan.rows.length || !plan.rows[0].values.length) {
     throw new Error(`Nothing in ${instance.file_name} maps onto the NAV chart at ${plan.periodEnd || 'its period end'}. ${plan.problems.join(' ')}`.trim());
   }
@@ -526,7 +680,8 @@ export async function loadNavReport(instanceId: string, clientId: string, input:
   return {
     instanceId: instance.id,
     fileName: instance.file_name,
-    fund: { id: fund.id, code: fund.entity_code, name: fund.entity_name },
+    fund: { id: fund.id, code: fund.entity_code, name: fund.entity_name, matchedBy: resolution.matchedBy },
+    confirmedBy: input.confirmed === true ? 'a person' : 'nobody: nothing needed a person',
     statement: { code: statement.code, name: statement.name, created: !statement.exists },
     periodEnd: plan.periodEnd,
     comparativeDate: plan.comparativeDate,

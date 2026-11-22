@@ -40,17 +40,20 @@ function statementName(kind: string): string {
 }
 
 /**
- * A filed report beside what it will load onto the fund: the report on the
- * left, and on the right the period and the date it compares with, the report's
- * own checks, each statement on the NAV chart with the lines behind each figure,
- * the lines left out, the schedule of investments, and a trial load. Pointing at
- * a line shows it in the report.
+ * A filed report the NAV reconciliation could not load on its own. The reasons
+ * come first, then the fund to choose when the report does not name one on
+ * file, and what the load would write: the report on the left, and on the right
+ * the period and the date it compares with, the report's own checks, each
+ * statement on the NAV chart with the lines behind each figure, the lines left
+ * out, the schedule of investments, and a trial load. Pointing at a line shows
+ * it in the report.
  */
 export function NavReportStage({ stage, busy, onComplete, onProgress }: StageScreenProps) {
   const fileId = String(stage.args.importInstanceId || '');
-  const fundArg = stage.args.fundId;
-  const fundId = Array.isArray(fundArg) ? String(fundArg[0] || '') : String(fundArg || '');
+  const selection = Array.isArray(stage.args.entityIds) ? stage.args.entityIds.map(String).filter(Boolean) : [];
+  const selectionKey = selection.join(',');
   const periodEnd = String(stage.args.periodEnd || '');
+  const [chosenFund, setChosenFund] = useState('');
   const [report, setReport] = useState<NavReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
@@ -60,19 +63,24 @@ export function NavReportStage({ stage, busy, onComplete, onProgress }: StageScr
   const [open, setOpen] = useState<string>('BALANCE_SHEET');
 
   useEffect(() => {
-    if (!fileId || !fundId) {
-      setError(!fileId ? 'This stage was not given a file.' : 'This stage was not given a fund.');
+    if (!fileId) {
+      setError('This stage was not given a file.');
       return;
     }
     let live = true;
-    const query = new URLSearchParams({ fundId, ...(periodEnd ? { periodEnd } : {}) });
+    setError(null);
+    const query = new URLSearchParams({
+      ...(chosenFund ? { fundId: chosenFund } : {}),
+      ...(selectionKey ? { entityIds: selectionKey } : {}),
+      ...(periodEnd ? { periodEnd } : {}),
+    });
     json<NavReport>(`/api/feeds/position-file/${fileId}/nav-report?${query}`)
       .then((next) => live && setReport(next))
       .catch((err) => live && setError(err.message));
     return () => {
       live = false;
     };
-  }, [fileId, fundId, periodEnd]);
+  }, [fileId, chosenFund, selectionKey, periodEnd]);
 
   /** Show a line of a statement in the report: that statement's table is chosen, then the row and column are pointed at. */
   const show = useCallback(async (tableId: string, row: number, column: string | null, text: string) => {
@@ -92,7 +100,13 @@ export function NavReportStage({ stage, busy, onComplete, onProgress }: StageScr
     setWorking(true);
     setError(null);
     try {
-      await onComplete('confirmed', { periodEnd: report?.report.periodEnd || periodEnd || null, comparativeDate: report?.report.comparativeDate || null });
+      await onComplete('confirmed', {
+        fundId: report?.fund?.id || chosenFund || null,
+        confirmed: true,
+        periodEnd: report?.report.periodEnd || periodEnd || null,
+        comparativeDate: report?.report.comparativeDate || null,
+        holds: report?.holds ?? [],
+      });
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -104,6 +118,8 @@ export function NavReportStage({ stage, busy, onComplete, onProgress }: StageScr
   const notTied = report?.checks.notTied ?? [];
   useReportProgress(onProgress, report ? {
     parts: [
+      { label: 'Choose the fund', done: Boolean(report.fund), note: report.fund ? report.fund.name : 'Not found from the report' },
+      { label: 'Read why the report was held', done: true, note: plural(report.holds.length, 'reason') },
       { label: 'Check the period and the date it compares with', done: Boolean(report.report.periodEnd), note: report.report.comparativeDate ? `${report.report.periodEnd} against ${report.report.comparativeDate}` : report.report.periodEnd || undefined },
       { label: 'Check the report\'s own checks', done: true, note: `${report.checks.ties} of ${report.checks.total} tie` },
       { label: 'Check the lines left out', done: true, note: plural(unmapped.length, 'line') },
@@ -128,6 +144,30 @@ export function NavReportStage({ stage, busy, onComplete, onProgress }: StageScr
         </div>
 
         <div style={{ display: 'grid', gap: 10, minWidth: 0, alignContent: 'start' }}>
+          {report.holds.length > 0 && (
+            <div style={{ ...card, borderColor: '#f79009', background: '#fffaeb' }} role="status">
+              <span style={label}>Why this needs you</span>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
+                {report.holds.map((hold) => <li key={hold}>{hold}</li>)}
+              </ul>
+              <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>Everything else in the run goes on without a person. Loading confirms you have looked at these.</span>
+            </div>
+          )}
+
+          <div style={card}>
+            <span style={label}>Fund</span>
+            {report.fund
+              ? <span style={{ fontSize: 13 }}><b>{report.fund.name}</b> ({report.fund.code}). {report.fundNote}</span>
+              : <span style={{ fontSize: 13, color: '#b42318' }}>{report.fundNote}</span>}
+            <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+              <span>{report.fund ? 'Load it onto another fund' : 'Choose the fund the report is for'}</span>
+              <select aria-label="Fund the report is for" value={chosenFund || report.fund?.id || ''} disabled={disabled} onChange={(event) => { setReport(null); setChosenFund(event.target.value); }}>
+                {!report.fund && <option value="">Choose a fund</option>}
+                {report.fundChoices.map((choice) => <option key={choice.id} value={choice.id}>{choice.name} ({choice.code})</option>)}
+              </select>
+            </label>
+          </div>
+
           <div style={card}>
             <span style={label}>What this is</span>
             <span style={{ fontSize: 14 }}>
@@ -137,9 +177,11 @@ export function NavReportStage({ stage, busy, onComplete, onProgress }: StageScr
               Period end <b>{report.report.periodEnd || 'not found'}</b>
               {report.report.comparativeDate ? <>, compared with <b>{report.report.comparativeDate}</b> ({plural(report.report.months || 0, 'month')} of flows)</> : null}.
             </span>
-            <span style={{ fontSize: 13 }}>
-              Loads onto <b>{report.fund.name}</b> ({report.fund.code}) as the administrator&apos;s figures, on {report.statement.exists ? 'its NAV statement' : 'a new NAV statement'} {report.statement.code}.
-            </span>
+            {report.fund && report.statement && (
+              <span style={{ fontSize: 13 }}>
+                Loads onto <b>{report.fund.name}</b> ({report.fund.code}) as the administrator&apos;s figures, on {report.statement.exists ? 'its NAV statement' : 'a new NAV statement'} {report.statement.code}.
+              </span>
+            )}
             {report.problems.length > 0 && (
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: '#b42318' }}>
                 {report.problems.map((problem) => <li key={problem}>{problem}</li>)}
@@ -292,7 +334,7 @@ export function NavReportStage({ stage, busy, onComplete, onProgress }: StageScr
       <span style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
         <ConfirmButton className="load-btn sec" disabled={disabled} confirmLabel="Yes, stop the run" title="Nothing has been loaded." onConfirm={() => void onComplete('abandoned', {})}>Stop this run</ConfirmButton>
         <button type="button" className="load-btn" disabled={disabled || !report.ready} onClick={confirm}>
-          {working || busy ? 'Working…' : 'This is right, load the report'}
+          {working || busy ? 'Working…' : report.holds.length ? 'I have checked these, load the report' : 'This is right, load the report'}
         </button>
       </span>
     </div>

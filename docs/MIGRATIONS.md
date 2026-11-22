@@ -53,3 +53,9 @@ Still to do:
 Adds the NAV chart lines a filed report needs, the report wording on every chart line, the statement's comparative date and report checks, and three fund settings (capital model, management fee basis, performance fee basis). Metadata only: no records. It replays cleanly on a fresh database, and a dry run on the hosted project in a rolled-back transaction applied cleanly (115 chart lines, every one with its rules).
 
 Not applied to the hosted project yet. Apply it with the web app built from the same change: the app deployed before it shows every chart line on the NAV statement tab, so the new lines would show there empty until the new app is out. Figures and checks are not affected.
+
+## Pending: 20261122110000_report_trigger
+
+Adds the `REPORT` trigger source. A stored file whose intake method becomes `financial_report` records one `REPORT_RECEIVED` event (on insert, or on the update that first marks it a report), with the entity, form and period end read from the file's "About the report" table. The event never stops the file from being stored. `workflow_trigger_save` accepts `REPORT` with `{ entityNames }`, and `job_run_workflow_triggers` hands a fitting report to the run as `importInstanceId`. Both functions are copied whole from their last version with only those branches added. Schema and functions only: no records.
+
+It replays cleanly on a fresh database after every other migration, and `scripts/db-tests/report-trigger.ts` (part of `npm run test:db`) checks it. Not applied to the hosted project yet. It does not depend on the app: until a trigger with source `REPORT` is saved, it only records events. Apply it after `20261122100000_nav_report_chart`.

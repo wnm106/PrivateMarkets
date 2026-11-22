@@ -5,9 +5,10 @@ import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
 export const dynamic = 'force-dynamic';
 
 /**
- * What a stored financial report holds and how it maps onto a fund's NAV
- * statement, with a trial load that writes nothing. The Check a filed report
- * stage reads this.
+ * What a stored financial report holds and how it maps onto its fund's NAV
+ * statement, with a trial load that writes nothing and the reasons it needs a
+ * person. The fund is fundId when given, else the first of entityIds, else the
+ * fund the report names. The Check a filed report stage reads this.
  */
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const user = await requireFeedUser();
@@ -16,11 +17,10 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
   if (!clientId) return NextResponse.json({ error: 'Choose a client first' }, { status: 400 });
   const { id } = await context.params;
   const params = request.nextUrl.searchParams;
-  const fundId = params.get('fundId') || '';
-  if (!fundId) return NextResponse.json({ error: 'Choose the fund the report is for' }, { status: 400 });
   try {
     return NextResponse.json(await readNavReport(id, clientId, {
-      fundId,
+      fundId: params.get('fundId') || null,
+      entityIds: (params.get('entityIds') || '').split(',').map((value) => value.trim()).filter(Boolean),
       periodEnd: params.get('periodEnd') || null,
       trial: params.get('trial') !== 'false',
     }));
