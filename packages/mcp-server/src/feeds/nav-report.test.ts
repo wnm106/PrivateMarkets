@@ -23,7 +23,7 @@ function plan(overrides: Partial<NavReportPlan> = {}): NavReportPlan {
 }
 
 const clean = {
-  statement: { dryRun: true, rowCount: 2, records: [{ domainCode: 'NAV_STATEMENT', distinct: 1, created: 1, matched: 0, failed: 0, errors: [] }], values: { created: 80, updated: 0, unchanged: 0 }, links: { created: 1, matched: 0, failed: 0 }, resolutions: 0, rejectCount: 0, rejects: [], warnings: [], errors: [] },
+  statement: { dryRun: true, rowCount: 2, records: [{ domainCode: 'NAV_STATEMENT', distinct: 1, created: 1, matched: 0, failed: 0, errors: [] }], values: { created: 80, updated: 0, unchanged: 0 }, links: { created: 1, matched: 0, failed: 0 }, resolutions: 0, rejectCount: 0, storedAsTyped: 0, typedExamples: [] as string[], rejects: [], warnings: [], errors: [] },
   positions: null,
 };
 
@@ -66,6 +66,17 @@ describe('holdsFor', () => {
       'NAV statement: the report changes 12 figures already on file for this period, so it restates them.',
       'Positions: the trial load refuses 2 records or values.',
       'Positions: 1 record matches more than one stored record.',
+    ]);
+  });
+
+  it('holds when values would be stored as typed, apart from values the trial load refuses', () => {
+    const trial = {
+      statement: clean.statement,
+      positions: { ...clean.statement, rejectCount: 391, storedAsTyped: 390, typedExamples: ['POSITION_TYPE "First Lien Debt"'] },
+    };
+    expect(holdsFor(plan(), found, [], trial)).toEqual([
+      'Positions: the trial load refuses 1 record or value.',
+      'Positions: 390 values are not on their lists or name no record, so they would be stored as typed (POSITION_TYPE "First Lien Debt"). Add the wording as a synonym on the list, or correct it, before the report loads.',
     ]);
   });
 });

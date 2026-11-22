@@ -389,7 +389,12 @@ export interface NavReportInput {
 
 const round = (value: number | null | undefined) => (value == null || !Number.isFinite(value) ? null : Math.round(value * 100) / 100);
 
+/** A flagged value the loader keeps as it was typed: off its list, or naming no record. */
+const STORED_AS_TYPED = /Stored as (typed|given)\.$/;
+
 function digestLoad(result: FeedLoadResult) {
+  const rejects = result.rejects || [];
+  const typed = rejects.filter((reject) => STORED_AS_TYPED.test(reject.message));
   return {
     dryRun: result.dryRun === true,
     rowCount: result.rowCount,
@@ -397,8 +402,10 @@ function digestLoad(result: FeedLoadResult) {
     values: result.attributes,
     links: result.relationships,
     resolutions: result.resolutions.length,
-    rejectCount: result.rejectCount ?? result.rejects?.length ?? 0,
-    rejects: (result.rejects || []).slice(0, 15),
+    rejectCount: result.rejectCount ?? rejects.length,
+    storedAsTyped: typed.length,
+    typedExamples: [...new Set(typed.map((reject) => `${reject.attributeCode} "${reject.value}"`))].slice(0, 3),
+    rejects: rejects.slice(0, 15),
     warnings: result.warnings.slice(0, 10),
     errors: result.errors.slice(0, 10),
   };
@@ -450,8 +457,10 @@ export function holdsFor(
   if (unplaced.length) holds.push(`${unplaced.length} line${unplaced.length === 1 ? ' has' : 's have'} no place on the NAV statement: ${unplaced.slice(0, 3).join('; ')}${unplaced.length > 3 ? '; …' : ''}.`);
   for (const [what, load] of [['NAV statement', trial?.statement], ['Positions', trial?.positions]] as const) {
     if (!load) continue;
-    const refused = load.records.reduce((total, record) => total + record.failed, 0) + load.rejectCount;
+    const typed = load.storedAsTyped ?? 0;
+    const refused = load.records.reduce((total, record) => total + record.failed, 0) + load.rejectCount - typed;
     if (refused) holds.push(`${what}: the trial load refuses ${refused} record${refused === 1 ? '' : 's'} or value${refused === 1 ? '' : 's'}.`);
+    if (typed) holds.push(`${what}: ${typed} value${typed === 1 ? ' is' : 's are'} not on ${typed === 1 ? 'its list' : 'their lists'} or name${typed === 1 ? 's' : ''} no record, so ${typed === 1 ? 'it' : 'they'} would be stored as typed (${(load.typedExamples ?? []).join(', ')}). Add the wording as a synonym on the list, or correct it, before the report loads.`);
     if (load.resolutions) holds.push(`${what}: ${load.resolutions} record${load.resolutions === 1 ? ' matches' : 's match'} more than one stored record.`);
     if (load.values.updated) holds.push(`${what}: the report changes ${load.values.updated} figure${load.values.updated === 1 ? '' : 's'} already on file for this period, so it restates them.`);
   }

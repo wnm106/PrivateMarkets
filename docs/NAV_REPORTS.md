@@ -58,7 +58,7 @@ The balance sheet loads at the period end and at the date it is compared with. T
 All as the administrator's figures (`FUND_ADMIN`), through the loader every file uses, as one batch that Load data can revert:
 
 - The fund's NAV statement record (its existing one, or `<fund code>-STMT`): every mapped line at the period end and at the comparative date, the period end, the comparative date, the received date, a label, and the report's own checks (`STATEMENT_SOURCE_CHECKS`: every check that does not tie, and the headline totals).
-- One position per investment in the schedule at the period end, linked to the fund: asset class, par, cost, fair value, coupon, currency, and the schedule's date (`METRIC_DATE`). A position's code is the fund code, the company, and a short hash of its class, maturity and spread, so the same tranche gets the same code next quarter.
+- One position per investment in the schedule at the period end, linked to the fund: its type, par, cost, fair value, coupon, currency, and the schedule's date (`METRIC_DATE`). The type is the broad one on the position type list (Debt, Equity): the schedule's asset class ("First Lien Debt", "Common Stocks") is a synonym on that list. A class the list does not take holds the report, with the wording to add. A position's code is the fund code, the company, and a short hash of its class, maturity and spread, so the same tranche gets the same code next quarter.
 
 Loading the same report again changes nothing already on file.
 
@@ -128,6 +128,7 @@ A report loads on its own unless one of these is true. Each is a reason a load c
 | One of the report's own subtotals or totals does not add up | The report may have been read wrong |
 | A line of a primary statement has no place on the chart | A figure would be left out. Supplemental disclosures, share-class detail and blank lines do not hold |
 | The trial load refuses a record, matches one to more than one stored record, or changes a figure already on file for the period | A restatement, or a collision, someone should see before it is written |
+| A value is not on its list or names no record, so it would be stored as typed | The list needs the wording as a synonym, or the value is wrong. The hold names the values |
 
 The reasons are in the run's step output and at the top of the screen, and confirming records who checked them.
 
@@ -139,6 +140,13 @@ A stored file read as a filed report (by upload, feed or email) records a `REPOR
 
 The fund needs a close calendar (`FUND_CLOSE_FREQUENCY`, `FUND_CLOSE_LAG_DAYS`) to have a reconciliation. For fee recalculation it needs its terms: the management fee rate and basis, and for a performance fee the rate (`FUND_CARRY_PCT`), the hurdle (`FUND_PREF_RETURN_PCT`), the catch-up and the basis. An evergreen fund or BDC sets `FUND_CAPITAL_MODEL` to `EVERGREEN`.
 
+### Turning it on for a client
+
+1. Publish the workflow: `SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node --experimental-strip-types scripts/publish-file-intake.mts <client code> NAV_RECONCILIATION`. Running it again publishes the template's latest version.
+2. On the workflow's page, under **Start automatically**, add a trigger with source "A filed report arrives". Leave the names blank to take every report: a report whose fund is not on file waits for a person to choose it.
+3. Give each fund its close calendar and terms (above), dated from the fund's start so the reconciliation reads them at every period end.
+4. Keep a job worker running (`docs/JOBS.md`). The "Explain the breaks" agent step needs `ANTHROPIC_API_KEY` where the worker runs. Without it, the step fails after the load, the reconciliation and the notes are done, and Retry on the run page continues from it once the key is set.
+
 ## Not built yet
 
 - Loading the per-class net assets, shares and NAV per share as records of their own. They are checked when the report is read, and the fund's total shares and its NAV per share (when every class agrees) load onto the statement.
@@ -147,3 +155,4 @@ The fund needs a close calendar (`FUND_CLOSE_FREQUENCY`, `FUND_CLOSE_LAG_DAYS`) 
 - Fund terms from the report's notes. They are set on the fund record.
 - Creating the fund from a report that names none on file. The run holds and a person chooses it.
 - Matching the report's investments to positions already in our own book under other codes.
+- Keeping the lien or seniority of each investment. A position has only its broad type; the full asset class stays in the stored report's schedule. Lien priority is a field of a security record, which the load does not create.

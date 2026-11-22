@@ -21,7 +21,12 @@ function effort(): Effort {
   return EFFORTS.includes(value) ? value : 'high';
 }
 
-function explain(error: unknown): Error {
+/** What a person reading the failed step should do about a model error. */
+export function explain(error: unknown): Error {
+  // The SDK says this, as a plain Error, before sending anything when no key is set.
+  if (error instanceof Error && !(error instanceof Anthropic.APIError) && /could not resolve authentication method/i.test(error.message)) {
+    return new Error('No Anthropic key is set where the worker runs. Set ANTHROPIC_API_KEY for the worker, then retry the run: it continues from this step.');
+  }
   if (error instanceof Anthropic.AuthenticationError) return new Error('The Anthropic key was rejected. Check ANTHROPIC_API_KEY for the worker.');
   if (error instanceof Anthropic.PermissionDeniedError) return new Error(`This Anthropic key cannot use the model. ${error.message}`);
   if (error instanceof Anthropic.RateLimitError) return new Error('The model is rate limited right now. Retry the run in a few minutes.');
