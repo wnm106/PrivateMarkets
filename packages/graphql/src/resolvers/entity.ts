@@ -9,6 +9,7 @@ import { ensureAttributeSection } from './metadata';
 import { resolveEntityClientId, resolveSchemaClientId, withClientNames } from './schema-scope';
 import { OPEN_SYSTEM_TO, writeGoldenValue } from '../lib/golden-write';
 import { ok } from '../lib/db-result';
+import { groupBy, loaderFor } from '../lib/request-loaders';
 
 function normalizePrecedenceChain(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -535,37 +536,37 @@ export const entityResolvers = {
   
   Entity: {
     lineage: async (entity: any, _: any, context: Context) => {
-      const { data, error } = await context.supabase
-        .from('entity_attribute_values')
-        .select('*')
-        .eq('entity_id', entity.id)
-        .eq('valid_to', '9999-12-31')
-        .eq('system_to', '9999-12-31 23:59:59');
-      
-      if (error) throw error;
+      // Current values, with their attribute and source, for every entity asked about in this request at once.
+      const rows = await loaderFor(context, 'currentValuesByEntity', async (entityIds) => {
+        const { data } = ok(await context.supabase
+          .from('entity_attribute_values')
+          .select('*')
+          .in('entity_id', [...entityIds])
+          .eq('valid_to', '9999-12-31')
+          .eq('system_to', '9999-12-31 23:59:59+00'));
+        const values = (data || []) as any[];
+        const attributeIds = [...new Set(values.map((row) => row.attribute_id).filter(Boolean))];
+        const sourceIds = [...new Set(values.map((row) => row.source_id).filter(Boolean))];
+        const [{ data: attributes }, { data: sourceRows }] = await Promise.all([
+          attributeIds.length
+            ? context.supabase.from('attribute_register').select('id, attribute_code, attribute_name').in('id', attributeIds).then(ok)
+            : Promise.resolve({ data: [] as any[], error: null }),
+          sourceIds.length
+            ? context.supabase.schema('entity_instances').from('source_registry').select('id, source_code, source_name').in('id', sourceIds).then(ok)
+            : Promise.resolve({ data: [] as any[], error: null }),
+        ]);
+        const attributeById = new Map((attributes || []).map((attribute: any) => [attribute.id, attribute]));
+        const sourceById = new Map((sourceRows || []).map((source: any) => [source.id, source]));
+        const enriched = values.map((row) => ({
+          ...row,
+          attribute_code: attributeById.get(row.attribute_id)?.attribute_code,
+          attribute_name: attributeById.get(row.attribute_id)?.attribute_name,
+          source_code: sourceById.get(row.source_id)?.source_code,
+          source_name: sourceById.get(row.source_id)?.source_name,
+        })).filter((row) => row.attribute_code && row.source_code);
+        return groupBy(enriched, 'entity_id');
+      }, () => [] as any[]).load(entity.id);
 
-      const attributeIds = [...new Set((data || []).map((row: any) => row.attribute_id).filter(Boolean))];
-      const sourceIds = [...new Set((data || []).map((row: any) => row.source_id).filter(Boolean))];
-      const [{ data: attributes, error: attributeError }, { data: sourceRows, error: sourceError }] = await Promise.all([
-        attributeIds.length
-          ? context.supabase.from('attribute_register').select('id, attribute_code, attribute_name').in('id', attributeIds)
-          : Promise.resolve({ data: [], error: null }),
-        sourceIds.length
-          ? context.supabase.schema('entity_instances').from('source_registry').select('id, source_code, source_name').in('id', sourceIds)
-          : Promise.resolve({ data: [], error: null }),
-      ]);
-      if (attributeError) throw attributeError;
-      if (sourceError) throw sourceError;
-      const attributeById = new Map((attributes || []).map((attribute: any) => [attribute.id, attribute]));
-      const sourceById = new Map((sourceRows || []).map((source: any) => [source.id, source]));
-      const rows = (data || []).map((row: any) => ({
-        ...row,
-        attribute_code: attributeById.get(row.attribute_id)?.attribute_code,
-        attribute_name: attributeById.get(row.attribute_id)?.attribute_name,
-        source_code: sourceById.get(row.source_id)?.source_code,
-        source_name: sourceById.get(row.source_id)?.source_name,
-      })).filter((row: any) => row.attribute_code && row.source_code);
-      
       // Group by attribute
       const byAttribute = new Map<string, any[]>();
       rows.forEach((row: any) => {

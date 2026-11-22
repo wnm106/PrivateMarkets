@@ -8,6 +8,7 @@ import { conditionValueKey, type RelationshipHopRef } from '../lib/compliance-po
 import { parseFundBoardResultPayload, selectLatestFundResults } from '../lib/fund-board-results';
 import { knowledgeInstant } from '../lib/fund-surface';
 import { ok } from '../lib/db-result';
+import { groupBy, loaderFor } from '../lib/request-loaders';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
 // through `.schema('compliance')` first (same convention as tenancy.ts /
@@ -608,14 +609,24 @@ export const complianceResolvers = {
     },
   },
 
+  // Each field reads every parent asked for in the same request at once (lib/request-loaders.ts).
   ComplianceRule: {
     versions: async (parent: any, _: any, context: Context) => {
-      const { data } = ok(await cx(context)
-        .from('rule_versions')
-        .select('*, conditions:rule_conditions(*)')
-        .eq('rule_id', parent.id)
-        .order('version_number', { ascending: false }));
-      return withMeasureLines(context, data || []);
+      return loaderFor(context, 'complianceVersionsByRule', async (ruleIds) => {
+        const { data } = ok(await cx(context)
+          .from('rule_versions')
+          .select('*, conditions:rule_conditions(*)')
+          .in('rule_id', [...ruleIds])
+          .order('version_number', { ascending: false }));
+        const mapped = await withMeasureLines(context, data || []);
+        const byRule = new Map<string, any[]>();
+        (data || []).forEach((row: any, index: number) => {
+          const list = byRule.get(row.rule_id) || [];
+          list.push(mapped[index]);
+          byRule.set(row.rule_id, list);
+        });
+        return byRule;
+      }, () => [] as any[]).load(parent.id);
     },
 
     currentVersion: async (parent: any, args: { asOfDate?: string; knowledgeDate?: string }, context: Context) => {
@@ -627,44 +638,56 @@ export const complianceResolvers = {
         p_knowledge_date: knowledgeDate,
       }));
       if (!data || !data.id) return null;
-
-      const { data: conditions } = ok(await cx(context).from('rule_conditions').select('*').eq('rule_version_id', data.id));
-      const [version] = await withMeasureLines(context, [{ ...data, conditions: conditions || [] }]);
-      return version;
+      // The version's conditions and amounts, read with every other rule's in this request.
+      return loaderFor(context, 'complianceVersionWithLines', async (versionIds) => {
+        const [{ data: versions }, { data: conditions }] = await Promise.all([
+          cx(context).from('rule_versions').select('*').in('id', [...versionIds]).then(ok),
+          cx(context).from('rule_conditions').select('*').in('rule_version_id', [...versionIds]).then(ok),
+        ]);
+        const byVersion = groupBy((conditions || []) as any[], 'rule_version_id');
+        const rows = (versions || []).map((row: any) => ({ ...row, conditions: byVersion.get(row.id) || [] }));
+        const mapped = await withMeasureLines(context, rows);
+        return new Map(rows.map((row: any, index: number) => [row.id as string, mapped[index]]));
+      }, () => null as any).load(data.id);
     },
 
     scopeAssignments: async (parent: any, _: any, context: Context) => {
-      const { data } = ok(await cx(context).from('rule_scope_assignments').select('*').eq('rule_id', parent.id));
-      const rows = data || [];
-      const labels = await entityLabels(context, rows.map((row: any) => row.entity_id));
-      return rows.map((row: any) => {
-        const label = labels.get(row.entity_id);
-        return {
-          ...mapScopeAssignment(row),
-          entityCode: label?.entity_code || null,
-          entityName: label?.entity_name || null,
-        };
-      });
+      return loaderFor(context, 'complianceScopesByRule', async (ruleIds) => {
+        const { data } = ok(await cx(context).from('rule_scope_assignments').select('*').in('rule_id', [...ruleIds]));
+        const rows = (data || []) as any[];
+        const labels = await entityLabels(context, rows.map((row) => row.entity_id));
+        const mapped = rows.map((row) => {
+          const label = labels.get(row.entity_id);
+          return { ruleId: row.rule_id as string, item: { ...mapScopeAssignment(row), entityCode: label?.entity_code || null, entityName: label?.entity_name || null } };
+        });
+        const byRule = new Map<string, any[]>();
+        for (const { ruleId, item } of mapped) byRule.set(ruleId, [...(byRule.get(ruleId) || []), item]);
+        return byRule;
+      }, () => [] as any[]).load(parent.id);
     },
   },
 
   ComplianceEvaluationRun: {
     rule: async (parent: any, _: any, context: Context) => {
-      const { data } = ok(await cx(context).from('rules').select('*').eq('id', parent.ruleId).maybeSingle());
-      return data ? mapRule(data) : null;
+      if (!parent.ruleId) return null;
+      return loaderFor(context, 'complianceRuleById', async (ids) => {
+        const { data } = ok(await cx(context).from('rules').select('*').in('id', [...ids]));
+        return new Map(((data || []) as any[]).map((row) => [row.id as string, mapRule(row)]));
+      }, () => null as any).load(parent.ruleId);
     },
     results: async (parent: any, _: any, context: Context) => {
-      const { data } = ok(await cx(context).from('rule_evaluation_results').select('*').eq('run_id', parent.id));
-      const rows = data || [];
-      const labels = await entityLabels(context, rows.map((row: any) => row.anchor_entity_id));
-      return rows.map((row: any) => {
-        const label = labels.get(row.anchor_entity_id);
-        return {
-          ...mapResult(row),
-          anchorEntityCode: label?.entity_code || null,
-          anchorEntityName: label?.entity_name || null,
-        };
-      });
+      return loaderFor(context, 'complianceResultsByRun', async (runIds) => {
+        const { data } = ok(await cx(context).from('rule_evaluation_results').select('*').in('run_id', [...runIds]));
+        const rows = (data || []) as any[];
+        const labels = await entityLabels(context, rows.map((row) => row.anchor_entity_id));
+        const byRun = new Map<string, any[]>();
+        for (const row of rows) {
+          const label = labels.get(row.anchor_entity_id);
+          const item = { ...mapResult(row), anchorEntityCode: label?.entity_code || null, anchorEntityName: label?.entity_name || null };
+          byRun.set(row.run_id, [...(byRun.get(row.run_id) || []), item]);
+        }
+        return byRun;
+      }, () => [] as any[]).load(parent.id);
     },
   },
 };

@@ -52,6 +52,13 @@ SELECT tests.expect_value('explain_golden_source names the winner the stored rec
           || ' ' || (golden_master.explain_golden_source('aaaaaaaa-0000-0000-0000-0000000000f2', 'NAV') ->> 'tier')$$, 'MANUAL MANUAL_OVERRIDE');
 SELECT tests.expect_value('It lists both competing values, the winner first',
     $$SELECT string_agg(c ->> 'value', ',') FROM jsonb_array_elements(golden_master.explain_golden_source('aaaaaaaa-0000-0000-0000-0000000000f2', 'NAV') -> 'candidates') AS c$$, '60,50');
+SELECT tests.login('a0000000-0000-0000-0000-00000000000b');
+SELECT tests.expect_value('An A steward re-resolves the record and gets the winner',
+    $$SELECT winning_source || ' ' || golden_value FROM golden_master.reresolve_golden_sources(ARRAY['aaaaaaaa-0000-0000-0000-0000000000f2']::uuid[], 'NAV')$$,
+    'MANUAL 60');
+SELECT tests.login('b0000000-0000-0000-0000-00000000000b');
+SELECT tests.expect_rows('A B steward re-resolves nothing of client A, and is told nothing',
+    $$SELECT * FROM golden_master.reresolve_golden_sources(ARRAY['aaaaaaaa-0000-0000-0000-0000000000f2']::uuid[], 'NAV')$$, 0);
 SELECT tests.login('b0000000-0000-0000-0000-00000000000a');
 SELECT tests.expect_error('A B analyst cannot have a client A record explained',
     $$SELECT golden_master.explain_golden_source('aaaaaaaa-0000-0000-0000-0000000000f2', 'NAV')$$);

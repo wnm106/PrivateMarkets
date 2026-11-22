@@ -199,40 +199,19 @@ export const goldenSourceResolvers = {
 
 // ─── Internal helpers ────────────────────────────────────────────────
 
+/** Re-decides one record's golden source with golden_master.reresolve_golden_sources and returns the winner. */
 async function resolveAndPersistGolden(
   context: Context, entityId: string, attributeCode: string,
   _domainCode: string, _templateId: string | null, _validFrom: string
 ): Promise<{ winningSource: string | null; goldenValueId: string | null; goldenValue: string | null }> {
-  const { data: attr } = ok(await context.supabase.from("attribute_register").select("id").eq("attribute_code", attributeCode).single());
-  if (!attr) throw new Error(`Attribute not found: ${attributeCode}`);
-
-  const current = (columns: string) => context.supabase.from("entity_attribute_values")
-    .select(columns)
-    .eq("entity_id", entityId).eq("attribute_id", attr.id)
-    .eq("valid_to", "9999-12-31").eq("system_to", "9999-12-31 23:59:59");
-
-  const { data: sample, error: sampleError } = await current("id").limit(1).maybeSingle<{ id: string }>();
-  if (sampleError) throw sampleError;
-  if (!sample?.id) return { winningSource: null, goldenValueId: null, goldenValue: null };
-
-  const { error: touchError } = await context.supabase.from("entity_attribute_values")
-    .update({ resolved_at: new Date().toISOString() })
-    .eq("id", sample.id);
-  if (touchError) throw touchError;
-
-  const { data: rows, error } = await current("id, source_id, golden_source_id, golden_value")
-    .returns<Array<{ id: string; source_id: string | null; golden_source_id: string | null; golden_value: string | null }>>();
-  if (error) throw error;
-  const winner = (rows || []).find((row) => row.golden_source_id && row.source_id === row.golden_source_id);
-  let winningSource: string | null = null;
-  if (winner?.source_id) {
-    const { data: source } = ok(await context.supabase.schema("entity_instances").from("source_registry")
-      .select("source_code").eq("id", winner.source_id).maybeSingle());
-    winningSource = source?.source_code ?? null;
-  }
-  return { winningSource, goldenValueId: winner?.id || null, goldenValue: winner?.golden_value || null };
+  const { data } = ok(await context.supabase
+    .schema("golden_master")
+    .rpc("reresolve_golden_sources", { p_entity_ids: [entityId], p_attribute_code: attributeCode }));
+  const winner = ((data || []) as Array<{ golden_value_id: string; winning_source: string | null; golden_value: string | null }>)[0];
+  return { winningSource: winner?.winning_source ?? null, goldenValueId: winner?.golden_value_id ?? null, goldenValue: winner?.golden_value ?? null };
 }
 
+/** Re-decides an attribute's golden source for every record of a domain (or template), a page of records a call. */
 async function batchReresolve(
   context: Context, domainCode: string, attributeCode: string, templateCode?: string
 ): Promise<number> {
@@ -246,24 +225,22 @@ async function batchReresolve(
   }
 
   let resolved = 0;
-  const validFrom = new Date().toISOString().split("T")[0];
-  const batchSize = 50;
   // PostgREST returns at most max_rows (1,000) rows per request, so the entities are read page by page.
   const pageSize = 1000;
+  const callSize = 500;
   for (let from = 0; ; ) {
-    let query = context.supabase.from("entity_master").select("entity_id, template_id, domain_code").eq("domain_code", domainCode);
+    let query = context.supabase.from("entity_master").select("entity_id").eq("domain_code", domainCode);
     if (templateId) query = query.eq("template_id", templateId);
     const { data: entities, error } = await query.order("entity_id", { ascending: true }).range(from, from + pageSize - 1);
     if (error) throw error;
-    const page = entities || [];
+    const page = (entities || []).map((entity: any) => entity.entity_id as string);
     if (page.length === 0) break;
-    for (let i = 0; i < page.length; i += batchSize) {
-      const batch = page.slice(i, i + batchSize);
-      const results = await Promise.all(batch.map(async (entity: any) => {
-        try { await resolveAndPersistGolden(context, entity.entity_id, attributeCode, domainCode, entity.template_id, validFrom); return true; }
-        catch (err) { console.error(`Failed to re-resolve for entity ${entity.entity_id}:`, err); return false; }
-      }));
-      resolved += results.filter(Boolean).length;
+    for (let i = 0; i < page.length; i += callSize) {
+      const ids = page.slice(i, i + callSize);
+      ok(await context.supabase
+        .schema("golden_master")
+        .rpc("reresolve_golden_sources", { p_entity_ids: ids, p_attribute_code: attributeCode }));
+      resolved += ids.length;
     }
     // Advance by what came back, so a lower row cap than pageSize skips nothing.
     from += page.length;
