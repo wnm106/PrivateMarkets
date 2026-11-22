@@ -67,10 +67,11 @@ function memoryDatabase(seed: Record<string, Row[]>) {
       } else if (mode === 'insert' || mode === 'upsert') {
         const incoming: Row[] = (payload as Row[]).map((row) => ({ id: row.id || `00000000-0000-4000-9000-${String(++sequence).padStart(12, '0')}`, ...row }));
         if (name === 'entity_instances.master_entities') {
-          const codes = new Set(table.map((row) => row.entity_code));
-          const clash = incoming.find((row) => codes.has(row.entity_code));
+          // As the database: codes are unique within a client.
+          const codes = new Set(table.map((row) => `${row.client_id}|${row.entity_code}`));
+          const clash = incoming.find((row) => codes.has(`${row.client_id}|${row.entity_code}`));
           if (clash) {
-            return { data: null, error: { code: '23505', message: `duplicate key value violates unique constraint "master_entities_entity_code_key" Key (entity_code)=(${clash.entity_code}) already exists.` } };
+            return { data: null, error: { code: '23505', message: `duplicate key value violates unique constraint "master_entities_client_entity_code_key" Key (client_id, entity_code)=(${clash.client_id}, ${clash.entity_code}) already exists.` } };
           }
         }
         table.push(...incoming);
@@ -215,9 +216,9 @@ describe('a load for one client', () => {
     expect(result.resolutions[0].candidates.map((item) => item.id).sort()).toEqual([A1, A2]);
     expect(JSON.stringify(result)).not.toContain('ACME-B1');
     expect(JSON.stringify(result)).not.toContain(B1);
-    // Reads of whole records name the client. A read across clients takes the code alone.
+    // Every read of records names the client. Codes are unique within a client, so nothing reads across clients.
     const entityReads = db.reads.filter((read) => read.table === 'entity_instances.master_entities');
-    expect(entityReads.every((read) => read.columns === 'entity_code' || read.columns.includes('id'))).toBe(true);
+    expect(entityReads.every((read) => read.columns.includes('id'))).toBe(true);
     expect(db.writes.filter((write) => write.table !== 'entity_instances.feed_maps')).toEqual([]);
   });
 
@@ -280,18 +281,20 @@ describe('a load for one client', () => {
     expect(newValue).toMatchObject({ created_by: ACTOR, updated_by: ACTOR });
   });
 
-  it('refuses a new record whose code another client holds, in words that do not say so', async () => {
+  it('creates a record whose code another client also uses, and leaves theirs alone', async () => {
     const db = twoClients();
     const result = await executeParsedFeed(issuerMap(), 'issuers.csv', fileOf([{ Code: 'SECRET-DEAL', Name: 'Mine', LEI: '' }]), '2026-09-30', db.client, CLIENT_A);
 
-    expect(result.errors).toEqual(['SECRET-DEAL is not available as a record code. Use a different code.']);
-    expect(JSON.stringify(result)).not.toMatch(/another client|Project X|duplicate key/i);
-    expect(db.writes.filter((write) => write.table === 'entity_instances.master_entities')).toEqual([]);
+    expect(result.errors).toEqual([]);
+    expect(JSON.stringify(result)).not.toMatch(/Project X/i);
+    const holders = db.tables.get('entity_instances.master_entities')!.filter((row) => row.entity_code === 'SECRET-DEAL');
+    expect(holders.map((row) => row.client_id).sort()).toEqual([CLIENT_A, CLIENT_B].sort());
+    expect(holders.find((row) => row.client_id === CLIENT_B)!.entity_name).toBe('Project X');
   });
 
   it('gives the same words when the database refuses the code at insert', async () => {
     const db = twoClients();
-    // The code is taken between the check and the insert.
+    // The code is taken in this client between the check and the insert.
     const original = db.client.schema.bind(db.client);
     let raced = false;
     (db.client as any).schema = (schema: string) => {
@@ -303,7 +306,7 @@ describe('a load for one client', () => {
             const insert = builder.insert.bind(builder);
             builder.insert = (rows: Row | Row[]) => {
               raced = true;
-              db.tables.get('entity_instances.master_entities')!.push(entityRow('00000000-0000-4000-8000-0000000000b3', 'LATE-CODE', 'Late', CLIENT_B));
+              db.tables.get('entity_instances.master_entities')!.push(entityRow('00000000-0000-4000-8000-0000000000b3', 'LATE-CODE', 'Late', CLIENT_A));
               return insert(rows);
             };
           }

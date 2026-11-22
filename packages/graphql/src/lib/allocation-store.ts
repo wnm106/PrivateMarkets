@@ -959,17 +959,8 @@ async function createPosition(
 ): Promise<string> {
   const tranche = draft.tranches.find((item) => item.id === trancheId);
   const code = allocationPositionCode(draft, fundId, trancheId, hypo ? 'HYPO' : role);
-  // The upsert matches on the code alone, and scoring writes with the service role.
-  // A code that already names another client's record is refused, not taken over.
-  const { data: taken, error: takenError } = await supabase
-    .from('master_entities')
-    .select('id, client_id')
-    .eq('entity_code', code)
-    .maybeSingle();
-  if (takenError) throw new Error(takenError.message);
-  if (taken && (taken.client_id ?? null) !== draft.clientId) {
-    throw new Error('An allocation position code on this deal is already used by another record.');
-  }
+  // Codes are unique within a client, so the upsert can only ever match this client's own record.
+  if (!draft.clientId) throw new Error('This deal has no client, so its allocation positions cannot be written.');
   const { data: created, error } = await supabase.from('master_entities').upsert({
     entity_code: code,
     entity_name: `${draft.dealName}: ${fundName}`,
@@ -978,7 +969,7 @@ async function createPosition(
     description: hypo ? 'Hypo allocation for a compliance test' : role === 'LOCK' ? 'Portfolio allocation lock' : 'Proposed allocation',
     client_id: draft.clientId,
     created_by: userId,
-  }, { onConflict: 'entity_code' }).select('id').single();
+  }, { onConflict: 'client_id,entity_code' }).select('id').single();
   if (error || !created) throw new Error(error?.message || 'Could not create the allocation position');
   const links: Array<[string, string]> = [
     ['POSITION_FUND', fundId],

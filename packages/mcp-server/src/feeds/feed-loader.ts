@@ -573,14 +573,7 @@ async function loadEntityMatchIndex(
       .in('entity_code', chunk);
     if (existing.error) throw new Error(existing.error.message);
     codeRows.push(...(existing.data || []));
-    // Codes are unique across every client. One held elsewhere cannot be created here, and the
-    // code is all that is read about it: no id, no name, nothing that can reach the caller.
-    const taken = await db.schema('entity_instances').from('master_entities')
-      .select('entity_code')
-      .neq('client_id', clientId)
-      .in('entity_code', chunk);
-    if (taken.error) throw new Error(taken.error.message);
-    for (const row of taken.data || []) index.reserveCode(String(row.entity_code));
+    // Codes are unique within a client, so another client's records are never read here.
   }
 
   const byId = new Map<string, any>();
