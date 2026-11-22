@@ -135,6 +135,44 @@ for (const [path, status] of changed) {
   }
 }
 
+// 5. Direct reads of the entity attribute tables (docs/PROVISIONAL_RECORDS.md).
+//    scripts/guard/direct-reads.txt lists the ones not yet on the shared
+//    readers. It only shrinks: no new line, no new unlisted read, and no line
+//    that no longer matches. npm run guard:db checks its db lines.
+const DIRECT_READS = 'scripts/guard/direct-reads.txt';
+const DIRECT_READ = /\.from\(\s*['"`](entity_attribute_values|entity_relationships|master_entities)['"`]\s*\)\s*\.select\(/g;
+const isAppCode = (path) => /^(apps|packages|surfaces)\/.+\.(ts|tsx|mjs|js)$/.test(path) && !/\.test\.|\/__tests__\/|node_modules|\.d\.ts$/.test(path);
+const isListLine = (text) => /^\s*(db|ts)\s+\S+\s+\S+\s*$/.test(text);
+if (existsSync(DIRECT_READS)) {
+  const listLines = readFileSync(DIRECT_READS, 'utf8').split(/\r?\n/);
+  const listedTs = new Map();
+  listLines.forEach((text, index) => {
+    const [kind, path, table] = text.trim().split(/\s+/);
+    if (kind === 'ts') listedTs.set(`${path} ${table}`, index + 1);
+  });
+  if (changed.has(DIRECT_READS) && tryGit('cat-file', '-e', `${base}:${DIRECT_READS}`) !== null) {
+    for (const { line, text } of addedLines(DIRECT_READS, changed.get(DIRECT_READS))) {
+      if (isListLine(text)) report(DIRECT_READS, line, 'A direct read was added to the list. The list only shrinks: read through the shared readers instead.');
+    }
+  }
+  const readsIn = (path) => {
+    const text = readFileSync(path, 'utf8');
+    return [...text.matchAll(DIRECT_READ)].map((found) => ({ table: found[1], line: text.slice(0, found.index).split('\n').length }));
+  };
+  for (const [path] of changed) {
+    if (!existsSync(path) || !isAppCode(path)) continue;
+    for (const { table, line } of readsIn(path)) {
+      if (!listedTs.has(`${path} ${table}`)) report(path, line, `Reads ${table} directly. Read it through the shared readers (docs/PROVISIONAL_RECORDS.md) so provisional scopes can see it.`);
+    }
+  }
+  for (const [key, line] of listedTs) {
+    const [path, table] = key.split(' ');
+    if (!existsSync(path) || !readsIn(path).some((found) => found.table === table)) {
+      report(DIRECT_READS, line, `"ts ${key}" no longer matches a direct read; remove the line.`);
+    }
+  }
+}
+
 if (problems.length) {
   console.error(`Guardrails: ${problems.length} problem(s) since ${base.slice(0, 12)}. See docs/GUARDRAILS.md.\n`);
   for (const problem of problems) console.error(`  ${problem}`);

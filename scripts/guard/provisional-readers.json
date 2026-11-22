@@ -1,0 +1,6 @@
+[
+  {
+    "function": "entity_instances.scope_for_caller",
+    "reason": "The access check every shared reader passes its scope through. Reads provisional_scopes only."
+  }
+]

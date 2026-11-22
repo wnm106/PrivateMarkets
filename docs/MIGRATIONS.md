@@ -73,6 +73,7 @@ Each was applied through the Management API in its own transaction and recorded 
 | `20261122120000_attribute_aliases_service_role` | Lets the service role read field aliases. Since `20261119190500_semantic_aliases`, every Load data upload that needed a fresh column plan failed on the hosted project with "permission denied for table attribute_aliases" |
 | `20261122130000_position_type_report_wording` | The asset classes a schedule of investments prints ("First Lien Debt", "Common Stocks") as synonyms on the position type list, so positions from a filed report get a type on the list |
 | `20261122140000_position_link_direction` | Sets `POSITION_FUND` and `POSITION_SECURITY` to the position-as-parent definition `00009_entity_relationships` gives. See below |
+| `20261122180000_provisional_scopes` | Step 1 of [PROVISIONAL_RECORDS.md](PROVISIONAL_RECORDS.md): `provisional_scopes`, held-record columns on `load_batch_records` (and `action` widened to 12 characters), `load_batch_links`, and `entity_instances.scope_for_caller`. Schema only; nothing writes to it yet. A dry run on the hosted project in a rolled-back transaction came first: the 11 existing batch records passed the new checks, and neither `anon` nor `authenticated` can reach the new tables |
 
 ### Found on the hosted project
 

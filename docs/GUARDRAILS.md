@@ -39,7 +39,8 @@ checked by a machine, so they hold no matter who or what writes the change.
 | `npm run guard` (`scripts/guard/check-static.mjs`) | Rules 1, 3 and 4 on what changed since `master` | Claude Code Stop hook (`.claude/settings.json`), CI `guard` job |
 | `npm run lint:surfaces` | Rule 5 | CI `guard` job |
 | `npm run db:replay` (`scripts/db-replay`) | A migration that does not apply on a fresh database | CI `database` job |
-| `npm run guard:db` (`scripts/guard/check-db.ts`) | Rule 1 in every function in the database, against the real rule, client and entity codes | CI `database` job |
+| `npm run guard:db` (`scripts/guard/check-db.ts`) | Rule 1 in every function in the database, against the real rule, client and entity codes. Also that provisional rows are read only by the functions in `provisional-readers.json`, that a function taking `p_scope` defaults it to null and checks it with `entity_instances.scope_for_caller`, and that every function reading the entity attribute tables directly is listed in `direct-reads.txt` ([PROVISIONAL_RECORDS.md](PROVISIONAL_RECORDS.md)) | CI `database` job |
+| `npm run guard` (same script as rules 1, 3 and 4) | A new direct read of `entity_attribute_values`, `entity_relationships` or `master_entities` in application code, a new line in `direct-reads.txt`, or a line there that no longer matches | Claude Code Stop hook, CI `guard` job |
 | `npm run test:db` (`scripts/db-tests/capacity-parity.ts`) | Rule 2 for capacity. For every deal, fund and rule, buying exactly the room passes the evaluator and buying a little more breaches it. A parent fund equals the sum of its child funds. The scoring plan's enrollment holds. | CI `database` job |
 
 The Stop hook blocks an agent from finishing while `npm run guard` reports a
@@ -65,6 +66,12 @@ CAPACITY_AS_OF=2026-11-21 npm run test:db
   order on a fresh database, and how the replay applies them. Production got
   them in a different order, so they are not edited. The list only shrinks: a
   new migration must apply cleanly and never goes there.
+- `scripts/guard/direct-reads.txt` lists the reads of the entity attribute
+  tables that do not go through the shared readers yet, so a provisional scope
+  cannot see them. Like `legacy.txt`, it only shrinks: move a read onto the
+  shared readers and remove its line.
+- `scripts/guard/provisional-readers.json` lists the database functions that
+  may read provisional rows, each with a reason.
 - `scripts/guard/allowlist.json` is for a database function that must name a
   code, each entry with a reason. It is empty. An entry that stops matching
   fails the check, so the list cannot go stale.
