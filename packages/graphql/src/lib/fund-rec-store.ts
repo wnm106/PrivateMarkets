@@ -17,15 +17,19 @@ import {
   FUND_ADMIN_SOURCE, INTERNAL_SOURCE, loadNavLineAttributes, readSourceAmounts, sourceAmount, sourceText,
   type SourceValue,
 } from './nav-statement-lines';
+import { loadNavPack } from './nav-pack-store';
+import type { PackActivity, PackHolding } from './nav-pack';
 
 const CODES = [
   'FUND_STRATEGY', 'FUND_TOTAL_COMMITMENTS', 'FUND_NET_IRR', 'FUND_CLOSE_FREQUENCY', 'FUND_CLOSE_LAG_DAYS',
   'FUND_MGMT_FEE_RATE_PCT', 'FUND_PREF_RETURN_PCT', 'FUND_CARRY_PCT', 'FUND_CATCH_UP_PCT',
   'FUND_CAPITAL_MODEL', 'FUND_MGMT_FEE_BASIS', 'FUND_PERF_FEE_BASIS',
+  'FUND_MGMT_FEE_STEPDOWN_DATE', 'FUND_MGMT_FEE_STEPDOWN_RATE_PCT', 'FUND_MGMT_FEE_STEPDOWN_BASIS',
   'STATEMENT_PERIOD_END', 'STATEMENT_PERIOD_LABEL', 'STATEMENT_TOLERANCE_PCT', 'STATEMENT_CERTIFIED', 'STATEMENT_RECEIVED_DATE',
   'STATEMENT_COMPARATIVE_DATE', 'STATEMENT_SOURCE_CHECKS',
   'POSITION_STRATEGY', 'MARKET_VALUE', 'METRIC_DATE', 'ACCRUED_CASH_INTEREST_AMOUNT', 'UNREALIZED_GAIN_LOSS', 'POSITION_MARK', 'POSITION_AGENT_MARK',
-  'ACTIVITY_DATE', 'ACTIVITY_KIND', 'ACTIVITY_AMOUNT', 'ACTIVITY_STATUS',
+  'ACTIVITY_DATE', 'ACTIVITY_KIND', 'ACTIVITY_AMOUNT', 'ACTIVITY_STATUS', 'ACTIVITY_OUTSTANDING',
+  'POSITION_CURRENCY', 'COST_BASIS',
   'EVIDENCE_KIND', 'EVIDENCE_DATE', 'EVIDENCE_AMOUNT',
   'CLOSE_PERIOD_END', 'CLOSE_SIGNOFF', 'CLOSE_CERTIFIED_AT', 'CLOSE_CERTIFIED_BY', 'CLOSE_CERTIFIED_NAV',
   'CLOSE_REC_NOTES', 'CLOSE_REC_OUTCOME',
@@ -245,7 +249,7 @@ export async function loadFundRecInput(
     unit: line.unit,
   })) : [];
   const BOOK_SOURCE = INTERNAL_SOURCE;
-  const positionCodes = ['MARKET_VALUE', 'ACCRUED_CASH_INTEREST_AMOUNT', 'UNREALIZED_GAIN_LOSS', 'POSITION_MARK', 'POSITION_AGENT_MARK', 'POSITION_STRATEGY', 'METRIC_DATE'] as const;
+  const positionCodes = ['MARKET_VALUE', 'ACCRUED_CASH_INTEREST_AMOUNT', 'UNREALIZED_GAIN_LOSS', 'POSITION_MARK', 'POSITION_AGENT_MARK', 'POSITION_STRATEGY', 'METRIC_DATE', 'POSITION_CURRENCY', 'COST_BASIS'] as const;
   const positionAttrIds = positionCodes.map((code) => facts.attributeId(code)).filter((id): id is string => Boolean(id));
   const [positionNow, positionThen] = positionIds.length && positionAttrIds.length
     ? await Promise.all([
@@ -394,9 +398,13 @@ export async function loadFundRecInput(
     ? positionEntities.filter((entity) => sourceText(positionNow, entity.id, metricId, FUND_ADMIN_SOURCE).slice(0, 10) === periodEnd
       && sourceAmount(positionNow, entity.id, marketId, FUND_ADMIN_SOURCE) != null)
     : [];
+  const costId = facts.attributeId('COST_BASIS');
+  const currencyId = facts.attributeId('POSITION_CURRENCY');
+  const costOf = (id: string) => (costId ? sourceAmount(positionNow, id, costId, FUND_ADMIN_SOURCE) : null);
   const adminSchedule = scheduled.length
     ? {
       total: scheduled.reduce((total, entity) => total + (sourceAmount(positionNow, entity.id, marketId!, FUND_ADMIN_SOURCE) ?? 0), 0),
+      cost: scheduled.some((entity) => costOf(entity.id) != null) ? scheduled.reduce((total, entity) => total + (costOf(entity.id) ?? 0), 0) : null,
       count: scheduled.length,
       sources: scheduled.slice(0, 100).map((entity): RecBind => ({
         entityId: entity.id, entityName: entity.entity_name, domainCode: 'POSITION', code: 'MARKET_VALUE', name: 'Market Value',
@@ -404,6 +412,15 @@ export async function loadFundRecInput(
       })),
     }
     : null;
+  /* What the pack's valuation support and FX translation are checked against: the administrator's schedule, or our own book. */
+  const holdings: PackHolding[] = scheduled.length
+    ? scheduled.map((entity) => ({
+      id: entity.id, name: entity.entity_name, fairValue: sourceAmount(positionNow, entity.id, marketId!, FUND_ADMIN_SOURCE) ?? 0,
+      cost: costOf(entity.id), currency: (currencyId ? sourceText(positionNow, entity.id, currencyId, FUND_ADMIN_SOURCE) : '').toUpperCase() || null,
+    }))
+    : positions.filter((position) => (position.marketValue ?? 0) > 0).map((position) => ({
+      id: position.id, name: position.name, fairValue: position.marketValue ?? 0, cost: null, currency: null,
+    }));
 
   /* outside evidence */
   const evidenceOn = (kind: string): { amount: number | null; id: string | null; name: string | null } => {
@@ -416,11 +433,13 @@ export async function loadFundRecInput(
   const distributions: Array<{ id: string; name: string }> = [];
   let callsInPeriod = 0;
   let distributionsInPeriod = 0;
+  const activities: PackActivity[] = [];
   for (const id of activityIds) {
     const date = dateOnly(facts.str(id, 'ACTIVITY_DATE'));
     const kind = facts.str(id, 'ACTIVITY_KIND');
     const status = facts.str(id, 'ACTIVITY_STATUS');
     const amount = facts.num(id, 'ACTIVITY_AMOUNT') ?? 0;
+    if (date && kind) activities.push({ id, name: activityName.get(id) || '', kind, date, amount, status: status || null, outstanding: facts.num(id, 'ACTIVITY_OUTSTANDING') });
     if (!date || date > periodEnd) continue;
     const inPeriod = date > previous;
     const name = activityName.get(id) || '';
@@ -452,6 +471,9 @@ export async function loadFundRecInput(
   const priorCertified = Boolean(priorCertifiedAt) || Boolean(priorStatementId && facts.bool(priorStatementId, 'STATEMENT_CERTIFIED'));
 
   const strategy = facts.str(fund.id, 'FUND_STRATEGY');
+  const pack = await loadNavPack(supabase, {
+    fund: { id: fund.id, name: fund.entity_name }, statementId, periodEnd, today, knowledge, holdings, activities,
+  });
   const input: RecInput = {
     fund: {
       id: fund.id,
@@ -470,6 +492,9 @@ export async function loadFundRecInput(
       capitalModel: (facts.str(fund.id, 'FUND_CAPITAL_MODEL') || 'DRAWDOWN') as CapitalModel,
       mgmtFeeBasis: (facts.str(fund.id, 'FUND_MGMT_FEE_BASIS') || 'COMMITMENTS') as MgmtFeeBasis,
       perfFeeBasis: (facts.str(fund.id, 'FUND_PERF_FEE_BASIS') || 'WATERFALL') as PerfFeeBasis,
+      mgmtFeeStepDownDate: dateOnly(facts.str(fund.id, 'FUND_MGMT_FEE_STEPDOWN_DATE')) || null,
+      mgmtFeeStepDownRatePct: facts.num(fund.id, 'FUND_MGMT_FEE_STEPDOWN_RATE_PCT'),
+      mgmtFeeStepDownBasis: (facts.str(fund.id, 'FUND_MGMT_FEE_STEPDOWN_BASIS') || null) as MgmtFeeBasis | null,
     },
     periodEnd,
     priorAsOf: previous,
@@ -488,6 +513,7 @@ export async function loadFundRecInput(
     positions,
     adminSchedule,
     sourceChecks,
+    pack,
     evidence: (() => {
       const bank = evidenceOn('BANK');
       const lender = evidenceOn('LENDER');

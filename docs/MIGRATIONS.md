@@ -127,3 +127,9 @@ Push in version order, all at once (`npx supabase db push --include-all`, after 
 
 `scripts/db-test.sh` without `--db-url` builds its own throwaway cluster from `supabase/tests/supabase_stub.sql` and applies every file as the Supabase CLI would. It stops at the shared 20261118210000 version and at the migrations `legacy.txt` lists, so use the replay for a full build.
 
+
+## Pending: 20261122150000_nav_pack
+
+The NAV pack's record types (trial balance lines, capital accounts, valuation support, FX translation), their lists, links, templates and column headings, the fund's pack and FX settings, a fee step-down, and the notes flag on a statement. Metadata only: no records. Every code it adds was checked to be new on the hosted project, so its `ON CONFLICT ... DO UPDATE` touches nothing already there. It runs twice without change.
+
+Apply it with or before the code built from the same change. The code works either way round: before it, the pack's settings and records simply read as absent, and the report load's notes flag is skipped as an unregistered field.

@@ -129,7 +129,7 @@ The templates, all built this way:
 | Required values check | Proposes missing required values. Needs filters | After review |
 | Data quality brief | Briefs on open exceptions | No |
 | NAV review | Names the checks and lines to look at before sign-off | No |
-| NAV reconciliation | Takes a fund's filed report (a 10-Q, a 10-K) from a stored file to a summary of the breaks. It finds the fund from the report, loads it, reconciles and keeps the summary as notes on its own; a person is asked only to check a report it holds and to decide breaks. A `REPORT` trigger starts it when a report arrives. See [NAV_REPORTS.md](NAV_REPORTS.md) | Loads the report unless it is held; keeps the summary as notes; decisions after review |
+| NAV reconciliation | Takes a fund's filed report (a 10-Q, a 10-K) from a stored file to a summary of the breaks. It finds the fund from the report, loads it, reconciles and keeps the summary as notes on its own; a person is asked only to check a report it holds and to decide breaks. A `REPORT` trigger starts it when a report arrives. The summary covers the whole NAV pack ([NAV_PACK.md](NAV_PACK.md)). See [NAV_REPORTS.md](NAV_REPORTS.md) | Loads the report unless it is held; keeps the summary as notes; decisions after review |
 | Cash tie-out | Says what ties to the bank and what does not | No |
 | Closing readiness | Says whether each deal can close and what is open | No |
 | Overcollateralization test, Single-name check | Score one compliance rule and explain the result | Stores the rule's results |

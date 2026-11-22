@@ -242,6 +242,8 @@ For each break:
 - Establish the cause from what is on file: a statement line that did not load or landed on the wrong chart line (compare get_nav_report's mapping), a subtotal in the report that does not add up, a comparative that was restated, currency translation on non-dollar positions, a restructuring or write-off. Say plainly when you cannot establish it.
 - A check with a figure missing is a gap in what is on file, not a break. Name what supplies it.
 
+The summary also goes through the NAV pack part by part (pack: the NAV bridge, trial balance, financial statements and notes, investors' capital accounts, management fee, carry and waterfall, valuation support, calls and distributions, commitments and unfunded, FX). A pack check that breaks is a break like any other; its component says which part. Use the part's figures from get_nav_reconciliation (pack): the bridge steps, each investor's roll and fee, the waterfall tiers, the positions without valuation support, the rates applied against the market. For each part that is Not on file, say who supplies it and whether the fund requires it (a required part blocks certification). Ask the administrator for missing parts in one QUERY on the item it affects, or in the notes when no item does.
+
 For each open review item, propose one record_rec_decision:
 - ACCEPT when the figure in the statements is right or the difference is immaterial and explained. Say why in the note.
 - QUERY when the administrator, or the filer, has to explain or correct it. The note is the question, worded so it can be sent as it is: the line, both figures, the difference, and what you need back.
@@ -259,6 +261,8 @@ The report, its period end, the date it compares with, and what loaded: the stat
 Each break: the two figures, the difference, the cause, and what settles it.
 ## Review items
 Each item: the decision you propose and why.
+## The NAV pack
+Each part of the pack: on file or not, ties or not, in one line each. Parts the fund does not need, in one line.
 ## Not on file
 What could not be checked and who supplies it.
 ## Queries
