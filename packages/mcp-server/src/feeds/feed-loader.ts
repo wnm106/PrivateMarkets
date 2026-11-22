@@ -1325,12 +1325,17 @@ export async function executeParsedFeed(
           warnings.push(`${domainCode} ${entity.code}: ${attributeCode} value "${raw}" is not in ${hit.listCode}`);
           reject({ kind: 'value', domainCode, entityCode: entity.code, attributeCode, value: raw, message: `Not on list ${hit.listCode}. Stored as typed.`, row: origin?.row, column: origin?.column });
         }
-        const coerced = coerceAttributeValue(stored, meta.data_type);
+        const coerced = coerceAttributeValue(stored, meta.data_type, map.valueFormat);
         if (!coerced) continue;
         if ('error' in coerced) {
           warnings.push(`${domainCode} ${entity.code}: ${attributeCode} ${coerced.error}`);
           reject({ kind: 'value', domainCode, entityCode: entity.code, attributeCode, value: raw, message: coerced.error, row: origin?.row, column: origin?.column });
           continue;
+        }
+        // Read US style, but it could have meant something else: stored, and listed for review.
+        if (coerced.ambiguous) {
+          warnings.push(`${domainCode} ${entity.code}: ${attributeCode} ${coerced.ambiguous}`);
+          reject({ kind: 'value', domainCode, entityCode: entity.code, attributeCode, value: raw, message: coerced.ambiguous, row: origin?.row, column: origin?.column });
         }
         const value = {
           golden_value: coerced.golden_value,

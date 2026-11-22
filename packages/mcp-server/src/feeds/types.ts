@@ -1,3 +1,4 @@
+import type { ValueFormat } from '@tapestrai/graphql/src/lib/attribute-values';
 export type FeedColumnRole = 'identity' | 'name' | 'alias' | 'attribute' | 'parent_key';
 
 export interface FeedAttributeColumn {
@@ -59,6 +60,11 @@ export interface FeedMap {
   domains: FeedDomainSpec[];
   /** Per source column. Absent means the loader applies its built-in coercions. */
   transforms?: Record<string, ColumnTransform>;
+  /**
+   * How the file writes numbers and dates (decimal mark, date order). Absent means US style,
+   * with any value that could be read both ways reported for review.
+   */
+  valueFormat?: ValueFormat;
 }
 
 /**

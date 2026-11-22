@@ -155,11 +155,24 @@ function fullYear(text: string): number {
 }
 
 /**
- * Read a date as an ISO day. Only real calendar days are accepted.
- * Slash dates are month first. When the first part cannot be a month
- * (13/01/2025) the day-first reading is used, since it is the only valid one.
+ * How a file writes numbers and dates. A feed map may say (FeedMap.valueFormat);
+ * without it the loader reads US style and flags any value that could be read
+ * both ways.
+ *   decimal    '.' as in 1,234.56, or ',' as in 1.234,56.
+ *   dateOrder  'MDY' as in 03/04/2025 for March 4, or 'DMY' for 3 April.
  */
-export function parseUsDate(input: string): string | null {
+export interface ValueFormat {
+  decimal?: '.' | ',';
+  dateOrder?: 'MDY' | 'DMY';
+}
+
+/**
+ * Read a date as an ISO day. Only real calendar days are accepted.
+ * Slash dates are month first unless `order` is DMY. When the first part
+ * cannot be a month (13/01/2025) the day-first reading is used, since it is
+ * the only valid one.
+ */
+export function parseUsDate(input: string, order: 'MDY' | 'DMY' = 'MDY'): string | null {
   const text = input.trim();
   const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:$|[T\s])/);
   if (iso) return isoDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
@@ -168,6 +181,7 @@ export function parseUsDate(input: string): string | null {
     const year = fullYear(slash[3]);
     const first = Number(slash[1]);
     const second = Number(slash[2]);
+    if (order === 'DMY') return isoDate(year, second, first) || (second > 12 ? isoDate(year, first, second) : null);
     return isoDate(year, first, second) || (first > 12 ? isoDate(year, second, first) : null);
   }
   const months: Record<string, number> = {
@@ -201,7 +215,7 @@ export function isBlankToken(text: string): boolean {
  * Returns the plain digits with a leading minus if negative, or null when
  * the text is not a number. The digits keep their original precision.
  */
-export function numberText(input: string): string | null {
+export function numberText(input: string, decimal?: '.' | ','): string | null {
   let text = input.trim().replace(/[$€£¥\s]/g, '');
   if (!text) return null;
   let negative = false;
@@ -220,6 +234,18 @@ export function numberText(input: string): string | null {
     text = text.slice(1);
   }
   if (!/^[\d.,]*(?:[eE][+-]?\d+)?$/.test(text) || !/\d/.test(text)) return null;
+  if (decimal) {
+    // The file says which mark is the decimal: the other may only group thousands.
+    const thousands = decimal === '.' ? ',' : '.';
+    const [whole, fraction, extra] = text.split(decimal);
+    if (extra !== undefined) return null;
+    const groups = whole.split(thousands);
+    if (groups.length > 1 && !(/^\d{1,3}$/.test(groups[0]) && groups.slice(1).every((group) => /^\d{3}$/.test(group)))) return null;
+    if (fraction !== undefined && !/^\d*(?:[eE][+-]?\d+)?$/.test(fraction)) return null;
+    text = groups.join('') + (fraction !== undefined ? `.${fraction}` : '');
+    if (!Number.isFinite(Number(text))) return null;
+    return negative ? `-${text}` : text;
+  }
   const lastDot = text.lastIndexOf('.');
   const lastComma = text.lastIndexOf(',');
   if (lastDot >= 0 && lastComma >= 0) {
@@ -242,9 +268,32 @@ export function numberText(input: string): string | null {
   return negative ? `-${text}` : text;
 }
 
-export function parseNumber(input: string): number | null {
-  const text = numberText(input);
+export function parseNumber(input: string, decimal?: '.' | ','): number | null {
+  const text = numberText(input, decimal);
   return text === null ? null : Number(text);
+}
+
+/**
+ * Why a number could be read two ways, or null. One mark followed by exactly
+ * three digits is 1,500 (fifteen hundred) in US style and 1.5 where the comma
+ * is the decimal, and the same for 1.500 the other way round.
+ */
+export function numberAmbiguity(input: string): string | null {
+  const text = input.trim().replace(/[$€£¥\s()+-]/g, '');
+  const match = /^(\d{1,3})([.,])(\d{3})$/.exec(text);
+  if (!match) return null;
+  const read = numberText(input);
+  return `"${input.trim()}" was read as ${read}, but it means ${match[1]}.${match[3].replace(/0+$/, '') || '0'} where "${match[2]}" is the decimal mark. Set the file's number format if that is what it means.`;
+}
+
+/** Why a slash date could be read two ways, or null: both parts could be the month. */
+export function dateAmbiguity(input: string): string | null {
+  const slash = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(input.trim());
+  if (!slash) return null;
+  const first = Number(slash[1]);
+  const second = Number(slash[2]);
+  if (first === second || first > 12 || second > 12) return null;
+  return `"${input.trim()}" was read month first, as ${parseUsDate(input)}. Set the file's date order if the day comes first.`;
 }
 
 export function dayBefore(isoDate: string): string {
@@ -281,33 +330,45 @@ export interface CoercedValue {
   golden_value_numeric: number | null;
   golden_value_date: string | null;
   raw_value: string;
+  /** Set when no format was given and the text could have meant something else. The value is still read. */
+  ambiguous?: string;
 }
 
-export function coerceAttributeValue(raw: string, dataType: string): CoercedValue | { error: string } | null {
+/**
+ * Reads a raw value as an attribute of the given type. With a format, numbers
+ * and dates are read by it. Without one, US style is assumed and a value that
+ * could be read both ways says so in `ambiguous`.
+ */
+export function coerceAttributeValue(raw: string, dataType: string, format?: ValueFormat): CoercedValue | { error: string } | null {
   const text = raw.trim();
   if (!text) return null;
   if (NUMERIC_TYPES.has(dataType)) {
     if (isBlankToken(text)) return null;
     const percent = text.endsWith('%');
-    const parsed = parseNumber(percent ? text.slice(0, -1) : text);
-    if (parsed === null) return { error: `"${text}" is not a number` };
+    const body = percent ? text.slice(0, -1) : text;
+    const parsed = parseNumber(body, format?.decimal);
+    if (parsed === null) return { error: `"${text}" is not a number${format?.decimal ? ` with "${format.decimal}" as the decimal mark` : ''}` };
     const value = percent ? parsed / 100 : parsed;
+    const ambiguous = format?.decimal ? null : numberAmbiguity(body);
     return {
       golden_value: String(value),
       golden_value_numeric: value,
       golden_value_date: null,
       raw_value: text,
+      ...(ambiguous ? { ambiguous } : {}),
     };
   }
   if (dataType === 'DATE') {
     if (isBlankToken(text)) return null;
-    const iso = parseUsDate(text);
+    const iso = parseUsDate(text, format?.dateOrder);
     if (!iso) return { error: `"${text}" is not a date` };
+    const ambiguous = format?.dateOrder ? null : dateAmbiguity(text);
     return {
       golden_value: iso,
       golden_value_numeric: null,
       golden_value_date: iso,
       raw_value: text,
+      ...(ambiguous ? { ambiguous } : {}),
     };
   }
   return {

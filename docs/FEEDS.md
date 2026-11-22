@@ -78,6 +78,14 @@ For a signature map both come to the same thing: the file's headers are not the 
 
 A poll with a file that needs review, or that failed, ends as a failed run so it is seen in Jobs. Files that loaded in the same poll stay loaded.
 
+### Numbers, dates and file size
+
+A map may say how its file writes numbers and dates, in `valueFormat` on the saved map: `decimal` is `.` (1,234.56) or `,` (1.234,56), and `dateOrder` is `MDY` (03/04/2025 is March 4) or `DMY` (3 April). With it, every value is read that way, and one that does not fit is refused by name.
+
+Without it, values are read US style, and a value that could mean something else is still stored but listed with the load's problems: `1,500` (fifteen hundred, or 1.5 where the comma is the decimal), `1.500`, and a slash date whose two parts could both be the month. Set `valueFormat` on a map whose files are not US style.
+
+A workbook is checked before it is opened. One that would take more than 200 MB once unpacked, has more than 10,000 parts, or expands far more than a real spreadsheet does is refused, from email and from every upload (`packages/graphql/src/lib/spreadsheet-safety.ts`).
+
 ## Permissions
 
 `feed.manage` lets a person create and change connections and feeds for their client, including stored credentials. Client admins have it. Queuing a poll or a check also needs `job.manage`. Any member of a client can see its connections, feeds and received files, but never a credential.
