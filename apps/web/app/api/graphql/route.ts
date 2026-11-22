@@ -1,5 +1,5 @@
 import { createYoga } from 'graphql-yoga';
-import { createRequestContext, GRAPHQL_CORS, schema, useQueryLimits } from '@tapestrai/graphql';
+import { createRequestContext, GRAPHQL_CORS, maskGraphqlError, schema, useQueryLimits } from '@tapestrai/graphql';
 import { NextRequest } from 'next/server';
 import { accessTokenFromCookieHeader, supabaseProjectRef } from '@/lib/auth-token';
 // GraphQL route.
@@ -51,8 +51,8 @@ const yoga = createYoga({
   graphqlEndpoint: '/api/graphql',
   landingPage: false,
   graphiql: graphiqlOptions,
-  // Left off: many resolvers throw plain errors whose messages the pages show.
-  maskedErrors: false,
+  // Resolver messages reach the page; the database's own text does not (lib/mask-errors.ts).
+  maskedErrors: { maskError: (error: unknown, message: string) => maskGraphqlError(error, message) },
   // Depth and alias limits, checked before a query runs.
   plugins: [useQueryLimits()],
   cors: GRAPHQL_CORS,

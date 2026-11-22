@@ -8,15 +8,23 @@
  * "No row" from .single() (PGRST116) is not a failure: it comes back as null
  * data, the way .maybeSingle() reports it.
  */
+import { safeMessage } from './mask-errors';
+
 export interface DbResult<T> {
   data: T | null;
   error: { message: string; code?: string } | null;
   count?: number | null;
 }
 
+/**
+ * A refused database call. `message` is safe to show a person (lib/mask-errors.ts),
+ * since mutation payloads pass it on; `raw` keeps the database's own text for the log.
+ */
 export class DbError extends Error {
-  constructor(readonly code: string | undefined, message: string) {
-    super(message);
+  readonly raw: string;
+  constructor(readonly code: string | undefined, raw: string) {
+    super(safeMessage({ code }, raw) ?? 'The database refused the request.');
+    this.raw = raw;
   }
 }
 

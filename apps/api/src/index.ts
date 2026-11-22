@@ -1,5 +1,5 @@
 import { createYoga } from 'graphql-yoga';
-import { createRequestContext, GRAPHQL_CORS, schema, useQueryLimits } from '@tapestrai/graphql';
+import { createRequestContext, GRAPHQL_CORS, maskGraphqlError, schema, useQueryLimits } from '@tapestrai/graphql';
 
 export interface Env {
   SUPABASE_URL: string;
@@ -15,6 +15,8 @@ const yoga = createYoga<{ env: Env }>({
   // Depth and alias limits, checked before a query runs.
   plugins: [useQueryLimits()],
   cors: GRAPHQL_CORS,
+  // The same rule as the web route: resolver messages pass, the database's own text does not.
+  maskedErrors: { maskError: (error: unknown, message: string) => maskGraphqlError(error, message) },
   // The caller's own JWT, so row security applies. See packages/graphql/src/request-context.ts.
   context: ({ request, env }) =>
     createRequestContext(request, {
