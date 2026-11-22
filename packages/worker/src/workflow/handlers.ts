@@ -55,12 +55,20 @@ export function engineDeps(supabase: SupabaseClient, tools: WorkflowTools = work
 }
 
 export function workflowAdvanceHandler(deps: EngineDeps): JobHandler {
-  return async (run) => {
+  return async (run, job) => {
     const workflowRunId = typeof run.payload.workflowRunId === 'string' ? run.payload.workflowRunId : '';
     if (!workflowRunId) throw new JobError('The job has no workflowRunId.');
+    // The id comes from the job, and a job can be queued with any id. The run must be the job's client's own
+    // before it is locked or moved. It is read first because loading a run takes its lock. One answer whether
+    // the run is gone or is another client's, so a job cannot be used to learn which ids exist.
+    const owner = await deps.store.clientOf(workflowRunId);
+    if (!owner || owner !== run.clientId) throw new JobError('This client has no workflow run with that id.');
     try {
       // The job's id is the lock owner, so the same job claimed again after a crash takes its own lock back.
-      const result = await advanceRun(workflowRunId, run.id, deps);
+      // That also lets a copy of this job that lost its claim through the lock, so the engine is told when the claim goes.
+      const result = await advanceRun(workflowRunId, run.id, deps, job?.signal);
+      // Stopped because the claim was lost: there is no outcome of this job's to report.
+      job?.signal.throwIfAborted();
       return { workflowRunId, ...result };
     } catch (error) {
       // Held by another job: come back later. Anything else here is the store

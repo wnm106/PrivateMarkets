@@ -46,6 +46,11 @@ for path in $(ls "$migrations"/*.sql | sort); do
   fi
   how="${mode[$file]:-clean}"
   src="$path"
+  if [[ "$how" == patched* ]]; then
+    # A fixed copy for a fresh database; production keeps the file as it ran.
+    src="$here/patches/$file"
+    [[ -f "$src" ]] || { echo "FAIL  $file: legacy.txt says patched, but patches/$file is missing"; failed=1; continue; }
+  fi
   if [[ "$how" == views* ]]; then
     sed -E 's/CREATE OR REPLACE VIEW ([A-Za-z_."]+)/DROP VIEW IF EXISTS \1 CASCADE; CREATE VIEW \1/I' "$path" > "$logs/$file.views.sql"
     src="$logs/$file.views.sql"

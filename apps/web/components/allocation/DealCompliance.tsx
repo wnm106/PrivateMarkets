@@ -235,7 +235,7 @@ const SCORE = `
   }
 `;
 
-type ScoreAdjustment = { fundId: string; trancheId: string; type: string; amount?: number | null; reason?: string | null; note?: string | null };
+type ScoreAdjustment = { fundId: string; trancheId: string; type: string; amount?: number | null; reason?: string | null; note?: string | null; saved?: boolean };
 
 const savedScoreRequests = new Map<string, ReturnType<typeof graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>>>();
 
@@ -282,6 +282,8 @@ export function useDealComplianceScore({
         amount: item.amount,
         reasonCode: item.reason,
         note: item.note,
+        // A saved amount is not a what-if override. Scoring never changes the saved allocation.
+        saved: item.saved === true ? true : undefined,
       }));
       const savedKey = `${dealId}|${asOfDate || ''}|saved`;
       const request = live

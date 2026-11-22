@@ -51,6 +51,10 @@ function fakeSupabase(options: {
       return {
         rpc(fn: string, args: Record<string, any>) {
           calls.push({ fn, args });
+          if (name === 'golden_master' && fn === 'write_value') {
+            inserted.push({ ...args.p_value, valid_from: args.p_valid_from, valid_to: args.p_valid_to, source_id: args.p_source_id, entity_id: args.p_entity_id });
+            return Promise.resolve({ data: `v${inserted.length}`, error: null });
+          }
           if (name === 'golden_master') {
             const rows = (args.p_entity_ids as string[]).flatMap((entityId) => {
               const value = options.current?.[entityId];
@@ -131,11 +135,12 @@ describe('submitTapOverrides', () => {
     ], 'Q3 administrator pack', 'user-1');
     // The last row matches today's value, but the 2026-09-30 entry would carry over to it, so it is saved too.
     expect(plans.map((plan) => plan.status)).toEqual(['SAVED', 'SAVED', 'SAVED']);
-    expect(supabase.inserted.map((row) => [row.golden_value, row.valid_from, row.source_id, row.override_reason, row.created_by, row.precedence_rank]))
+    // Written through golden_master.write_value, which stamps the caller from the session.
+    expect(supabase.inserted.map((row) => [row.golden_value, row.valid_from, row.source_id, row.override_reason, row.precedence_rank]))
       .toEqual([
-        ['1100', '2026-09-30', 'manual', 'Q3 administrator pack', 'user-1', 1],
-        ['1150', '2026-12-31', 'manual', 'Q4 pack', 'user-1', 1],
-        ['1000', '2027-03-31', 'manual', 'Q3 administrator pack', 'user-1', 1],
+        ['1100', '2026-09-30', 'manual', 'Q3 administrator pack', 1],
+        ['1150', '2026-12-31', 'manual', 'Q4 pack', 1],
+        ['1000', '2027-03-31', 'manual', 'Q3 administrator pack', 1],
       ]);
     expect(supabase.refreshed).toEqual(['e-fund']);
   });

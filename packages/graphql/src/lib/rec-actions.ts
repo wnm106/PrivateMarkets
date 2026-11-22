@@ -15,11 +15,9 @@ import type { AdjustmentSide, CashRec, CashRuleKind } from './cash-rec';
 import type { Decision } from './fund-rec';
 import { loadFundRec } from './fund-rec-store';
 import { recOutcome } from './rec-digest';
+import { writeGoldenValue } from './golden-write';
 
 type FundRec = Awaited<ReturnType<typeof loadFundRec>>;
-
-const OPEN_END = '9999-12-31';
-const OPEN_SYSTEM = '9999-12-31 23:59:59';
 
 const stamp = (periodEnd: string) => periodEnd.replace(/-/g, '');
 const slug = (value: string) => value.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
@@ -118,34 +116,30 @@ async function createRecord(supabase: SupabaseClient, input: NewRecord): Promise
 }
 
 /** Replaces the manual value of each attribute from `asOf`. Earlier values stay in history. */
-async function setAttributes(supabase: SupabaseClient, entityId: string, attributes: Record<string, string>, asOf: string): Promise<void> {
+export async function setAttributes(supabase: SupabaseClient, entityId: string, attributes: Record<string, string>, asOf: string): Promise<void> {
   const entries = Object.entries(attributes).filter(([, value]) => value !== '');
   if (entries.length === 0) return;
   const defs = await attributeDefs(supabase, entries.map(([code]) => code));
   const sourceId = await manualSourceId(supabase);
   for (const [code, value] of entries) {
     const def = defs.get(code)!;
-    const closed = await supabase
-      .from('entity_attribute_values')
-      .update({ valid_to: asOf, system_to: new Date().toISOString() })
-      .eq('entity_id', entityId)
-      .eq('attribute_id', def.id)
-      .eq('source_id', sourceId)
-      .eq('system_to', OPEN_SYSTEM);
-    if (closed.error) fail(closed.error, `${code} could not be saved.`);
-    const { error } = await supabase.from('entity_attribute_values').insert({
-      entity_id: entityId,
-      attribute_id: def.id,
-      source_id: sourceId,
-      golden_value: value,
-      golden_value_numeric: numericOf(value),
-      valid_from: asOf,
-      valid_to: OPEN_END,
-      system_to: OPEN_SYSTEM,
-      precedence_rank: 1,
-      is_manual_override: true,
-    });
-    if (error) fail(error, `${code} could not be saved.`);
+    // write_value keeps the value before `asOf`, and what was known before now, as they were.
+    try {
+      await writeGoldenValue(supabase, {
+        entityId,
+        attributeId: def.id,
+        sourceId,
+        validFrom: asOf,
+        value: {
+          golden_value: value,
+          golden_value_numeric: numericOf(value),
+          precedence_rank: 1,
+          is_manual_override: true,
+        },
+      });
+    } catch (error) {
+      fail(error as { message?: string }, `${code} could not be saved.`);
+    }
   }
 }
 

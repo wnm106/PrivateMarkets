@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { trackImportAttribute } from '@/lib/feeds/import-instances';
-import { canChangeSchema, feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
+import { canChangeSchema, requireFeedWriter } from '@/lib/feeds/require-user';
 
 export const dynamic = 'force-dynamic';
 
 /** Add a field to the catalog for a column that has nowhere to live. */
 export async function POST(request: NextRequest) {
-  const user = await requireFeedUser();
-  if (!user) return NextResponse.json({ error: 'Sign in to load a file' }, { status: 401 });
-  const clientId = await feedClientId();
-  if (!clientId) return NextResponse.json({ error: 'Choose a client before loading the file' }, { status: 400 });
+  const who = await requireFeedWriter();
+  if ('error' in who) return who.error;
+  const { clientId } = who;
   if (!(await canChangeSchema(clientId))) {
     return NextResponse.json({ error: 'Adding a field needs permission to change records for this client.' }, { status: 403 });
   }

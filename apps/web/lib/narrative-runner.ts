@@ -84,8 +84,8 @@ let registry: ToolRegistry | null = null;
 /** The read-only tool set a section may call. Built once; each call runs as the caller. */
 function agentRegistry(): ToolRegistry {
   if (registry) return registry;
-  // The registry's own client is unused: every call passes the caller's client.
-  const r = new ToolRegistry(null as never);
+  // The registry holds no client: every call passes the caller's client.
+  const r = new ToolRegistry();
   registerDomainTools(r);
   registerLineageTools(r);
   registerDQTools(r);

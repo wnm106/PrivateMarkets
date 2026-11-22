@@ -100,6 +100,8 @@ export type RunPatch = {
 export type ActorType = 'SYSTEM' | 'AGENT' | 'USER';
 
 export interface WorkflowStore {
+  /** The client a run belongs to, read without taking the run. Null when there is no such run. */
+  clientOf(runId: string): Promise<string | null>;
   /** The run, held for `owner`. 'busy' while another job holds it, 'done' when it has finished, null when there is none. */
   load(runId: string, owner: string): Promise<LoadedRun | 'busy' | 'done' | null>;
   /** False when `owner` no longer holds the run, or the run was cancelled. */
@@ -196,6 +198,8 @@ export interface AgentRequest {
   agent?: AgentDef | null;
   /** The workflow run, so usage adds up what the run cost. */
   runId?: string;
+  /** Aborts when the job running the step has lost its claim. The step stops before it next asks the model. */
+  signal?: AbortSignal;
 }
 
 export interface AgentResult {
@@ -273,6 +277,8 @@ interface StepContext {
   owner: string;
   deps: EngineDeps;
   step: StepRow | undefined;
+  /** Aborts when the job advancing the run has lost its claim. */
+  signal?: AbortSignal;
 }
 
 async function runTool(node: WorkflowNode, ctx: StepContext): Promise<StepOutcome> {
@@ -281,7 +287,7 @@ async function runTool(node: WorkflowNode, ctx: StepContext): Promise<StepOutcom
   const write = !isReadTool(tool);
   if (write && node.config.allowWrite !== true) throw new Error(`"${tool}" changes data and this step is not allowed to.`);
   const actor: Actor = { userId: ctx.run.startedBy, clientId: ctx.run.clientId };
-  const output = clampOutput(await ctx.deps.tools.run(tool, args, actor, write ? 'write' : 'read'));
+  const output = clampOutput(await ctx.deps.tools.run(tool, args, actor, write ? 'write' : 'read', ctx.run.id));
   await ctx.deps.store.event(ctx.run.id, node.id, 'tool.called', 'SYSTEM', ctx.run.startedBy, `Ran ${tool}`, { tool, args });
   return { outcome: null, output };
 }
@@ -314,12 +320,15 @@ async function runAgent(node: WorkflowNode, ctx: StepContext): Promise<StepOutco
     scope: ctx.scope,
     actor,
     agent,
+    signal: ctx.signal,
     state: ctx.step?.state ?? null,
     checkpoint: async (state) => {
+      if (ctx.signal?.aborted) throw new Halted();
       if (!(await store.saveStep(ctx.run.id, ctx.owner, node.id, { state }))) throw new Halted();
     },
     event: (type, summary, detail) => store.event(ctx.run.id, node.id, type, 'AGENT', null, summary, detail),
   });
+  if (ctx.signal?.aborted) throw new Halted();
 
   // Required fields are checked here, not left to the agent to remember.
   const items: ProposalItem[] = [];
@@ -459,6 +468,8 @@ async function runApply(node: WorkflowNode, ctx: StepContext): Promise<StepOutco
     } else if (!tools.names().has(item.tool)) {
       done[item.id] = { id: item.id, summary: item.summary, tool: item.tool, ok: false, error: `There is no tool called "${item.tool}".` };
     } else {
+      // The job lost its claim: the job that has the run now makes the changes that are left.
+      if (ctx.signal?.aborted) throw new Halted();
       // Marked before the call: after a crash mid-call the change is reported as
       // unconfirmed rather than silently made a second time.
       const pending = { ...done, [item.id]: { id: item.id, summary: item.summary, tool: item.tool, ok: false, error: 'The worker stopped while this change was being made. Check the record before applying it again.' } };
@@ -469,6 +480,9 @@ async function runApply(node: WorkflowNode, ctx: StepContext): Promise<StepOutco
       } catch (error) {
         done[item.id] = { id: item.id, summary: item.summary, tool: item.tool, ok: false, error: message(error) };
       }
+      // Lost while the change was being made. The list of changes done now belongs to the job that has the run,
+      // and writing this copy's list over it could have a change made twice. The mark saved above stands.
+      if (ctx.signal?.aborted) throw new Halted();
     }
     const outcome = done[item.id];
     await store.event(
@@ -716,8 +730,13 @@ function readPaths(value: unknown): Paths | null {
  * still running can reach it. The run waits when every path left is waiting,
  * and finishes when no path is left and one reached End.
  */
-export async function advanceRun(runId: string, owner: string, deps: EngineDeps): Promise<AdvanceResult> {
+export async function advanceRun(runId: string, owner: string, deps: EngineDeps, signal?: AbortSignal): Promise<AdvanceResult> {
   const { store } = deps;
+  // `signal` aborts when the job advancing the run has lost its claim. The job is then claimed again, and
+  // because the lock owner is the job's id, the second copy takes the same lock. So from that moment this
+  // copy runs no further step and writes nothing more, not even the lock's release.
+  const lost = () => signal?.aborted === true;
+  if (lost()) return { status: 'CANCELLED', steps: 0 };
   const loaded = await store.load(runId, owner);
   if (loaded === null) throw new Error(`Workflow run ${runId} was not found.`);
   if (loaded === 'done') return { status: 'DONE', steps: 0 };
@@ -773,6 +792,7 @@ export async function advanceRun(runId: string, owner: string, deps: EngineDeps)
   };
 
   for (;;) {
+    if (lost()) return { status: 'CANCELLED', steps: ran };
     if (paths.active.length === 0) {
       releaseJoins();
       if (paths.active.length === 0) {
@@ -812,14 +832,16 @@ export async function advanceRun(runId: string, owner: string, deps: EngineDeps)
 
       let result: StepOutcome;
       try {
-        result = await runNode(node, { run, graph, scope, owner, deps, step });
+        if (lost()) throw new Halted();
+        result = await runNode(node, { run, graph, scope, owner, deps, step, signal });
       } catch (error) {
-        if (error instanceof Halted) return { status: 'CANCELLED', steps: ran };
+        if (error instanceof Halted || lost()) return { status: 'CANCELLED', steps: ran };
         const text = message(error);
         await store.saveStep(runId, owner, node.id, { status: 'FAILED', error: text });
         return fail(node.id, `"${node.label}" failed. ${text}`);
       }
 
+      if (lost()) return { status: 'CANCELLED', steps: ran };
       if (result.wait) {
         await store.saveStep(runId, owner, node.id, { status: 'WAITING' });
         waiting.push(node.id);

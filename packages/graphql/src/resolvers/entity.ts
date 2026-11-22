@@ -7,6 +7,7 @@ import { templateSide } from '../lib/template-inheritance';
 import { dirtyAttributeCodes } from './calculation';
 import { ensureAttributeSection } from './metadata';
 import { resolveEntityClientId, resolveSchemaClientId, withClientNames } from './schema-scope';
+import { OPEN_SYSTEM_TO, writeGoldenValue } from '../lib/golden-write';
 
 function normalizePrecedenceChain(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -149,6 +150,84 @@ async function presentDomain(context: Context, row: any) {
   const group = mapGroup(groups.find((item: any) => item.id === row.group_id));
   const [presented] = await withClientNames(context, [mapDomainRow(row, group)]);
   return presented;
+}
+
+type LinkInput = {
+  parentEntityId?: string;
+  childEntityId?: string;
+  relationshipType: string;
+  relationshipCode: string;
+  isPrimary?: boolean | null;
+  validFrom: string;
+};
+
+/**
+ * Makes one side of a record's current links match `wanted`. `parent` means the
+ * record is the child of each link. A wanted link that is already current is
+ * left alone. A current link that is no longer wanted ends as current knowledge
+ * (system_to = now) and keeps its valid dates, so earlier knowledge dates still
+ * see it. A new link is added. A link whose only change is its primary flag or
+ * type is updated in place: links are unique on (parent, child, code, valid_from)
+ * whatever their system time, so it cannot be ended and written again.
+ */
+export async function replaceLinks(context: Context, entityId: string, side: 'parent' | 'child', wanted: LinkInput[]) {
+  const own = side === 'parent' ? 'child_entity_id' : 'parent_entity_id';
+  const other = side === 'parent' ? 'parent_entity_id' : 'child_entity_id';
+  const { data: current, error } = await context.supabase
+    .from('entity_relationships')
+    .select('id, parent_entity_id, child_entity_id, relationship_code, relationship_type, is_primary, valid_from')
+    .eq(own, entityId)
+    .eq('system_to', OPEN_SYSTEM_TO);
+  if (error) throw error;
+
+  const keyOf = (otherId: string, code: string, validFrom: string) => `${otherId}|${code}|${String(validFrom).slice(0, 10)}`;
+  const currentByKey = new Map((current || []).map((row: any) => [keyOf(row[other], row.relationship_code, row.valid_from), row]));
+  const rows = wanted.map((rel) => ({
+    parent_entity_id: side === 'parent' ? rel.parentEntityId : entityId,
+    child_entity_id: side === 'parent' ? entityId : rel.childEntityId,
+    relationship_type: rel.relationshipType,
+    relationship_code: rel.relationshipCode,
+    is_primary: rel.isPrimary ?? false,
+    valid_from: rel.validFrom,
+  }));
+  const wantedKeys = new Set(rows.map((row) => keyOf(String(row[other]), row.relationship_code, row.valid_from)));
+
+  for (const row of current || []) {
+    if (wantedKeys.has(keyOf((row as any)[other], row.relationship_code, row.valid_from))) continue;
+    const { data: ended, error: endError } = await context.supabase
+      .from('entity_relationships')
+      .update({ system_to: new Date().toISOString() })
+      .eq('id', row.id)
+      .eq('system_to', OPEN_SYSTEM_TO)
+      .select('id');
+    if (endError) throw endError;
+    if (!ended?.length) throw new Error('A link could not be ended. You may not edit one of the linked records.');
+  }
+
+  for (const row of rows) {
+    const existing = currentByKey.get(keyOf(String(row[other]), row.relationship_code, row.valid_from));
+    if (existing) {
+      if (existing.is_primary === row.is_primary && existing.relationship_type === row.relationship_type) continue;
+      // Ended and written again, so the link's earlier version stays in history.
+      const { data: changed, error: changeError } = await context.supabase
+        .schema('entity_instances')
+        .rpc('revise_relationship', {
+          p_id: existing.id,
+          p_is_primary: row.is_primary,
+          p_relationship_type: row.relationship_type,
+        });
+      if (changeError) throw changeError;
+      if (!changed) throw new Error('A link could not be changed. You may not edit one of the linked records.');
+      continue;
+    }
+    const { error: insertError } = await context.supabase.from('entity_relationships').insert(row);
+    if (insertError) {
+      if ((insertError as { code?: string }).code === '23505') {
+        throw new Error(`A ${row.relationship_code} link that started on ${row.valid_from} was ended before. Give the new link a different start date.`);
+      }
+      throw insertError;
+    }
+  }
 }
 
 export const entityResolvers = {
@@ -731,86 +810,29 @@ export const entityResolvers = {
                 ? String(input.asOfDate)
                 : new Date().toISOString().split('T')[0];
 
-              // Replace only this source. The fund administrator and the internal amount stay beside each other.
-              const { error: closeError } = await context.supabase
-                .from('entity_attribute_values')
-                .update({
-                  valid_to: asOf,
-                  system_to: new Date().toISOString(),
-                })
-                .eq('entity_id', input.id)
-                .eq('attribute_id', attr.id)
-                .eq('source_id', source.id)
-                .eq('system_to', '9999-12-31 23:59:59');
-              if (closeError) throw closeError;
-
-              // Insert new record
-              const { error: insertError } = await context.supabase.from('entity_attribute_values').insert({
-                entity_id: input.id,
-                attribute_id: attr.id,
-                source_id: source.id,
-                golden_value: text,
-                golden_value_numeric: numeric,
-                valid_from: asOf,
-                valid_to: '9999-12-31',
-                system_to: '9999-12-31 23:59:59',
-                precedence_rank: manual ? 1 : (source.precedence_rank ?? 100),
-                is_manual_override: manual,
-                created_by: userId,
+              // Replace only this source, from the viewed date until its next later value.
+              // The fund administrator and the internal amount stay beside each other, and
+              // earlier dates and earlier knowledge dates keep their values.
+              await writeGoldenValue(context.supabase, {
+                entityId: input.id,
+                attributeId: attr.id,
+                sourceId: source.id,
+                validFrom: asOf,
+                value: {
+                  golden_value: text,
+                  golden_value_numeric: numeric,
+                  precedence_rank: manual ? 1 : (source.precedence_rank ?? 100),
+                  is_manual_override: manual,
+                },
               });
-              if (insertError) throw insertError;
             }
           }
         }
         
-        // Update relationships if provided
-        if (input.parentRelationships) {
-          // Close existing parent relationships
-          await context.supabase
-            .from('entity_relationships')
-            .update({
-              valid_to: new Date().toISOString().split('T')[0],
-              system_to: new Date().toISOString(),
-            })
-            .eq('child_entity_id', input.id)
-            .eq('system_to', '9999-12-31 23:59:59');
-          
-          // Insert new relationships
-          for (const rel of input.parentRelationships) {
-            await context.supabase.from('entity_relationships').insert({
-              parent_entity_id: rel.parentEntityId,
-              child_entity_id: input.id,
-              relationship_type: rel.relationshipType,
-              relationship_code: rel.relationshipCode,
-              is_primary: rel.isPrimary ?? false,
-              valid_from: rel.validFrom,
-            });
-          }
-        }
-        
-        if (input.childRelationships) {
-          // Close existing child relationships
-          await context.supabase
-            .from('entity_relationships')
-            .update({
-              valid_to: new Date().toISOString().split('T')[0],
-              system_to: new Date().toISOString(),
-            })
-            .eq('parent_entity_id', input.id)
-            .eq('system_to', '9999-12-31 23:59:59');
-          
-          // Insert new relationships
-          for (const rel of input.childRelationships) {
-            await context.supabase.from('entity_relationships').insert({
-              parent_entity_id: input.id,
-              child_entity_id: rel.childEntityId,
-              relationship_type: rel.relationshipType,
-              relationship_code: rel.relationshipCode,
-              is_primary: rel.isPrimary ?? false,
-              valid_from: rel.validFrom,
-            });
-          }
-        }
+        // Links are history too: one already current is kept, one no longer wanted
+        // ends as current knowledge, and a new one is added.
+        if (input.parentRelationships) await replaceLinks(context, input.id, 'parent', input.parentRelationships);
+        if (input.childRelationships) await replaceLinks(context, input.id, 'child', input.childRelationships);
         
         // Fetch the updated entity from the view
         const { data: updatedEntity } = await context.supabase
@@ -911,18 +933,18 @@ export const entityResolvers = {
       const { input } = args;
       
       try {
+        // Ended and written again, so the link's earlier version stays in history.
         const { data, error } = await context.supabase
-          .from('entity_relationships')
-          .update({
-            is_primary: input.isPrimary,
-            valid_from: input.validFrom,
-            valid_to: input.validTo,
-          })
-          .eq('id', input.id)
-          .select()
-          .single();
-        
+          .schema('entity_instances')
+          .rpc('revise_relationship', {
+            p_id: input.id,
+            p_is_primary: input.isPrimary ?? null,
+            p_valid_from: input.validFrom ?? null,
+            p_valid_to: input.validTo ?? null,
+          });
+
         if (error) throw error;
+        if (!data) throw new Error('That link was not found, or you may not edit it.');
         
         // Fetch related entities
         const { data: parentEntity } = await context.supabase
@@ -966,12 +988,17 @@ export const entityResolvers = {
       context: Context
     ) => {
       try {
-        const { error } = await context.supabase
+        // The link ends as current knowledge rather than being deleted, so earlier
+        // knowledge dates still see it. Its valid dates are left as recorded.
+        const { data, error } = await context.supabase
           .from('entity_relationships')
-          .delete()
-          .eq('id', args.id);
+          .update({ system_to: new Date().toISOString() })
+          .eq('id', args.id)
+          .eq('system_to', OPEN_SYSTEM_TO)
+          .select('id');
         
         if (error) throw error;
+        if (!data?.length) throw new Error('No current link was ended. It may have ended already, or you may not edit these records.');
         
         return { success: true, errors: [] };
       } catch (error: any) {

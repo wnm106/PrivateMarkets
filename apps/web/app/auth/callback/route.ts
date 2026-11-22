@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseProjectRef } from '@/lib/auth-token';
-import { NEXT_PATH_COOKIE, safeNextPath } from '@/lib/safe-next-path';
+import { NEXT_PATH_COOKIE, nextPathFromCookie, safeNextPath } from '@/lib/safe-next-path';
 import { EXCEL_CONNECT_PATH, SESSION_STORE_COOKIE, sessionCookieName, sessionStoreFrom } from '@/lib/session-store';
 
 /**
@@ -17,9 +17,10 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get('code');
   const remembered = request.cookies.get(NEXT_PATH_COOKIE)?.value;
   const store = sessionStoreFrom(request.cookies.get(SESSION_STORE_COOKIE)?.value);
+  const requested = searchParams.get('redirectedFrom');
   const redirectedFrom = store === 'excel'
     ? EXCEL_CONNECT_PATH
-    : safeNextPath(searchParams.get('redirectedFrom') || (remembered ? decodeURIComponent(remembered) : null));
+    : requested ? safeNextPath(requested) : nextPathFromCookie(remembered);
   const cookieName = sessionCookieName(store, supabaseProjectRef());
 
   if (!code) {

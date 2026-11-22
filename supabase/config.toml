@@ -5,7 +5,8 @@ project_id = "meridian-mdm"
 [api]
 enabled = true
 port = 54321
-schemas = ["public", "metadata_register", "entity_instances", "golden_master", "position_master", "data_quality", "compliance", "read_projections", "tenancy"]
+# position_master was dropped by 20261031140000; an exposed schema that does not exist only causes errors.
+schemas = ["public", "metadata_register", "entity_instances", "golden_master", "data_quality", "compliance", "read_projections", "tenancy"]
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
 
@@ -44,7 +45,21 @@ enable_anonymous_sign_ins = false
 [auth.email]
 enable_signup = true
 double_confirm_changes = true
-enable_confirmations = false
+# An address must be confirmed before the session starts. Joining a client by
+# email domain happens only on a confirmed address (tenancy.auto_join_client),
+# so with confirmations off a sign-up never joins a client by domain.
+# Set the same under Authentication -> Providers -> Email on the hosted project.
+enable_confirmations = true
+secure_password_change = true
+
+# Second factor. Clients that require it (client_auth_requirements.mfa_required)
+# and platform staff are held to it by the database, not only by the app.
+[auth.mfa]
+max_enrolled_factors = 10
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
 
 [auth.external.google]
 enabled = false
@@ -60,6 +75,8 @@ enabled = true
 client_id = "env(AZURE_CLIENT_ID)"
 secret = "env(AZURE_CLIENT_SECRET)"
 # "common" allows sign-in from any Azure AD tenant (required for multi-tenant clients).
+# A sign-in joins a client only when its directory (tid) is the one registered
+# for that client; see tenancy.auto_join_client.
 url = "https://login.microsoftonline.com/common/v2.0"
 redirect_uri = ""
 

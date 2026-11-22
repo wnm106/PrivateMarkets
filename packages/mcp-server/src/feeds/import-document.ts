@@ -311,6 +311,11 @@ export async function confirmImportUnderstanding(
     const types = await documentTypes(db, clientId);
     const type = input.documentTypeCode ? types.find((item) => item.code === String(input.documentTypeCode).toUpperCase()) : null;
     if (input.documentTypeCode && !type) throw new Error('Choose a document type from the list.');
+    if (input.entityId) {
+      // This runs with the service role, so the record the caller names is checked here: it must be one of this client's.
+      const owned = await db.schema('entity_instances').from('master_entities').select('id').eq('id', input.entityId).eq('client_id', clientId).maybeSingle();
+      if (owned.error || !owned.data) throw new Error('Choose one of this client\'s records for the file.');
+    }
     const updated = await db.rpc('document_update', {
       p_id: file.document_id,
       p_title: null,

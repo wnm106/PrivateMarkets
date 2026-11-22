@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { EntityMatchIndex, identifierCatalog, type IdentifierCatalog, type IdentifierTerm, type MatchEntity, type ResolveHit } from './entity-match';
+import { EntityMatchIndex, codeUnavailableMessage, identifierCatalog, type IdentifierCatalog, type IdentifierTerm, type MatchEntity, type ResolveHit } from './entity-match';
 import { chooseRelationship, dependencyLoadOrder, dependencyLoadWaves, relationshipEndpoints, type RelationshipTypeRow } from './load-order';
 import { readImportFile } from './intake';
 import { parseTabularFile } from './parse-table';
@@ -524,6 +524,31 @@ async function loadIdentifierCatalog(db: SupabaseClient, domainCode: string): Pr
   return { catalog, attributeIds };
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Of these record ids, the ones that belong to the client. An id of another
+ * client's record is dropped, and so is one that does not exist. The loader
+ * writes with the service role, so this is what keeps a write inside the client.
+ */
+async function clientEntityIds(db: SupabaseClient, clientId: string, ids: readonly string[]): Promise<Set<string>> {
+  const wanted = [...new Set(ids.filter((id) => UUID.test(id)))];
+  const own = new Set<string>();
+  for (let offset = 0; offset < wanted.length; offset += 150) {
+    const found = await db.schema('entity_instances').from('master_entities')
+      .select('id')
+      .eq('client_id', clientId)
+      .in('id', wanted.slice(offset, offset + 150));
+    if (found.error) throw new Error(found.error.message);
+    for (const row of found.data || []) own.add(row.id);
+  }
+  return own;
+}
+
+/**
+ * The records a file row may match: this client's, and no one else's. The
+ * loader reads with the service role, so every read here names the client.
+ */
 async function loadEntityMatchIndex(
   db: SupabaseClient,
   domainCode: string,
@@ -536,15 +561,26 @@ async function loadEntityMatchIndex(
   const domainRows = await pageRows((from, to) => db.schema('entity_instances').from('master_entities')
     .select('id, entity_code, entity_name, domain_code, client_id, is_active, merged_into_id')
     .eq('domain_code', domainCode)
+    .eq('client_id', clientId)
     .range(from, to));
   const codeRows: any[] = [];
   for (let offset = 0; offset < codes.length; offset += 100) {
     const chunk = codes.slice(offset, offset + 100);
+    // This client's records of any type, so a code it already uses for another type is refused by name.
     const existing = await db.schema('entity_instances').from('master_entities')
       .select('id, entity_code, entity_name, domain_code, client_id, is_active, merged_into_id')
+      .eq('client_id', clientId)
       .in('entity_code', chunk);
     if (existing.error) throw new Error(existing.error.message);
     codeRows.push(...(existing.data || []));
+    // Codes are unique across every client. One held elsewhere cannot be created here, and the
+    // code is all that is read about it: no id, no name, nothing that can reach the caller.
+    const taken = await db.schema('entity_instances').from('master_entities')
+      .select('entity_code')
+      .neq('client_id', clientId)
+      .in('entity_code', chunk);
+    if (taken.error) throw new Error(taken.error.message);
+    for (const row of taken.data || []) index.reserveCode(String(row.entity_code));
   }
 
   const byId = new Map<string, any>();
@@ -676,7 +712,7 @@ function sharedIdentifiers(entity: EntityDraft, catalog: IdentifierCatalog): { a
   return found;
 }
 
-function resolutionFrom(domainCode: string, entity: EntityDraft, hit: Extract<ResolveHit, { kind: 'ambiguous' }>, asOf: string, catalog: IdentifierCatalog): EntityResolution {
+function resolutionFrom(domainCode: string, entity: EntityDraft, hit: Extract<ResolveHit, { kind: 'ambiguous' }>, asOf: string, catalog: IdentifierCatalog, clientId: string): EntityResolution {
   return {
     domainCode,
     fileCode: entity.code,
@@ -684,38 +720,41 @@ function resolutionFrom(domainCode: string, entity: EntityDraft, hit: Extract<Re
     asOf: entity.asOf || asOf,
     via: hit.via,
     message: hit.message,
-    candidates: hit.entities.filter((item) => !item.provisional).map((item) => ({ id: item.id, code: item.code, name: item.name })),
+    // These go back to the person loading the file, so only their own client's records are named.
+    candidates: hit.entities.filter((item) => !item.provisional && item.clientId === clientId).map((item) => ({ id: item.id, code: item.code, name: item.name })),
     identifiers: sharedIdentifiers(entity, catalog),
   };
 }
 
-async function availableEntityCode(db: SupabaseClient, code: string): Promise<string> {
-  const base = code.slice(0, 80);
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const candidate = (attempt === 0 ? base : `${base}-${attempt + 1}`).slice(0, 100);
-    const existing = await db.schema('entity_instances').from('master_entities').select('id').eq('entity_code', candidate).maybeSingle();
-    if (existing.error) throw new Error(existing.error.message);
-    if (!existing.data) return candidate;
-  }
-  return `${base}-${Date.now()}`.slice(0, 100);
+/** A unique-key failure on the record code. The database says which key, which is more than the caller should learn. */
+function isDuplicateCode(error: { code?: string; message?: string } | null | undefined): boolean {
+  return Boolean(error) && (error?.code === '23505' || /duplicate key|entity_code/i.test(error?.message || ''));
 }
 
+/**
+ * Close identifier values on records the file row was told apart from. Only
+ * records of this client are touched, whatever ids are passed in.
+ */
 async function cleanseDuplicateIdentifiers(
   db: SupabaseClient,
+  clientId: string,
   entityIds: string[],
   entity: EntityDraft,
   catalog: IdentifierCatalog,
   attributeIds: Map<string, string>,
   asOf: string,
+  actor: { updated_by?: string } = {},
 ) {
   const shared = sharedIdentifiers(entity, catalog);
   if (!shared.length || !entityIds.length) return;
+  const own = await clientEntityIds(db, clientId, entityIds);
+  if (own.size === 0) return;
   const now = new Date().toISOString();
   for (const identifier of shared) {
     const attributeId = attributeIds.get(identifier.attributeCode);
     if (!attributeId) continue;
     const wanted = compactIdentifier(identifier.value);
-    for (const entityId of entityIds) {
+    for (const entityId of own) {
       const rows = await db.schema('golden_master').from('entity_attribute_values')
         .select('*')
         .eq('entity_id', entityId)
@@ -727,7 +766,7 @@ async function cleanseDuplicateIdentifiers(
         const started = String(row.valid_from).slice(0, 10);
         const ended = String(row.valid_to).slice(0, 10);
         if (ended < asOf || started > asOf) continue;
-        const close = await db.schema('golden_master').from('entity_attribute_values').update({ system_to: now }).eq('id', row.id);
+        const close = await db.schema('golden_master').from('entity_attribute_values').update({ system_to: now, ...actor }).eq('id', row.id);
         if (close.error) throw new Error(close.error.message);
         if (started >= asOf) continue;
         const historyEnd = dayBefore(asOf);
@@ -739,6 +778,7 @@ async function cleanseDuplicateIdentifiers(
         copy.valid_to = historyEnd;
         copy.system_from = now;
         copy.system_to = OPEN_SYSTEM_TO;
+        Object.assign(copy, actor);
         const insert = await db.schema('golden_master').from('entity_attribute_values').insert(copy);
         if (insert.error) throw new Error(insert.error.message);
       }
@@ -791,6 +831,11 @@ export interface LoadOptions {
   recorder?: LoadRecorder;
   /** Stamped on every value, link and record a real load writes. */
   batchId?: string;
+  /**
+   * The signed-in user the load runs for. Recorded as who created or changed
+   * each record and value. Left out for an unattended feed, which has no person.
+   */
+  actorId?: string | null;
 }
 
 export async function executeFeed(map: FeedMap, fileName: string, bytes: Buffer, asOfDate: string, client?: SupabaseClient, clientId?: string): Promise<FeedLoadResult> {
@@ -812,6 +857,9 @@ export async function executeParsedFeed(
   const decisions = options.decisions;
   const recorder = options.recorder;
   const batchTag: Record<string, string> = !dry && options.batchId ? { load_batch_id: options.batchId } : {};
+  const actorId = !dry && options.actorId && UUID.test(options.actorId) ? options.actorId : null;
+  const createdBy: { created_by?: string; updated_by?: string } = actorId ? { created_by: actorId, updated_by: actorId } : {};
+  const updatedBy: { updated_by?: string } = actorId ? { updated_by: actorId } : {};
   if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
     throw new Error('As-of date must be YYYY-MM-DD');
   }
@@ -858,8 +906,9 @@ export async function executeParsedFeed(
   const externalIds = new Map<string, Map<string, string>>();
   for (const [domainCode, codes] of externalByDomain) {
     const list = [...codes];
+    // A parent named by code is looked for among this client's records only.
     const found = list.length
-      ? await db.schema('entity_instances').from('master_entities').select('id, entity_code').eq('domain_code', domainCode).in('entity_code', list)
+      ? await db.schema('entity_instances').from('master_entities').select('id, entity_code').eq('domain_code', domainCode).eq('client_id', catalog.clientId).in('entity_code', list)
       : { data: [], error: null };
     if (found.error) throw new Error(found.error.message);
     externalIds.set(domainCode, new Map((found.data || []).map((row: any) => [row.entity_code, row.id])));
@@ -879,6 +928,13 @@ export async function executeParsedFeed(
   const receivedAt = new Date().toISOString();
   const resolutions: EntityResolution[] = [];
 
+  // A "map" decision names the stored record a file row is. The id comes from the caller, so it is
+  // checked against the database before anything else: it must be a record of this client.
+  const mapTargets = (decisions || []).filter((item) => item.action === 'map' && item.entityId).map((item) => String(item.entityId));
+  const mappable = mapTargets.length ? await clientEntityIds(db, catalog.clientId, mapTargets) : new Set<string>();
+  const chosenFor = (hit: Extract<ResolveHit, { kind: 'ambiguous' }>, decision: EntityResolutionDecision) =>
+    hit.entities.find((item) => item.id === decision.entityId && item.clientId === catalog.clientId && mappable.has(item.id));
+
   for (const domainCode of order) {
     const domain = domainByCode.get(domainCode);
     if (!domain) continue;
@@ -890,12 +946,12 @@ export async function executeParsedFeed(
       const hit = index.resolve(incoming, entity.asOf || asOfDate);
       const decision = decisionFor(decisions, domainCode, entity.code);
       if (hit.kind === 'ambiguous' && !decision) {
-        resolutions.push(resolutionFrom(domainCode, entity, hit, asOfDate, matchCatalog));
+        resolutions.push(resolutionFrom(domainCode, entity, hit, asOfDate, matchCatalog, catalog.clientId));
         continue;
       }
       if (hit.kind === 'ambiguous' && decision?.action === 'ignore') continue;
       if (hit.kind === 'ambiguous' && decision?.action === 'map') {
-        const chosen = hit.entities.find((item) => item.id === decision.entityId);
+        const chosen = chosenFor(hit, decision);
         if (chosen) index.absorb(chosen.id, incoming);
         continue;
       }
@@ -988,13 +1044,17 @@ export async function executeParsedFeed(
       if (hit.kind === 'ambiguous') {
         if (decision?.action === 'ignore') continue;
         if (decision?.action === 'map') {
-          const chosen = hit.entities.find((item) => item.id === decision.entityId);
+          const chosen = chosenFor(hit, decision);
           hit = chosen
             ? { kind: 'match', entity: chosen, via: hit.via }
             : { kind: 'rejected', message: `${entity.code} was not mapped to one of the matching records.` };
         } else if (decision?.action === 'create') {
-          cleanseIds.set(entity.code, hit.entities.filter((item) => !item.provisional).map((item) => item.id));
-          hit = { kind: 'none' };
+          if (index.codeReserved(entity.code)) {
+            hit = { kind: 'rejected', message: codeUnavailableMessage(entity.code) };
+          } else {
+            cleanseIds.set(entity.code, hit.entities.filter((item) => !item.provisional && item.clientId === catalog.clientId).map((item) => item.id));
+            hit = { kind: 'none' };
+          }
         }
       }
       if (hit.kind === 'ambiguous') {
@@ -1021,7 +1081,8 @@ export async function executeParsedFeed(
           const update = dry || !rowName ? { error: null } : await db.schema('entity_instances').from('master_entities').update({
             entity_name: rowName,
             updated_at: new Date().toISOString(),
-          }).eq('id', hit.entity.id);
+            ...updatedBy,
+          }).eq('id', hit.entity.id).eq('client_id', catalog.clientId);
           if (update.error) {
             stats.failed += 1;
             stats.errors.push(update.error.message);
@@ -1083,7 +1144,7 @@ export async function executeParsedFeed(
     for (const entity of toCreate) {
       const targets = cleanseIds.get(entity.code) || [];
       if (!targets.length) continue;
-      await cleanseDuplicateIdentifiers(db, targets, entity, matchCatalog, attributeIds, entity.asOf || asOfDate);
+      await cleanseDuplicateIdentifiers(db, catalog.clientId, targets, entity, matchCatalog, attributeIds, entity.asOf || asOfDate, updatedBy);
     }
     for (let offset = 0; offset < toCreate.length; offset += 200) {
       const chunk = toCreate.slice(offset, offset + 200);
@@ -1096,21 +1157,21 @@ export async function executeParsedFeed(
         is_active: true,
         metadata: { feed_map: map.mapCode, source_code: map.sourceCode },
         ...batchTag,
+        ...createdBy,
       }));
       const insert = await db.schema('entity_instances').from('master_entities').insert(payload).select('id, entity_code');
       if (insert.error || !insert.data) {
         for (const entity of chunk) {
-          const single = await db.schema('entity_instances').from('master_entities').insert(payload.find((row) => row.entity_code === entity.code)!).select('id').single();
-          let created = single;
-          if (created.error && /duplicate key|entity_code/i.test(created.error.message || '')) {
-            const storedCode = await availableEntityCode(db, entity.code);
-            created = await db.schema('entity_instances').from('master_entities').insert({ ...payload.find((row) => row.entity_code === entity.code)!, entity_code: storedCode }).select('id').single();
-          }
+          const created = await db.schema('entity_instances').from('master_entities').insert(payload.find((row) => row.entity_code === entity.code)!).select('id').single();
           if (created.error || !created.data) {
             stats.failed += 1;
-            const message = created.error?.message || `Failed to create ${entity.code}`;
+            // A code that is already taken is reported in the same words whoever holds it. The
+            // database's own message is not passed on, and no other code is tried in its place.
+            const taken = isDuplicateCode(created.error);
+            const message = taken ? codeUnavailableMessage(entity.code) : created.error?.message || `Failed to create ${entity.code}`;
             stats.errors.push(message);
             errors.push(message);
+            if (taken) reject({ kind: 'record', domainCode, entityCode: entity.code, message });
             continue;
           }
           stats.created += 1;
@@ -1308,6 +1369,7 @@ export async function executeParsedFeed(
               precedence_rank: valueSource.rank,
               last_received_at: receivedAt,
               metadata: valueMetadata,
+              ...updatedBy,
             }).eq('id', slice.id);
             if (update.error) errors.push(update.error.message);
             else {
@@ -1356,6 +1418,7 @@ export async function executeParsedFeed(
           if (queuedRow) queuedRow.valid_to = planned.closeTo;
           const close = dry || queuedRow ? { error: null } : await db.schema('golden_master').from('entity_attribute_values').update({
             valid_to: planned.closeTo,
+            ...updatedBy,
           }).eq('id', planned.closeId);
           if (close.error) errors.push(close.error.message);
           else if (covering) {
@@ -1383,6 +1446,7 @@ export async function executeParsedFeed(
           precedence_rank: valueSource.rank,
           metadata: valueMetadata,
           ...batchTag,
+          ...createdBy,
         };
         const historyKey = `${entityId}|${meta.id}`;
         slicesByKey.set(historyKey, [...(slicesByKey.get(historyKey) || []), {

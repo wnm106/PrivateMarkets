@@ -11,6 +11,11 @@ type ComplianceSchema = {
   from: (table: string) => any;
 };
 
+/** The service role sees every client's rules. This keeps the shared ones and the deal client's own. */
+export function ownRulesFilter(clientId: string | null): string {
+  return clientId ? `client_id.is.null,client_id.eq.${clientId}` : 'client_id.is.null';
+}
+
 /**
  * The rules a deal is scored on, for which funds. The database decides
  * (compliance.deal_score_plans): rules marked deal_surface cover every fund on
@@ -24,6 +29,8 @@ export async function loadDealScorePlans(
   compliance: ComplianceSchema,
   fundIds: Iterable<string>,
   asOf: string,
+  /** The deal's client. When given, only shared rules and that client's own are kept: the service role sees every client's rules. */
+  clientId?: string | null,
 ): Promise<Array<DealScorePlan<any>>> {
   const funds = [...new Set(fundIds)];
   if (!funds.length) return [];
@@ -33,10 +40,12 @@ export async function loadDealScorePlans(
   if (!planRows.length) return [];
   // Read through the service role where the caller has it, so a user policy
   // does not hide an inactive deal-surface rule.
-  const { data: ruleRows, error: ruleError } = await compliance
+  let ruleRead = compliance
     .from('rules')
     .select('*')
     .in('id', planRows.map((row) => row.rule_id));
+  if (clientId !== undefined) ruleRead = ruleRead.or(ownRulesFilter(clientId));
+  const { data: ruleRows, error: ruleError } = await ruleRead;
   if (ruleError) throw new Error(ruleError.message);
   const ruleById = new Map<string, any>(((ruleRows || []) as any[]).map((row) => [row.id, row]));
   return planRows
@@ -110,11 +119,13 @@ export async function scoreDealFunds(
   asOf: string,
   scenarioCode: string,
   triggeredBy: string | null,
+  /** The knowledge instant to score at. A staged what-if is readable at its own instant only. */
+  knowledgeDate: string = new Date().toISOString(),
 ): Promise<DealScoreResult[]> {
   const { data, error } = await compliance.rpc('score_deal_funds', {
     p_plans: plans.map((plan) => ({ ruleCode: plan.rule.rule_code, anchors: plan.anchorIds })),
     p_as_of: asOf,
-    p_knowledge: new Date().toISOString(),
+    p_knowledge: knowledgeDate,
     p_scenario: scenarioCode,
     p_triggered_by: triggeredBy,
   });

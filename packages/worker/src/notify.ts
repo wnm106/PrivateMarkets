@@ -7,9 +7,13 @@ import { JobError, type JobHandler } from './worker';
  *
  * Email goes through Resend when RESEND_API_KEY and NOTIFY_EMAIL_FROM are
  * set; without them email is skipped and says why. Slack goes to the client's
- * incoming webhook. Every send is recorded through job_run_notify_record, and
- * a recipient already sent to is never sent to again, so a retry is safe.
+ * incoming webhook. Each send is recorded through job_run_notify_record as soon
+ * as it finishes, and a recipient already sent to is never sent to again, so a
+ * run that stops part-way is safe to repeat.
  * APP_URL, when set, turns the event's page into a full link.
+ *
+ * The event id comes from the job, and a job can be queued with any id. The
+ * event must belong to the job's client before anything is sent.
  */
 
 export interface NotifyEnv {
@@ -28,6 +32,8 @@ interface Recipient {
 
 interface Collected {
   eventId?: string;
+  /** The client the event belongs to, once job_run_notify_collect returns it. */
+  clientId?: string;
   kind?: string;
   summary?: string;
   href?: string | null;
@@ -101,25 +107,40 @@ async function post(fetcher: Fetch, url: string, headers: Record<string, string>
   }
 }
 
+/**
+ * Called before each send, and with each send as soon as it finishes. Either
+ * may throw to stop the rest. `before` answers false to leave this one send out.
+ */
+export interface DeliverHooks {
+  before?: (channel: Delivery['channel'], recipient: string) => Promise<boolean>;
+  sent?: (delivery: Delivery) => Promise<void>;
+}
+
 /** Sends what the collected event calls for. Returns one row per send, and why anything was skipped. */
-export async function deliver(collected: Collected, env: NotifyEnv, fetcher: Fetch): Promise<{ deliveries: Delivery[]; skipped: string[] }> {
+export async function deliver(collected: Collected, env: NotifyEnv, fetcher: Fetch, hooks: DeliverHooks = {}): Promise<{ deliveries: Delivery[]; skipped: string[] }> {
   const deliveries: Delivery[] = [];
   const skipped: string[] = [];
   const summary = collected.summary || 'A workflow review needs you';
   const link = noticeLink(collected.href, env.appUrl);
+  const send = async (channel: Delivery['channel'], recipient: string, url: string, headers: Record<string, string>, body: unknown) => {
+    if (hooks.before && !(await hooks.before(channel, recipient))) return;
+    const error = await post(fetcher, url, headers, body);
+    const delivery: Delivery = { channel, recipient, status: error ? 'FAILED' : 'SENT', ...(error ? { error } : {}) };
+    deliveries.push(delivery);
+    await hooks.sent?.(delivery);
+  };
 
   if (collected.emailEnabled) {
     if (!env.resendApiKey || !env.emailFrom) {
       skipped.push('Email is on for this client, but the worker has no RESEND_API_KEY and NOTIFY_EMAIL_FROM.');
     } else {
       for (const recipient of collected.recipients || []) {
-        const error = await post(fetcher, 'https://api.resend.com/emails', { Authorization: `Bearer ${env.resendApiKey}` }, {
+        await send('EMAIL', recipient.email, 'https://api.resend.com/emails', { Authorization: `Bearer ${env.resendApiKey}` }, {
           from: env.emailFrom,
           to: [recipient.email],
           subject: emailSubject(collected.kind),
           text: emailText(summary, link, recipient.name, collected.kind),
         });
-        deliveries.push({ channel: 'EMAIL', recipient: recipient.email, status: error ? 'FAILED' : 'SENT', ...(error ? { error } : {}) });
       }
     }
   }
@@ -128,31 +149,83 @@ export async function deliver(collected: Collected, env: NotifyEnv, fetcher: Fet
     if (!/^https:\/\/hooks\.slack\.com\//.test(collected.slackWebhookUrl)) {
       skipped.push('The Slack address is not a hooks.slack.com address.');
     } else {
-      const error = await post(fetcher, collected.slackWebhookUrl, {}, { text: slackText(summary, link) });
-      deliveries.push({ channel: 'SLACK', recipient: 'webhook', status: error ? 'FAILED' : 'SENT', ...(error ? { error } : {}) });
+      await send('SLACK', 'webhook', collected.slackWebhookUrl, {}, { text: slackText(summary, link) });
     }
   }
   return { deliveries, skipped };
 }
 
+/**
+ * Why sends failed, for the run's error. The run's error is shown on the Jobs
+ * page, so it names the channel and the status only: never who a notice was
+ * for, and not the provider's reply, which can repeat the address.
+ */
+export function failureSummary(deliveries: Delivery[]): string {
+  const failed = deliveries.filter((row) => row.status === 'FAILED');
+  const reasons = new Map<string, number>();
+  for (const row of failed) {
+    const reason = `${row.channel} ${/^HTTP \d+/.exec(row.error || '')?.[0] || 'could not be reached'}`;
+    reasons.set(reason, (reasons.get(reason) || 0) + 1);
+  }
+  const listed = [...reasons].map(([reason, count]) => (count > 1 ? `${reason} (${count})` : reason));
+  return `${failed.length} of ${deliveries.length} sends failed: ${listed.join('; ')}`;
+}
+
+/**
+ * The client an event belongs to, or null when it cannot be told.
+ * job_run_notify_collect does not return it yet. Until it does, it is read from
+ * the workflow run the notice links to: only review notices are delivered, and
+ * each is written with the address of its run.
+ */
+async function noticeClient(supabase: SupabaseClient, collected: Collected): Promise<string | null> {
+  if (typeof collected.clientId === 'string' && collected.clientId) return collected.clientId;
+  const runId = /^\/workflows\/runs\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(collected.href || '')?.[1];
+  if (!runId) return null;
+  const { data, error } = await supabase.rpc('workflow_run_get', { p_run_id: runId });
+  if (error) throw new Error(error.message);
+  const clientId = (data as { client_id?: unknown } | null)?.client_id;
+  return typeof clientId === 'string' && clientId ? clientId : null;
+}
+
 export function notifyDeliverHandler(supabase: SupabaseClient, env: NotifyEnv = notifyEnv(), fetcher: Fetch = fetch as unknown as Fetch): JobHandler {
-  return async (run) => {
+  return async (run, job) => {
     const eventId = typeof run.payload.eventId === 'string' ? run.payload.eventId : '';
     if (!eventId) throw new JobError('The job has no eventId.');
-    const collected = await supabase.rpc('job_run_notify_collect', { p_event_id: eventId });
-    if (collected.error) throw new Error(collected.error.message);
-    const data = (collected.data || null) as Collected | null;
-    if (!data) return { sent: 0, note: 'The event no longer exists.' };
-    if (data.stale) return { sent: 0, note: 'The review was decided before the notice went out.' };
+    const collect = async (): Promise<Collected | null> => {
+      const collected = await supabase.rpc('job_run_notify_collect', { p_event_id: eventId });
+      if (collected.error) throw new Error(collected.error.message);
+      return (collected.data || null) as Collected | null;
+    };
+    const data = await collect();
+    // One answer for both, because neither can be matched to a client: it must not say which it was.
+    if (!data || data.stale) return { sent: 0, note: 'Nothing to send: the event no longer exists, or its review was decided before the notice went out.' };
+    // One answer whether the notice is another client's or cannot be matched to one, for the same reason.
+    const owner = await noticeClient(supabase, data);
+    if (!owner || owner !== run.clientId) throw new JobError('This client has no notice with that id, so nothing was sent.');
 
-    const { deliveries, skipped } = await deliver(data, env, fetcher);
-    if (deliveries.length > 0) {
-      const recorded = await supabase.rpc('job_run_notify_record', { p_event_id: eventId, p_rows: deliveries });
-      if (recorded.error) throw new Error(recorded.error.message);
-    }
-    const failed = deliveries.filter((row) => row.status === 'FAILED');
+    const { deliveries, skipped } = await deliver(data, env, fetcher, {
+      before: async (channel, recipient) => {
+        // A run another worker has taken over sends nothing more: that worker sends what is left.
+        job?.signal.throwIfAborted();
+        // Asked again just before each send. A send another run of this notice has made since this run
+        // started is on record by now, and is not made twice; a review decided meanwhile is not announced.
+        const now = await collect();
+        if (!now || now.stale) return false;
+        const due = channel === 'SLACK' ? !now.slackSent : (now.recipients || []).some((row) => row.email === recipient);
+        if (!due) return false;
+        // Claimed in the database before sending, so of two runs that both get here only one sends.
+        const claimed = await supabase.rpc('job_run_notify_claim', { p_event_id: eventId, p_channel: channel, p_recipient: recipient });
+        if (claimed.error) throw new Error(claimed.error.message);
+        return claimed.data === true;
+      },
+      // Recorded one at a time, so a run that stops part-way never sends the same notice to the same person again.
+      sent: async (delivery) => {
+        const recorded = await supabase.rpc('job_run_notify_record', { p_event_id: eventId, p_rows: [delivery] });
+        if (recorded.error) throw new Error(recorded.error.message);
+      },
+    });
     // A failed send is worth another attempt; what was sent is not sent again.
-    if (failed.length > 0) throw new Error(`${failed.length} of ${deliveries.length} sends failed: ${failed.map((row) => `${row.channel} ${row.recipient}: ${row.error}`).join('; ')}`);
+    if (deliveries.some((row) => row.status === 'FAILED')) throw new Error(failureSummary(deliveries));
     return { sent: deliveries.length, skipped };
   };
 }

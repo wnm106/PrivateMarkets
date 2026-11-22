@@ -3,11 +3,13 @@
 import { useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { MfaStep } from '@/components/auth/MfaStep';
+import { safeNextPath } from '@/lib/safe-next-path';
 
 export default function MfaPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectedFrom = searchParams.get('redirectedFrom') || '/';
+  // The address bar is not trusted: only a path inside this app is followed after the code is accepted.
+  const redirectedFrom = safeNextPath(searchParams.get('redirectedFrom'));
   const onVerified = useCallback(() => {
     router.replace(redirectedFrom);
     router.refresh();

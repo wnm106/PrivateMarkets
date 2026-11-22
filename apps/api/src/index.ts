@@ -1,6 +1,6 @@
 import { createYoga, createSchema } from 'graphql-yoga';
 import { createClient } from '@supabase/supabase-js';
-import { schema } from '@tapestrai/graphql';
+import { schema, useQueryLimits } from '@tapestrai/graphql';
 
 export interface Env {
   SUPABASE_URL: string;
@@ -13,6 +13,8 @@ const yoga = createYoga<{ env: Env }>({
   schema,
   graphqlEndpoint: '/graphql',
   landingPage: false,
+  // Depth and alias limits, checked before a query runs.
+  plugins: [useQueryLimits()],
   cors: {
     origin: '*',
     credentials: true,

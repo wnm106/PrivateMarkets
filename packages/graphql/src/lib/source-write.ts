@@ -1,12 +1,12 @@
 import { coerceAttributeValue } from './attribute-values';
-import { planSourceVersion } from './source-version';
 
 /**
  * Writing one source's value on one record, and the manual override built on it.
  *
- * A new value versions its own source only, bitemporally: the rows it replaces are
- * closed in system time, their earlier days are written again, and a value already
- * scheduled later stays (planSourceVersion). Other sources are untouched; which
+ * A new value versions its own source only, bitemporally, through
+ * golden_master.write_value: the rows it replaces stop being current knowledge, their
+ * earlier days are written again, and a value already scheduled later stays. Other
+ * sources are untouched; which
  * source wins is still decided by precedence, where an open manual entry beats all.
  *
  * Every manual override goes through writeManualOverride: the record screen and
@@ -19,7 +19,7 @@ export const OPEN_SYSTEM_TO = '9999-12-31 23:59:59';
 
 type WriteClient = {
   from: (table: string) => any;
-  schema: (name: string) => { from: (table: string) => any };
+  schema: (name: string) => { from: (table: string) => any; rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }> };
   rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { message?: string } | null }>;
 };
 
@@ -77,7 +77,13 @@ function fail(error: { code?: string; message?: string }): never {
   throw Object.assign(new Error(error.message || 'The value could not be written.'), { code: error.code });
 }
 
-/** Write one value for one source on one record from `validFrom`. Returns the new row's id. */
+/**
+ * Write one value for one source on one record from `validFrom`, until that source's next
+ * later value. Returns the new row's id. golden_master.write_value does the versioning
+ * (lib/golden-write.ts): the rows it replaces stop being current knowledge, their other
+ * days are written again, and nothing is edited in place. The row is stamped with the
+ * caller from the session.
+ */
 export async function writeSourceVersion(
   supabase: WriteClient,
   input: {
@@ -89,53 +95,24 @@ export async function writeSourceVersion(
     precedenceRank: number;
     isManualOverride: boolean;
     overrideReason?: string | null;
-    userId?: string | null;
   },
 ): Promise<{ id: string }> {
-  const validFrom = dateOnly(input.validFrom);
-  const now = new Date().toISOString();
-  const { data: currentRows, error: currentError } = await supabase
-    .from('entity_attribute_values')
-    .select('*')
-    .eq('entity_id', input.entityId)
-    .eq('attribute_id', input.attributeId)
-    .eq('source_id', input.sourceId)
-    .gte('valid_to', validFrom)
-    .eq('system_to', OPEN_SYSTEM_TO);
-  if (currentError) fail(currentError);
-
-  const plan = planSourceVersion<any>(currentRows || [], validFrom);
-  for (const current of plan.close) {
-    const { error } = await supabase.from('entity_attribute_values').update({ system_to: now }).eq('id', current.id);
-    if (error) fail(error);
-  }
-  for (const { row: current, validTo } of plan.keepBefore) {
-    const { error } = await supabase
-      .from('entity_attribute_values')
-      .insert(versionCopy(current, dateOnly(current.valid_from), validTo, now, current.created_by));
-    if (error) fail(error);
-  }
-
-  const { data, error } = await supabase
-    .from('entity_attribute_values')
-    .insert({
-      entity_id: input.entityId,
-      attribute_id: input.attributeId,
-      source_id: input.sourceId,
+  const { data, error } = await supabase.schema('golden_master').rpc('write_value', {
+    p_entity_id: input.entityId,
+    p_attribute_id: input.attributeId,
+    p_source_id: input.sourceId,
+    p_valid_from: dateOnly(input.validFrom),
+    p_value: {
       ...input.stored,
-      valid_from: validFrom,
-      valid_to: plan.newValidTo,
-      system_from: now,
-      system_to: OPEN_SYSTEM_TO,
       precedence_rank: input.precedenceRank,
       is_manual_override: input.isManualOverride,
       override_reason: input.overrideReason ?? null,
-      created_by: input.userId ?? null,
-    })
-    .select('id')
-    .single();
+    },
+    p_valid_to: null,
+  });
   if (error) fail(error);
-  return { id: String(data.id) };
+  if (typeof data !== 'string') throw new Error('The value was not saved.');
+  return { id: data };
 }
 
 /** A typed value as an override stores it, read the way a file load reads it. */
@@ -188,6 +165,7 @@ export async function writeManualOverride(
     value: unknown;
     validFrom?: string | null;
     reason: string | null | undefined;
+    /** Not written: golden_master.write_value stamps the caller from the session. */
     userId?: string | null;
   },
 ): Promise<{ id: string; stored: StoredValue }> {
@@ -205,7 +183,6 @@ export async function writeManualOverride(
     precedenceRank: 1,
     isManualOverride: true,
     overrideReason: reason.slice(0, 1000),
-    userId: input.userId,
   });
   return { id: written.id, stored: value.stored };
 }

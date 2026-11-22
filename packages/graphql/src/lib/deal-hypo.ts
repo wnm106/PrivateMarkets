@@ -11,15 +11,30 @@
  */
 
 import type { Context } from '../context';
-import { commitAllocation, loadAllocationDraft, type AllocationHold } from './allocation-store';
+import { assertAllocationInputsOnDeal, commitAllocation, loadAllocationDraft, type AllocationHold } from './allocation-store';
 import type { AllocationAdjustment } from './allocation-engine';
 import { dealSurfaceResults, loadDealScorePlans, scoreDealFunds } from './deal-compliance';
+
+export { ownRulesFilter } from './deal-compliance';
 
 export interface DealScoreArgs {
   dealId: string;
   asOfDate?: string | null;
   holds?: any[] | null;
   adjustments?: any[] | null;
+}
+
+/**
+ * Scoring and Hypo runs read and write with the service role, so the caller's own
+ * right to change the deal is settled first, with the caller's JWT. Returns their id.
+ */
+export async function assertMayScoreDeal(context: Context, dealId: string): Promise<string> {
+  if (!context.user) throw new Error('Not authenticated');
+  const { data: mayWrite, error } = await context.supabase
+    .schema('tenancy')
+    .rpc('has_entity_access', { p_entity_id: dealId, p_level: 'WRITE' });
+  if (error || mayWrite !== true) throw new Error('You do not have access to score this deal.');
+  return context.user.id;
 }
 
 export function hypoScenarioCode(dealCode: string): string {
@@ -52,16 +67,22 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
   // Hypo positions are engine rows, not a user edit. The caller's JWT cannot
   // insert them under the entity RLS policies, so the write uses the service
   // role. The rules themselves still run as the compliance functions.
+  const userId = await assertMayScoreDeal(context, args.dealId);
   const writer = context.supabaseAdmin || context.supabase;
-  const draft = await loadAllocationDraft(writer, args.dealId, args.asOfDate, parseHolds(args.holds), parseAdjustments(args.adjustments));
+  // The draft is read as the caller, so it holds only the tranches and funds they can see.
+  const holds = parseHolds(args.holds);
+  const adjustments = parseAdjustments(args.adjustments);
+  const draft = await loadAllocationDraft(context.supabase, args.dealId, args.asOfDate, holds, adjustments);
+  assertAllocationInputsOnDeal(draft, holds, adjustments);
   const scenarioCode = hypoScenarioCode(draft.dealCode);
-  const preview = await commitAllocation(writer, draft, context.user?.id ?? null, { scenarioCode });
+  const preview = await commitAllocation(writer, draft, userId, { scenarioCode });
   const fundIds = new Set(preview.rows.map((row) => row.fundId));
 
   // Which rules this deal is scored on, for which funds, is one database
   // function shared with the deal score and capacity.
   const compliance = writer.schema('compliance');
-  const plans = await loadDealScorePlans(compliance, fundIds, draft.asOf);
+  // The service role sees every client's rules. Only the shared ones and the deal client's own are scored.
+  const plans = await loadDealScorePlans(compliance, fundIds, draft.asOf, draft.clientId);
   if (!plans.length) throw new Error('No compliance rules with limits are assigned to the funds on this deal.');
   const { data: versionRows, error: versionError } = await compliance
     .from('rule_versions')
@@ -80,7 +101,7 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
   // score uses. A failed scenario is reported, and the other still shows.
   const score = async (code: string) => {
     try {
-      const results = await scoreDealFunds(compliance, plans, draft.asOf, code, context.user?.id ?? null);
+      const results = await scoreDealFunds(compliance, plans, draft.asOf, code, userId);
       return results.filter((result) => fundIds.has(result.anchorEntityId));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

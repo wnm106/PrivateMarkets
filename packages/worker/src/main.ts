@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { config } from 'dotenv';
 import { hostname } from 'node:os';
 import { resolve } from 'node:path';
@@ -36,7 +37,9 @@ async function main() {
   const options: WorkerOptions = {
     store: supabaseJobStore(supabase),
     handlers: buildHandlers(supabase),
-    workerName: process.env.WORKER_NAME || `${hostname()}:${process.pid}`,
+    // WORKER_NAME is a label. The suffix keeps it unique to this process, so replicas started with the
+    // same WORKER_NAME (or the same host name and process id, as containers often are) never share a claim.
+    workerName: `${process.env.WORKER_NAME || hostname()}:${process.pid}:${randomBytes(4).toString('hex')}`,
     concurrency: positive(process.env.WORKER_CONCURRENCY, 5),
     leaseSeconds: positive(process.env.WORKER_LEASE_SECONDS, 300),
     log: (message, detail) => console.log(JSON.stringify({ at: new Date().toISOString(), message, ...detail })),

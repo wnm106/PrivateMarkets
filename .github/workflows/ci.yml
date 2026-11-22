@@ -100,3 +100,8 @@ jobs:
 
       - name: Capacity agrees with the evaluator
         run: npm run test:db
+
+      # supabase/tests: two clients, and every read, write, function and grant
+      # checked across them, on the database built above. See scripts/db-test.sh.
+      - name: Tenant isolation
+        run: bash scripts/db-test.sh --db-url "$DATABASE_URL"

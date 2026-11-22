@@ -542,6 +542,13 @@ const PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
  * being promoted: its id is stamped on what is written and its corrections are
  * laid over the file's rows. Any other load opens a batch of its own, so it can
  * be reverted too.
+ *
+ * This writes with the service role and checks nothing about the caller. A
+ * caller acting for a signed-in user must first have the database confirm, as
+ * that user, that they may write live records in `clientId`: load.promote
+ * (requireLoadPromote in session-client.ts), the same as a promote needs. It
+ * passes who they are as `options.actorId` so the records and values written
+ * name them.
  */
 export async function processImportInstance(
   id: string,
@@ -551,7 +558,9 @@ export async function processImportInstance(
   client?: SupabaseClient,
   decisions?: EntityResolutionDecision[],
   batch?: { id: string; cellEdits?: CellEdit[]; userId?: string | null },
+  options: { actorId?: string | null } = {},
 ): Promise<ImportInstanceDetail> {
+  const actorId = options.actorId ?? batch?.userId ?? null;
   const db = client || useClient();
   assertLocalSupabase(db);
   const existing = await db.schema('entity_instances').from('import_instances').select('*').eq('id', id).eq('client_id', clientId).single();
@@ -614,6 +623,7 @@ export async function processImportInstance(
     mapCode: identity.mapCode,
     sourceCode: fileSource || identity.sourceCode,
     asOfDate: asOf,
+    userId: actorId,
   });
   const batchId = batch?.id || directBatchId;
   const journal: JournalEntry[] = [];
@@ -633,6 +643,7 @@ export async function processImportInstance(
         decisions,
         recorder,
         batchId: batchId || undefined,
+        actorId,
       });
     } finally {
       // Whatever was changed in place is written down even when the load stops part way.
@@ -1026,8 +1037,9 @@ export async function loadFileWithMap(
   asOfDate?: string,
   client: SupabaseClient = useClient(),
   sourceCode?: string,
+  actorId?: string | null,
 ): Promise<ImportInstanceDetail> {
   const instance = await createImportInstance(fileName, mediaType, bytes, clientId, client, { forceMapCode: mapCode, sourceCode });
   const asOf = asOfDate || instance.asOfDate || new Date().toISOString().slice(0, 10);
-  return processImportInstance(instance.id, clientId, instance.columnMappings, asOf, client);
+  return processImportInstance(instance.id, clientId, instance.columnMappings, asOf, client, undefined, undefined, { actorId });
 }

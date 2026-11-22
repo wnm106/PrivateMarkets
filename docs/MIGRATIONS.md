@@ -80,3 +80,50 @@ Each was applied through the Management API in its own transaction and recorded 
 - **Still to do:** 6,138 `POSITION_FUND` and 7,776 `POSITION_SECURITY` links from 2026-10-02 and 2026-10-23 are stored the other way round. The fund page, the fund and cash reconciliations and allocations do not see those positions. Turning them round is a change to records: decide first whether the positions they link are still wanted.
 - **Still to do:** `DEAL_FUND` is defined in the migrations but missing on the hosted project, and `Deal_Security` is on the hosted project but in no migration.
 - **Still to do:** the service role cannot read 17 other tables a signed-in user can (among them `entity_instances.source_attribute_values` and `metadata_register.template_attribute_assignments`). Nothing in the NAV reconciliation needs them. Grant them only where a service-role reader needs them.
+
+## The 2026-11-20 security migrations
+
+`20261120100000_tenancy_hardening` to `20261121000000_reconcile_audit_with_master` came from the tenant-isolation audit (merged 2026-11-22). They were written on a branch cut before master's later migrations, so `20261122150000_notify_collect_client_and_open_check` puts together the one function both sides replaced (`public.job_run_notify_collect`: the client id from the audit, the open-step check from `20261121150000`). Apply it after them on the hosted project too.
+
+The audit also edited a dozen applied migrations so the chain builds on an empty database. Those edits were not kept: an applied migration is never edited. A fresh build is `scripts/db-replay/replay.sh`, and where a file cannot apply there, `scripts/db-replay/legacy.txt` says how it is applied. Three of the audit's fixed copies are used that way, mode `patched`, from `scripts/db-replay/patches/`: `20261024140000_dq_compiled_rule_sql`, `20261105160000_role_entity_security` (it creates `tenancy.entity_ancestors`, which the security migrations need) and `20261109181221_scope_unassigned_attributes`. The files in `supabase/migrations` are as they ran on the hosted project.
+
+## Function grants
+
+PostgREST exposes every function in the API schemas, so a function's grants are the first check on who can call it. Since `20261120101000_function_lockdown.sql`:
+
+- A new function is not executable by PUBLIC or anon. The migration that creates it grants what it means to open.
+- A function created in `public` still reaches `authenticated` and `service_role` through Supabase's default grant. A function created in any other schema (`tenancy`, `compliance`, `ops`, `golden_master`, ...) gets no grant at all: `GRANT EXECUTE ON FUNCTION ... TO authenticated` (and/or `service_role`) explicitly, or it cannot be called.
+- Never `REVOKE ... FROM PUBLIC` alone. Supabase also grants anon and authenticated directly, so revoke from each role you mean: `REVOKE ALL ON FUNCTION f(...) FROM PUBLIC, anon, authenticated;` then grant back what is needed.
+- The only functions anon may run are `public.workflow_portal_get(text)` and `public.workflow_portal_submit(text, text, jsonb, text)`.
+- A SECURITY DEFINER function sets its own `search_path`, and checks the caller first: `PERFORM tenancy.assert_entity_access(p_entity_id, 'READ')` for a record id, or its own client check.
+
+`supabase/tests/09_function_grants.sql` checks all of this over the whole catalog, and `10_definer_sweep.sql` calls every SECURITY DEFINER function a signed-in user can call with another client's ids and fails on any of that client's data in the answer.
+
+## Upserting links
+
+Since `20261120108000_relationship_history.sql`, `entity_instances.entity_relationships` keeps a link's history: an ended link stays as a row, and the four-column UNIQUE constraint is replaced by a unique index on current links only (`WHERE system_to = '9999-12-31 23:59:59+00'`). A new migration that upserts current links must name that index's predicate, or Postgres finds no matching constraint:
+
+```sql
+INSERT INTO entity_instances.entity_relationships (parent_entity_id, child_entity_id, relationship_code, valid_from, ...)
+VALUES (...)
+ON CONFLICT (parent_entity_id, child_entity_id, relationship_code, valid_from)
+    WHERE system_to = '9999-12-31 23:59:59+00'
+DO NOTHING;
+```
+
+Older migrations that use `ON CONFLICT` on the four columns alone ran before this one and are left as they are. API callers can only end a link; to change one, use `entity_instances.revise_relationship`.
+
+## Pushing what is pending
+
+Push in version order, all at once (`npx supabase db push --include-all`, after the dry run), not the 2026-11-20 files on their own:
+
+1. The pending files listed above, and anything `db push --dry-run` lists from after the 11-17 snapshot, in version order. `20261031140000` comes before `20261105160000`, which has to run before the security migrations: it creates `tenancy.entity_ancestors`, and its `tenancy.is_entity_restricted` is replaced by 20261120100000. Run after them, it would put the old function back.
+2. `20261118210000_agents` and `20261118210000_document_refile` share a version. The CLI records one row per version, so check which of the two hosted has (`ops.agents`, `public.document_refile(uuid)`) and use `npx supabase migration repair` for the other before the push.
+3. The 2026-11-20 security migrations, last, in order: `20261120100000_tenancy_hardening` (needs `tenancy.client_auth_requirements` from 20261109180000 and `ops.workflow_service_accounts` from 20261116130000), `20261120101000_function_lockdown`, `20261120102000_compliance_tenant_scope`, `20261120103000_shared_table_reads`, `20261120104000_job_queue_scope`, `20261120105000_merge_entities_repair`, `20261120106000_bitemporal_integrity`, `20261120107000_worker_scope`, `20261120108000_relationship_history`, `20261120130000_compliance_rule_version_atomic` (and any later 20261120 file). Several replace a function "with the body already in the database"; those bodies assume every earlier file has run.
+
+## Testing the chain
+
+`npm run db:replay` builds a database from the migrations on plain Postgres with pgvector (`scripts/db-replay/shim.sql` stands in for what a Supabase project provides, with Supabase's starting grants). CI then runs `npm run guard:db`, `npm run test:db` and `bash scripts/db-test.sh --db-url "$DATABASE_URL"`, which checks every version is recorded (a file `legacy.txt` lists as broken may be missing), loads `supabase/tests/fixture.sql` (two clients, A and B) and runs `supabase/tests/NN_*.sql`. Each test file runs in a transaction that rolls back and fails on any check that fails.
+
+`scripts/db-test.sh` without `--db-url` builds its own throwaway cluster from `supabase/tests/supabase_stub.sql` and applies every file as the Supabase CLI would. It stops at the shared 20261118210000 version and at the migrations `legacy.txt` lists, so use the replay for a full build.
+

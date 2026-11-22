@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { ToolRegistry } from '@tapestrai/mcp-server/src/lib/tool-registry';
 import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/compliance-tools';
 import { registerDocumentTools } from '@tapestrai/mcp-server/src/tools/document-tools';
@@ -27,8 +26,8 @@ import { authenticate } from '@/lib/chat-server';
  * calls the same as packages/worker/src/workflow/tools.ts, which runs them.
  */
 
-// The registry's client is never used: this route only lists.
-const registry = new ToolRegistry(null as unknown as SupabaseClient);
+// The registry holds no database client, and this route only lists.
+const registry = new ToolRegistry();
 registerDomainTools(registry);
 registerLineageTools(registry);
 registerOverrideTools(registry);

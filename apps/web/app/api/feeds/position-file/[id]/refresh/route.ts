@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { refreshImportInstance } from '@/lib/feeds/import-instances';
 import { asFeedCaller } from '@/lib/agent-audit';
-import { feedClientId, requireFeedUser } from '@/lib/feeds/require-user';
+import { requireFeedWriter } from '@/lib/feeds/require-user';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 export async function POST(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
-  const user = await requireFeedUser();
-  if (!user) return NextResponse.json({ error: 'Sign in to load a file' }, { status: 401 });
-  const clientId = await feedClientId();
-  if (!clientId) return NextResponse.json({ error: 'Choose a client before loading the file' }, { status: 400 });
+  const who = await requireFeedWriter();
+  if ('error' in who) return who.error;
+  const { user, clientId } = who;
   const { id } = await context.params;
   try {
     return NextResponse.json(await asFeedCaller(user.id, clientId, () => refreshImportInstance(id, clientId)));
