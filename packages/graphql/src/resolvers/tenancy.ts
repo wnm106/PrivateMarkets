@@ -9,6 +9,7 @@ import {
   type IdentityProviderKind,
 } from '../lib/enterprise-sso';
 import { requireUuid } from '../lib/input-guards';
+import { ok } from '../lib/db-result';
 
 // Always the caller's JWT. The service role bypasses row level security, so
 // tenancy reads and writes go through `supabase` and Postgres policies.
@@ -325,7 +326,7 @@ export const tenancyResolvers = {
         if (error) throw error;
 
         if (args.input.permissionCodes?.length) {
-          const { data: permissions } = await tn(context).from('permissions').select('id, permission_code').in('permission_code', args.input.permissionCodes);
+          const { data: permissions } = ok(await tn(context).from('permissions').select('id, permission_code').in('permission_code', args.input.permissionCodes));
           const rows = (permissions || []).map((p: any) => ({ role_id: role.id, permission_id: p.id }));
           if (rows.length) {
             const { error: rpError } = await tn(context).from('role_permissions').insert(rows);
@@ -542,10 +543,10 @@ export const tenancyResolvers = {
         if (!profile) {
           return { success: false, errors: [{ field: 'general', message: 'Profile not found', code: 'NOT_FOUND' }] };
         }
-        const { data: roleRows } = await tn(context)
+        const { data: roleRows } = ok(await tn(context)
           .from('user_roles')
           .select('role:roles(role_permissions(permission:permissions(permission_code)))')
-          .eq('user_id', context.user.id);
+          .eq('user_id', context.user.id));
         const isTenantAdmin = profile.is_tenant_admin ?? false;
         const access = collectAccess(roleRows, isTenantAdmin);
         const meResult = {

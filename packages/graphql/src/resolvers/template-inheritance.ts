@@ -61,7 +61,7 @@ async function loadRules(supabase: SupabaseClient): Promise<InheritanceRule[]> {
     .from('relationship_types')
     .select('relationship_code, relationship_name, parent_domain_code, child_domain_code, template_from_side, is_active')
     .not('template_from_side', 'is', null);
-  if (error) return [];
+  if (error) throw new Error(error.message);
   const rules: InheritanceRule[] = [];
   for (const row of data || []) {
     const side = templateSide(row.template_from_side);
@@ -85,7 +85,7 @@ async function loadTemplates(supabase: SupabaseClient, domainCodes: string[]): P
     .select('id, template_code, template_name, domain_code, is_active')
     .in('domain_code', domains)
     .order('template_name');
-  if (error) return [];
+  if (error) throw new Error(error.message);
   return (data || []) as TemplateRow[];
 }
 
@@ -97,7 +97,7 @@ async function loadChoices(supabase: SupabaseClient, entityIds: string[]): Promi
       .from('entity_template_choices')
       .select('id, entity_id, relationship_code, template_id, valid_from, valid_to')
       .in('entity_id', part);
-    if (error) return [];
+    if (error) throw new Error(error.message);
     for (const row of data || []) {
       rows.push({
         id: row.id,
@@ -122,7 +122,7 @@ async function loadDateCodes(supabase: SupabaseClient, domainCodes: string[]): P
     .select('attribute_code, domain_code, display_group')
     .eq('data_type', 'DATE')
     .in('domain_code', domains);
-  if (error) return found;
+  if (error) throw new Error(error.message);
   const rows = [...(data || [])].sort((a: any, b: any) =>
     (a.display_group ?? Number.MAX_SAFE_INTEGER) - (b.display_group ?? Number.MAX_SAFE_INTEGER)
     || String(a.attribute_code).localeCompare(String(b.attribute_code)));

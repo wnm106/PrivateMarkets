@@ -11,6 +11,7 @@ import {
   type EntityNameAlias,
 } from '../semantic-aliases';
 import { ParsedField } from './data-parsers';
+import { ok } from '../db-result';
 
 export interface FieldMapping {
   sourceField: string;
@@ -180,11 +181,11 @@ async function fetchTargetAttributes(
 
   // If template specified, only get attributes assigned to that template
   if (templateCode) {
-    const { data: template } = await supabase
+    const { data: template } = ok(await supabase
       .from('domain_templates')
       .select('id, template_attribute_assignments(attribute_id)')
       .eq('template_code', templateCode)
-      .single();
+      .single());
 
     if (template) {
       const attributeIds = template.template_attribute_assignments.map(
@@ -221,7 +222,7 @@ async function loadAliasLabels(supabase: SupabaseClient, attributeIds: string[])
     .select('attribute_id, alias_label, is_active')
     .eq('is_active', true)
     .in('attribute_id', ids);
-  if (error) return labels;
+  if (error) throw new Error(error.message);
   for (const alias of data || []) {
     const list = labels.get(alias.attribute_id) || [];
     list.push(alias.alias_label);
@@ -236,7 +237,7 @@ async function loadNameAliases(supabase: SupabaseClient, domainCode: string): Pr
     .select('domain_code, alias_label, alias_code, is_active')
     .eq('is_active', true)
     .eq('domain_code', domainCode);
-  if (error) return [];
+  if (error) throw new Error(error.message);
   return (data || []).map((row: { domain_code: string; alias_label: string; alias_code: string }) => ({
     domainCode: row.domain_code,
     aliasLabel: row.alias_label,
@@ -249,7 +250,7 @@ async function loadDomainAliases(supabase: SupabaseClient): Promise<DomainAlias[
     .from('domain_aliases')
     .select('domain_code, alias_label, alias_code, is_active')
     .eq('is_active', true);
-  if (error) return [];
+  if (error) throw new Error(error.message);
   return (data || []).map((row: { domain_code: string; alias_label: string; alias_code: string }) => ({
     domainCode: row.domain_code,
     aliasLabel: row.alias_label,

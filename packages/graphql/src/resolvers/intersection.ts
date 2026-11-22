@@ -1,4 +1,5 @@
 import { Context } from '../context';
+import { ok } from '../lib/db-result';
 
 export const intersectionResolvers = {
   Query: {
@@ -185,14 +186,14 @@ export const intersectionResolvers = {
         }
 
         // Fetch the created type with members
-        const { data: createdType } = await context.supabase
+        const { data: createdType } = ok(await context.supabase
           .from('intersection_types')
           .select(`
             *,
             intersection_type_members(*)
           `)
           .eq('id', type.id)
-          .single();
+          .single());
 
         return {
           intersectionType: mapIntersectionTypeRow(createdType),
@@ -257,14 +258,14 @@ export const intersectionResolvers = {
         }
 
         // Fetch the updated type with members
-        const { data: updatedType } = await context.supabase
+        const { data: updatedType } = ok(await context.supabase
           .from('intersection_types')
           .select(`
             *,
             intersection_type_members(*)
           `)
           .eq('id', input.id)
-          .single();
+          .single());
 
         return {
           intersectionType: mapIntersectionTypeRow(updatedType),
@@ -372,18 +373,18 @@ export const intersectionResolvers = {
         // Insert attributes
         if (input.attributes) {
           for (const [attrCode, value] of Object.entries(input.attributes)) {
-            const { data: attr } = await context.supabase
+            const { data: attr } = ok(await context.supabase
               .from('attribute_register')
               .select('id, default_precedence_rank')
               .eq('attribute_code', attrCode)
-              .single();
+              .single());
 
             if (attr) {
-              const { data: source } = await context.supabase
+              const { data: source } = ok(await context.supabase
                 .from('source_registry')
                 .select('id')
                 .eq('source_code', 'MANUAL')
-                .single();
+                .single());
 
               await context.supabase.from('intersection_attribute_values').insert({
                 intersection_id: intersection.id,
@@ -401,20 +402,20 @@ export const intersectionResolvers = {
         }
 
         // Validate intersection completeness
-        const { data: isValid } = await context.supabase.rpc('validate_intersection_members', {
+        const { data: isValid } = ok(await context.supabase.rpc('validate_intersection_members', {
           p_intersection_id: intersection.id,
-        });
+        }));
 
         if (!isValid) {
           console.warn(`Intersection ${input.intersectionCode} is missing required members`);
         }
 
         // Fetch the created intersection
-        const { data: createdIntersection } = await context.supabase
+        const { data: createdIntersection } = ok(await context.supabase
           .from('intersection_master')
           .select('*')
           .eq('intersection_id', intersection.id)
-          .single();
+          .single());
 
         return {
           intersection: createdIntersection ? mapIntersectionRow(createdIntersection) : null,
@@ -484,11 +485,11 @@ export const intersectionResolvers = {
         // Update attributes (bi-temporal: close old, insert new)
         if (input.attributes) {
           for (const [attrCode, value] of Object.entries(input.attributes)) {
-            const { data: attr } = await context.supabase
+            const { data: attr } = ok(await context.supabase
               .from('attribute_register')
               .select('id, default_precedence_rank')
               .eq('attribute_code', attrCode)
-              .single();
+              .single());
 
             if (attr) {
               // Close existing attribute value
@@ -503,11 +504,11 @@ export const intersectionResolvers = {
                 .eq('system_to', '9999-12-31 23:59:59');
 
               // Insert new attribute value
-              const { data: source } = await context.supabase
+              const { data: source } = ok(await context.supabase
                 .from('source_registry')
                 .select('id')
                 .eq('source_code', 'MANUAL')
-                .single();
+                .single());
 
               await context.supabase.from('intersection_attribute_values').insert({
                 intersection_id: input.id,
@@ -525,11 +526,11 @@ export const intersectionResolvers = {
         }
 
         // Fetch the updated intersection
-        const { data: updatedIntersection } = await context.supabase
+        const { data: updatedIntersection } = ok(await context.supabase
           .from('intersection_master')
           .select('*')
           .eq('intersection_id', input.id)
-          .single();
+          .single());
 
         return {
           intersection: updatedIntersection ? mapIntersectionRow(updatedIntersection) : null,

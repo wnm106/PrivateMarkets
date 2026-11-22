@@ -7,6 +7,7 @@ import { assertWhatIfKnowledge, dealSurfaceResults, loadDealScorePlans, ruleVers
 import { conditionValueKey, type RelationshipHopRef } from '../lib/compliance-population';
 import { parseFundBoardResultPayload, selectLatestFundResults } from '../lib/fund-board-results';
 import { knowledgeInstant } from '../lib/fund-surface';
+import { ok } from '../lib/db-result';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
 // through `.schema('compliance')` first (same convention as tenancy.ts /
@@ -361,14 +362,14 @@ export const complianceResolvers = {
         // limit, unless the rule reads the limit from a fund attribute.
         if (!input.id && input.applies !== false && !input.groupValue && input.rankFrom == null
           && input.softLimitValue == null && input.hardLimitValue == null) {
-          const { data: version } = await cx(context)
+          const { data: version } = ok(await cx(context)
             .from('rule_versions')
             .select('soft_limit_value, hard_limit_value, hard_limit_attribute_code, limit_direction')
             .eq('rule_id', input.ruleId)
             .eq('is_active', true)
             .order('version_number', { ascending: false })
             .limit(1)
-            .maybeSingle();
+            .maybeSingle());
           if (version && !version.hard_limit_attribute_code) {
             input.softLimitValue = version.soft_limit_value ?? null;
             input.hardLimitValue = version.hard_limit_value ?? null;
@@ -443,7 +444,7 @@ export const complianceResolvers = {
           allFunds: Boolean(args.input.allFunds),
         });
 
-        const { data: ruleRow } = await cx(context).from('rules').select('*').eq('id', run.ruleId).maybeSingle();
+        const { data: ruleRow } = ok(await cx(context).from('rules').select('*').eq('id', run.ruleId).maybeSingle());
 
         return {
           run: {
@@ -522,11 +523,11 @@ export const complianceResolvers = {
         const failures: string[] = [];
         const results = await scoreDealFunds(compliance, plans, asOf, dealCode, userId, knowledgeDate);
 
-        const { data: scenarioAttribute } = await writer
+        const { data: scenarioAttribute } = ok(await writer
           .from('attribute_register')
           .select('id')
           .eq('attribute_code', 'POSITION_SCENARIO_CODE')
-          .maybeSingle();
+          .maybeSingle());
         // This deal's proposal positions, as known at the score's knowledge instant. Read
         // with the service role, so only positions held by the funds scored here count:
         // a deal code is unique within a client, not across clients.
@@ -609,31 +610,31 @@ export const complianceResolvers = {
 
   ComplianceRule: {
     versions: async (parent: any, _: any, context: Context) => {
-      const { data } = await cx(context)
+      const { data } = ok(await cx(context)
         .from('rule_versions')
         .select('*, conditions:rule_conditions(*)')
         .eq('rule_id', parent.id)
-        .order('version_number', { ascending: false });
+        .order('version_number', { ascending: false }));
       return withMeasureLines(context, data || []);
     },
 
     currentVersion: async (parent: any, args: { asOfDate?: string; knowledgeDate?: string }, context: Context) => {
       const asOfDate = args.asOfDate || new Date().toISOString().slice(0, 10);
       const knowledgeDate = args.knowledgeDate || new Date().toISOString();
-      const { data } = await cx(context).rpc('resolve_rule_version', {
+      const { data } = ok(await cx(context).rpc('resolve_rule_version', {
         p_rule_id: parent.id,
         p_as_of_date: asOfDate,
         p_knowledge_date: knowledgeDate,
-      });
+      }));
       if (!data || !data.id) return null;
 
-      const { data: conditions } = await cx(context).from('rule_conditions').select('*').eq('rule_version_id', data.id);
+      const { data: conditions } = ok(await cx(context).from('rule_conditions').select('*').eq('rule_version_id', data.id));
       const [version] = await withMeasureLines(context, [{ ...data, conditions: conditions || [] }]);
       return version;
     },
 
     scopeAssignments: async (parent: any, _: any, context: Context) => {
-      const { data } = await cx(context).from('rule_scope_assignments').select('*').eq('rule_id', parent.id);
+      const { data } = ok(await cx(context).from('rule_scope_assignments').select('*').eq('rule_id', parent.id));
       const rows = data || [];
       const labels = await entityLabels(context, rows.map((row: any) => row.entity_id));
       return rows.map((row: any) => {
@@ -649,11 +650,11 @@ export const complianceResolvers = {
 
   ComplianceEvaluationRun: {
     rule: async (parent: any, _: any, context: Context) => {
-      const { data } = await cx(context).from('rules').select('*').eq('id', parent.ruleId).maybeSingle();
+      const { data } = ok(await cx(context).from('rules').select('*').eq('id', parent.ruleId).maybeSingle());
       return data ? mapRule(data) : null;
     },
     results: async (parent: any, _: any, context: Context) => {
-      const { data } = await cx(context).from('rule_evaluation_results').select('*').eq('run_id', parent.id);
+      const { data } = ok(await cx(context).from('rule_evaluation_results').select('*').eq('run_id', parent.id));
       const rows = data || [];
       const labels = await entityLabels(context, rows.map((row: any) => row.anchor_entity_id));
       return rows.map((row: any) => {
@@ -1257,7 +1258,7 @@ async function loadResultContributors(context: Context, resultId: string) {
     const entityIds = [...new Set(rowsIn.map((row) => row.entity_id as string))];
     const info = new Map<string, { code: string; name: string | null }>();
     for (let i = 0; i < entityIds.length; i += 200) {
-      const { data } = await context.supabase.schema('entity_instances').from('master_entities').select('id, entity_code, entity_name').in('id', entityIds.slice(i, i + 200));
+      const { data } = ok(await context.supabase.schema('entity_instances').from('master_entities').select('id, entity_code, entity_name').in('id', entityIds.slice(i, i + 200)));
       for (const row of data || []) info.set(row.id, { code: row.entity_code, name: row.entity_name });
     }
     const totals = new Map<string, number>();

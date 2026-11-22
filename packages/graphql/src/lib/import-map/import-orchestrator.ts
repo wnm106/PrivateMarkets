@@ -10,6 +10,7 @@ import { recommendFieldMappings, MappingRecommendation, FieldMapping } from './f
 import { validateIdentifierMappings, validateIdentifierValues, IdentifierValidationResult } from './identifier-validator';
 import { generateImportPlan, validateImportPlan, planToBatches, ImportPlan, ImportBatch } from './relationship-analyzer';
 import { writeGoldenValue } from '../golden-write';
+import { ok } from '../db-result';
 
 export interface ImportMap {
   id?: string;
@@ -383,12 +384,12 @@ async function importDomainRecords(
         const entityName = identity.entityName || identity.attributes['name'] || entityCode;
 
         // Check if entity already exists
-        const { data: existing } = await supabase
+        const { data: existing } = ok(await supabase
           .from('master_entities')
           .select('id')
           .eq('entity_code', entityCode)
           .eq('domain_code', domainCode)
-          .maybeSingle();
+          .maybeSingle());
 
         if (existing) {
           // Update existing entity
@@ -634,12 +635,12 @@ async function insertEntityRelationships(
     if (!parentKeyValue) continue;
 
     // Find parent entity by key
-    const { data: parentEntity } = await supabase
+    const { data: parentEntity } = ok(await supabase
       .from('master_entities')
       .select('id')
       .eq('domain_code', relMapping.parentDomainCode)
       .eq('entity_code', `${relMapping.parentDomainCode}-${String(parentKeyValue).toUpperCase()}`)
-      .maybeSingle();
+      .maybeSingle());
 
     if (parentEntity) {
       const { error: relationshipError } = await supabase.from('entity_relationships').insert({

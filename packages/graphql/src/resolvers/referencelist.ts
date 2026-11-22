@@ -1,4 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import { ok } from '../lib/db-result';
 
 export const referenceListResolvers = {
   Query: {
@@ -30,11 +31,11 @@ export const referenceListResolvers = {
       if (!data) return null;
 
       const list: any = mapReferenceListSummary(data);
-      const { data: values } = await supabase
+      const { data: values } = ok(await supabase
         .from('reference_list_values')
         .select('*')
         .eq('list_id', data.id)
-        .order('display_order');
+        .order('display_order'));
       const codeById = new Map((values || []).map((row: any) => [row.id, row.value_code]));
       list.values = (values || []).map((row: any) => ({
         ...mapReferenceListValue(row),
@@ -329,11 +330,11 @@ async function normalizeInJs(
   values: string[],
   supabase: SupabaseClient
 ): Promise<any[]> {
-  const { data: listRow } = await supabase
+  const { data: listRow } = ok(await supabase
     .from('reference_list_summary')
     .select('id')
     .eq('list_code', listCode)
-    .maybeSingle();
+    .maybeSingle());
 
   if (!listRow) {
     return values.map(v => ({
@@ -342,11 +343,11 @@ async function normalizeInJs(
     }));
   }
 
-  const { data: listValues } = await supabase
+  const { data: listValues } = ok(await supabase
     .from('reference_list_values')
     .select('value_code, value_label, synonyms')
     .eq('list_id', listRow.id)
-    .eq('is_active', true);
+    .eq('is_active', true));
 
   const entries = listValues || [];
 

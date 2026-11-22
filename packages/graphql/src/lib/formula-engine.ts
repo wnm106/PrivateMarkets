@@ -1,4 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import { ok } from './db-result';
 
 /**
  * Context for evaluating derived attributes
@@ -275,10 +276,10 @@ export class FormulaEngine {
       return { valid: true, missing: [] };
     }
 
-    const { data: existingAttrs } = await this.supabase
+    const { data: existingAttrs } = ok(await this.supabase
       .from('attribute_register')
       .select('attribute_code')
-      .in('attribute_code', dependencies);
+      .in('attribute_code', dependencies));
 
     const existingCodes = new Set(existingAttrs?.map(a => a.attribute_code) || []);
     const missing = dependencies.filter((dep: string) => !existingCodes.has(dep));

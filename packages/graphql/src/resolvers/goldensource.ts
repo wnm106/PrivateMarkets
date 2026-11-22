@@ -1,4 +1,5 @@
 ﻿import { Context } from "../context";
+import { ok } from '../lib/db-result';
 
 /** The tiers of golden_master.preference_decision, in the order it tries them. */
 const DECISION_TIERS = ["MANUAL_OVERRIDE", "CALCULATED", "TEMPLATE_SEQUENCE", "ATTRIBUTE_SEQUENCE", "DATA_SOURCE_SEQUENCE"];
@@ -30,9 +31,9 @@ function receiptIsStale(receivedAt: string | null | undefined, sourceCode: strin
 export const goldenSourceResolvers = {
   Query: {
     goldenSource: async (_: any, args: { entityId: string; attributeCode: string }, context: Context) => {
-      const { data: attr } = await context.supabase
+      const { data: attr } = ok(await context.supabase
         .from("attribute_register").select("id, attribute_code, attribute_name")
-        .eq("attribute_code", args.attributeCode).single();
+        .eq("attribute_code", args.attributeCode).single());
       if (!attr) return null;
 
       const { data, error } = await context.supabase
@@ -84,12 +85,12 @@ export const goldenSourceResolvers = {
     },
 
     templatePrecedenceChain: async (_: any, args: { templateId: string; attributeCode: string }, context: Context) => {
-      const { data: attr } = await context.supabase
-        .from("attribute_register").select("id").eq("attribute_code", args.attributeCode).single();
+      const { data: attr } = ok(await context.supabase
+        .from("attribute_register").select("id").eq("attribute_code", args.attributeCode).single());
       if (!attr) return null;
-      const { data } = await context.supabase
+      const { data } = ok(await context.supabase
         .from("template_attribute_assignments").select("default_precedence_chain, chain_version")
-        .eq("template_id", args.templateId).eq("attribute_id", attr.id).maybeSingle();
+        .eq("template_id", args.templateId).eq("attribute_id", attr.id).maybeSingle());
       const sources = Array.isArray(data?.default_precedence_chain)
         ? (data.default_precedence_chain as string[]).filter((code) => code && code !== "MANUAL")
         : [];
@@ -147,16 +148,16 @@ export const goldenSourceResolvers = {
     updateTemplatePrecedenceChain: async (_: any, args: { templateId: string; attributeCode: string; chain: string[] }, context: Context) => {
       try {
         const { templateId, attributeCode, chain } = args;
-        const { data: attr } = await context.supabase.from("attribute_register").select("id").eq("attribute_code", attributeCode).single();
+        const { data: attr } = ok(await context.supabase.from("attribute_register").select("id").eq("attribute_code", attributeCode).single());
         if (!attr) return { success: false, chainVersion: 0, entitiesResolved: 0, errors: [{ field: "attributeCode", message: "Attribute not found", code: "NOT_FOUND" }] };
 
         // Check if assignment exists; if not, create it
-        const { data: assignment } = await context.supabase
+        const { data: assignment } = ok(await context.supabase
           .from("template_attribute_assignments")
           .select("id, chain_version")
           .eq("template_id", templateId)
           .eq("attribute_id", attr.id)
-          .maybeSingle();
+          .maybeSingle());
 
         const sources = (chain || []).filter((code) => code && code !== "MANUAL");
         const storedChain = sources.length > 0 ? sources : null;
@@ -184,7 +185,7 @@ export const goldenSourceResolvers = {
           chainVersion = newAssignment?.chain_version || 1;
         }
 
-        const { data: template } = await context.supabase.from("domain_templates").select("domain_code, template_code").eq("id", templateId).single();
+        const { data: template } = ok(await context.supabase.from("domain_templates").select("domain_code, template_code").eq("id", templateId).single());
         let resolved = 0;
         if (template) resolved = await batchReresolve(context, template.domain_code, attributeCode, template.template_code);
 
@@ -202,7 +203,7 @@ async function resolveAndPersistGolden(
   context: Context, entityId: string, attributeCode: string,
   _domainCode: string, _templateId: string | null, _validFrom: string
 ): Promise<{ winningSource: string | null; goldenValueId: string | null; goldenValue: string | null }> {
-  const { data: attr } = await context.supabase.from("attribute_register").select("id").eq("attribute_code", attributeCode).single();
+  const { data: attr } = ok(await context.supabase.from("attribute_register").select("id").eq("attribute_code", attributeCode).single());
   if (!attr) throw new Error(`Attribute not found: ${attributeCode}`);
 
   const current = (columns: string) => context.supabase.from("entity_attribute_values")
@@ -225,8 +226,8 @@ async function resolveAndPersistGolden(
   const winner = (rows || []).find((row) => row.golden_source_id && row.source_id === row.golden_source_id);
   let winningSource: string | null = null;
   if (winner?.source_id) {
-    const { data: source } = await context.supabase.schema("entity_instances").from("source_registry")
-      .select("source_code").eq("id", winner.source_id).maybeSingle();
+    const { data: source } = ok(await context.supabase.schema("entity_instances").from("source_registry")
+      .select("source_code").eq("id", winner.source_id).maybeSingle());
     winningSource = source?.source_code ?? null;
   }
   return { winningSource, goldenValueId: winner?.id || null, goldenValue: winner?.golden_value || null };
@@ -273,12 +274,12 @@ async function batchReresolve(
 async function qualifyTemplate(
   context: Context, entityId: string, domainCode: string
 ): Promise<{ templateId: string | null; templateCode: string | null; matched: boolean }> {
-  const { data: templates } = await context.supabase
+  const { data: templates } = ok(await context.supabase
     .from("domain_templates").select("*").eq("domain_code", domainCode).eq("is_active", true)
-    .order("qualification_priority", { ascending: true });
+    .order("qualification_priority", { ascending: true }));
   if (!templates || templates.length === 0) return { templateId: null, templateCode: null, matched: false };
 
-  const { data: entityAttrs } = await context.supabase.from("source_attribute_values").select("*").eq("entity_id", entityId);
+  const { data: entityAttrs } = ok(await context.supabase.from("source_attribute_values").select("*").eq("entity_id", entityId));
   const attributesByCode: Record<string, any> = {};
   (entityAttrs || []).forEach((attr: any) => { if (!attributesByCode[attr.attribute_code]) attributesByCode[attr.attribute_code] = attr.attribute_value; });
 

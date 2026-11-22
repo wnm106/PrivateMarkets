@@ -14,6 +14,7 @@ import type { Context } from '../context';
 import { assertAllocationInputsOnDeal, commitAllocation, loadAllocationDraft, type AllocationHold } from './allocation-store';
 import type { AllocationAdjustment } from './allocation-engine';
 import { assertWhatIfKnowledge, dealSurfaceResults, loadDealScorePlans, ruleVersionsAt, scoreDealFunds } from './deal-compliance';
+import { ok } from './db-result';
 
 export { ownRulesFilter } from './deal-compliance';
 
@@ -144,17 +145,17 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
 }
 
 async function scenarioPositionIds(writer: any, code: string): Promise<Set<string>> {
-  const { data: scenarioAttribute } = await writer
+  const { data: scenarioAttribute } = ok(await writer
     .from('attribute_register')
     .select('id')
     .eq('attribute_code', 'POSITION_SCENARIO_CODE')
-    .maybeSingle();
+    .maybeSingle());
   if (!scenarioAttribute) return new Set();
-  const { data: scenarioRows } = await writer
+  const { data: scenarioRows } = ok(await writer
     .from('entity_attribute_values')
     .select('entity_id')
     .eq('attribute_id', scenarioAttribute.id)
     .eq('golden_value', code)
-    .gte('system_to', new Date().toISOString());
+    .gte('system_to', new Date().toISOString()));
   return new Set((scenarioRows || []).map((row: any) => row.entity_id));
 }
