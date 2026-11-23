@@ -135,3 +135,21 @@ The NAV pack's record types (trial balance lines, capital accounts, valuation su
 It was first dated `20261122150000`, which `20261122150000_notify_collect_client_and_open_check` already uses, and the hosted project had `20261122160000` to `20261122190000` applied, so it was redated to run after them.
 
 Found on the hosted project: `20261122160000_entity_views`, `20261122170000_surface_blueprints`, `20261122180000_provisional_scopes` and `20261122190000_relationship_reads_set_check` are applied there but are in no file on master. Their SQL is in `supabase_migrations.schema_migrations.statements`. `20261122150000_notify_collect_client_and_open_check` is on master and not applied there.
+
+## Applied on 2026-11-23: the audit migrations and everything after them
+
+The web app deployed from master called functions the hosted project did not have. The first one seen was `golden_master.write_value`, which every manual override now writes through. The others were `create_rule_version`, `revise_relationship`, `evaluate_rule_for_client`, `job_run_notify_claim` and `workflow_worker_entity_access`. The 2026-11-20 security migrations had been merged without being applied.
+
+These 26 were applied in version order, in one transaction, through the Management API. A dry run in a rolled-back transaction came first, with `lock_timeout` 10s and `check_function_bodies` off, as `pg_dump` does:
+
+`20261120100000` to `20261120108000`, `20261120130000`, `20261121000000`, `20261121130000`, `20261121130100`, `20261121150000`, `20261121170000`, `20261122004300`, `20261122150000`, `20261122160000_feed_loads_keep_history`, `20261122170000_entity_codes_per_client`, `20261122180000_golden_source_as_known`, `20261122190000_explain_golden_source`, `20261122200000_population_preview_in_database`, `20261122210000_reresolve_golden_in_batches`, `20261122220000`, `20261122230000`, and `20261123052600_entity_restricted_fast_path_scoped`.
+
+Three things differ from a plain `db push`:
+
+- **Six versions are taken on the hosted project.** `20261122160000` to `20261122210000` are recorded there for other migrations (`entity_views`, `surface_blueprints`, `provisional_scopes`, `relationship_reads_set_check`, `nav_pack`, `dq_rules_describe_exceptions`), so master's files with those versions are applied but not recorded. `db push` sees those versions as applied and will not run them again.
+- **`20261120103000_shared_table_reads` ran in a hosted edition.** The hosted project has no `data_connections`, `data_loaders`, `import_maps` or `import_executions`, although `00015` is recorded there. The policy changes on those four tables were wrapped in `to_regclass(...) IS NOT NULL`, so they did nothing there. The SQL that ran is what `statements` records.
+- **`20261123052600_entity_restricted_fast_path_scoped` is new.** `tenancy_hardening` counts only the owning client's grants. The hosted project had already restored the no-grants shortcut (`20261120234000 entity_restricted_fast_path`, in no file here). Applied in order, the hardening would have dropped that shortcut. The new migration keeps both, so a fresh database ends the same.
+
+Before: no grant crossed clients and no support session was open, so the audit's two data clean-ups changed nothing. After: all six functions exist, `metadata_register.evaluate_*_formula` run for the service role only, and the 20 free versions plus `20261123052600` are recorded.
+
+Still not applied on the hosted project: the six older migrations under "Still pending" above, left as they were.
