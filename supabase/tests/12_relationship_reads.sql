@@ -12,6 +12,13 @@ SELECT tests.owner();
 CREATE TABLE tests.rel_links (name text PRIMARY KEY, id uuid NOT NULL, parent uuid NOT NULL, child uuid NOT NULL);
 GRANT SELECT ON tests.rel_links TO authenticated, anon;
 
+-- A link from a client-A record to a client-B record cannot be made through
+-- the table: the same-client trigger refuses it for every role. The read
+-- policy must still hide such a link if one ever exists, so the trigger is off
+-- for these rows only. It is back on before any check runs, and the write
+-- checks below rely on it.
+ALTER TABLE entity_instances.entity_relationships DISABLE TRIGGER entity_relationships_client;
+
 WITH made AS (
     INSERT INTO entity_instances.entity_relationships
         (parent_entity_id, child_entity_id, relationship_type, relationship_code, valid_from)
@@ -28,6 +35,8 @@ SELECT CASE
          ELSE 'B1_B2'
        END, id, parent_entity_id, child_entity_id
 FROM made;
+
+ALTER TABLE entity_instances.entity_relationships ENABLE TRIGGER entity_relationships_client;
 
 -- The policy and the per-record rule must agree for whoever is signed in.
 CREATE OR REPLACE FUNCTION tests.rel_parity(p_label text) RETURNS void
