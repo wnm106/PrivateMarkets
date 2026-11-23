@@ -15,6 +15,8 @@ import { cellResult, errorResult, tapRequestFromArguments, type TapClient } from
 import { signInWithDialog } from '../office/sign-in';
 import { h } from './dom';
 import { mountOverrides } from './overrides';
+import { mountTables } from './tables';
+import type { TableSync } from '../office/table-sync';
 import { activeCellFormula, ensureShortName, hasShortName, insertFormula, onSelectionChanged, recalculateAll } from '../office/workbook';
 
 /**
@@ -27,6 +29,10 @@ interface Services {
   auth: ExcelAuth;
   graphql: GraphQLClient;
   tap: TapClient;
+  /** False when the browser blocks storage for the add-in, so a sign-in lasts only while the workbook is open. */
+  persistentSignIn?: boolean;
+  /** The workbook's synced tables. */
+  tables?: TableSync;
 }
 
 function debounce<T extends unknown[]>(fn: (...args: T) => void, ms: number) {
@@ -85,6 +91,11 @@ export function mountPane(root: HTMLElement, services: Services): void {
         h('p', { className: 'who' }, ['Signed in as ', h('strong', {}, [email])]),
         h('button', { type: 'button', onClick: () => { void signOut(); } }, ['Sign out']),
       );
+      if (services.persistentSignIn === false) {
+        account.append(h('p', { className: 'help' }, [
+          'This browser blocks storage for add-ins, so you will sign in again each time you open the workbook.',
+        ]));
+      }
     } else {
       account.append(
         h('p', { className: 'who' }, ['Sign in with your Tapestry account. Formulas show only what your account can see.']),
@@ -348,6 +359,8 @@ export function mountPane(root: HTMLElement, services: Services): void {
 
   const overrides = h('section', { className: 'overrides' });
   mountOverrides(overrides, { auth, graphql, setStatus, afterSave: () => recalculateAll() });
+  const tablesSection = h('section', { className: 'tables' });
+  if (services.tables) mountTables(tablesSection, { auth, graphql, sync: services.tables, setStatus });
 
   root.replaceChildren(
     h('header', {}, [h('h1', {}, ['Tapestry']), account]),
@@ -369,6 +382,7 @@ export function mountPane(root: HTMLElement, services: Services): void {
     ]),
     selectionNote,
     overrides,
+    ...(services.tables ? [tablesSection] : []),
     h('section', { className: 'workbook' }, [
       refreshButton,
       h('p', { className: 'help' }, [
