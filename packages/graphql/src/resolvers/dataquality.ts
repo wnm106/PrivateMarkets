@@ -163,7 +163,8 @@ export const dataQualityResolvers = {
       }
       
       const limit = pagination?.first || 20;
-      const offset = pagination?.after ? parseInt(atob(pagination.after)) : 0;
+      // A cursor is the index of the last row returned, so the next page starts after it.
+        const offset = pagination?.after ? parseInt(atob(pagination.after), 10) + 1 : 0;
       
       query = query.range(offset, offset + limit - 1).order('detected_at', { ascending: false });
       

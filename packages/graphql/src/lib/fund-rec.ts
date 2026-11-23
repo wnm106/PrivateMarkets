@@ -12,6 +12,8 @@
  * A prior period is the same attribute read at that period's as-of date.
  */
 
+import { buildPack, emptyPack, feeSegments, type PackComponentKey, type PackInput, type PackReview } from './nav-pack';
+
 export const TIE = 5000;
 export const MARK_TOLERANCE_PTS = 1;
 const DRIFT_FLOOR = 100000;
@@ -44,7 +46,7 @@ export interface RecLine {
 }
 
 export type CapitalModel = 'DRAWDOWN' | 'EVERGREEN';
-export type MgmtFeeBasis = 'COMMITMENTS' | 'NET_ASSETS' | 'TOTAL_ASSETS';
+export type MgmtFeeBasis = 'COMMITMENTS' | 'NET_ASSETS' | 'TOTAL_ASSETS' | 'INVESTED_CAPITAL';
 export type PerfFeeBasis = 'WATERFALL' | 'INCOME';
 
 /** A check the report made of itself when it was read: a schedule subtotal, a share-class NAV. */
@@ -172,6 +174,10 @@ export interface RecInput {
     mgmtFeeBasis?: MgmtFeeBasis;
     /** Blank is WATERFALL. */
     perfFeeBasis?: PerfFeeBasis;
+    /** From this date the step-down rate and basis apply. */
+    mgmtFeeStepDownDate?: string | null;
+    mgmtFeeStepDownRatePct?: number | null;
+    mgmtFeeStepDownBasis?: MgmtFeeBasis | null;
   };
   periodEnd: string;
   /** Valid date of the prior period. Comparative attributes are read as of this day. */
@@ -186,7 +192,9 @@ export interface RecInput {
    * The administrator's schedule of investments at the period end: positions
    * whose administrator value is dated the period end. Null when none is loaded.
    */
-  adminSchedule?: { total: number; count: number; sources: RecBind[] } | null;
+  adminSchedule?: { total: number; count: number; sources: RecBind[]; cost?: number | null } | null;
+  /** The rest of the administrator's NAV pack on file for the period: trial balance, capital accounts, valuation support, FX, notices. */
+  pack?: PackInput | null;
   /** The checks the report made of itself, kept on the statement when it was loaded. */
   sourceChecks?: { total: number; ties: number; checks: RecSourceCheck[] } | null;
   evidence: {
@@ -365,6 +373,13 @@ const MATCH = {
   chTotal: { statement: 'CHANGES', label: /^total increase in net assets/i },
   chShares: { statement: 'CHANGES', label: /^net increase from share transactions/i },
   servicing: { statement: 'OPS', label: /servicing fees/i },
+  subsRec: { statement: 'BS_ASSET', label: /(subscriptions|contributions|capital call)s? receivable/i },
+  distPayable: { statement: 'BS_LIABILITY', label: /distributions? payable/i },
+  derivAssets: { statement: 'BS_ASSET', label: /derivative assets|forward (currency )?contracts?.*asset|unrealized appreciation on (forward|derivative)/i },
+  derivLiabilities: { statement: 'BS_LIABILITY', label: /derivative liabilities|forward (currency )?contracts?.*liabilit|unrealized depreciation on (forward|derivative)/i },
+  realizedTotal: { statement: 'OPS', label: /^net realized gain/i, role: /^(SUBTOTAL|TOTAL)$/i },
+  fxRealized: { statement: 'OPS', label: /realized (gain|loss|gain \(loss\)) on (foreign )?currenc|realized.*foreign exchange/i },
+  fxUnrealized: { statement: 'OPS', label: /unrealized.*(on (foreign )?currenc|foreign exchange)/i },
 } satisfies Record<string, Matcher>;
 
 type MatchKey = keyof typeof MATCH;
@@ -418,7 +433,9 @@ export interface RecBind {
 
 export interface RecCheck {
   id: string;
-  group: 'statements' | 'evidence';
+  group: 'statements' | 'evidence' | 'pack';
+  /** The part of the NAV pack a pack check is about. */
+  component?: PackComponentKey;
   /** Where a check came from when it is not the reconciliation's own: the report's check of itself. */
   origin?: 'report';
   label: string;
@@ -572,8 +589,12 @@ export interface RecReview {
     id: string; name: string; admin: number; ours: number; difference: number;
     adminSources: RecBind[]; oursSources: RecBind[];
   }>;
+  /** The NAV pack, part by part. */
+  pack: PackReview;
   mgmtFee: {
     basis: MgmtFeeBasis;
+    /** The fee terms for each part of the period: two parts when the fee steps down in it. */
+    segments: Array<{ from: string; to: string; share: number; ratePct: number | null; basis: string; base: number | null }>;
     rate: number | null; base: number | null; share: number; recalculated: number | null; admin: number | null;
     difference: number | null; differencePct: number | null; impliedBase: number | null;
     sources: { rate: RecBind[]; base: RecBind[]; recalculated: RecBind[]; admin: RecBind[]; difference: RecBind[]; impliedBase: RecBind[] };
@@ -615,6 +636,10 @@ const ATTR: Record<string, [name: string, dataType: string, domainCode: string]>
   FUND_PREF_RETURN_PCT: ['Preferred Return', 'PERCENTAGE', 'FUND'],
   FUND_CARRY_PCT: ['Carried Interest', 'PERCENTAGE', 'FUND'],
   FUND_CATCH_UP_PCT: ['Catch-up', 'PERCENTAGE', 'FUND'],
+  FUND_MGMT_FEE_STEPDOWN_DATE: ['Management Fee Step-down Date', 'DATE', 'FUND'],
+  FUND_MGMT_FEE_STEPDOWN_RATE_PCT: ['Management Fee Rate After Step-down', 'PERCENTAGE', 'FUND'],
+  FUND_MGMT_FEE_STEPDOWN_BASIS: ['Management Fee Basis After Step-down', 'REFERENCE_LIST', 'FUND'],
+  FUND_NAV_PACK_REQUIRED: ['NAV Pack Components Required', 'REFERENCE_LIST', 'FUND'],
   FUND_TOTAL_COMMITMENTS: ['Total Commitments', 'CURRENCY', 'FUND'],
   FUND_NET_IRR: ['Net IRR', 'PERCENTAGE', 'FUND'],
   STATEMENT_RECEIVED_DATE: ['Received', 'DATE', 'NAV_STATEMENT'],
@@ -1151,8 +1176,8 @@ export function buildReview(input: RecInput): RecReview {
   const checksByKey = Object.fromEntries(checks.map((check) => [check.id, check]));
   const evidenceChecks = checks.filter((check) => !(check.id === 'facility' && !fund.hasFacility));
   const scoped = checks.filter((check) => evidenceChecks.includes(check));
-  const breaks = scoped.filter((check) => check.result === 'Break').length;
-  const missing = scoped.filter((check) => check.result === 'Missing').length;
+  let breaks = scoped.filter((check) => check.result === 'Break').length;
+  let missing = scoped.filter((check) => check.result === 'Missing').length;
 
   /* roll-forward ------------------------------------------------------- */
   const roll = buildRoll(input.positions, lines, periodEnd, input.priorAsOf, input.priorKnowledge);
@@ -1178,22 +1203,40 @@ export function buildReview(input: RecInput): RecReview {
 
   // management fee: the rate on its base for the months the statement covers.
   const share = spanMonths / 12;
-  const mgmtFeeBasis: MgmtFeeBasis = fund.mgmtFeeBasis === 'NET_ASSETS' || fund.mgmtFeeBasis === 'TOTAL_ASSETS' ? fund.mgmtFeeBasis : 'COMMITMENTS';
+  const basisOf = (value: string | null | undefined): MgmtFeeBasis =>
+    value === 'NET_ASSETS' || value === 'TOTAL_ASSETS' || value === 'INVESTED_CAPITAL' ? value : 'COMMITMENTS';
+  const mgmtFeeBasis: MgmtFeeBasis = basisOf(fund.mgmtFeeBasis);
   const average = (now: number | null, then: number | null) => (present(now) && present(then) ? (now + then) / 2 : now);
-  const feeBase = mgmtFeeBasis === 'NET_ASSETS'
+  const investedCapital = input.adminSchedule?.cost ?? (input.pack?.holdings.length && input.pack.holdings.some((holding) => present(holding.cost))
+    ? sum(input.pack.holdings.map((holding) => holding.cost)) : null);
+  const baseFor = (basis: MgmtFeeBasis) => basis === 'NET_ASSETS'
     ? average(navReported, priorNav)
-    : mgmtFeeBasis === 'TOTAL_ASSETS' ? average(assets, P('assets')) : fund.commitments;
-  const basisLabel = mgmtFeeBasis === 'NET_ASSETS' ? 'average net assets' : mgmtFeeBasis === 'TOTAL_ASSETS' ? 'average total assets' : 'commitments';
-  const feeRate = fund.feeRatePct;
+    : basis === 'TOTAL_ASSETS' ? average(assets, P('assets')) : basis === 'INVESTED_CAPITAL' ? investedCapital : fund.commitments;
+  const basisLabelOf = (basis: MgmtFeeBasis) => basis === 'NET_ASSETS' ? 'average net assets' : basis === 'TOTAL_ASSETS' ? 'average total assets' : basis === 'INVESTED_CAPITAL' ? 'invested capital' : 'commitments';
+  // The fee steps down, usually at the end of the investment period, to a new rate and often a new basis.
+  const feeTerms = feeSegments({
+    ratePct: fund.feeRatePct, basis: mgmtFeeBasis, stepDownDate: fund.mgmtFeeStepDownDate ?? null,
+    stepDownRatePct: fund.mgmtFeeStepDownRatePct ?? null, stepDownBasis: fund.mgmtFeeStepDownBasis ?? null,
+  }, previous, periodEnd, spanMonths).map((segment) => ({ ...segment, base: baseFor(basisOf(segment.basis)) }));
+  const lastTerms = feeTerms[feeTerms.length - 1];
+  const feeBase = feeTerms.length === 1 ? feeTerms[0].base : lastTerms.base;
+  const basisLabel = feeTerms.length === 1 ? basisLabelOf(mgmtFeeBasis) : feeTerms.map((segment) => basisLabelOf(basisOf(segment.basis))).join(', then ');
+  const feeRate = feeTerms.length === 1 ? feeTerms[0].ratePct : lastTerms.ratePct;
   const mgmtAdmin = A('mgmt') ?? A('accFee');
-  const recalculated = present(feeBase) && present(feeRate) ? feeBase * (feeRate / 100) * share : null;
+  const recalculated = feeTerms.every((segment) => present(segment.base) && present(segment.ratePct))
+    ? sum(feeTerms.map((segment) => segment.base! * (segment.ratePct! / 100) * segment.share))
+    : null;
   const mgmtDiff = present(mgmtAdmin) && present(recalculated) ? mgmtAdmin - recalculated : null;
   const mgmtPct = present(mgmtDiff) && recalculated ? mgmtDiff / recalculated : null;
   const impliedBase = present(mgmtAdmin) && present(feeRate) && feeRate ? mgmtAdmin / share / (feeRate / 100) : null;
+  const stepDownNote = feeTerms.length > 1 ? ` The fee steps down on ${addDays(lastTerms.from, 1)} to ${lastTerms.ratePct}% on ${basisLabelOf(basisOf(lastTerms.basis))}; the period is charged at each rate for its days.` : '';
   const rateSource = fundOf('FUND_MGMT_FEE_RATE_PCT');
-  const baseSource = mgmtFeeBasis === 'NET_ASSETS'
+  const baseSourceOf = (basis: MgmtFeeBasis) => basis === 'NET_ASSETS'
     ? binds(lineOf('netAssets'), priorOf('netAssets'), fundOf('FUND_MGMT_FEE_BASIS'))
-    : mgmtFeeBasis === 'TOTAL_ASSETS' ? binds(lineOf('assets'), priorOf('assets'), fundOf('FUND_MGMT_FEE_BASIS')) : binds(fundOf('FUND_TOTAL_COMMITMENTS'));
+    : basis === 'TOTAL_ASSETS' ? binds(lineOf('assets'), priorOf('assets'), fundOf('FUND_MGMT_FEE_BASIS'))
+      : basis === 'INVESTED_CAPITAL' ? binds(input.adminSchedule?.sources ?? [], fundOf('FUND_MGMT_FEE_BASIS')) : binds(fundOf('FUND_TOTAL_COMMITMENTS'));
+  const baseSource = binds(...feeTerms.map((segment) => baseSourceOf(basisOf(segment.basis))),
+    feeTerms.length > 1 ? binds(fundOf('FUND_MGMT_FEE_STEPDOWN_DATE'), fundOf('FUND_MGMT_FEE_STEPDOWN_RATE_PCT'), fundOf('FUND_MGMT_FEE_STEPDOWN_BASIS')) : []);
   const frequencySource = fundOf('FUND_CLOSE_FREQUENCY');
   const mgmtLine = lineFor(lines, 'mgmt') ?? lineFor(lines, 'accFee');
   const mgmtAdminSource = adminBind(mgmtLine);
@@ -1202,9 +1245,9 @@ export function buildReview(input: RecInput): RecReview {
   if (present(mgmtPct) && Math.abs(mgmtPct) > 0.005) {
     addItem({
       id: 'fee', tab: 'fees', title: 'Management fee accrual', admin: mgmtAdmin!, ours: recalculated!, effect: mgmtAdmin! - recalculated!, unit: 'USD', drift: false,
-      why: mgmtFeeBasis === 'COMMITMENTS'
+      why: (feeTerms.length === 1 && mgmtFeeBasis === 'COMMITMENTS'
         ? `Admin implies a fee base of $${money(impliedBase!)}M against $${money(feeBase!)}M commitments. Check for a subsequent close or day-count difference.`
-        : `The fee implies a base of $${money(impliedBase!)}M against $${money(feeBase!)}M ${basisLabel} over ${spanMonths} months. The fee is charged on each month's opening balance, so a large flow in the period moves it; ask for the monthly fee calculation.`,
+        : `The fee implies a base of $${money(impliedBase!)}M against $${money(feeBase!)}M ${basisLabel} over ${spanMonths} months. The fee is charged on each month's opening balance, so a large flow in the period moves it; ask for the monthly fee calculation.`) + stepDownNote,
       adminSources: binds(mgmtAdminSource), oursSources: feeOurs, effectSources: feeEffect,
     });
   }
@@ -1470,6 +1513,34 @@ export function buildReview(input: RecInput): RecReview {
   });
   const stepsDone = steps.filter((step) => step.state === 'Done').length;
 
+  /* the NAV pack, part by part ------------------------------------------ */
+  const statementTitles: Record<string, string> = { BS_ASSET: 'Balance sheet', OPS: 'Statement of operations', CHANGES: 'Changes in net assets', CASH: 'Cash flows' };
+  const pack = buildPack({
+    fund: { id: fund.id, name: fund.name, capitalModel, feeRatePct: fund.feeRatePct, carryPct: fund.carryPct },
+    periodEnd, previous, spanMonths, lagDays: fund.lagDays,
+    amount: (key) => key.startsWith('code:') ? (lines.find((line) => line.code === key.slice(5))?.admin ?? null) : (key in MATCH ? A(key as MatchKey) : null),
+    prior: (key) => (key in MATCH ? P(key as MatchKey) : null),
+    lineSources: (key) => key.startsWith('code:')
+      ? binds(dated(adminBind(lines.find((line) => line.code === key.slice(5))), periodEnd, null))
+      : key in MATCH ? binds(lineOf(key as MatchKey)) : [],
+    statementsWithFigures: Object.entries(statementTitles)
+      .filter(([statement]) => lines.some((line) => (line.statement === statement || (statement === 'BS_ASSET' && line.statement.startsWith('BS_'))) && line.admin != null))
+      .map(([, title]) => title),
+    fee: { segments: feeTerms, admin: mgmtAdmin, sources: binds(mgmtAdminSource, feeOurs) },
+    perf: {
+      basis: perfFeeBasis, ready: perfReady, contributions, distributions, profit, hurdle, excess, carry, admin: perfAdmin,
+      carryPct, catchUpPct, sources: binds(carrySources),
+    },
+    checks: scoped,
+    items,
+  }, input.pack ?? emptyPack());
+  scoped.push(...pack.checks);
+  breaks = scoped.filter((check) => check.result === 'Break').length;
+  missing = scoped.filter((check) => check.result === 'Missing').length;
+  const packExpected = pack.components.filter((part) => part.expected);
+  const packMissing = packExpected.filter((part) => !part.onFile);
+  const packRequired = pack.components.filter((part) => part.required);
+
   /* readiness: every input the rec needs is on file -------------------- */
   const positionsWithMarks = input.positions.filter((item) => present(item.mark) && present(item.agentMark)).length;
   const readiness: RecReadiness[] = [
@@ -1490,6 +1561,15 @@ export function buildReview(input: RecInput): RecReview {
         : income ? `Fee rate on ${basisLabel}, incentive fee rate, hurdle and catch-up` : `Fee rate, ${basisLabel}, preferred return, carry`;
       return { key: 'terms', label: income ? 'Fee and incentive fee terms' : 'Fee and waterfall terms', ok, required: true, detail, sources: binds(rateSource, baseSource, prefSource, carryRateSource, catchUpSource) };
     })(),
+    {
+      key: 'pack', label: 'NAV pack',
+      ok: packRequired.length ? packRequired.every((part) => part.onFile) : packMissing.length === 0,
+      required: packRequired.length > 0,
+      detail: packMissing.length
+        ? `${packExpected.length - packMissing.length} of ${packExpected.length} expected parts on file. Missing: ${packMissing.map((part) => part.label).join(', ')}`
+        : `All ${packExpected.length} expected parts on file`,
+      sources: binds(fundOf('FUND_NAV_PACK_REQUIRED')),
+    },
     ...(input.sourceChecks
       ? [{
         key: 'report', label: 'The report adds up', ok: input.sourceChecks.ties === input.sourceChecks.total, required: false,
@@ -1581,8 +1661,10 @@ export function buildReview(input: RecInput): RecReview {
     roll,
     marks,
     accruals,
+    pack,
     mgmtFee: {
       basis: mgmtFeeBasis,
+      segments: feeTerms,
       rate: feeRate, base: feeBase, share, recalculated, admin: mgmtAdmin, difference: mgmtDiff,
       differencePct: present(mgmtPct) ? mgmtPct * 100 : null, impliedBase,
       sources: { rate: binds(rateSource), base: baseSource, recalculated: feeOurs, admin: binds(mgmtAdminSource), difference: feeEffect, impliedBase: binds(mgmtAdminSource, rateSource) },

@@ -9,10 +9,23 @@ import {
   type IdentityProviderKind,
 } from '../lib/enterprise-sso';
 import { requireUuid } from '../lib/input-guards';
+import { ok } from '../lib/db-result';
 
 // Always the caller's JWT. The service role bypasses row level security, so
 // tenancy reads and writes go through `supabase` and Postgres policies.
 // `supabaseAdmin` is reserved for auth.admin invite lookups.
+/**
+ * The Supabase address and service key for SSO registration. From the entry
+ * point's own config (on Workers they are on `env`, not process.env), else the
+ * Node process environment.
+ */
+function serviceConfig(context: Context): { supabaseUrl: string; serviceRoleKey: string } {
+  return {
+    supabaseUrl: context.config?.supabaseUrl || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
+    serviceRoleKey: context.config?.serviceRoleKey || process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  };
+}
+
 function tn(context: Context) {
   return context.supabase.schema('tenancy');
 }
@@ -313,7 +326,7 @@ export const tenancyResolvers = {
         if (error) throw error;
 
         if (args.input.permissionCodes?.length) {
-          const { data: permissions } = await tn(context).from('permissions').select('id, permission_code').in('permission_code', args.input.permissionCodes);
+          const { data: permissions } = ok(await tn(context).from('permissions').select('id, permission_code').in('permission_code', args.input.permissionCodes));
           const rows = (permissions || []).map((p: any) => ({ role_id: role.id, permission_id: p.id }));
           if (rows.length) {
             const { error: rpError } = await tn(context).from('role_permissions').insert(rows);
@@ -530,10 +543,10 @@ export const tenancyResolvers = {
         if (!profile) {
           return { success: false, errors: [{ field: 'general', message: 'Profile not found', code: 'NOT_FOUND' }] };
         }
-        const { data: roleRows } = await tn(context)
+        const { data: roleRows } = ok(await tn(context)
           .from('user_roles')
           .select('role:roles(role_permissions(permission:permissions(permission_code)))')
-          .eq('user_id', context.user.id);
+          .eq('user_id', context.user.id));
         const isTenantAdmin = profile.is_tenant_admin ?? false;
         const access = collectAccess(roleRows, isTenantAdmin);
         const meResult = {
@@ -632,8 +645,7 @@ export const tenancyResolvers = {
         if (!registers) return { success: true, errors: [] };
 
         const registration = await syncIdentityProvider({
-          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
-          serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+          ...serviceConfig(context),
           row: {
             provider: write.provider,
             emailDomain: write.emailDomain,
@@ -678,8 +690,7 @@ export const tenancyResolvers = {
         if (error) throw error;
         if (!row) return { success: true, errors: [] };
         await removeRegisteredProvider({
-          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
-          serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+          ...serviceConfig(context),
           provider: row.provider,
           ssoProviderId: row.sso_provider_id,
           oidcIdentifier: row.oidc_identifier,

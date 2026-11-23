@@ -16,11 +16,10 @@ import { compactIdentifier, normalizeName } from '../../../graphql/src/lib/entit
  * against, offered as choices, or handed back to be written to. Another
  * client's record never enters the index, even if a caller adds it.
  *
- * Record codes are unique across every client in the database, so a code held
- * elsewhere cannot be given to a new record here. The index is told those
- * codes only (reserveCode), and a row that would need one is refused with a
- * message that gives no reason. It says nothing about who holds the code, or
- * whether anyone does.
+ * Record codes are unique within a client, so another client's codes mean
+ * nothing here: a new record may take a code another client also uses. A code
+ * the caller says is unavailable (reserveCode) is refused with a message that
+ * gives no reason.
  */
 
 export interface IdentifierCatalog {
@@ -140,7 +139,7 @@ export class EntityMatchIndex {
   private readonly byCodeName = new Map<string, MatchEntity[]>();
   private readonly byIdentifier = new Map<string, MatchEntity[]>();
   private readonly byComposite = new Map<string, MatchEntity[]>();
-  /** Codes the database already holds outside this client. The code is all that is kept. */
+  /** Codes a new record here may not take. The code is all that is kept. */
   private readonly reservedCodes = new Set<string>();
 
   constructor(
@@ -149,7 +148,7 @@ export class EntityMatchIndex {
     private readonly clientId: string,
   ) {}
 
-  /** A code a new record here cannot take, because the database holds it for a record this client does not own. */
+  /** A code a new record here cannot take. */
   reserveCode(code: string): void {
     const key = code.trim();
     if (key) this.reservedCodes.add(key);
@@ -160,11 +159,8 @@ export class EntityMatchIndex {
   }
 
   add(entity: MatchEntity): void {
-    // A record of another client is never matched, offered or written to. All it can do is hold its code.
-    if (entity.clientId !== this.clientId) {
-      this.reserveCode(entity.code);
-      return;
-    }
+    // A record of another client is never matched, offered or written to, and its code does not count here.
+    if (entity.clientId !== this.clientId) return;
     if (this.byId.has(entity.id)) return;
     this.byId.set(entity.id, entity);
     this.indexCode(entity, entity.code);

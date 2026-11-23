@@ -9,6 +9,13 @@ import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useSurfaceDates } from '@/components/certification/CertificationScope';
 import { usePublishTab } from '@/lib/view-context';
 import { addMonths, heldShare, monthKey, projectSchedule, spreadFromPricing, type ScheduleDraw, type ScheduleMonth } from '@/lib/servicing-schedule';
+import { useLatestRequest } from '@/lib/use-latest-request';
+
+/** What the Servicing tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const SERVICING_TAB = {
+  label: 'Servicing',
+  purpose: 'How the facility runs after close: terms and coupon, draws on the unfunded commitments, covenants and reporting due.',
+};
 
 const COVENANT_TESTS = `
   query DealCovenantTests($dealId: ID!, $asOfDate: Date) {
@@ -229,7 +236,9 @@ export function DealServicing({
   const [error, setError] = useState<string | null>(null);
   const [trancheId, setTrancheId] = useState('ALL');
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     setLoading(true);
     setError(null);
     const result = await graphqlQuery<{
@@ -237,7 +246,8 @@ export function DealServicing({
       covenants: { edges: Array<{ node: Node }> };
       reports: { edges: Array<{ node: Node }> };
       deal: { attributes: Record<string, unknown> } | null;
-    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only');
+    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     if (result.error?.message) {
       setError(result.error.message);
       setLoading(false);
@@ -297,7 +307,7 @@ export function DealServicing({
       }))
       .sort((a, b) => a.due.localeCompare(b.due)));
     setLoading(false);
-  }, [asOfDate, dealId, knowledgeDate, rows, tranches]);
+  }, [latest, asOfDate, dealId, knowledgeDate, rows, tranches]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -371,8 +381,7 @@ export function DealServicing({
     .filter((row) => row.funded > 0 || row.unfunded > 0);
 
   usePublishTab('servicing', {
-    label: 'Servicing',
-    purpose: 'How the facility runs after close: terms and coupon, draws on the unfunded commitments, covenants and reporting due.',
+    ...SERVICING_TAB,
     howToRead: "Pro forma until the deal funds. funds shows funded and unfunded commitments per fund. draws are scheduled or actual, by status. covenants: calculated is the value under the deal's own definition, certificate is the borrower's reported figure, house is the same borrower under the house standard; status is Pass, Watch (inside a 10% cushion) or Breach.",
     data: {
       terms,

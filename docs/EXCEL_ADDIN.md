@@ -12,6 +12,8 @@ The Tapestry pane has a formula builder. It searches attributes first, then reco
 
 The pane can also save new values as manual entries, the same as a manual override on the record screen. Formulas only read; writing is always an action someone takes in the pane.
 
+The pane also brings whole tables into the workbook: the records of one entity type, with the columns you choose, filtered on the way in. A filter can point at a cell, and changing that cell refreshes the table ([Synced tables](#synced-tables)).
+
 ## The pieces
 
 | Piece | Where |
@@ -28,6 +30,11 @@ The pane can also save new values as manual entries, the same as a manual overri
 | The one manual-override writer (record screen, chat, workflows, Excel) | `packages/graphql/src/lib/source-write.ts` |
 | Reading a value as an attribute stores it (loads and overrides) | `packages/graphql/src/lib/attribute-values.ts` |
 | The Override values panel | `apps/excel-addin/src/ui/overrides.ts`, `apps/excel-addin/src/lib/overrides.ts` |
+| Synced tables: filters, the query, refresh plans (pure, tested) | `apps/excel-addin/src/lib/tables.ts` |
+| Synced tables: reading filter cells, writing the Excel table, the saved definitions | `apps/excel-addin/src/office/tables.ts` |
+| Synced tables: refreshing and auto-refresh | `apps/excel-addin/src/office/table-sync.ts` |
+| The Tables panel | `apps/excel-addin/src/ui/tables.ts` |
+| The rows a table reads (`gridQuery`, the same query as the app's grids) | `packages/graphql/src/resolvers/reporting.ts`, `public.report_grid` |
 
 ## The function
 
@@ -149,6 +156,61 @@ Because the record screen, chat and workflows share the writer, they changed too
 - Values are now typed. Before, they were stored as text only, without the typed number and date columns loads fill, and a value of the wrong type was accepted.
 - Calculations are now refreshed after a manual override. Before, only `addCompetingSource` refreshed them.
 
+## Synced tables
+
+A synced table is an ordinary Excel table that Tapestry fills: the records of one entity type, one row each, with the columns you choose. Filters are applied by Tapestry before anything is sent, so a table holds only the records you asked for, not the whole database.
+
+### Making one
+
+1. Select an empty cell with room below and to the right. In **Tables**, choose **New table**.
+2. **Records of**: the entity type, such as Fund.
+3. **Columns**: Code and Name always come first. Search for attributes to add more.
+4. **Filters**: a field, a test, and a value. The value is either typed or points at cells:
+
+   | Value | Means |
+   | --- | --- |
+   | `2020`, `Buyout`, `2026-09-30`, `7.5%` | Typed, read as the field's type |
+   | `FUND-1, FUND-2` or `2026-01-01; 2026-12-31` | A list, for *is one of*, *is not one of* and *between*. Separate with commas, semicolons or new lines |
+   | `=B2`, `=Inputs!B2`, `='Q3 inputs'!$B$2` | The value of that cell. Without a sheet it means the table's own sheet. **Cell** fills in the selected cell |
+   | `=Inputs!B2:B20` | The values in a range, as a list. Blank cells are skipped |
+   | blank, or a blank cell | No filter. Clearing a filter cell widens the table rather than emptying it |
+
+   Only text that starts with `=` is a reference, so a code such as `AB12` is still a code. A filter can name a field that is not one of the columns.
+5. **As of**: blank for today, a date, or a cell such as `=B1`.
+6. **Sort**, and **Refresh when a filter cell changes** (on unless you turn it off).
+7. **Insert at selected cell**. The table is named `Tapestry_<TYPE>_<n>`, so formulas can use it: `=SUM(Tapestry_FUND_1[Net asset value])`.
+
+### What a refresh writes
+
+- **Values with their types.** Numbers as numbers, dates as Excel dates, text as text. A new table formats text columns as text, so `00123` keeps its zeros, and dates as `yyyy-mm-dd`.
+- **Your formats stay.** A refresh writes values only. Rows it adds take the format of the table's first row, column by column, so a date format you chose holds.
+- **Never a formula.** Text from Tapestry that starts with `=`, `+` or `@` is written with a leading apostrophe, so a record named `=HYPERLINK(...)` shows as that text and never runs.
+- **In place.** The rows the table has are overwritten, extra rows are deleted and missing rows are added. Cells below the table move up or down with it, as with any Excel table; cells beside it stay.
+- **Tapestry's columns only.** Put your own columns and formulas beside the table, not inside it. If the table gains or loses a column in Excel, a refresh stops and says so rather than writing into it.
+- **At most 50,000 rows.** Rows are read 2,000 at a time and written 1,000 at a time. When more records match, the first page says so, nothing more is read, the table is left as it is, and it says to narrow the filters. A new table checks for room once the first page says how many rows match.
+- **Each person's own records.** Rows are read by `gridQuery` under the signed-in person's token, so row security applies exactly as in the app. A workbook passed to someone else refreshes to what that person can see.
+
+### Auto-refresh
+
+A table with auto-refresh on refreshes when a value it is filtered on changes:
+
+- **An edit** to a filter cell, or to the as-of cell.
+- **A recalculation** that changes one: a filter cell holding `=EOMONTH(TODAY(), -1)`, a drop-down, or a cell fed from another sheet. After Excel calculates, the add-in reads the filter cells again and refreshes only the tables whose filter values differ from their last refresh. A recalculation that changes nothing sends no query.
+
+Quick edits do not start a refresh each: the add-in waits until changes stop for about a second, refreshes a table once at a time, and refreshes again if a filter changed during the refresh, so the last value always wins. A filter value that does not fit its field, such as text in a number filter, is shown on the table, and the table keeps its rows until the value is fixed.
+
+While any table in a workbook has auto-refresh on, the add-in asks Excel to start it with the workbook (`Office.addin.setStartupBehavior`), so it watches from the moment the file opens. On opening, a table whose filter cells changed while the add-in was closed is refreshed; the others are left alone. When no table has auto-refresh, the add-in goes back to starting only when the pane is opened. A signed-out add-in does not refresh; tables keep their last values.
+
+### Changing and stopping
+
+- **Edit** changes the filters, as-of, sort or columns, then refreshes. Removed columns are deleted and new ones are added at the right, in the same Excel table, so formulas on the columns that stay keep working. The entity type cannot be changed; make a new table.
+- **Refresh** and **Refresh all** refresh on request. Refresh all carries on past a table that fails, and names the ones that did.
+- **Stop syncing** (click twice) forgets the definition. The table and its values stay as an ordinary Excel table.
+
+### Where a table's definition is kept
+
+In the workbook, as an add-in setting (`tapestry.tables` in `Office.context.document.settings`): the entity type, columns, filters and their references, as-of, sort, auto-refresh, where the table is, and a signature of the filter values at the last refresh. It travels with the file. No data from Tapestry is kept there; the values in the table are ordinary cells.
+
 ## Deploying
 
 1. Apply `20261121150100_excel_tap_matches.sql` to the hosted project before the web app that calls it is deployed (docs/MIGRATIONS.md). It only adds two functions.
@@ -181,7 +243,11 @@ EXCEL_ADDIN_ORIGIN=https://localhost:3000 npm run dev -- --experimental-https
 - **Knowledge date.** `tapValues` takes one, but the function and the pane do not offer it yet. Formulas read current knowledge.
 - **Clearing a manual entry from Excel.** Clear it on the record screen. A blank value in the pane is skipped rather than read as "clear".
 - **More than 50 cells at once.** The pane lists the first 50 TAP cells of a selection. Larger edits are a file load, which stages and checks a batch (docs/STAGING.md).
-- **Ranges.** One cell asks for one value. A spilled array of attributes across records (for example a column of funds by a row of fields) is the natural next function.
+- **Ranges.** One cell asks for one value. A spilled array of attributes across records (for example a column of funds by a row of fields) is the natural next function. Synced tables cover the case of many records by many fields.
+- **Saved views as tables.** A synced table is built from an entity type, columns and filters. Starting one from a saved view needs the saved views work merged first.
+- **Knowledge date on tables.** `gridQuery` takes one; the Tables panel does not offer it yet. Tables read current knowledge.
+- **Writing from a synced table.** Its cells are values, not TAP formulas, so **Override selected cells** does not read them. Change records on the record screen or with TAP cells.
+- **Reordering columns.** A table whose columns are edited in an order that is not "keep these, add those at the end" is rebuilt at the same corner, which breaks formulas that refer to it. The pane only makes the in-place shape.
 - **1904 dates.** A workbook on the 1904 date system passes date cells four years off. Use `"YYYY-MM-DD"` text there.
 - **Microsoft single sign-on inside Office.** Sign-in uses the dialog. Office's own SSO (`getAccessToken`) could skip it for organizations on Microsoft Entra ID.
 - **Step-up on bearer reads.** Excel saves check `current_sign_in_decision`. Reads through `/api/graphql` do not, for any bearer client. The connect page will not hand over a session that still owes an authenticator step, and refreshing keeps the session's level.

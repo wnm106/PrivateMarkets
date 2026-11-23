@@ -2,10 +2,11 @@ import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
-import { BlockList, isIP, type LookupFunction } from 'node:net';
+import { isIP, type LookupFunction } from 'node:net';
 import { posix } from 'node:path';
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isPublicAddress } from '@tapestrai/mcp-server/src/lib/public-address';
 import { JobError } from './worker';
 
 /**
@@ -277,98 +278,11 @@ export function emailConnector(supabase: SupabaseClient, connection: ConnectionS
 //      connect, a name that answers differently the second time would get
 //      past the check.
 
-function blockList(family: 'ipv4' | 'ipv6', subnets: Array<[string, number]>): BlockList {
-  const list = new BlockList();
-  for (const [network, prefix] of subnets) list.addSubnet(network, prefix, family);
-  return list;
-}
-
-/** IPv4 that is not a host on the public internet. */
-const NOT_PUBLIC_V4 = blockList('ipv4', [
-  ['0.0.0.0', 8], // this network
-  ['10.0.0.0', 8], // private
-  ['100.64.0.0', 10], // shared by carriers (CGNAT)
-  ['127.0.0.0', 8], // loopback
-  ['169.254.0.0', 16], // link-local, where cloud metadata services live
-  ['172.16.0.0', 12], // private
-  ['192.0.0.0', 24], // protocol assignments
-  ['192.0.2.0', 24], // documentation
-  ['192.88.99.0', 24], // 6to4 relays
-  ['192.168.0.0', 16], // private
-  ['198.18.0.0', 15], // benchmarking
-  ['198.51.100.0', 24], // documentation
-  ['203.0.113.0', 24], // documentation
-  ['224.0.0.0', 4], // multicast
-  ['240.0.0.0', 4], // reserved, and broadcast
-]);
-
 /**
- * The only IPv6 that can be a public host is global unicast. Everything outside
- * it is refused without being listed: ::, ::1, unique-local fc00::/7, link-local
- * fe80::/10, multicast ff00::/8, and whatever is set aside next.
+ * Whether an IP address is a host on the public internet. One rule for the
+ * worker and the assistant's MCP connections: see mcp-server/src/lib/public-address.ts.
  */
-const GLOBAL_V6 = blockList('ipv6', [['2000::', 3]]);
-
-/** Global unicast that is set aside for something other than hosts. */
-const NOT_PUBLIC_V6 = blockList('ipv6', [
-  ['2001:2::', 48], // benchmarking
-  ['2001:10::', 28], // ORCHID
-  ['2001:20::', 28], // ORCHIDv2
-  ['2001:db8::', 32], // documentation
-  ['3fff::', 20], // documentation
-]);
-
-/** The eight 16-bit groups of an IPv6 address that isIP has already accepted. */
-function groupsOf(address: string): number[] {
-  // A dotted tail (::ffff:1.2.3.4) is the last two groups.
-  const dotted = /^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(address);
-  const text = dotted
-    ? `${dotted[1]}${((Number(dotted[2]) << 8) | Number(dotted[3])).toString(16)}:${((Number(dotted[4]) << 8) | Number(dotted[5])).toString(16)}`
-    : address;
-  const [head, tail] = text.split('::');
-  const left = head ? head.split(':') : [];
-  const right = tail ? tail.split(':') : [];
-  // "::" stands for as many zero groups as it takes to make eight.
-  const zeros = tail === undefined ? 0 : 8 - left.length - right.length;
-  return [...left, ...Array<string>(zeros).fill('0'), ...right].map((group) => parseInt(group, 16));
-}
-
-function dottedQuad(high: number, low: number): string {
-  return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
-}
-
-/**
- * The IPv4 addresses an IPv6 address carries inside it, or null when it carries
- * none. A packet sent to one of these forms is delivered to the IPv4 address
- * inside, so the address is only as public as that is. However the address is
- * written (::ffff:127.0.0.1 or ::ffff:7f00:1), the groups are the same.
- */
-function embeddedV4(groups: number[]): string[] | null {
-  const [a, b, c, d, e, f, g, h] = groups;
-  // ::a.b.c.d, the old IPv4-compatible form. :: and ::1 are in it too, as 0.0.0.0 and 0.0.0.1.
-  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0) return [dottedQuad(g, h)];
-  // ::ffff:a.b.c.d, IPv4-mapped.
-  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0xffff) return [dottedQuad(g, h)];
-  // 64:ff9b::a.b.c.d, NAT64. A network with only IPv6 reaches IPv4 hosts through it.
-  if (a === 0x64 && b === 0xff9b && c === 0 && d === 0 && e === 0 && f === 0) return [dottedQuad(g, h)];
-  // 2002:AABB:CCDD::/48, 6to4.
-  if (a === 0x2002) return [dottedQuad(b, c)];
-  // 2001:0:SERVER:..:CLIENT, Teredo. The client's address is stored with every bit flipped.
-  if (a === 0x2001 && b === 0) return [dottedQuad(c, d), dottedQuad(g ^ 0xffff, h ^ 0xffff)];
-  return null;
-}
-
-/** Whether an IP address is a host on the public internet. Anything that is not an IP address is not. */
-export function isPublicAddress(address: string): boolean {
-  // A zone (fe80::1%eth0) names an interface, not a different address.
-  const text = address.split('%')[0];
-  const family = isIP(text);
-  if (family === 4) return !NOT_PUBLIC_V4.check(text, 'ipv4');
-  if (family !== 6) return false;
-  const inside = embeddedV4(groupsOf(text));
-  if (inside) return inside.every((v4) => !NOT_PUBLIC_V4.check(v4, 'ipv4'));
-  return GLOBAL_V6.check(text, 'ipv6') && !NOT_PUBLIC_V6.check(text, 'ipv6');
-}
+export { isPublicAddress };
 
 export interface HttpOptions {
   /** Tests supply a stand-in. The default connects only to an address that was checked. */

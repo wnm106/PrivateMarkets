@@ -1,4 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+// The few matchers these tests use, on node:assert.
+function expect(actual: unknown) {
+  return {
+    toBe: (expected: unknown) => assert.equal(actual, expected),
+    toEqual: (expected: unknown) => assert.deepEqual(actual, expected),
+    toBeNull: () => assert.equal(actual, null),
+    toBeUndefined: () => assert.equal(actual, undefined),
+    toMatchObject: (expected: Record<string, unknown>) => {
+      for (const [key, value] of Object.entries(expected)) assert.deepEqual((actual as Record<string, unknown>)[key], value, key);
+    },
+  };
+}
 import { cushionOf, dashboardRows, dashboardTabData, formatCushion, summarize, watchlist, type ComplianceDashboardData } from './compliance-dashboard';
 
 const data: ComplianceDashboardData = {

@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import * as cheerio from 'cheerio';
 import * as xml2js from 'xml2js';
 import { extractPdfText, interpretMatrices, interpretText, type InterpretedImport } from '../import-intake';
+import { assertSafeSpreadsheet } from '../spreadsheet-safety';
 
 export interface ParsedField {
   name: string;
@@ -63,7 +64,9 @@ export async function parseData(
  * Parse Excel/Spreadsheet files
  */
 async function parseXLSX(data: Buffer | string, sheetName?: string, fileName?: string): Promise<ParsedData> {
-  const workbook = XLSX.read(asBytes(data), { type: 'buffer', cellDates: true });
+  const bytes = asBytes(data);
+  assertSafeSpreadsheet(bytes);
+  const workbook = XLSX.read(bytes, { type: 'buffer', cellDates: true });
   const names = sheetName ? [sheetName] : workbook.SheetNames;
   const sheets = names.filter((name) => workbook.Sheets[name]).map((name) => ({
     name,

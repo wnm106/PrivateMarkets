@@ -1,6 +1,5 @@
-import { createYoga, createSchema } from 'graphql-yoga';
-import { createClient } from '@supabase/supabase-js';
-import { schema, useQueryLimits } from '@tapestrai/graphql';
+import { createYoga } from 'graphql-yoga';
+import { createRequestContext, GRAPHQL_CORS, maskGraphqlError, schema, useQueryLimits } from '@tapestrai/graphql';
 
 export interface Env {
   SUPABASE_URL: string;
@@ -15,49 +14,16 @@ const yoga = createYoga<{ env: Env }>({
   landingPage: false,
   // Depth and alias limits, checked before a query runs.
   plugins: [useQueryLimits()],
-  cors: {
-    origin: '*',
-    credentials: true,
-    methods: ['POST', 'GET', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  },
-  context: async ({ request, env }) => {
-    const authHeader = request.headers.get('Authorization');
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
-
-    // IMPORTANT: scoped to the CALLER's own JWT so Postgres Row Level Security
-    // (multi-tenant isolation + per-entity ACLs, see supabase/migrations/00026-00030)
-    // actually applies. The service role key bypasses RLS entirely and must only
-    // be used for specific privileged operations via `supabaseAdmin`.
-    const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
-      global: token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-    const supabaseAdmin = env.SUPABASE_SERVICE_ROLE_KEY
-      ? createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
-      : null;
-
-    let user = null;
-    if (token) {
-      const { data: { user: authUser } } = await supabase.auth.getUser(token);
-      if (authUser) {
-        user = {
-          id: authUser.id,
-          email: authUser.email || '',
-          role: (authUser.user_metadata?.role as any) || 'readonly',
-          metadata: authUser.user_metadata,
-        };
-      }
-    }
-
-    return {
-      supabase,
-      supabaseAdmin,
-      user,
-      requestId: crypto.randomUUID(),
-      loaders: {} as any,
-    };
-  },
+  cors: GRAPHQL_CORS,
+  // The same rule as the web route: resolver messages pass, the database's own text does not.
+  maskedErrors: { maskError: (error: unknown, message: string) => maskGraphqlError(error, message) },
+  // The caller's own JWT, so row security applies. See packages/graphql/src/request-context.ts.
+  context: ({ request, env }) =>
+    createRequestContext(request, {
+      supabaseUrl: env.SUPABASE_URL,
+      supabaseAnonKey: env.SUPABASE_ANON_KEY,
+      supabaseServiceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
+    }),
 });
 
 export default {

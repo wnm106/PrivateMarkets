@@ -110,6 +110,7 @@ const listPositionFileTargetsTool: ToolDefinition = {
 
 const createPositionFileImportTool: ToolDefinition = {
   name: 'create_position_file_import',
+  effect: 'stage',
   description: 'Store a CSV or Excel position file. Returns a suggested mapping for each column, using only targets from list_position_file_mapping_targets. Does not load records. Call process_position_file_import after the mapping is accepted.',
   category: 'import',
   inputSchema: {
@@ -153,6 +154,7 @@ const getPositionFileImportTool: ToolDefinition = {
 
 const updatePositionFileImportTool: ToolDefinition = {
   name: 'update_position_file_import',
+  effect: 'stage',
   description: 'Save a column mapping and as-of date on a stored position file. Attribute targets must be keys from list_position_file_mapping_targets. Does not load records. Call process_position_file_import to load.',
   category: 'import',
   inputSchema: {
@@ -240,6 +242,7 @@ const loadPositionFileTableTool: ToolDefinition = {
 
 const stageImportTool: ToolDefinition = {
   name: 'stage_position_file_import',
+  effect: 'stage',
   description: 'Stage a stored file: run the load without writing to live records and keep what it would do as a batch. Returns the batch with its counts and its data quality checks, run on each record as it would stand once promoted. Nothing is live until promote_load_batch. Staging a file again replaces its earlier staged batch. If a record in the file matches more than one stored record, nothing is staged and the choices are returned: pass them back as resolutions.',
   category: 'import',
   inputSchema: {
@@ -301,6 +304,7 @@ const getLoadBatchValuesTool: ToolDefinition = {
 
 const editStagedValueTool: ToolDefinition = {
   name: 'edit_staged_value',
+  effect: 'stage',
   description: 'Correct one value of a staged batch before it is promoted. The value must fit the type of its attribute. Live records are not changed. Returns the batch with its checks run again. A blank value takes the correction back.',
   category: 'import',
   inputSchema: {
@@ -355,6 +359,7 @@ const revertLoadBatchTool: ToolDefinition = {
 
 const discardLoadBatchTool: ToolDefinition = {
   name: 'discard_load_batch',
+  effect: 'stage',
   description: 'Drop a staged batch. Nothing live was changed, so there is nothing to undo.',
   category: 'import',
   inputSchema: { type: 'object', properties: { batchId: { type: 'string' } }, required: ['batchId'] },
@@ -363,6 +368,7 @@ const discardLoadBatchTool: ToolDefinition = {
 
 const indexImportTool: ToolDefinition = {
   name: 'index_position_file_import',
+  effect: 'stage',
   description: 'Keep a stored file as a searchable document: the file itself when its text can be read, otherwise a text rendering of the tables read from it. The document is paired with the file. Does not load records. A file that cannot be indexed is reported with the reason and does not fail the step. Calling it again returns the document already made.',
   category: 'import',
   inputSchema: {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { excelSessionMessage, parseExcelSessionMessage, type ExcelSession } from '@tapestrai/graphql/src/lib/excel-session';
-import { browserStore, ExcelAuth, SESSION_KEY } from './auth';
+import { browserStore, ExcelAuth, pageStorage, SESSION_KEY } from './auth';
 
 const NOW = Date.UTC(2026, 10, 21, 12);
 
@@ -103,5 +103,25 @@ describe('ExcelAuth', () => {
     await auth.signOut();
     expect(calls[0].url).toBe('https://project.supabase.co/auth/v1/logout?scope=local');
     expect(auth.session()).toBeNull();
+  });
+});
+
+describe('storage the browser blocks', () => {
+  it('falls back to memory instead of failing when reading localStorage throws', () => {
+    const previous = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = {
+      get localStorage(): Storage {
+        throw new Error("SecurityError: Failed to read the 'localStorage' property from 'Window': Access is denied for this document.");
+      },
+    };
+    try {
+      expect(pageStorage()).toBeNull();
+      const store = browserStore();
+      expect(store.persistent).toBe(false);
+      store.set(SESSION_KEY, 'kept');
+      expect(store.get(SESSION_KEY)).toBe('kept');
+    } finally {
+      (globalThis as { window?: unknown }).window = previous;
+    }
   });
 });

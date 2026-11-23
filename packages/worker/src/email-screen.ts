@@ -17,6 +17,8 @@
  * Malware scanning comes after, in email.ts, on what is left.
  */
 
+import { spreadsheetProblem } from '@tapestrai/graphql/src/lib/spreadsheet-safety';
+
 export type ScreenStatus = 'ACCEPTED' | 'QUARANTINED' | 'REJECTED';
 
 export interface EmailSettings {
@@ -125,8 +127,10 @@ export function contentProblem(extension: string, content: Buffer): string | nul
   if (extension === 'xlsx') {
     if (!content.subarray(0, 4).equals(ZIP)) return 'The file is not an Excel workbook.';
     // File names in a zip are stored as plain text, so a macro project is visible without unpacking.
-    if (content.includes('vbaProject.bin') || content.includes('macroEnabled')) return 'The workbook contains macros.';
-    return null;
+    // Every macro workbook has one. (Content types are inside compressed parts, so they are not read.)
+    if (content.includes('vbaProject.bin')) return 'The workbook contains macros.';
+    // A zip whose parts would inflate far past the attachment itself is refused before anything unpacks it.
+    return spreadsheetProblem(content);
   }
   if (extension === 'xls') {
     if (!content.subarray(0, 8).equals(OLE)) return 'The file is not an Excel workbook.';

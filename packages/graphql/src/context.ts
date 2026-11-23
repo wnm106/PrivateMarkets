@@ -14,6 +14,11 @@ export interface Context {
   user: User | null;
   requestId: string;
   loaders: DataLoaders;
+  /**
+   * What the entry point was configured with. On Workers these arrive on `env`,
+   * not process.env, so resolvers read them here. Absent in tests.
+   */
+  config?: { supabaseUrl: string; serviceRoleKey: string };
 }
 
 export interface User {

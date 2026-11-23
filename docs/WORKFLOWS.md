@@ -129,7 +129,7 @@ The templates, all built this way:
 | Required values check | Proposes missing required values. Needs filters | After review |
 | Data quality brief | Briefs on open exceptions | No |
 | NAV review | Names the checks and lines to look at before sign-off | No |
-| NAV reconciliation | Takes a fund's filed report (a 10-Q, a 10-K) from a stored file to a summary of the breaks. It finds the fund from the report, loads it, reconciles and keeps the summary as notes on its own; a person is asked only to check a report it holds and to decide breaks. A `REPORT` trigger starts it when a report arrives. See [NAV_REPORTS.md](NAV_REPORTS.md) | Loads the report unless it is held; keeps the summary as notes; decisions after review |
+| NAV reconciliation | Takes a fund's filed report (a 10-Q, a 10-K) from a stored file to a summary of the breaks. It finds the fund from the report, loads it, reconciles and keeps the summary as notes on its own; a person is asked only to check a report it holds and to decide breaks. A `REPORT` trigger starts it when a report arrives. The summary covers the whole NAV pack ([NAV_PACK.md](NAV_PACK.md)). See [NAV_REPORTS.md](NAV_REPORTS.md) | Loads the report unless it is held; keeps the summary as notes; decisions after review |
 | Cash tie-out | Says what ties to the bank and what does not | No |
 | Closing readiness | Says whether each deal can close and what is open | No |
 | Overcollateralization test, Single-name check | Score one compliance rule and explain the result | Stores the rule's results |
@@ -525,6 +525,7 @@ Every run keeps an append-only log: each step starting and finishing, each tool 
 - **A step fails.** The run is `FAILED` and names the step. Retry on the run page continues from that step. Steps before it are not run again.
 - **The worker dies mid-run.** The job's lease expires and another worker takes the run. Finished steps are read back. An agent step continues from its last saved round.
 - **The worker dies while applying a change.** That one change is reported as unconfirmed ("Check the record before applying it again") instead of being made a second time. The changes after it still run.
+- **The worker dies while sending or writing.** A Call a connection step (other than GET), a Send a message step, or a Run a tool step that may change data is marked before the call. Found still marked after a restart, it fails with "it may already have happened" instead of sending again. Check, then Retry. Every attempt at one step sends the same `Idempotency-Key` (the run and step), so a connection or the email service that honours it does not act on a repeat.
 - **A run is cancelled.** A step already running finishes; nothing after it starts. Changes already applied stay.
 
 ## Scheduling

@@ -8,6 +8,13 @@ import { domainHref } from '@/lib/domain-routes';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useSurfaceDates } from '@/components/certification/CertificationScope';
 import { usePublishTab } from '@/lib/view-context';
+import { useLatestRequest } from '@/lib/use-latest-request';
+
+/** What the Syndicate tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const SYNDICATE_TAB = {
+  label: 'Syndicate',
+  purpose: 'Who holds the facility: our hold, outside lenders and orders, and how much is still to place.',
+};
 
 const ROLE: Record<string, string> = {
   PARTICIPANT: 'Participant',
@@ -182,7 +189,9 @@ export function DealSyndicate({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     setLoading(true);
     setError(null);
     const result = await graphqlQuery<{
@@ -190,7 +199,8 @@ export function DealSyndicate({
       orders: { edges: Array<{ node: Node }> };
       lenders: { edges: Array<{ node: Node }> };
       deal: { attributes: Record<string, unknown> } | null;
-    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only');
+    }>(BOOK, { dealId, asOfDate, knowledgeDate }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     if (result.error?.message) {
       setError(result.error.message);
       setLoading(false);
@@ -231,7 +241,7 @@ export function DealSyndicate({
     const stored = attributeText(result.data?.deal?.attributes?.SYNDICATE_STATUS);
     setStatus(STATUS[stored] || stored);
     setLoading(false);
-  }, [asOfDate, dealId, knowledgeDate]);
+  }, [latest, asOfDate, dealId, knowledgeDate]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -281,8 +291,7 @@ export function DealSyndicate({
   ];
 
   usePublishTab('syndicate', {
-    label: 'Syndicate',
-    purpose: 'Who holds the facility: our hold, outside lenders and orders, and how much is still to place.',
+    ...SYNDICATE_TAB,
     howToRead: 'gap is the facility not yet placed: positive means still to place, negative means placed above the facility. ours, outside and ordered are per tranche.',
     data: {
       status: status || null,

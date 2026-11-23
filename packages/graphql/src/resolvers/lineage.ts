@@ -8,6 +8,7 @@ import { requireIsoDate } from '../lib/input-guards';
 import { writeGoldenValue } from '../lib/golden-write';
 import { buildTimelineVersions, candidateChangeDays, type TimelineCell, type VersionSpan } from '../lib/entity-timeline';
 import { knowledgeInstant, loadWinningValues } from '../lib/temporal-attributes';
+import { ok } from '../lib/db-result';
 
 
 function dateOnly(value: string): string {
@@ -186,11 +187,11 @@ export const lineageResolvers = {
       const userIds = [...new Set(rows.map((row) => row.created_by).filter(Boolean))];
       const names = new Map<string, string>();
       if (userIds.length > 0) {
-        const { data: profiles } = await context.supabase
+        const { data: profiles } = ok(await context.supabase
           .schema('tenancy')
           .from('profiles')
           .select('id, display_name')
-          .in('id', userIds);
+          .in('id', userIds));
         for (const profile of profiles || []) {
           if (profile.display_name) names.set(profile.id, profile.display_name);
         }
@@ -324,11 +325,11 @@ export const lineageResolvers = {
     ) => {
       const fromDate = requireIsoDate(args.fromDate, 'fromDate');
       const toDate = requireIsoDate(args.toDate, 'toDate');
-      const { data: attrDef } = await context.supabase
+      const { data: attrDef } = ok(await context.supabase
         .from('attribute_register')
         .select('*')
         .eq('attribute_code', args.attributeCode)
-        .single();
+        .single());
       
       if (!attrDef) return [];
       
@@ -361,11 +362,11 @@ export const lineageResolvers = {
       const { input } = args;
       
       try {
-        const { data: attrDef } = await context.supabase
+        const { data: attrDef } = ok(await context.supabase
           .from('attribute_register')
           .select('*')
           .eq('attribute_code', input.attributeCode)
-          .single();
+          .single());
         
         if (!attrDef) throw new Error(`Attribute not found: ${input.attributeCode}`);
         
@@ -443,11 +444,11 @@ export const lineageResolvers = {
       const { input } = args;
       
       try {
-        const { data: attrDef } = await context.supabase
+        const { data: attrDef } = ok(await context.supabase
           .from('attribute_register')
           .select('*')
           .eq('attribute_code', input.attributeCode)
-          .single();
+          .single());
         
         if (!attrDef) throw new Error(`Attribute not found: ${input.attributeCode}`);
 
@@ -489,11 +490,11 @@ export const lineageResolvers = {
       const now = new Date().toISOString();
 
       try {
-        const { data: attrDef } = await context.supabase
+        const { data: attrDef } = ok(await context.supabase
           .from('attribute_register')
           .select('id')
           .eq('attribute_code', input.attributeCode)
-          .single();
+          .single());
         if (!attrDef) throw new Error(`Attribute not found: ${input.attributeCode}`);
 
         const { data: current, error: currentError } = await context.supabase

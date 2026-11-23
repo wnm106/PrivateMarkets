@@ -1,24 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
-import { ToolRegistry } from '@tapestrai/mcp-server/src/lib/tool-registry';
-import { registerDomainTools } from '@tapestrai/mcp-server/src/tools/domain-tools';
-import { registerLineageTools } from '@tapestrai/mcp-server/src/tools/lineage-tools';
-import { registerDocumentTools } from '@tapestrai/mcp-server/src/tools/document-tools';
-import { registerOverrideTools } from '@tapestrai/mcp-server/src/tools/override-tools';
-import { registerDQTools } from '@tapestrai/mcp-server/src/tools/dq-tools';
-import { registerDQRuleTools } from '@tapestrai/mcp-server/src/tools/dq-rule-tools';
-import { registerWorkflowTools } from '@tapestrai/mcp-server/src/tools/workflow-tools';
-import { registerImportMapTools } from '@tapestrai/mcp-server/src/tools/import-map-tools';
-import { registerPositionFileTools } from '@tapestrai/mcp-server/src/tools/position-file-tools';
-import { registerSpecialistTools } from '@tapestrai/mcp-server/src/tools/specialist-tools';
-import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/compliance-tools';
-import { registerReportingTools } from '@tapestrai/mcp-server/src/tools/reporting-tools';
-import { QUERY_DATA_GUIDE, registerQueryTools } from '@tapestrai/mcp-server/src/tools/query-data';
-import { registerNarrativeTools } from '@tapestrai/mcp-server/src/tools/narrative-tools';
-import { registerExternalIdTools } from '@tapestrai/mcp-server/src/tools/external-id-tools';
+import { QUERY_DATA_GUIDE } from '@tapestrai/mcp-server/src/tools/query-data';
+import { toolRegistry } from '@/lib/chat-tools';
 import { loadExternalServers } from '@tapestrai/mcp-server/src/external/load';
 import { serviceClient } from '@/lib/assistant-connections-server';
-import { buildExternalToolset, externalServersPrompt, type ExternalToolset } from '@tapestrai/mcp-server/src/external/toolset';
+import { buildExternalToolset, ConfirmationRequired, externalServersPrompt, type ExternalToolset } from '@tapestrai/mcp-server/src/external/toolset';
+import { holdAction, type HeldAction } from '@/lib/held-actions';
 import { NARRATIVE_COMPOSE_GUIDE } from '@tapestrai/mcp-server/src/lib/narrative-guide';
 import { formatLessons, lessonFromRow, matchLessons } from '@tapestrai/mcp-server/src/lib/chat-lessons';
 import { getContextProfile, isCategoryAllowed } from '@tapestrai/mcp-server/src/lib/context-profiles';
@@ -69,22 +56,7 @@ const MAX_STORED_CONTENT = 20000;
 // The tool registry holds no database client. Every tool call below passes the
 // caller's own client, so tenancy and row security decide what a tool may touch.
 // This route never holds the service role key.
-const toolRegistry = new ToolRegistry();
-registerDomainTools(toolRegistry);
-registerLineageTools(toolRegistry);
-registerDocumentTools(toolRegistry);
-registerOverrideTools(toolRegistry);
-registerDQTools(toolRegistry);
-registerDQRuleTools(toolRegistry);
-registerWorkflowTools(toolRegistry);
-registerImportMapTools(toolRegistry);
-registerPositionFileTools(toolRegistry);
-registerSpecialistTools(toolRegistry);
-registerComplianceTools(toolRegistry);
-registerReportingTools(toolRegistry);
-registerQueryTools(toolRegistry);
-registerNarrativeTools(toolRegistry);
-registerExternalIdTools(toolRegistry);
+// The tools are registered in lib/chat-tools.ts, shared with /api/chat/confirm.
 
 async function callGemini(
   body: Record<string, any>,
@@ -289,8 +261,10 @@ export async function POST(request: NextRequest) {
     const clientId = await callerClientId(auth.supabase);
     bindAgentContext({ userId: auth.userId, clientId, feature: 'chat', activity: 'chat.turn' });
     const audits: AgentAudit[] = [];
+    /** Outside writes the model asked for this turn. Each runs only if the person presses Confirm. */
+    const heldActions: HeldAction[] = [];
     const withUsage = (payload: Record<string, unknown>, status = 200) =>
-      NextResponse.json({ ...payload, usage: usageForClient(audits) }, { status });
+      NextResponse.json({ ...payload, usage: usageForClient(audits), ...(heldActions.length ? { heldActions } : {}) }, { status });
 
     // Convert messages to Gemini format (accept both `content` and `text`)
     const incoming: Array<{ role: 'user' | 'model'; content?: string; text?: string }> = messages || [];
@@ -574,6 +548,11 @@ export async function POST(request: NextRequest) {
             results.set(call, outcome);
             continue;
           }
+          // A tool that changes live records, rules or settings is never run by the model:
+          // it is held like an outside write, and runs only on the person's Confirm.
+          if (!externalToolset?.has(name) && toolRegistry.effectOf(name) === 'write') {
+            throw new ConfirmationRequired(name, 'Tapestry', 'internal');
+          }
           const value = externalToolset?.has(name)
             ? await externalToolset.execute(name, args || {})
             : await toolRegistry.executeTool(name, args || {}, toolSupabase);
@@ -582,6 +561,28 @@ export async function POST(request: NextRequest) {
           callCache.set(cacheKey, outcome);
           results.set(call, outcome);
         } catch (error: any) {
+          // An outside write: held for the person, never run here.
+          if (error instanceof ConfirmationRequired && clientId) {
+            let held: HeldAction | null = null;
+            try {
+              held = holdAction({ name, args: args || {}, serverName: error.serverName, tool: error.tool, kind: error.kind }, { userId: auth.userId, clientId });
+            } catch (holdError) {
+              console.error('[Chat API] Could not hold a change for confirmation:', holdError);
+            }
+            if (held) heldActions.push(held);
+            const outcome = held
+              ? {
+                  ok: true,
+                  value: {
+                    status: 'awaiting_user_confirmation',
+                    note: `Not run. The user is shown this exact ${error.tool} call in ${error.serverName} with a Confirm button below your reply, and it runs only if they press it. Say in one or two sentences what it will change and ask them to confirm below. Do not call it again and do not say it is done.`,
+                  },
+                }
+              : { ok: false, error: `${error.tool} could not be held for confirmation, so it was not run. Tell the user.` };
+            callCache.set(cacheKey, outcome);
+            results.set(call, outcome);
+            continue;
+          }
           // Tell the model not to simply retry a failing call, which otherwise
           // burns every remaining round on the same broken tool.
           const outcome = {

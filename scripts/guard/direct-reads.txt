@@ -147,6 +147,7 @@ ts packages/graphql/src/lib/deal-performance-store.ts entity_relationships
 ts packages/graphql/src/lib/entity-search.ts entity_relationships
 ts packages/graphql/src/lib/entity-search.ts master_entities
 ts packages/graphql/src/lib/fund-rec-store.ts master_entities
+ts packages/graphql/src/lib/nav-pack-store.ts master_entities
 ts packages/graphql/src/lib/fund-surface.ts entity_relationships
 ts packages/graphql/src/lib/fund-surface.ts master_entities
 ts packages/graphql/src/lib/ic-memo.ts entity_relationships
@@ -175,7 +176,6 @@ ts packages/mcp-server/src/feeds/feed-loader.ts master_entities
 ts packages/mcp-server/src/feeds/import-document.ts master_entities
 ts packages/mcp-server/src/feeds/nav-report.ts entity_relationships
 ts packages/mcp-server/src/feeds/nav-report.ts master_entities
-ts packages/mcp-server/src/lib/import-map/import-orchestrator.ts master_entities
 ts packages/mcp-server/src/tools/dq-rule-tools.ts master_entities
 ts packages/mcp-server/src/tools/external-id-tools.ts master_entities
 ts packages/mcp-server/src/tools/lineage-tools.ts entity_attribute_values

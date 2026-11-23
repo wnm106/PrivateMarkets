@@ -75,6 +75,7 @@ const getComplianceRuleVersion: ToolDefinition = {
 
 const evaluateComplianceRule: ToolDefinition = {
   name: 'evaluate_compliance_rule',
+  effect: 'stage',
   description: 'Run a compliance rule and return result and breach counts. ruleCode comes from list_compliance_rules. asOfDate is YYYY-MM-DD, and today when left out. sourceScope is the golden record or one source code from the source registry. Read get_compliance_rule first if you need to explain the rule. For an ad hoc count that is not a saved rule, use query_data.',
   category: 'compliance',
   inputSchema: {
@@ -644,6 +645,7 @@ const deleteComplianceScopeAssignment: ToolDefinition = {
 
 const evaluateComplianceProforma: ToolDefinition = {
   name: 'evaluate_compliance_proforma',
+  effect: 'stage',
   description: 'Score any number of buys and sells together against the compliance rules for one fund. Each leg is a security plus a par: positive par buys, negative par sells. A swap is a sell leg and a buy leg in the same call. A multi-tranche deal is one leg per security. Returns a verdict per rule and group. approved is false when the package creates or deepens a hard breach. anchorEntityId is the fund. securityId or securityCode identifies each security. asOfDate is YYYY-MM-DD.',
   category: 'compliance',
   inputSchema: {
@@ -685,6 +687,7 @@ const evaluateComplianceProforma: ToolDefinition = {
 
 const investmentCapacity: ToolDefinition = {
   name: 'investment_capacity',
+  effect: 'read',
   description: 'Largest additional par of one security that does not push a rule it worsens through its limit. Null capacity means no rule caps the buy. Zero means a rule blocks it. Pass legs to include other buys and sells in the same package, such as the sale in a swap, and the result is how much of the named security still fits on top of those legs. limitKind is HARD (default) or SOFT. anchorEntityId is the fund. securityId or securityCode is the security being sized.',
   category: 'compliance',
   inputSchema: {

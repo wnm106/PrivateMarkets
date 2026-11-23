@@ -25,6 +25,15 @@ checked by a machine, so they hold no matter who or what writes the change.
    - Capacity reads the evaluator (`compliance.deal_capacity_observations`)
      and is solved by `packages/graphql/src/lib/compliance-capacity.ts`, the
      same module `investmentCapacity` uses.
+   - `compliance.entity_matches_condition_set` matches a rule's conditions,
+     saved or not. The evaluator reaches it through
+     `entity_matches_conditions`; the editor's preview through
+     `compliance.preview_population`. A result's contributors and their
+     amounts come from `compliance.result_contributor_values`.
+   - `golden_master.preference_decision` picks the golden source. The value
+     triggers store it; `golden_master.explain_golden_source` explains it.
+   - The deal page's capacity tones breach exactly where the evaluator does
+     (`apps/web/lib/capacity-view.ts`): past the limit, never at it.
    A new feature that needs any of these calls them. It does not copy them.
 3. **Migrations change schema and functions, not records.** Entities,
    attribute values and relationships go in `supabase/seed`. A migration that

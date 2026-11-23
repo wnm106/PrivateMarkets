@@ -26,6 +26,8 @@ describe('capacity view', () => {
 
   it('calls the full room at limit, part of it over the soft limit, and more than it over limit', () => {
     assert.equal(standing(sector, sector.room).label, 'At limit');
+    // compliance.evaluate_rule passes a figure exactly at the hard limit, so the grid does too.
+    assert.notEqual(standing(sector, sector.room).tone, 'breach');
     assert.equal(standing(sector, 12.49e6).label, 'Over soft limit');
     assert.equal(standing(sector, 0).currentLabel, 'Within limit');
     assert.equal(standing(sector, 20e6).tone, 'breach');
@@ -55,5 +57,14 @@ describe('capacity view', () => {
     assert.equal(standing(banned, 0).label, 'Not permitted');
     assert.equal(standing(banned, 0).tone, 'blocked');
     assert.equal(standing(banned, 5e6).label, 'Not permitted, held');
+  });
+  it('passes what the evaluator passes: a room-only rule used exactly, and a floor met exactly', () => {
+    const composite: CapacityReading = { ...sector, ruleName: 'Composite ratio', numerator: null, denominator: null, room: 10e6 };
+    assert.equal(standing(composite, 10e6).tone, 'near');
+    assert.equal(standing(composite, 10e6).label, 'At limit');
+    assert.equal(standing(composite, 10e6 + 1).tone, 'breach');
+    const floor: CapacityReading = { ...sector, ruleName: 'Minimum liquidity', limitDirection: 'MIN', resultUnit: 'CURRENCY', numerator: 50e6, denominator: null, hardLimit: 50e6, softLimit: null, room: 0 };
+    assert.notEqual(standing(floor, 0).currentTone, 'breach');
+    assert.equal(standing({ ...floor, numerator: 49e6 }, 0).currentTone, 'breach');
   });
 });

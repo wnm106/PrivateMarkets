@@ -15,7 +15,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -31,6 +31,18 @@ jobs:
 
       - name: Unit tests
         run: npm run test:ci
+
+      # The deploy builds the web app. Build it here too, so a build that breaks
+      # fails the pull request rather than the deploy after merge. The public
+      # values are placeholders: nothing is called at build time.
+      - name: Build the web app
+        run: npm run build --workspace @tapestrai/web
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+          NEXT_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          NEXT_PUBLIC_GRAPHQL_ENDPOINT: /api/graphql
 
   # docs/GUARDRAILS.md: no code names a client, rule or entity; records go in
   # supabase/seed; applied migrations are never edited; surfaces reach the

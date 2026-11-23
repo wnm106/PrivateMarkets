@@ -17,6 +17,38 @@ export function ownRulesFilter(clientId: string | null): string {
 }
 
 /**
+ * The version of each rule in force at the as-of date, as known at the
+ * knowledge instant: compliance.resolve_rule_version, the same choice the
+ * evaluator makes. Not the highest version number, which may not have been in
+ * force, or known, then.
+ */
+export async function ruleVersionsAt(
+  compliance: ComplianceSchema,
+  ruleIds: Iterable<string>,
+  asOf: string,
+  knowledge: string,
+): Promise<Map<string, any>> {
+  const ids = [...new Set(ruleIds)];
+  const found = await Promise.all(ids.map(async (ruleId) => {
+    const { data, error } = await compliance.rpc('resolve_rule_version', { p_rule_id: ruleId, p_as_of_date: asOf, p_knowledge_date: knowledge });
+    if (error) throw new Error(error.message);
+    const version = Array.isArray(data) ? data[0] : data;
+    return [ruleId, version && (version as any).id ? version : null] as const;
+  }));
+  return new Map(found.filter(([, version]) => version));
+}
+
+/**
+ * A what-if is staged as rows written now, so it can only be scored against what
+ * is known now. Refuses an earlier Knowledge date with a reason the user can act on.
+ */
+export function assertWhatIfKnowledge(knowledge: string, now = Date.now()): void {
+  if (Date.parse(knowledge) < now - 60_000) {
+    throw new Error('Unsaved changes are scored against what is known now. Set the Knowledge date to today to score them, or save them first.');
+  }
+}
+
+/**
  * The rules a deal is scored on, for which funds. The database decides
  * (compliance.deal_score_plans): rules marked deal_surface cover every fund on
  * the deal, and any other active rule covers the funds with a limit assigned to

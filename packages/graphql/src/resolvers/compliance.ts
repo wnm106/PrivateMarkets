@@ -3,16 +3,12 @@ import { ComplianceEngine } from '../lib/compliance-engine';
 import { assertAllocationInputsOnDeal, loadAllocationDraft, loadDealScoreAnchors, stageAllocationWhatIf } from '../lib/allocation-store';
 import { adjustments as allocationAdjustments, holds as allocationHolds } from './allocation';
 import { assertMayScoreDeal, runDealHypo, type DealScoreArgs } from '../lib/deal-hypo';
-import { dealSurfaceResults, loadDealScorePlans, scoreDealFunds } from '../lib/deal-compliance';
-import {
-  matchPopulationEntity,
-  targetsAlongPath,
-  textOfAttribute,
-  type PopulationCondition,
-  type RelationshipHopRef,
-  conditionExpressionReads,
-} from '../lib/compliance-population';
+import { assertWhatIfKnowledge, dealSurfaceResults, loadDealScorePlans, ruleVersionsAt, scoreDealFunds } from '../lib/deal-compliance';
+import { conditionValueKey, type RelationshipHopRef } from '../lib/compliance-population';
 import { parseFundBoardResultPayload, selectLatestFundResults } from '../lib/fund-board-results';
+import { knowledgeInstant } from '../lib/fund-surface';
+import { ok } from '../lib/db-result';
+import { groupBy, loaderFor } from '../lib/request-loaders';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
 // through `.schema('compliance')` first (same convention as tenancy.ts /
@@ -85,8 +81,11 @@ export const complianceResolvers = {
       if (args.filter?.status) query = query.eq('status', args.filter.status);
       if (args.filter?.runId?.equals) query = query.eq('run_id', args.filter.runId.equals);
 
-      const first = args.pagination?.first || 50;
-      query = query.limit(first);
+      // The same offset cursor the other connections use. At most 500 a page.
+      const first = Math.min(Math.max(Number(args.pagination?.first) || 50, 1), 500);
+      const after = args.pagination?.after ? parseInt(atob(args.pagination.after), 10) : -1;
+      const offset = Number.isFinite(after) && after >= 0 ? after + 1 : 0;
+      query = query.range(offset, offset + first - 1);
 
       const { data, error, count } = await query;
       if (error) {
@@ -94,12 +93,12 @@ export const complianceResolvers = {
         throw new Error('Failed to fetch compliance results');
       }
 
-      const edges = (data || []).map((row: any) => ({ node: mapResult(row), cursor: row.id }));
+      const edges = (data || []).map((row: any, index: number) => ({ node: mapResult(row), cursor: btoa(String(offset + index)) }));
       return {
         edges,
         pageInfo: {
-          hasNextPage: (count || 0) > edges.length,
-          hasPreviousPage: false,
+          hasNextPage: (count || 0) > offset + edges.length,
+          hasPreviousPage: offset > 0,
           startCursor: edges[0]?.cursor ?? null,
           endCursor: edges[edges.length - 1]?.cursor ?? null,
         },
@@ -371,14 +370,14 @@ export const complianceResolvers = {
         // limit, unless the rule reads the limit from a fund attribute.
         if (!input.id && input.applies !== false && !input.groupValue && input.rankFrom == null
           && input.softLimitValue == null && input.hardLimitValue == null) {
-          const { data: version } = await cx(context)
+          const { data: version } = ok(await cx(context)
             .from('rule_versions')
             .select('soft_limit_value, hard_limit_value, hard_limit_attribute_code, limit_direction')
             .eq('rule_id', input.ruleId)
             .eq('is_active', true)
             .order('version_number', { ascending: false })
             .limit(1)
-            .maybeSingle();
+            .maybeSingle());
           if (version && !version.hard_limit_attribute_code) {
             input.softLimitValue = version.soft_limit_value ?? null;
             input.hardLimitValue = version.hard_limit_value ?? null;
@@ -453,7 +452,7 @@ export const complianceResolvers = {
           allFunds: Boolean(args.input.allFunds),
         });
 
-        const { data: ruleRow } = await cx(context).from('rules').select('*').eq('id', run.ruleId).maybeSingle();
+        const { data: ruleRow } = ok(await cx(context).from('rules').select('*').eq('id', run.ruleId).maybeSingle());
 
         return {
           run: {
@@ -498,18 +497,19 @@ export const complianceResolvers = {
         if (holds == null && adjustments == null) {
           // The open page scores the book already saved on the deal. Nothing is
           // rebuilt or written: the funds holding it are read as the caller.
+          // Scored as of the user's dates: the book as it was known then.
           const anchors = await loadDealScoreAnchors(context.supabase, args.dealId, args.asOfDate, args.knowledgeDate);
           dealCode = anchors.dealCode;
           asOf = anchors.asOf;
           clientId = anchors.clientId;
           fundIds = new Set(anchors.fundIds);
-          // A certified deal scores its saved book as known when it was certified.
-          knowledgeDate = anchors.knowledge || new Date().toISOString();
+          knowledgeDate = anchors.knowledge;
         } else {
           // An edit is staged as a what-if the rules read at one knowledge instant.
           // The draft is read as the caller, so it holds only the tranches and funds
           // they can see, and the saved allocation is never changed.
-          const draft = await loadAllocationDraft(context.supabase, args.dealId, args.asOfDate, holds, adjustments);
+          const draft = await loadAllocationDraft(context.supabase, args.dealId, args.asOfDate, holds, adjustments, args.knowledgeDate);
+          assertWhatIfKnowledge(draft.knowledge);
           assertAllocationInputsOnDeal(draft, holds, adjustments);
           const staged = await stageAllocationWhatIf(writer, draft, userId);
           dealCode = draft.dealCode;
@@ -525,37 +525,40 @@ export const complianceResolvers = {
         // The service role sees every client's rules. Only the shared ones and the deal client's own are scored.
         const plans = await loadDealScorePlans(compliance, fundIds, asOf, clientId);
         if (!plans.length) throw new Error('No compliance rules with limits are assigned to the funds on this deal.');
-        const ruleIds = plans.map((plan) => plan.rule.id);
-        const { data: versionRows, error: versionError } = await compliance
-          .from('rule_versions')
-          .select('*')
-          .in('rule_id', ruleIds)
-          .eq('is_active', true);
-        if (versionError) throw new Error(versionError.message);
-        const versionByRule = new Map<string, any>();
-        for (const version of versionRows || []) {
-          const current = versionByRule.get(version.rule_id);
-          if (!current || version.version_number > current.version_number) versionByRule.set(version.rule_id, version);
-        }
+        const versionByRule = await ruleVersionsAt(compliance, plans.map((plan) => plan.rule.id), asOf, knowledgeDate);
 
         // Every rule in one database call. A staged what-if is readable at its knowledge instant only.
         const failures: string[] = [];
         const results = await scoreDealFunds(compliance, plans, asOf, dealCode, userId, knowledgeDate);
 
-        const { data: scenarioAttribute } = await writer
+        const { data: scenarioAttribute } = ok(await writer
           .from('attribute_register')
           .select('id')
           .eq('attribute_code', 'POSITION_SCENARIO_CODE')
-          .maybeSingle();
-        const { data: scenarioRows } = scenarioAttribute
+          .maybeSingle());
+        // This deal's proposal positions, as known at the score's knowledge instant. Read
+        // with the service role, so only positions held by the funds scored here count:
+        // a deal code is unique within a client, not across clients.
+        const { data: scenarioRows, error: scenarioError } = scenarioAttribute
           ? await writer
             .from('entity_attribute_values')
             .select('entity_id')
             .eq('attribute_id', scenarioAttribute.id)
             .eq('golden_value', dealCode)
-            .gte('system_to', new Date().toISOString())
-          : { data: [] };
-        const proposalIds = new Set((scenarioRows || []).map((row) => row.entity_id));
+            .lte('system_from', knowledgeDate)
+            .gte('system_to', knowledgeDate)
+          : { data: [], error: null };
+        if (scenarioError) throw new Error(scenarioError.message);
+        const scenarioIds = [...new Set((scenarioRows || []).map((row) => row.entity_id as string))];
+        const { data: ownPositions, error: ownError } = scenarioIds.length
+          ? await writer
+            .from('master_entities')
+            .select('id')
+            .in('id', scenarioIds)
+            .eq('client_id', clientId ?? '00000000-0000-0000-0000-000000000000')
+          : { data: [], error: null };
+        if (ownError) throw new Error(ownError.message);
+        const proposalIds = new Set((ownPositions || []).map((row) => row.id as string));
         const impacted = dealSurfaceResults(results, fundIds, proposalIds);
 
         return {
@@ -613,63 +616,85 @@ export const complianceResolvers = {
     },
   },
 
+  // Each field reads every parent asked for in the same request at once (lib/request-loaders.ts).
   ComplianceRule: {
     versions: async (parent: any, _: any, context: Context) => {
-      const { data } = await cx(context)
-        .from('rule_versions')
-        .select('*, conditions:rule_conditions(*)')
-        .eq('rule_id', parent.id)
-        .order('version_number', { ascending: false });
-      return withMeasureLines(context, data || []);
+      return loaderFor(context, 'complianceVersionsByRule', async (ruleIds) => {
+        const { data } = ok(await cx(context)
+          .from('rule_versions')
+          .select('*, conditions:rule_conditions(*)')
+          .in('rule_id', [...ruleIds])
+          .order('version_number', { ascending: false }));
+        const mapped = await withMeasureLines(context, data || []);
+        const byRule = new Map<string, any[]>();
+        (data || []).forEach((row: any, index: number) => {
+          const list = byRule.get(row.rule_id) || [];
+          list.push(mapped[index]);
+          byRule.set(row.rule_id, list);
+        });
+        return byRule;
+      }, () => [] as any[]).load(parent.id);
     },
 
     currentVersion: async (parent: any, args: { asOfDate?: string; knowledgeDate?: string }, context: Context) => {
       const asOfDate = args.asOfDate || new Date().toISOString().slice(0, 10);
       const knowledgeDate = args.knowledgeDate || new Date().toISOString();
-      const { data } = await cx(context).rpc('resolve_rule_version', {
+      const { data } = ok(await cx(context).rpc('resolve_rule_version', {
         p_rule_id: parent.id,
         p_as_of_date: asOfDate,
         p_knowledge_date: knowledgeDate,
-      });
+      }));
       if (!data || !data.id) return null;
-
-      const { data: conditions } = await cx(context).from('rule_conditions').select('*').eq('rule_version_id', data.id);
-      const [version] = await withMeasureLines(context, [{ ...data, conditions: conditions || [] }]);
-      return version;
+      // The version's conditions and amounts, read with every other rule's in this request.
+      return loaderFor(context, 'complianceVersionWithLines', async (versionIds) => {
+        const [{ data: versions }, { data: conditions }] = await Promise.all([
+          cx(context).from('rule_versions').select('*').in('id', [...versionIds]).then(ok),
+          cx(context).from('rule_conditions').select('*').in('rule_version_id', [...versionIds]).then(ok),
+        ]);
+        const byVersion = groupBy((conditions || []) as any[], 'rule_version_id');
+        const rows = (versions || []).map((row: any) => ({ ...row, conditions: byVersion.get(row.id) || [] }));
+        const mapped = await withMeasureLines(context, rows);
+        return new Map(rows.map((row: any, index: number) => [row.id as string, mapped[index]]));
+      }, () => null as any).load(data.id);
     },
 
     scopeAssignments: async (parent: any, _: any, context: Context) => {
-      const { data } = await cx(context).from('rule_scope_assignments').select('*').eq('rule_id', parent.id);
-      const rows = data || [];
-      const labels = await entityLabels(context, rows.map((row: any) => row.entity_id));
-      return rows.map((row: any) => {
-        const label = labels.get(row.entity_id);
-        return {
-          ...mapScopeAssignment(row),
-          entityCode: label?.entity_code || null,
-          entityName: label?.entity_name || null,
-        };
-      });
+      return loaderFor(context, 'complianceScopesByRule', async (ruleIds) => {
+        const { data } = ok(await cx(context).from('rule_scope_assignments').select('*').in('rule_id', [...ruleIds]));
+        const rows = (data || []) as any[];
+        const labels = await entityLabels(context, rows.map((row) => row.entity_id));
+        const mapped = rows.map((row) => {
+          const label = labels.get(row.entity_id);
+          return { ruleId: row.rule_id as string, item: { ...mapScopeAssignment(row), entityCode: label?.entity_code || null, entityName: label?.entity_name || null } };
+        });
+        const byRule = new Map<string, any[]>();
+        for (const { ruleId, item } of mapped) byRule.set(ruleId, [...(byRule.get(ruleId) || []), item]);
+        return byRule;
+      }, () => [] as any[]).load(parent.id);
     },
   },
 
   ComplianceEvaluationRun: {
     rule: async (parent: any, _: any, context: Context) => {
-      const { data } = await cx(context).from('rules').select('*').eq('id', parent.ruleId).maybeSingle();
-      return data ? mapRule(data) : null;
+      if (!parent.ruleId) return null;
+      return loaderFor(context, 'complianceRuleById', async (ids) => {
+        const { data } = ok(await cx(context).from('rules').select('*').in('id', [...ids]));
+        return new Map(((data || []) as any[]).map((row) => [row.id as string, mapRule(row)]));
+      }, () => null as any).load(parent.ruleId);
     },
     results: async (parent: any, _: any, context: Context) => {
-      const { data } = await cx(context).from('rule_evaluation_results').select('*').eq('run_id', parent.id);
-      const rows = data || [];
-      const labels = await entityLabels(context, rows.map((row: any) => row.anchor_entity_id));
-      return rows.map((row: any) => {
-        const label = labels.get(row.anchor_entity_id);
-        return {
-          ...mapResult(row),
-          anchorEntityCode: label?.entity_code || null,
-          anchorEntityName: label?.entity_name || null,
-        };
-      });
+      return loaderFor(context, 'complianceResultsByRun', async (runIds) => {
+        const { data } = ok(await cx(context).from('rule_evaluation_results').select('*').in('run_id', [...runIds]));
+        const rows = (data || []) as any[];
+        const labels = await entityLabels(context, rows.map((row) => row.anchor_entity_id));
+        const byRun = new Map<string, any[]>();
+        for (const row of rows) {
+          const label = labels.get(row.anchor_entity_id);
+          const item = { ...mapResult(row), anchorEntityCode: label?.entity_code || null, anchorEntityName: label?.entity_name || null };
+          byRun.set(row.run_id, [...(byRun.get(row.run_id) || []), item]);
+        }
+        return byRun;
+      }, () => [] as any[]).load(parent.id);
     },
   },
 };
@@ -1009,7 +1034,7 @@ async function loadFundBoard(context: Context) {
     context.supabase
       .schema('entity_instances')
       .from('master_entities')
-      .select('id, entity_code, entity_name')
+      .select('id, entity_code, entity_name, metadata')
       .eq('domain_code', 'FUND')
       .eq('is_active', true)
       .order('entity_code'),
@@ -1022,12 +1047,15 @@ async function loadFundBoard(context: Context) {
   ]);
   if (fundResult.error) throw new Error(fundResult.error.message);
   if (ruleResult.error) throw new Error(ruleResult.error.message);
-  const funds = (fundResult.data || []).filter((row) => !String(row.entity_code).startsWith('BENCH-'));
+  // Benchmark records carry metadata.bench (supabase/seed/bench_compliance.sql). Decided from that flag, not the code.
+  const funds = (fundResult.data || []).filter((row) => (row.metadata as { bench?: unknown } | null)?.bench !== true);
   const fundIds = funds.map((row) => row.id);
   const rules = ruleResult.data || [];
   const ruleIds = rules.map((row) => row.id);
 
-  const [parentResult, versionResult, thresholdResult, latestResult] = await Promise.all([
+  // Which funds each rule is scored for is decided once, by compliance.deal_score_plans.
+  const today = new Date().toISOString().slice(0, 10);
+  const [parentResult, versionResult, thresholdResult, latestResult, planResult] = await Promise.all([
     fundIds.length
       ? context.supabase
         .schema('entity_instances')
@@ -1053,7 +1081,11 @@ async function loadFundBoard(context: Context) {
     ruleIds.length
       ? cx(context).rpc('latest_fund_board_results', { p_rule_ids: ruleIds })
       : Promise.resolve({ data: [] as unknown[], error: null }),
+    fundIds.length
+      ? cx(context).rpc('deal_score_plans', { p_fund_ids: fundIds, p_as_of_date: today })
+      : Promise.resolve({ data: [] as unknown[], error: null }),
   ]);
+  if (planResult.error) throw new Error(planResult.error.message);
   if (parentResult.error) throw new Error(parentResult.error.message);
   if (versionResult.error) throw new Error(versionResult.error.message);
   if (thresholdResult.error) throw new Error(thresholdResult.error.message);
@@ -1096,11 +1128,14 @@ async function loadFundBoard(context: Context) {
     results: (resultRows || [])
       .filter((row) => fundById.has(row.anchor_entity_id))
       .map(mapResult),
+    enrollments: ((planResult.data || []) as Array<{ rule_id: string; anchor_ids: string[] | null }>)
+      .filter((row) => ruleById.has(row.rule_id))
+      .map((row) => ({ ruleId: row.rule_id, fundIds: (row.anchor_ids || []).filter((id) => fundById.has(id)) })),
   };
 }
 
 /** A date-only knowledge date means everything known by the end of that day. */
-export function knowledgeInstant(value: string | null): string | null {
+function dashboardKnowledgeInstant(value: string | null): string | null {
   if (!value) return null;
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T23:59:59.999Z` : value;
 }
@@ -1140,7 +1175,7 @@ async function loadComplianceDashboard(context: Context, asOfDate: string | null
       ? cx(context).rpc('latest_results_as_of', {
         p_rule_ids: ruleIds,
         p_as_of_date: asOfDate,
-        p_knowledge_date: knowledgeInstant(knowledgeDate),
+        p_knowledge_date: dashboardKnowledgeInstant(knowledgeDate),
       })
       : Promise.resolve({ data: [] as unknown[], error: null }),
     domainCodes.length
@@ -1252,82 +1287,49 @@ function hopsFromDimension(dim: any): RelationshipHopRef[] {
     .filter((h: RelationshipHopRef) => h.relationshipCode);
 }
 
+/**
+ * The records a rule's conditions select, before the rule is saved. Matched by
+ * compliance.preview_population with the evaluator's own condition matcher, as
+ * of the user's dates. Nothing is interpreted here.
+ */
 async function previewPopulation(context: Context, input: any) {
   const domainCode = input?.domainCode;
   if (!domainCode) throw new Error('domainCode is required');
   const limit = Math.min(Math.max(Number(input.limit ?? 25) || 25, 1), 100);
   const offset = Math.max(Number(input.offset ?? 0) || 0, 0);
-  const asOf = new Date().toISOString().slice(0, 10);
-  const now = new Date().toISOString();
+  const asOf = input.asOfDate || new Date().toISOString().slice(0, 10);
+  // A Knowledge date of a day means what was known by the end of it.
+  const knowledge = knowledgeInstant(input.knowledgeDate);
 
-  const conditions: PopulationCondition[] = (input.conditions || [])
-    .filter((c: any) => c?.attributeCode)
-    .map((c: any) => ({
-      conditionGroup: c.conditionGroup,
-      conditionOrder: c.conditionOrder,
-      attributeCode: c.attributeCode,
-      operator: c.operator || 'equals',
-      value: c.value ?? null,
-      compareAttributeCode: c.compareAttributeCode || null,
-      attributePath: hopsFromDimension(c.attributeDimension),
-      comparePath: hopsFromDimension(c.compareDimension),
-      leftExpression: c.leftExpression ?? null,
-      rightExpression: c.rightExpression ?? null,
-      logicOperator: c.logicOperator || 'AND',
-    }));
-
-  const { rows, truncated } = await fetchDomainEntities(context.supabase, domainCode);
-  const hopMaps = await loadRelationshipMaps(context.supabase, conditions, asOf, now);
-
-  const attributes = new Map<string, any>();
-  const needed = new Set<string>();
-  for (const row of rows) {
-    for (const cond of conditions) {
-      const attributeHops = cond.attributePath || [];
-      const compareHops = cond.comparePath || [];
-      const attributeIds = cond.leftExpression
-        ? []
-        : attributeHops.length ? targetsAlongPath(row.entity_id, attributeHops, hopMaps) : [row.entity_id];
-      const compareIds = cond.compareAttributeCode
-        ? (compareHops.length ? targetsAlongPath(row.entity_id, compareHops, hopMaps) : [row.entity_id])
-        : [];
-      const exprIds = conditionExpressionReads(cond).flatMap((read) =>
-        read.path.length ? targetsAlongPath(row.entity_id, read.path, hopMaps) : [row.entity_id],
-      );
-      for (const id of [...attributeIds, ...compareIds, ...exprIds, row.entity_id]) needed.add(id);
-    }
-  }
-  const attributeCodes = [...new Set(conditions.flatMap((cond) => [
-    cond.leftExpression ? '' : cond.attributeCode,
-    cond.compareAttributeCode,
-    ...conditionExpressionReads(cond).map((read) => read.code),
-  ].filter((code): code is string => !!code)))];
-  await fetchAttributeValues(context.supabase, [...needed], attributeCodes, attributes, asOf, now);
-
-  const matches: Array<{ entityId: string; entityCode: string; entityName: string | null; values: Record<string, string | null> }> = [];
-  for (const row of rows) {
-    const result = matchPopulationEntity(
-      row.entity_id,
-      conditions,
-      (id, path) => targetsAlongPath(id, path, hopMaps),
-      (id, code) => textOfAttribute(attributes.get(id), code),
-      asOf,
-    );
-    if (result.match) {
-      matches.push({
-        entityId: row.entity_id,
-        entityCode: row.entity_code,
-        entityName: row.entity_name,
-        values: result.values,
-      });
-    }
-  }
-
-  const page = matches.slice(offset, offset + limit);
+  const active = (input.conditions || []).filter((c: any) => c?.attributeCode);
+  // The same row shape a saved condition is stored in.
+  const rows = active.map((c: any) => {
+    const { rule_version_id: _version, ...row } = conditionRow('', { ...c, appliesTo: 'BASE', operator: c.operator || 'equals' });
+    return row;
+  });
+  const { data, error } = await cx(context).rpc('preview_population', {
+    p_domain_code: domainCode,
+    p_conditions: rows,
+    p_as_of_date: asOf,
+    p_knowledge_date: knowledge,
+    p_limit: limit,
+    p_offset: offset,
+    p_cap: POPULATION_CAP,
+  });
+  if (error) throw new Error(error.message);
+  const result = (data || {}) as { total?: number; scanned?: number; truncated?: boolean; rows?: Array<{ entityId: string; entityCode: string; entityName: string | null; values: Array<string | null> }> };
+  // The form keys each column by the condition's path and attribute.
+  const keys = active.map((c: any) => conditionValueKey(hopsFromDimension(c.attributeDimension), c.attributeCode));
+  const page = (result.rows || []).map((row) => ({
+    entityId: row.entityId,
+    entityCode: row.entityCode,
+    entityName: row.entityName,
+    values: Object.fromEntries(keys.map((key: string, index: number) => [key, row.values?.[index] ?? null])),
+  }));
   return {
-    total: matches.length,
-    scanned: rows.length,
-    truncated,
+    total: result.total ?? 0,
+    scanned: result.scanned ?? 0,
+    truncated: Boolean(result.truncated),
     rows: await withParentRecords(context, domainCode, page),
   };
 }
@@ -1380,125 +1382,9 @@ async function withParentRecords<T extends { entityId: string }>(context: Contex
   });
 }
 
-async function fetchDomainEntities(supabase: Context['supabase'], domainCode: string) {
-  const pageSize = 1000;
-  const rows: Array<{ entity_id: string; entity_code: string; entity_name: string | null }> = [];
-  for (let from = 0; rows.length < POPULATION_CAP; from += pageSize) {
-    const { data, error } = await supabase
-      .schema('entity_instances')
-      .from('master_entities')
-      .select('id, entity_code, entity_name')
-      .eq('domain_code', domainCode)
-      .order('entity_code', { ascending: true })
-      .range(from, from + pageSize - 1);
-    if (error) throw new Error(`Failed to load ${domainCode} records: ${error.message}`);
-    rows.push(...(data || []).map((row: any) => ({ entity_id: row.id, entity_code: row.entity_code, entity_name: row.entity_name })));
-    if (!data || data.length < pageSize) return { rows, truncated: false };
-  }
-  return { rows: rows.slice(0, POPULATION_CAP), truncated: true };
-}
 
-async function loadRelationshipMaps(
-  supabase: Context['supabase'],
-  conditions: PopulationCondition[],
-  asOf: string,
-  now: string,
-) {
-  const hops = new Map<string, RelationshipHopRef>();
-  for (const cond of conditions) {
-    for (const hop of [...(cond.attributePath || []), ...(cond.comparePath || []), ...conditionExpressionReads(cond).flatMap((read) => read.path)]) {
-      hops.set(`${hop.direction}:${hop.relationshipCode}`, hop);
-    }
-  }
-  const maps = new Map<string, Map<string, string[]>>();
-  const seenCodes = new Set<string>();
-  for (const hop of hops.values()) {
-    if (seenCodes.has(hop.relationshipCode)) continue;
-    seenCodes.add(hop.relationshipCode);
-    const { up, down } = await loadBothDirections(supabase, hop.relationshipCode, asOf, now);
-    maps.set(`UP:${hop.relationshipCode}`, up);
-    maps.set(`DOWN:${hop.relationshipCode}`, down);
-  }
-  return maps;
-}
 
-async function loadBothDirections(supabase: Context['supabase'], relationshipCode: string, asOf: string, now: string) {
-  const up = new Map<string, string[]>();
-  const down = new Map<string, string[]>();
-  const pageSize = 1000;
-  for (let from = 0; from < 200000; from += pageSize) {
-    // public.entity_relationships keeps the caller's JWT. Switching schema with
-    // supabase-js drops that header and RLS then hides every row.
-    const { data, error } = await supabase
-      .from('entity_relationships')
-      .select('parent_entity_id, child_entity_id')
-      .eq('relationship_code', relationshipCode)
-      .lte('valid_from', asOf)
-      .gte('valid_to', asOf)
-      .lte('system_from', now)
-      .gte('system_to', now)
-      .order('id', { ascending: true })
-      .range(from, from + pageSize - 1);
-    if (error) throw new Error(`Failed to walk ${relationshipCode}: ${error.message}`);
-    for (const row of data || []) {
-      const parents = up.get(row.child_entity_id) || [];
-      parents.push(row.parent_entity_id);
-      up.set(row.child_entity_id, parents);
-      const children = down.get(row.parent_entity_id) || [];
-      children.push(row.child_entity_id);
-      down.set(row.parent_entity_id, children);
-    }
-    if (!data || data.length < pageSize) break;
-  }
-  return { up, down };
-}
 
-async function fetchAttributeValues(
-  supabase: Context['supabase'],
-  ids: string[],
-  codes: string[],
-  into: Map<string, any>,
-  asOf: string,
-  now: string,
-) {
-  if (!ids.length || !codes.length) return;
-  const { data: definitions, error: defError } = await supabase
-    .schema('metadata_register')
-    .from('attribute_register')
-    .select('id, attribute_code')
-    .in('attribute_code', codes);
-  if (defError) throw new Error(`Failed to resolve attributes: ${defError.message}`);
-  const codeById = new Map((definitions || []).map((row: any) => [row.id, row.attribute_code]));
-  const attributeIds = [...codeById.keys()];
-  if (!attributeIds.length) return;
-
-  // winning_attribute_values seeks idx_eav_entity_attr_source_asof once per
-  // (entity, attribute, source) instead of scanning every historical slice.
-  const chunk = 200;
-  for (let i = 0; i < ids.length; i += chunk) {
-    const slice = ids.slice(i, i + chunk);
-    const { data, error } = await supabase
-      .schema('golden_master')
-      .rpc('winning_attribute_values', {
-        p_entity_ids: slice,
-        p_attribute_ids: attributeIds,
-        p_as_of: asOf,
-        p_knowledge: now,
-        p_require_text: false,
-      });
-    if (error) throw new Error(`Failed to load attribute values: ${error.message}`);
-    for (const row of data || []) {
-      const code = codeById.get(row.attribute_id);
-      if (!code) continue;
-      const bag = into.get(row.entity_id) || {};
-      const current = bag[code];
-      if (!current || row.precedence_rank < current.rank) {
-        bag[code] = { value: row.golden_value, rank: row.precedence_rank };
-      }
-      into.set(row.entity_id, bag);
-    }
-  }
-}
 
 async function loadResultContributors(context: Context, resultId: string) {
   const { data: result, error } = await cx(context).from('rule_evaluation_results').select('*').eq('id', resultId).maybeSingle();
@@ -1515,7 +1401,7 @@ async function loadResultContributors(context: Context, resultId: string) {
     const entityIds = [...new Set(rowsIn.map((row) => row.entity_id as string))];
     const info = new Map<string, { code: string; name: string | null }>();
     for (let i = 0; i < entityIds.length; i += 200) {
-      const { data } = await context.supabase.schema('entity_instances').from('master_entities').select('id, entity_code, entity_name').in('id', entityIds.slice(i, i + 200));
+      const { data } = ok(await context.supabase.schema('entity_instances').from('master_entities').select('id, entity_code, entity_name').in('id', entityIds.slice(i, i + 200)));
       for (const row of data || []) info.set(row.id, { code: row.entity_code, name: row.entity_name });
     }
     const totals = new Map<string, number>();
@@ -1542,53 +1428,27 @@ async function loadResultContributors(context: Context, resultId: string) {
     return { resultId, baseDomainCode: null, numeratorAggregation: null, columns: [], rows, total: rows.length };
   }
 
-  const ids: string[] = result.contributing_entity_ids || [];
-  const asOf = String(result.as_of_date).slice(0, 10);
-  const now = result.knowledge_date || new Date().toISOString();
+  // Each contributor's numerator as the evaluator read it (compliance.result_contributor_values).
   const aggregation = version.numerator_aggregation || null;
-  const counting = aggregation === 'COUNT' || aggregation === 'COUNT_DISTINCT';
-
-  const numeratorPath = hopsFromDimension(toCamelDim(version.numerator_dimension));
+  const { data: contributed, error: contributedError } = await cx(context).rpc('result_contributor_values', { p_result_id: resultId });
+  if (contributedError) throw new Error(`Could not load the records: ${contributedError.message}`);
   const reads = [
-    { code: version.numerator_attribute_code as string | null, role: 'NUMERATOR', path: numeratorPath },
-    { code: version.denominator_attribute_code as string | null, role: 'DENOMINATOR', path: hopsFromDimension(toCamelDim(version.denominator_dimension)) },
-    { code: version.group_by_attribute_code as string | null, role: 'GROUP', path: hopsFromDimension(toCamelDim(version.group_by_dimension)) },
+    { code: version.numerator_attribute_code as string | null, role: 'NUMERATOR', key: 'numerator_text' },
+    { code: version.denominator_attribute_code as string | null, role: 'DENOMINATOR', key: 'denominator_text' },
+    { code: version.group_by_attribute_code as string | null, role: 'GROUP', key: 'group_text' },
   ].filter((read) => !!read.code);
-
-  const conditions: PopulationCondition[] = reads
-    .filter((read) => read.path.length)
-    .map((read) => ({ attributeCode: read.code as string, operator: 'equals', value: null, attributePath: read.path }) as PopulationCondition);
-  const hopMaps = await loadRelationshipMaps(context.supabase, conditions, asOf, now);
-  const targetsFor = (id: string, path: RelationshipHopRef[]) => (path.length ? targetsAlongPath(id, path, hopMaps) : [id]);
-
-  const needed = new Set<string>(ids);
-  for (const id of ids) for (const read of reads) for (const target of targetsFor(id, read.path)) needed.add(target);
-  const attributes = new Map<string, any>();
-  await fetchAttributeValues(context.supabase, [...needed], [...new Set(reads.map((r) => r.code as string))], attributes, asOf, now);
-
-  const entityInfo = new Map<string, { code: string; name: string | null }>();
-  for (let i = 0; i < ids.length; i += 200) {
-    const { data } = await context.supabase.schema('entity_instances').from('master_entities').select('id, entity_code, entity_name').in('id', ids.slice(i, i + 200));
-    for (const row of data || []) entityInfo.set(row.id, { code: row.entity_code, name: row.entity_name });
-  }
-
-  const readValues = (id: string, read: { code: string | null; path: RelationshipHopRef[] }) => {
-    const texts = targetsFor(id, read.path).map((target) => textOfAttribute(attributes.get(target), read.code as string)).filter((t): t is string => t != null);
-    return texts.length ? texts.join(', ') : null;
-  };
-  const numeric = (text: string | null) => {
-    if (text == null) return null;
-    const parts = text.split(', ').map((part) => Number(part.replace(/,/g, ''))).filter((n) => Number.isFinite(n));
-    return parts.length ? parts.reduce((a, b) => a + b, 0) : null;
-  };
-
-  const numeratorRead = reads.find((read) => read.role === 'NUMERATOR');
-  const rows = ids.map((id) => {
+  const ids: string[] = result.contributing_entity_ids || [];
+  const rows = ((contributed || []) as any[]).map((row) => {
     const values: Record<string, string | null> = {};
-    for (const read of reads) values[read.code as string] = readValues(id, read);
-    const info = entityInfo.get(id);
-    const contribution = counting ? 1 : numeratorRead ? numeric(values[numeratorRead.code as string]) : null;
-    return { entityId: id, entityCode: info?.code || id, entityName: info?.name ?? null, numeratorValue: contribution, sharePercent: null as number | null, values };
+    for (const read of reads) values[read.code as string] = row[read.key] ?? null;
+    return {
+      entityId: row.entity_id as string,
+      entityCode: (row.entity_code as string) || row.entity_id,
+      entityName: (row.entity_name as string | null) ?? null,
+      numeratorValue: row.numerator_value == null ? null : Number(row.numerator_value),
+      sharePercent: null as number | null,
+      values,
+    };
   });
   const total = rows.reduce((sum, row) => sum + (row.numeratorValue ?? 0), 0);
   for (const row of rows) row.sharePercent = total && row.numeratorValue != null ? (row.numeratorValue / total) * 100 : null;

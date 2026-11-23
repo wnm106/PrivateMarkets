@@ -8,6 +8,13 @@ import { domainHref } from '@/lib/domain-routes';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { useSurfaceDates } from '@/components/certification/CertificationScope';
 import { usePublishTab } from '@/lib/view-context';
+import { useLatestRequest } from '@/lib/use-latest-request';
+
+/** What the Closing tab is, for the assistant. The deal page publishes it before the tab has loaded. */
+export const CLOSING_TAB = {
+  label: 'Closing',
+  purpose: 'Whether the deal is on track to close and fund: closing conditions, documents and each fund\'s cash for the funding call.',
+};
 
 const WORKSTREAM: Record<string, string> = {
   LEGAL: 'Legal and documentation',
@@ -179,14 +186,17 @@ export function DealClosing({
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
+    const request = latest.begin();
     setLoading(true);
     setError(null);
     const result = await graphqlQuery<{
       conditions: { edges: Array<{ node: Node }> };
       documents: { edges: Array<{ node: Node }> };
       plans: { edges: Array<{ node: Node }> };
-    }>(BOOK, { asOfDate, knowledgeDate }, 'network-only');
+    }>(BOOK, { asOfDate, knowledgeDate }, 'network-only', request.signal);
+    if (!request.current(result)) return;
     if (result.error?.message) {
       setError(result.error.message);
       setLoading(false);
@@ -240,7 +250,7 @@ export function DealClosing({
     setDocuments(nextDocuments);
     setFlows(nextFlows);
     setLoading(false);
-  }, [asOfDate, dealId, knowledgeDate]);
+  }, [latest, asOfDate, dealId, knowledgeDate]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -288,8 +298,7 @@ export function DealClosing({
             : `${Math.abs(away)} days past`;
 
   usePublishTab('closing', {
-    label: 'Closing',
-    purpose: 'Whether the deal is on track to close and fund: closing conditions, documents and each fund\'s cash for the funding call.',
+    ...CLOSING_TAB,
     howToRead: 'onTrack, overdue and blocked count the closing conditions. funding is per fund: cash and credit line available against the call.',
     data: {
       closeDate: closeDate || null,

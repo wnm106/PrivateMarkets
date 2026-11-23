@@ -122,9 +122,14 @@ export interface FinancialReport {
   statements: ReportStatement[];
   schedules: ReportSchedule[];
   checks: ReportCheck[];
+  /** The report includes its notes to the financial statements. */
+  notes?: boolean;
 }
 
 /* ------------------------------------------------------------------ text */
+
+/** The first note of the notes to the financial statements: "Note 1. Organization", "1. Summary of Significant Accounting Policies". */
+const NOTES_START = /^(note\s+1\s*[.:\u2014-]\s*\S|1\.\s+(organization|nature of|basis of|significant accounting|summary of significant))/i;
 
 interface Frag extends PdfFragment {
   page: number;
@@ -943,9 +948,11 @@ export function readFinancialReport(pages: PdfPageFragments[]): FinancialReport 
   const schedulePages: SchedulePage[][] = [];
   let form: string | null = null;
   let openSchedule: SchedulePage[] | null = null;
+  let notes = false;
 
   for (const page of pages) {
     const rows = rowsOf(page);
+    if (!notes && rows.some((row) => NOTES_START.test(row.text.trim()))) notes = true;
     if (!rows.length) {
       openSchedule = null;
       continue;
@@ -1010,7 +1017,7 @@ export function readFinancialReport(pages: PdfPageFragments[]): FinancialReport 
     ...(balanceSheet ? classChecks(balanceSheet) : []),
     ...schedules.flatMap((schedule) => scheduleChecks(schedule, balanceSheet)),
   ];
-  return { entityName, form, periodEnd, comparativeDate, statements: primary, schedules, checks };
+  return { entityName, form, periodEnd, comparativeDate, statements: primary, schedules, checks, notes };
 }
 
 /* ---------------------------------------------------------------- tables */
@@ -1124,6 +1131,7 @@ export function reportTables(report: FinancialReport, pageSizes: Array<{ page: n
     ['Form', report.form || ''],
     ['Period end', report.periodEnd || ''],
     ['Comparative date', report.comparativeDate || ''],
+    ['Notes', report.notes ? 'Included' : ''],
   ];
   tables.push({ id: REPORT_ABOUT_TABLE, name: 'About the report', headers: ['Field', 'Value'], rows: about.map(([Field, Value]) => ({ Field, Value })), locations: about.map(() => [null, null]) });
   return tables;
@@ -1237,5 +1245,6 @@ export function reportFromTables(tables: StoredTable[]): FinancialReport | null 
     statements,
     schedules,
     checks,
+    notes: about.get('Notes') === 'Included',
   };
 }

@@ -8,7 +8,7 @@ import { DOMAIN_TYPES_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY,
 import { definingParentDomains, mergeParentColumns, parentEntityColumns, toParentLinkCounts, type ParentEntityColumn } from '@/lib/parent-entities';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
 import { useTemporalStore } from '@/lib/store';
-import { useWarmTabs } from '@/lib/view-context';
+import { usePublishTab, useWarmTabs } from '@/lib/view-context';
 import { EntityAttributeTable, type RelatedAttributeColumn } from './EntityAttributeTable';
 import { EntityViews } from './EntityViews';
 
@@ -42,6 +42,13 @@ export function EntityHome({
   const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
   const [discovered, setDiscovered] = useState<ParentEntityColumn[]>([]);
+  // With a record chosen, EntityReports publishes the Dashboards tab. Without one the
+  // tab shows only a prompt, and says so (docs/SURFACE_TABS.md).
+  usePublishTab('dashboards', selected ? null : {
+    label: 'Dashboards',
+    purpose: 'The dashboards and narratives defined for this type of record, run for the record being viewed.',
+    data: { note: 'No record is chosen. Dashboards and narratives run for one record: choose one on the Records tab.' },
+  });
 
   useEffect(() => {
     setSelected(null);

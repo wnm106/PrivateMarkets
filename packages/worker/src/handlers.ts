@@ -90,10 +90,19 @@ export function complianceEvaluateHandler(supabase: SupabaseClient, now: () => D
     const codes = requested.length > 0 ? requested : [...usableCodes].sort();
     if (codes.length === 0) return { asOfDate, evaluated: 0, breaches: 0, rules: [] };
 
+    // A code names a rule within one client (shared rules have none). Each rule is
+    // run in its own client, so two clients' rules with one code are both scored.
+    const targets = usable
+      .filter((rule) => codes.includes(String(rule.rule_code)))
+      .map((rule) => ({ ruleCode: String(rule.rule_code), clientId: (rule.client_id as string | null) ?? null }))
+      .sort((left, right) => left.ruleCode.localeCompare(right.ruleCode) || String(left.clientId).localeCompare(String(right.clientId)));
+
     const outcomes: RuleOutcome[] = [];
     const errors: string[] = [];
-    for (const ruleCode of codes) {
-      const { data: runId, error } = await compliance.rpc('evaluate_rule', { p_rule_code: ruleCode, p_as_of_date: asOfDate });
+    for (const { ruleCode, clientId } of targets) {
+      const { data: runId, error } = clientId
+        ? await compliance.rpc('evaluate_rule_for_client', { p_client_id: clientId, p_rule_code: ruleCode, p_as_of_date: asOfDate })
+        : await compliance.rpc('evaluate_rule', { p_rule_code: ruleCode, p_as_of_date: asOfDate });
       if (error || !runId) {
         errors.push(`${ruleCode}: ${error?.message || 'no run was recorded'}`);
         continue;

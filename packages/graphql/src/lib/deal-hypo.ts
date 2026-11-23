@@ -13,14 +13,15 @@
 import type { Context } from '../context';
 import { assertAllocationInputsOnDeal, commitAllocation, loadAllocationDraft, type AllocationHold } from './allocation-store';
 import type { AllocationAdjustment } from './allocation-engine';
-import { dealSurfaceResults, loadDealScorePlans, scoreDealFunds } from './deal-compliance';
+import { assertWhatIfKnowledge, dealSurfaceResults, loadDealScorePlans, ruleVersionsAt, scoreDealFunds } from './deal-compliance';
+import { ok } from './db-result';
 
 export { ownRulesFilter } from './deal-compliance';
 
 export interface DealScoreArgs {
   dealId: string;
   asOfDate?: string | null;
-  /** Scores the saved book as known at this instant, such as a certification. Only for the saved book, not an edit. */
+  /** The user's Knowledge date. A day means the end of it. */
   knowledgeDate?: string | null;
   holds?: any[] | null;
   adjustments?: any[] | null;
@@ -74,7 +75,9 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
   // The draft is read as the caller, so it holds only the tranches and funds they can see.
   const holds = parseHolds(args.holds);
   const adjustments = parseAdjustments(args.adjustments);
-  const draft = await loadAllocationDraft(context.supabase, args.dealId, args.asOfDate, holds, adjustments);
+  const draft = await loadAllocationDraft(context.supabase, args.dealId, args.asOfDate, holds, adjustments, args.knowledgeDate);
+  // A Hypo writes its scenario now, so it is run against what is known now.
+  assertWhatIfKnowledge(draft.knowledge);
   assertAllocationInputsOnDeal(draft, holds, adjustments);
   const scenarioCode = hypoScenarioCode(draft.dealCode);
   const preview = await commitAllocation(writer, draft, userId, { scenarioCode });
@@ -86,17 +89,7 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
   // The service role sees every client's rules. Only the shared ones and the deal client's own are scored.
   const plans = await loadDealScorePlans(compliance, fundIds, draft.asOf, draft.clientId);
   if (!plans.length) throw new Error('No compliance rules with limits are assigned to the funds on this deal.');
-  const { data: versionRows, error: versionError } = await compliance
-    .from('rule_versions')
-    .select('*')
-    .in('rule_id', plans.map((plan) => plan.rule.id))
-    .eq('is_active', true);
-  if (versionError) throw new Error(versionError.message);
-  const versionByRule = new Map<string, any>();
-  for (const version of versionRows || []) {
-    const current = versionByRule.get(version.rule_id);
-    if (!current || version.version_number > current.version_number) versionByRule.set(version.rule_id, version);
-  }
+  const versionByRule = await ruleVersionsAt(compliance, plans.map((plan) => plan.rule.id), draft.asOf, draft.knowledge);
 
   const failures: string[] = [];
   // Every rule for one scenario is one database call, the same path the deal
@@ -152,17 +145,17 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
 }
 
 async function scenarioPositionIds(writer: any, code: string): Promise<Set<string>> {
-  const { data: scenarioAttribute } = await writer
+  const { data: scenarioAttribute } = ok(await writer
     .from('attribute_register')
     .select('id')
     .eq('attribute_code', 'POSITION_SCENARIO_CODE')
-    .maybeSingle();
+    .maybeSingle());
   if (!scenarioAttribute) return new Set();
-  const { data: scenarioRows } = await writer
+  const { data: scenarioRows } = ok(await writer
     .from('entity_attribute_values')
     .select('entity_id')
     .eq('attribute_id', scenarioAttribute.id)
     .eq('golden_value', code)
-    .gte('system_to', new Date().toISOString());
+    .gte('system_to', new Date().toISOString()));
   return new Set((scenarioRows || []).map((row: any) => row.entity_id));
 }

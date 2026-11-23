@@ -96,7 +96,7 @@ const loadNavReportTool: ToolDefinition = {
 const summarizeBreaksTool: ToolDefinition = {
   name: 'get_nav_breaks',
   description:
-    'The breaks of one fund\'s NAV reconciliation for one period, summarized for the person who signs it: each tie-out check that breaks, each check that cannot be made because a figure is missing, each review item still open, and each input not on file. Each comes with both figures, the difference, what usually causes it, what settles it and who does that, and the whole as markdown. needsDecision is true when something breaks or a review item is open. Reads the same reconciliation as get_nav_reconciliation. Amounts are whole dollars.',
+    'The breaks of one fund\'s NAV reconciliation for one period, summarized for the person who signs it: each tie-out check that breaks, each check that cannot be made because a figure is missing, each review item still open, and each input not on file. Each comes with both figures, the difference, what usually causes it, what settles it and who does that, and the whole as markdown. pack lists the ten parts of the NAV pack (NAV bridge, trial balance, financial statements, capital accounts, management fee, carry and waterfall, valuation support, calls and distributions, commitments, FX) with whether each is on file and ties, and the entry of a pack check names its component. needsDecision is true when something breaks or a review item is open. Reads the same reconciliation as get_nav_reconciliation. Amounts are whole dollars.',
   category: 'reconciliation',
   inputSchema: {
     type: 'object',

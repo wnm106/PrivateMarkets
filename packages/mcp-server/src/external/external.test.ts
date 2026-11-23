@@ -3,7 +3,7 @@ import { externalToolName, isExternalToolName, isValidServerCode, serverCodeFrom
 import { toGeminiParameters } from './gemini-schema';
 import { checkServerUrl, isPrivateAddress } from './url-guard';
 import { authHeaders, shapeToolResult, toDiscoveredTool } from './client';
-import { buildExternalToolset, CONFIRM_ARGUMENT, externalServersPrompt } from './toolset';
+import { buildExternalToolset, ConfirmationRequired, externalServersPrompt } from './toolset';
 import { cleanIdentifierHints, serverFromRuntimeRow } from './rows';
 import { isCategoryAllowed } from '../lib/context-profiles';
 import type { ExternalServer } from './types';
@@ -129,6 +129,21 @@ describe('server addresses', () => {
     expect(checkServerUrl('https://metadata.google.internal', false)).toMatch(/public/);
   });
 
+  it('refuses IPv4 carried inside IPv6, however the URL parser rewrites it', () => {
+    for (const url of [
+      'https://[::ffff:127.0.0.1]/mcp',
+      'https://[::ffff:169.254.169.254]/latest',
+      'https://[::ffff:a9fe:a9fe]/',
+      'https://[64:ff9b::a9fe:a9fe]/',
+      'https://[::127.0.0.1]/',
+      'https://[2002:7f00:1::1]/',
+      'https://[fe80::1]/',
+    ]) {
+      expect(checkServerUrl(url, false), url).toMatch(/public/);
+    }
+    expect(checkServerUrl('https://[2606:4700::1111]/mcp', false)).toBeNull();
+  });
+
   it('allows local servers when development opts in', () => {
     expect(checkServerUrl('http://localhost:8787/mcp', true)).toBeNull();
   });
@@ -181,17 +196,19 @@ describe('the toolset for one turn', () => {
     const toolset = buildExternalToolset([server()]);
     const read = toolset.declarations.find((d) => d.name === 'ext__CRM__get_company')!;
     expect(read.description).toMatch(/company_id takes DEALCLOUD/);
-    expect(read.parameters.properties[CONFIRM_ARGUMENT]).toBeUndefined();
+    expect(read.parameters.properties.confirmedByUser).toBeUndefined();
   });
 
-  it('treats marked and destructive tools as write tools that need confirmation', async () => {
+  it('never runs a marked or destructive tool for the model, whatever it claims', async () => {
     const toolset = buildExternalToolset([server()]);
     for (const name of ['ext__CRM__update_stage', 'ext__CRM__delete_note']) {
       const declaration = toolset.declarations.find((d) => d.name === name)!;
-      expect(declaration.parameters.properties[CONFIRM_ARGUMENT].type).toBe('BOOLEAN');
-      expect(declaration.description).toMatch(/changes data/);
-      // Refused before any connection is opened.
-      await expect(toolset.execute(name, { stage: 'won' })).rejects.toThrow(/confirm/);
+      // There is no argument the model can set to say the user agreed.
+      expect(declaration.parameters.properties.confirmedByUser).toBeUndefined();
+      expect(declaration.description).toMatch(/changes data.*Confirm button/);
+      // Refused before any connection is opened, even with the old flag set.
+      await expect(toolset.execute(name, { stage: 'won', confirmedByUser: true })).rejects.toBeInstanceOf(ConfirmationRequired);
+      expect(toolset.describe(name)?.write).toBe(true);
     }
     await toolset.close();
   });

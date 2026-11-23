@@ -166,12 +166,13 @@ export default function DocumentPage() {
 
   const sections = useMemo(() => document?.sections || [], [document]);
 
-  usePublishTabs(document ? {
+  // Every tab, loaded or not: until the document has loaded each publishes data: null.
+  usePublishTabs({
     passages: {
       label: 'Passages',
       purpose: 'What the document says: its headings in order and the text of the passages under the open heading.',
       howToRead: 'sections are the document\'s headings; chunkCount is how many passages sit under each. templateSection is the standard section the heading was matched to. openSection and passages are the heading the reader has open and its text, which is the beginning of it when the section is long.',
-      data: {
+      data: !document ? null : {
         title: document.title, status: document.status, pages: document.pageCount, passageCount: document.chunkCount,
         sections: sections.slice(0, 150).map((section) => ({ number: section.number, heading: section.heading, level: section.level, passages: section.chunkCount, templateSection: section.templateSectionCode })),
         openSection: sections.find((section) => section.id === sectionId)?.heading || null,
@@ -182,14 +183,14 @@ export default function DocumentPage() {
       label: 'Details',
       purpose: 'What the document is and which records it is about: its type, date, tags, linked records and processing status.',
       howToRead: 'role is what the linked record is to the document. status says whether the document has been read: READY means its passages can be searched.',
-      data: {
+      data: !document ? null : {
         title: document.title, type: document.typeName, fileName: document.fileName, format: document.format, documentDate: document.documentDate,
         tags: document.tags, status: document.status, stage: document.stage, message: document.message, processedAt: document.processedAt,
         pages: document.pageCount, passages: document.chunkCount, embedded: document.embeddedCount,
         records: document.entities.map((link) => ({ name: link.entityName, code: link.entityCode || null, type: link.typeName || link.domainCode || null, role: link.role })),
       },
     },
-  } : {});
+  });
 
   // Arriving from a search result: open the heading that holds the passage.
   useEffect(() => {

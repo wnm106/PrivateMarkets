@@ -367,6 +367,25 @@ describe('complianceEvaluateHandler', () => {
     expect(result).toMatchObject({ evaluated: 3 });
   });
 
+  it('runs a client\'s rule in its own client, so two clients may share a code', async () => {
+    const shared = [...rules, { rule_code: 'A_ONLY', client_id: 'client-b' }];
+    const { supabase, calls } = fakeSupabase({
+      rpc: (_fn, args) => ({ data: `eval-${args.p_rule_code}-${args.p_client_id ?? 'shared'}`, error: null }),
+      rows: (table) =>
+        table === 'rules'
+          ? { data: shared, error: null }
+          : { data: { run_status: 'COMPLETED', result_count: 1, breach_count: 0, error_message: null }, error: null },
+    });
+    const result = await complianceEvaluateHandler(supabase, today)(run({ clientId: null }));
+    expect(result).toMatchObject({ evaluated: 4 });
+    expect(calls.filter((call) => call[0] === 'rpc').map((call) => [call[1], (call[2] as any).p_rule_code, (call[2] as any).p_client_id ?? null])).toEqual([
+      ['evaluate_rule_for_client', 'A_ONLY', 'client-a'],
+      ['evaluate_rule_for_client', 'A_ONLY', 'client-b'],
+      ['evaluate_rule_for_client', 'B_ONLY', 'client-b'],
+      ['evaluate_rule', 'SHARED_ISSUER', null],
+    ]);
+  });
+
   it('scores only the rules asked for, on the date asked for', async () => {
     const { supabase, calls } = scripted();
     await complianceEvaluateHandler(supabase, today)(run({ payload: { ruleCodes: ['SHARED_ISSUER'], asOfDate: '2026-09-30' } }));

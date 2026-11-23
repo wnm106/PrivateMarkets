@@ -27,9 +27,32 @@ export class SignedOutError extends Error {
   }
 }
 
-export function browserStore(storage: Storage | undefined = typeof localStorage === 'undefined' ? undefined : localStorage): KeyValueStore {
+/**
+ * localStorage, or null when this page may not use it. In Excel on the web the pane is a
+ * third-party frame, and a browser that blocks third-party cookies throws on the mere
+ * read of window.localStorage. That must never stop the add-in from starting.
+ */
+export function pageStorage(): Storage | null {
+  try {
+    const storage = typeof window === 'undefined' ? undefined : window.localStorage;
+    if (!storage) return null;
+    const probe = '__tapestry_probe__';
+    storage.setItem(probe, '1');
+    storage.removeItem(probe);
+    return storage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A key-value store over localStorage that falls back to memory. Without storage the
+ * sign-in lasts while the workbook is open; `persistent` says which one this is.
+ */
+export function browserStore(storage: Storage | null | undefined = pageStorage()): KeyValueStore & { persistent: boolean } {
   const memory = new Map<string, string>();
   return {
+    persistent: Boolean(storage),
     get(key) {
       try { return storage ? storage.getItem(key) : memory.get(key) ?? null; } catch { return memory.get(key) ?? null; }
     },

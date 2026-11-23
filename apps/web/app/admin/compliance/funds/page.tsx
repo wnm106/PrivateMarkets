@@ -11,7 +11,6 @@ import {
   DELETE_COMPLIANCE_THRESHOLD_MUTATION,
   EVALUATE_COMPLIANCE_RULE_MUTATION,
 } from '@/lib/graphql';
-import { fundUsesRule } from '@/lib/fund-enrollment';
 
 interface FundNode {
   entityId: string;
@@ -65,6 +64,13 @@ interface Board {
   rules: FundRule[];
   thresholds: Threshold[];
   results: FundResult[];
+  /** The funds each rule is scored for, from compliance.deal_score_plans. */
+  enrollments: Array<{ ruleId: string; fundIds: string[] }>;
+}
+
+/** Whether a fund is scored for a rule. Decided by the database, not here. */
+function fundUsesRule(board: Pick<Board, 'enrollments'>, ruleId: string, fundId: string): boolean {
+  return board.enrollments.some((item) => item.ruleId === ruleId && item.fundIds.includes(fundId));
 }
 
 function unitWord(unit?: string | null) {
@@ -207,13 +213,13 @@ export default function FundThresholdsPage() {
   };
 
   const ruleStats = board && selected
-    ? board.rules.map((rule) => fundUsesRule(board.thresholds, rule.id, selected.entityId))
+    ? board.rules.map((rule) => fundUsesRule(board, rule.id, selected.entityId))
     : [];
   const appliedCount = ruleStats.filter(Boolean).length;
   const appliedShare = ruleStats.length ? Math.round((appliedCount / ruleStats.length) * 100) : 0;
   const childCount = selected ? (tree.children.get(selected.entityId) || []).length : 0;
   const appliedRule = board && selected
-    ? board.rules.find((rule) => fundUsesRule(board.thresholds, rule.id, selected.entityId))
+    ? board.rules.find((rule) => fundUsesRule(board, rule.id, selected.entityId))
     : null;
   const openRule = board?.rules.find((rule) => rule.id === openRuleId) || appliedRule || board?.rules[0] || null;
 
@@ -292,7 +298,7 @@ export default function FundThresholdsPage() {
                     </thead>
                     <tbody>
                       {board.rules.map((rule) => {
-                        const applied = fundUsesRule(board.thresholds, rule.id, selected.entityId);
+                        const applied = fundUsesRule(board, rule.id, selected.entityId);
                         const scored = board.results.filter((item) => item.ruleId === rule.id && item.anchorEntityId === selected.entityId && item.status !== 'NO_DATA');
                         const outcome = scored.some((item) => item.status === 'HARD_BREACH') ? 'HARD_BREACH'
                           : scored.some((item) => item.status === 'SOFT_BREACH') ? 'SOFT_BREACH'
@@ -321,6 +327,7 @@ export default function FundThresholdsPage() {
                       rule={openRule}
                       fund={selected}
                       thresholds={board.thresholds}
+                      board={board}
                       results={board.results}
                       busy={busy}
                       onSave={save}
@@ -337,10 +344,11 @@ export default function FundThresholdsPage() {
   );
 }
 
-function RuleLimit({ rule, fund, thresholds, results, busy, onSave, onDelete }: {
+function RuleLimit({ rule, fund, thresholds, board, results, busy, onSave, onDelete }: {
   rule: FundRule;
   fund: FundNode;
   thresholds: Threshold[];
+  board: Pick<Board, 'enrollments'>;
   results: FundResult[];
   busy: boolean;
   onSave: (input: Record<string, unknown>) => void;
@@ -351,7 +359,7 @@ function RuleLimit({ rule, fund, thresholds, results, busy, onSave, onDelete }: 
   const groups = rows.filter((item) => item.groupValue);
   const ranks = rows.filter((item) => !item.groupValue && item.rankFrom != null);
   const scored = results.filter((item) => item.ruleId === rule.id && item.anchorEntityId === fund.entityId);
-  const applied = fundUsesRule(thresholds, rule.id, fund.entityId);
+  const applied = fundUsesRule(board, rule.id, fund.entityId);
   const headline = fundDefault?.hardLimitValue ?? fundDefault?.softLimitValue;
   const way = fundDefault?.limitDirection || rule.limitDirection || 'MAX';
   return (
