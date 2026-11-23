@@ -476,6 +476,21 @@ export const ENTITY_ACTIVITY_QUERY = `
   }
 `;
 
+export const ENTITY_TIMELINE_QUERY = `
+  query EntityTimeline($entityId: ID!, $knowledgeDate: DateTime, $limit: Int) {
+    entityTimeline(entityId: $entityId, knowledgeDate: $knowledgeDate, limit: $limit) {
+      attributes { attributeCode attributeName }
+      versions {
+        effectiveFrom
+        effectiveTo
+        changed
+        values { attributeCode value sourceName }
+      }
+      truncated
+    }
+  }
+`;
+
 export const FIELD_LINEAGE_QUERY = `
   query FieldLineage($entityId: ID!, $asOfDate: Date, $knowledgeDate: DateTime) {
     fieldLineage(entityId: $entityId, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate) {
@@ -1729,6 +1744,25 @@ export const STALE_ATTRIBUTES_QUERY = `
   }
 `;
 
+/** One record's data-quality score weights, the same score the record's Data quality tab shows. */
+export const DQ_RECORD_SCORE_QUERY = `
+  query DQRecordScore($fromDate: Date, $toDate: Date, $knowledgeDate: DateTime, $entityId: ID) {
+    dataQualityDashboard(fromDate: $fromDate, toDate: $toDate, knowledgeDate: $knowledgeDate, entityId: $entityId) {
+      scores {
+        availabilityPassing
+        availabilityApplicable
+        qualityPassing
+        qualityApplicable
+        freshnessPassing
+        freshnessApplicable
+        consensusPassing
+        consensusApplicable
+        waivedChecks
+      }
+    }
+  }
+`;
+
 // Counts and failing records load first. The per-record list is added only when the Entity view asks for it,
 // and the records behind a required attribute are fetched when its row is opened.
 const dataQualityDashboardQuery = (entityRows: string) => `
@@ -2360,6 +2394,19 @@ export const COMPLIANCE_FUND_BOARD_QUERY = `
       rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode consolidateDescendants isActive }
       thresholds { id ruleId ruleCode ruleName entityId groupValue rankFrom rankTo limitDirection softLimitValue hardLimitValue applies notes }
       results { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
+    }
+  }
+`;
+
+export const COMPLIANCE_DASHBOARD_QUERY = `
+  query ComplianceDashboard($asOfDate: Date, $knowledgeDate: DateTime) {
+    complianceDashboard(asOfDate: $asOfDate, knowledgeDate: $knowledgeDate) {
+      asOfDate
+      knowledgeDate
+      domains { domainCode domainName ruleCount entityCount resultCount passCount softBreachCount hardBreachCount noDataCount }
+      rules { id ruleCode ruleName ruleCategory anchorDomainCode resultUnit limitDirection groupByAttributeCode softLimitValue hardLimitValue }
+      thresholds { id ruleId entityId groupValue rankFrom limitDirection softLimitValue hardLimitValue applies }
+      results { id ruleId anchorEntityId anchorEntityCode anchorEntityName groupByValue rankPosition asOfDate computedValue limitDirection softLimitValue hardLimitValue status contributingCount }
     }
   }
 `;
@@ -3059,6 +3106,18 @@ export const MERGE_CANDIDATES_QUERY = `
         reasons { clauseCode algorithm label leftValue rightValue leftAttribute rightAttribute similarity deterministic }
         left { id entityCode entityName domainCode createdAt relationshipCount children { id entityCode entityName domainCode createdAt descendantCount } }
         right { id entityCode entityName domainCode createdAt relationshipCount children { id entityCode entityName domainCode createdAt descendantCount } }
+      }
+    }
+  }
+`;
+
+/** Just the pairs, to tell whether a record has possible duplicates. */
+export const MERGE_CANDIDATE_PAIRS_QUERY = `
+  query MergeCandidatePairs($filter: MergeCandidateFilter) {
+    mergeCandidates(filter: $filter) {
+      candidates {
+        left { id }
+        right { id }
       }
     }
   }

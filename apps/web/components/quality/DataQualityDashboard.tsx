@@ -14,7 +14,7 @@ import { domainHref } from '@/lib/domain-routes';
 import { nestDomainLinks, type DomainNavItem } from '@/lib/domain-nav';
 import { AttributeValueInput } from '@/components/forms/AttributeValueInput';
 import { groupByEntityType, splitChangesByEntityType, splitRulesByEntityType } from '@/lib/dq-groups';
-import { compareScores, scoreFromWeights, type ScoreWeights } from '@/lib/dq-scores';
+import { compareScores, knowledgeArgument, scoreFromWeights, type ScoreWeights } from '@/lib/dq-scores';
 
 type Section = 'availability' | 'quality' | 'trajectory' | 'handoff' | 'freshness' | 'consensus';
 type Period = 'day' | 'week' | 'month' | 'quarter' | 'custom';
@@ -358,19 +358,6 @@ function severityClass(severity: string) {
   return 'sev-low';
 }
 
-function knowledgeArgument(knowledgeDate: string): string | null {
-  const trimmed = knowledgeDate.trim();
-  if (!trimmed) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    const today = new Date().toISOString().slice(0, 10);
-    if (trimmed >= today) return null;
-    return `${trimmed}T23:59:59.999Z`;
-  }
-  const parsed = new Date(trimmed);
-  if (Number.isNaN(parsed.getTime()) || parsed.getTime() >= Date.now() - 1000) return null;
-  return parsed.toISOString();
-}
-
 const top = <T,>(rows: T[], limit: number) => rows.slice(0, limit);
 
 /**
@@ -555,12 +542,10 @@ function qualityTabs(
 export function DataQualityDashboard({
   domainCode: fixedDomain,
   entityId,
-  embedded = false,
   active = true,
 }: {
   domainCode?: string;
   entityId?: string;
-  embedded?: boolean;
   /** False when the dashboard is mounted on a hidden tab. It still publishes its figures but does not take over the page's focus. */
   active?: boolean;
 } = {}) {
@@ -949,14 +934,6 @@ export function DataQualityDashboard({
 
   return (
     <div className="view-fade da">
-      {!embedded && (
-        <div className="da-crumbs">
-          <Link href="/">Home</Link>
-          <span>/</span>
-          <strong>Data quality</strong>
-        </div>
-      )}
-
       <div className="da-sechead">
         <p>{comparing ? `Comparing ${formatDay(fromDate)} to ${formatDay(toDate)}` : `As of ${formatDay(toDate)}`}</p>
         <div className="page-actions">

@@ -7,9 +7,14 @@ export function receiptAgeDays(receivedAt: string | null | undefined, now = Date
   return Math.max(0, Math.floor((now - time) / 86400000));
 }
 
-export function isStaleReceipt(receivedAt: string | null | undefined, sourceCode?: string | null): boolean {
+/** The source a calculation writes its result under. Its value is computed, not received or typed. */
+export function isCalculationSource(sourceCode?: string | null): boolean {
   const code = (sourceCode || '').toUpperCase();
-  if (code === 'DERIVED' || code === 'CALCULATED') return false;
+  return code === 'DERIVED' || code === 'CALCULATED';
+}
+
+export function isStaleReceipt(receivedAt: string | null | undefined, sourceCode?: string | null): boolean {
+  if (isCalculationSource(sourceCode)) return false;
   const age = receiptAgeDays(receivedAt);
   return age != null && age > STALE_AFTER_DAYS;
 }

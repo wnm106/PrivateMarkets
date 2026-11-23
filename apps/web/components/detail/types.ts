@@ -73,4 +73,5 @@ export interface ActivityData {
   value?: string;
   validFrom?: string;
   validTo?: string;
+  sourceName?: string | null;
 }

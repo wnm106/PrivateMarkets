@@ -359,6 +359,45 @@ type ComplianceFundBoard {
   results: [ComplianceEvaluationResult!]!
 }
 
+# One entity type that has compliance results at the dashboard's dates.
+type ComplianceDashboardDomain {
+  domainCode: String!
+  domainName: String!
+  ruleCount: Int!
+  entityCount: Int!
+  resultCount: Int!
+  passCount: Int!
+  softBreachCount: Int!
+  hardBreachCount: Int!
+  noDataCount: Int!
+}
+
+# An active rule with the settings of its current version.
+type ComplianceDashboardRule {
+  id: ID!
+  ruleCode: String!
+  ruleName: String!
+  ruleCategory: String!
+  anchorDomainCode: String!
+  resultUnit: String
+  limitDirection: String
+  groupByAttributeCode: String
+  # The version's own limits, used when no fund or group threshold is set.
+  softLimitValue: Float
+  hardLimitValue: Float
+}
+
+# Every entity type with results, every active rule, current thresholds, and
+# the newest result per rule, entity, group and rank at the given dates.
+type ComplianceDashboard {
+  asOfDate: Date
+  knowledgeDate: DateTime
+  domains: [ComplianceDashboardDomain!]!
+  rules: [ComplianceDashboardRule!]!
+  thresholds: [ComplianceThreshold!]!
+  results: [ComplianceEvaluationResult!]!
+}
+
 input UpsertComplianceThresholdInput {
   id: ID
   ruleId: ID!

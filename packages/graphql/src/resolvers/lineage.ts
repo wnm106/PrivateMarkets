@@ -6,6 +6,8 @@ import { planVersionDelete } from '../lib/source-version';
 import { ManualOverrideError, OPEN_SYSTEM_TO, refreshCalculations, versionCopy, writeManualOverride } from '../lib/source-write';
 import { requireIsoDate } from '../lib/input-guards';
 import { writeGoldenValue } from '../lib/golden-write';
+import { buildTimelineVersions, candidateChangeDays, type TimelineCell, type VersionSpan } from '../lib/entity-timeline';
+import { knowledgeInstant, loadWinningValues } from '../lib/temporal-attributes';
 
 
 function dateOnly(value: string): string {
@@ -217,6 +219,104 @@ export const lineageResolvers = {
         });
     },
     
+    entityTimeline: async (
+      _: any,
+      args: { entityId: string; knowledgeDate?: string; limit?: number },
+      context: Context
+    ) => {
+      const knownAt = knowledgeCutoff(args.knowledgeDate);
+      const knowledge = knownAt || knowledgeInstant(null);
+      const limit = Math.min(Math.max(args.limit ?? 120, 1), 250);
+
+      // The effective spans of every version believed at the knowledge time. Only the days
+      // come from here; the value on each day comes from the shared winning-value reader.
+      const spans: Array<VersionSpan & { attributeId: string }> = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await context.supabase
+          .from('entity_attribute_values')
+          .select('attribute_id, valid_from, valid_to')
+          .eq('entity_id', args.entityId)
+          .lte('system_from', knowledge)
+          .gt('system_to', knowledge)
+          .order('valid_from', { ascending: true })
+          .range(from, from + 999);
+        if (error) throw error;
+        for (const row of data || []) {
+          spans.push({ attributeId: row.attribute_id, validFrom: dateOnly(row.valid_from), validTo: row.valid_to ? dateOnly(row.valid_to) : null });
+        }
+        if (!data || data.length < 1000) break;
+      }
+      const attributeIds = [...new Set(spans.map((span) => span.attributeId))];
+      if (!attributeIds.length) return { attributes: [], versions: [], truncated: false };
+
+      const { data: attributes, error: attributeError } = await context.supabase
+        .from('attribute_register')
+        .select('id, attribute_code, attribute_name')
+        .in('id', attributeIds);
+      if (attributeError) throw attributeError;
+      const codeOf = new Map<string, string>();
+      const register = (attributes || [])
+        .map((row: any) => {
+          codeOf.set(row.id, row.attribute_code);
+          return { attributeCode: row.attribute_code as string, attributeName: (row.attribute_name || row.attribute_code) as string };
+        })
+        .sort((a, b) => a.attributeName.localeCompare(b.attributeName));
+      const codes = register.map((attribute) => attribute.attributeCode);
+
+      // One more day than the limit, so the oldest version kept can still say what changed.
+      const allDays = candidateChangeDays(spans);
+      const days = allDays.slice(-(limit + 1));
+      const snapshots: Array<{ day: string; values: Record<string, TimelineCell> }> = [];
+      for (let index = 0; index < days.length; index += 6) {
+        const batch = days.slice(index, index + 6);
+        const reads = await Promise.all(batch.map((day) => loadWinningValues(context.supabase as any, [args.entityId], attributeIds, day, knowledge)));
+        batch.forEach((day, position) => {
+          const values: Record<string, TimelineCell> = {};
+          for (const row of reads[position]) {
+            const code = codeOf.get(row.attribute_id);
+            if (code) values[code] = { value: row.golden_value, sourceId: row.source_id };
+          }
+          snapshots.push({ day, values });
+        });
+      }
+
+      let versions = buildTimelineVersions(snapshots, codes);
+      const truncated = allDays.length > days.length;
+      // When older days were cut, the first day read is only the baseline for the next one.
+      if (truncated) versions = versions.slice(1);
+      versions = versions.slice(-limit);
+
+      const sourceIds = [...new Set(versions.flatMap((version) => Object.values(version.values).map((cell) => cell.sourceId)).filter(Boolean))] as string[];
+      const sourceNames = new Map<string, string>();
+      if (sourceIds.length) {
+        const { data: sources, error: sourceError } = await context.supabase
+          .schema('entity_instances')
+          .from('source_registry')
+          .select('id, source_name, source_code')
+          .in('id', sourceIds);
+        if (sourceError) throw sourceError;
+        for (const source of sources || []) sourceNames.set(source.id, source.source_name || source.source_code);
+      }
+
+      return {
+        attributes: register,
+        truncated,
+        versions: versions.reverse().map((version) => ({
+          effectiveFrom: version.effectiveFrom,
+          effectiveTo: version.effectiveTo,
+          changed: version.changed,
+          values: codes.map((code) => {
+            const cell = version.values[code];
+            return {
+              attributeCode: code,
+              value: cell?.value ?? null,
+              sourceName: cell?.sourceId ? sourceNames.get(cell.sourceId) || null : null,
+            };
+          }),
+        })),
+      };
+    },
+
     temporalHistory: async (
       _: any,
       args: { entityId: string; attributeCode: string; fromDate: string; toDate: string },

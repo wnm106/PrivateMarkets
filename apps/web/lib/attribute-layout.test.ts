@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { attributeSectionLinks, attributesInDisplayOrder, fieldsForVisibility, planAttributeMove, sectionAnchor, sectionsForDisplay } from './attribute-layout';
+import { attributeSectionLinks, attributesInDisplayOrder, fieldsForVisibility, fieldsMatchingSearch, planAttributeMove, sectionAnchor, sectionsForDisplay } from './attribute-layout';
 
 describe('attributes in display order', () => {
   it('orders by section, then position, then name, like the record editor', () => {
@@ -110,5 +110,28 @@ describe('attribute section grouping', () => {
     assert.equal(planAttributeMove(groups, 'revenue', { kind: 'section', section: 'Financials' }), null);
     assert.equal(planAttributeMove(groups, 'code', { kind: 'before', attributeId: 'code' }), null);
     assert.equal(planAttributeMove(groups, 'shared', { kind: 'before', attributeId: 'name' }), null);
+  });
+});
+
+describe('fields matching a search', () => {
+  const items = [
+    { key: 'LEGAL_NAME', name: 'Legal name', section: 'Identity', value: 'Acme Fund II' },
+    { key: 'NAV', name: 'Net asset value', section: 'Valuation', value: '125000000' },
+    { key: 'DOMICILE', name: 'Domicile', section: 'Identity', value: null },
+  ];
+
+  it('keeps every field for a blank search', () => {
+    assert.equal(fieldsMatchingSearch(items, '  ').length, 3);
+  });
+
+  it('matches name, code, section and value, ignoring case', () => {
+    assert.deepEqual(fieldsMatchingSearch(items, 'asset').map((item) => item.key), ['NAV']);
+    assert.deepEqual(fieldsMatchingSearch(items, 'legal_name').map((item) => item.key), ['LEGAL_NAME']);
+    assert.deepEqual(fieldsMatchingSearch(items, 'identity').map((item) => item.key), ['LEGAL_NAME', 'DOMICILE']);
+    assert.deepEqual(fieldsMatchingSearch(items, 'acme').map((item) => item.key), ['LEGAL_NAME']);
+  });
+
+  it('needs every word to match', () => {
+    assert.deepEqual(fieldsMatchingSearch(items, 'identity acme').map((item) => item.key), ['LEGAL_NAME']);
   });
 });

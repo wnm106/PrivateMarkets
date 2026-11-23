@@ -9,10 +9,12 @@ import { useTemporalStore } from '@/lib/store';
 import { useSurfaceNav } from '@/lib/surface-nav';
 import { usePublishTabs, withoutSources, type TabPayload } from '@/lib/view-context';
 import {
-  FUND_REC_QUERY, HEALTH_LABEL, certify, healthTone, longDate, millions, percent, recordDecision, reopen,
+  CLOSE_PROCESS, FUND_REC_QUERY, HEALTH_LABEL, certify, healthTone, longDate, millions, percent, recFigures, recordDecision, reopen,
   setSignoff, shortDate, signedMillions, stepTone,
   type FundRec, type RecBind,
 } from '@/lib/fund-rec';
+import { certifyBlockedBy, replacedDependencies, type Certification, type CertificationView } from '@/lib/certification';
+import { CertifiedBanner, ReopenButton, useCertification } from '@/components/certification/CertificationScope';
 import {
   saveCashAdjustment, saveCashMatch, saveCashRules, unmatchCash,
   type CashRec, type CashRule,
@@ -111,7 +113,15 @@ function pendingRecTabs(): Record<string, TabPayload> {
  * What each tab tells the assistant, built from the one load that feeds every tab,
  * so it sees all of them at once. Amounts are in dollars.
  */
-function recTabs(rec: FundRec, cash: CashRec | null, insights: RecInsight[] | null, breaks: BreakSummary): Record<string, TabPayload> {
+function recTabs(
+  rec: FundRec,
+  cash: CashRec | null,
+  insights: RecInsight[] | null,
+  breaks: BreakSummary,
+  certification: Certification | null,
+  view: CertificationView,
+  reopened: Certification | null,
+): Record<string, TabPayload> {
   const undecided = rec.items.filter((item) => item.decision == null);
   const item = (row: FundRec['items'][number]) => ({ title: row.title, tab: row.tab, administrator: row.admin, ours: row.ours, effect: row.effect, unit: row.unit, why: row.why, decision: row.decision, note: row.note });
   return withoutSources({
@@ -124,6 +134,20 @@ function recTabs(rec: FundRec, cash: CashRec | null, insights: RecInsight[] | nu
         adjustments: rec.adjustments, stepsDone: rec.stepsDone, steps: rec.steps.map((step) => ({ name: step.name, owner: step.owner, due: step.due, state: step.state, detail: step.detail, overdue: step.overdue })),
         itemsDecided: rec.itemsDecided, itemsOpen: undecided.length, openItems: head(undecided, 40).map(item),
         insights: insights?.map((point) => point) ?? null,
+        certification: certification
+          ? {
+            certifiedBy: certification.certifiedBy, certifiedAt: certification.certifiedAt,
+            asOfDate: certification.asOfDate, knowledgeAt: certification.knowledgeAt, version: certification.version,
+            showing: view === 'certified' ? 'what was certified, as known at knowledgeAt' : 'current data, not what was certified',
+            priorPeriodReopenedSince: replacedDependencies(certification).map((item) => ({ periodEnd: item.periodEnd, version: item.version, reason: item.revokeReason })),
+          }
+          : null,
+        reopened: reopened
+          ? { version: reopened.version, asOfDate: reopened.asOfDate, reason: reopened.revokeReason, note: 'Reads the reopened version\'s As Of date as known now. A re-certification keeps that As Of date.' }
+          : null,
+        comparedWithPrior: rec.priorCertification
+          ? { periodEnd: rec.priorCertification.periodEnd, version: rec.priorCertification.version, knowledgeAt: rec.priorCertification.knowledgeAt }
+          : null,
       },
     },
     breaks: {
@@ -177,7 +201,8 @@ function recTabs(rec: FundRec, cash: CashRec | null, insights: RecInsight[] | nu
 }
 
 export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initialTab?: string | null }) {
-  const asOfDate = useTemporalStore((state) => state.asOfDate);
+  const userAsOf = useTemporalStore((state) => state.asOfDate);
+  const userKnowledge = useTemporalStore((state) => state.knowledgeDate);
   const [rec, setRec] = useState<FundRec | null>(null);
   const [cash, setCash] = useState<CashRec | null>(null);
   const [period, setPeriod] = useState<string | null>(null);
@@ -190,17 +215,28 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   const [insightError, setInsightError] = useState<string | null>(null);
   const [insightTry, setInsightTry] = useState(0);
 
+  // A certified close reads at its certification: the As Of date and the
+  // knowledge instant it was certified at. docs/CERTIFICATION.md.
+  const scope = useCertification({ processCode: CLOSE_PROCESS, subjectEntityId: rec?.closeEntityId, periodEnd: rec?.periodEnd });
+  // Choosing another period reads it at the user's dates until its own certification is read.
+  const standing = scope.certification ?? scope.reopened;
+  const certFits = !period || standing?.periodEnd === period;
+  const dates = certFits ? scope.dates : { asOfDate: userAsOf, knowledgeDate: userKnowledge, pinnedBy: null, asOfKeptBy: null };
+  const asOfDate = dates.asOfDate;
+  // Pinned or being re-certified, the period is the certification's.
+  const pinnedPeriod = certFits && (scope.pinned || dates.asOfKeptBy) ? standing?.periodEnd ?? null : null;
+
   const load = useCallback(async () => {
     const result = await graphqlQuery<{ fundRec: FundRec; cashRec: CashRec }, Record<string, unknown>>(
       FUND_REC_QUERY,
-      { fundId, periodEnd: period, asOfDate, driftThresholdPct: threshold },
+      { fundId, periodEnd: period ?? pinnedPeriod, asOfDate, knowledgeDate: dates.knowledgeDate, driftThresholdPct: threshold },
       'network-only',
     );
     if (result.error) { setError(result.error.message || 'Could not load the close'); return; }
     setRec(result.data?.fundRec ?? null);
     setCash(result.data?.cashRec ?? null);
     setError(null);
-  }, [fundId, period, asOfDate, threshold]);
+  }, [fundId, period, pinnedPeriod, asOfDate, dates.knowledgeDate, threshold]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -233,11 +269,37 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   };
 
   const breaks = useMemo(() => (rec ? summarizeBreaks(rec) : null), [rec]);
-  usePublishTabs(rec && breaks ? recTabs(rec, cash, insights, breaks) : pendingRecTabs());
+  const certification = certFits ? scope.certification ?? null : null;
+  const reopened = certFits ? scope.reopened : null;
+  usePublishTabs(rec && breaks && scope.ready ? recTabs(rec, cash, insights, breaks, certification, scope.view, reopened) : pendingRecTabs());
 
   if (!rec) return error ? <div className="xp-error">{error}</div> : <div className="xp-empty">Loading close…</div>;
 
   const ctx = { rec, asOfDate };
+  const figures = recFigures(rec, cash);
+  // Closes certified before certifications were recorded, or whose record failed, are not pinned.
+  const unpinned = rec.certified && scope.ready && !scope.error && !certification && !reopened;
+  // The prior period's certification this close compared against, so a later re-certification of it shows here.
+  const dependsOn = rec.priorCertification ? [rec.priorCertification.id] : [];
+  const onCertify = () => run(async () => {
+    const blocked = certifyBlockedBy(userKnowledge);
+    if (blocked) throw new Error(blocked);
+    // What the person saw is what is certified. The records are marked first,
+    // so the instant the certification stamps already knows the close is certified.
+    const seen = recFigures(rec, cash);
+    const closeId = await certify(ctx);
+    await scope.certify(seen, { subjectEntityId: closeId, dependsOn });
+  });
+  const onPin = () => run(async () => {
+    const blocked = certifyBlockedBy(userKnowledge);
+    if (blocked) throw new Error(blocked);
+    if (!rec.closeEntityId) throw new Error('This close has no close record to certify on.');
+    await scope.certify(figures, { note: 'Recorded after certification, as known when recorded.', subjectEntityId: rec.closeEntityId, dependsOn });
+  });
+  const onReopen = (reason: string) => run(async () => {
+    await scope.reopen(reason);
+    await reopen(ctx);
+  });
   const open = rec.items.filter((item) => item.decision == null);
   const decided = rec.items.length - open.length;
   const tabCount = (key: TabKey) => (key === 'val' || key === 'fees' || key === 'drift'
@@ -268,8 +330,12 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
           <div className="da-bar"><i style={{ width: `${(rec.stepsDone / rec.steps.length) * 100}%` }} /></div>
           <p>{rec.certified ? `NAV certified ${rec.certifiedAt ? longDate(rec.certifiedAt) : ''}.` : rec.certifyBlock || 'Every check ties and every item is decided.'}</p>
           {rec.certified
-            ? <button type="button" className="btn" disabled={busy} onClick={() => run(() => reopen(ctx))}>Reopen</button>
-            : <button type="button" className="btn btn-primary" disabled={busy || !rec.canCertify} onClick={() => run(() => certify(ctx))}>{rec.adjustments ? 'Certify with proposed adjustments' : 'Certify NAV'}</button>}
+            ? <ReopenButton disabled={busy || !scope.ready} onReopen={onReopen} />
+            : <button type="button" className="btn btn-primary" disabled={busy || !rec.canCertify || !scope.ready} onClick={onCertify}>
+              {reopened
+                ? `Re-certify as of ${longDate(reopened.asOfDate)}`
+                : rec.adjustments ? 'Certify with proposed adjustments' : 'Certify NAV'}
+            </button>}
         </RecFact>
       </header>
 
@@ -283,6 +349,13 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
         <Link href={`/funds/${rec.fundId}/overview`} className="btn">Fund record</Link>
       </div>
       {error && <div className="xp-error">{error}</div>}
+      {certFits && scope.ready && <CertifiedBanner scope={scope} figures={figures} />}
+      {unpinned && (
+        <div className="cert-banner cert-warn cert-banner-head">
+          <span><strong>Certified, but not pinned.</strong> This close was certified before certifications were recorded, so it shows current data and can still change. Recording it now pins it to what is known now.</span>
+          <button type="button" className="btn btn-sm" disabled={busy} onClick={onPin}>Record certification</button>
+        </div>
+      )}
 
       <div className="da-tabs" role="tablist">
         {TABS.map(([key, label]) => {

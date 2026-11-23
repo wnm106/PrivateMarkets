@@ -6,7 +6,7 @@ import { graphqlQuery } from '@/lib/graphql';
 import { attributeText } from '@/lib/experience';
 import { domainHref } from '@/lib/domain-routes';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
-import { useTemporalStore } from '@/lib/store';
+import { useSurfaceDates } from '@/components/certification/CertificationScope';
 import { usePublishTab } from '@/lib/view-context';
 
 const ROLE: Record<string, string> = {
@@ -174,8 +174,8 @@ export function DealSyndicate({
   tranches: Tranche[];
   rows: BookRow[];
 }) {
-  const asOfDate = useTemporalStore((state) => state.asOfDate);
-  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+  const { asOfDate } = useSurfaceDates();
+  const { knowledgeDate } = useSurfaceDates();
   const [seats, setSeats] = useState<Seat[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [status, setStatus] = useState('');

@@ -92,6 +92,7 @@ type Query {
   complianceResultContributors(resultId: ID!): ComplianceResultContributors!
   compliancePopulationPreview(input: CompliancePopulationPreviewInput!): CompliancePopulationPreview!
   complianceFundBoard: ComplianceFundBoard!
+  complianceDashboard(asOfDate: Date, knowledgeDate: DateTime): ComplianceDashboard!
   # Booked book plus any number of buys and sells, scored together.
   evaluateComplianceProforma(
     anchorEntityId: ID!

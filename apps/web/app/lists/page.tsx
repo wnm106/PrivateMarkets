@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { graphqlClient, graphqlQuery, graphqlMutation, REFERENCE_LISTS_QUERY, CREATE_REFERENCE_LIST_MUTATION, DOMAIN_TYPES_QUERY } from '@/lib/graphql';
+import { usePublishPageData, usePublishViewContext } from '@/lib/view-context';
+import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
 interface ReferenceListSummary {
   id: string;
@@ -14,7 +16,10 @@ interface ReferenceListSummary {
   isActive: boolean;
   activeValueCount: number;
   totalSynonymCount: number;
+  totalValueCount: number;
   linkedAttributeCount: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 interface DomainTypeOption {
@@ -74,9 +79,50 @@ export default function ListsPage() {
     router.push(`/lists/${result.data.createReferenceList.referenceList.listCode}`);
   };
 
-  const totalValues = lists.reduce((sum, l) => sum + l.activeValueCount, 0);
+  const sortedLists = useMemo(
+    () => [...lists].sort((a, b) => a.listName.localeCompare(b.listName, undefined, { sensitivity: 'base' })),
+    [lists]
+  );
+
+  const columns = useMemo<ColDef<ReferenceListSummary>[]>(() => [
+    { field: 'listName', headerName: 'List', minWidth: 200, flex: 1, sort: 'asc', cellStyle: { fontWeight: 600 } },
+    { field: 'listCode', headerName: 'Code', minWidth: 180, cellClass: 'mono' },
+    { field: 'domainCode', headerName: 'Domain', minWidth: 160, valueGetter: (p) => p.data?.domainCode || 'Shared' },
+    { field: 'description', headerName: 'Description', minWidth: 280, flex: 2, tooltipField: 'description' },
+    { field: 'activeValueCount', headerName: 'Active values', minWidth: 120, type: 'numericColumn', filter: 'agNumberColumnFilter' },
+    { field: 'totalValueCount', headerName: 'Total values', minWidth: 120, type: 'numericColumn', filter: 'agNumberColumnFilter' },
+    { field: 'totalSynonymCount', headerName: 'Synonyms', minWidth: 110, type: 'numericColumn', filter: 'agNumberColumnFilter' },
+    { field: 'linkedAttributeCount', headerName: 'Linked attributes', minWidth: 140, type: 'numericColumn', filter: 'agNumberColumnFilter' },
+    { field: 'isActive', headerName: 'Status', minWidth: 100, valueGetter: (p) => (p.data?.isActive ? 'Active' : 'Inactive') },
+    { field: 'updatedAt', headerName: 'Updated', minWidth: 120, valueFormatter: (p) => (p.value ? String(p.value).slice(0, 10) : '') },
+  ], []);
+
   const totalSynonyms = lists.reduce((sum, l) => sum + l.totalSynonymCount, 0);
   const linkedAttrs = lists.reduce((sum, l) => sum + l.linkedAttributeCount, 0);
+
+  usePublishViewContext({
+    activity: 'viewing',
+    kind: 'reference_list',
+    label: 'Standardized Value Lists',
+    summary: 'Controlled vocabularies that normalize imported values',
+  });
+
+  usePublishPageData(loading ? null : {
+    purpose: 'Every standardized value list, alphabetical, with its domain and counts',
+    howToRead: 'Active values are the canonical values a source value maps to; synonyms are source spellings mapped onto them; linked attributes are attributes whose values are drawn from the list. Domain "Shared" means the list is not tied to one domain.',
+    totals: { lists: lists.length, synonyms: totalSynonyms, linkedAttributes: linkedAttrs },
+    lists: sortedLists.map((l) => ({
+      list: l.listName,
+      code: l.listCode,
+      domain: l.domainCode || 'Shared',
+      description: l.description || null,
+      activeValues: l.activeValueCount,
+      totalValues: l.totalValueCount,
+      synonyms: l.totalSynonymCount,
+      linkedAttributes: l.linkedAttributeCount,
+      active: l.isActive,
+    })),
+  });
 
   return (
     <div className="view-fade">
@@ -100,100 +146,6 @@ export default function ListsPage() {
           <button className="btn btn-primary" type="button" onClick={() => { setCreateError(null); setShowCreate(true); }}>+ New List</button>
         </div>
       </div>
-
-      {loading ? (
-        <div style={{ color: 'var(--ink-3)', fontSize: '12px', textAlign: 'center', padding: '40px' }}>
-          Loading reference lists...
-        </div>
-      ) : lists.length === 0 ? (
-        <div style={{ color: 'var(--ink-3)', fontSize: '12px', textAlign: 'center', padding: '40px' }}>
-          No reference lists defined yet. Create one to start normalizing imported values.
-        </div>
-      ) : (
-        /* Lists Grid */
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px' }}>
-          {lists.map((list) => (
-            <Link
-              key={list.id}
-              href={`/lists/${list.listCode}`}
-              className="entity-card"
-              style={{ '--card-accent': 'var(--accent-2)', textDecoration: 'none' } as React.CSSProperties}
-            >
-              <div className="entity-head">
-                <div>
-                  <div className="entity-name" style={{ fontSize: '15px' }}>
-                    {list.listName}
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '4px' }}>
-                    {list.activeValueCount} canonical values
-                    {list.linkedAttributeCount > 0 && (
-                      <span style={{ marginLeft: '8px', color: 'var(--accent-2)' }}>
-                        · {list.linkedAttributeCount} attr{list.linkedAttributeCount !== 1 ? 's' : ''} linked
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {list.domainCode ? (
-                  <span className="src-tag" style={{ fontSize: '11px' }}>
-                    {list.domainCode}
-                  </span>
-                ) : (
-                  <span className="check" style={{ fontSize: '18px' }}>✓</span>
-                )}
-              </div>
-              {list.description && (
-                <div style={{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '6px', lineHeight: '1.4' }}>
-                  {list.description}
-                </div>
-              )}
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  padding: '12px 0',
-                  borderTop: '1px solid var(--line)',
-                  borderBottom: '1px solid var(--line)',
-                  margin: '12px 0',
-                  fontSize: '11px',
-                }}
-              >
-                <div>
-                  <div
-                    style={{
-                      color: 'var(--ink-3)',
-                      textTransform: 'none',
-                      letterSpacing: 0,
-                      fontSize: '11px',
-                      marginBottom: '3px',
-                    }}
-                  >
-                    Synonyms
-                  </div>
-                  <div className="mono" style={{ color: 'var(--ink)', fontWeight: 600 }}>
-                    {list.totalSynonymCount}
-                  </div>
-                </div>
-                <div>
-                  <div
-                    style={{
-                      color: 'var(--ink-3)',
-                      textTransform: 'none',
-                      letterSpacing: 0,
-                      fontSize: '11px',
-                      marginBottom: '3px',
-                    }}
-                  >
-                    Values
-                  </div>
-                  <div style={{ color: 'var(--ink)', fontWeight: 500, fontSize: '11px' }}>
-                    {list.activeValueCount}
-                  </div>
-                </div>
-              </div>
-            </Link>
-          ))}
-        </div>
-      )}
 
       {showCreate && (
         <div
@@ -241,6 +193,18 @@ export default function ListsPage() {
           </div>
         </div>
       )}
+      <div className="data-table">
+        <AppGrid
+          rows={sortedLists}
+          columns={columns}
+          getRowId={(row) => row.id}
+          autoHeight={false}
+          height="100%"
+          loading={loading}
+          emptyMessage="No reference lists defined yet. Create one to start normalizing imported values."
+          onRowClicked={(row) => router.push(`/lists/${row.listCode}`)}
+        />
+      </div>
     </div>
   );
 }

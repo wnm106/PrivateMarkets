@@ -76,3 +76,17 @@ export function compareScores(a: { score: number | null; label: string }, b: { s
   if (b.score == null) return -1;
   return a.score - b.score || a.label.localeCompare(b.label);
 }
+
+/** The knowledge time to send with a data-quality query. Null means now. */
+export function knowledgeArgument(knowledgeDate: string): string | null {
+  const trimmed = knowledgeDate.trim();
+  if (!trimmed) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (trimmed >= today) return null;
+    return `${trimmed}T23:59:59.999Z`;
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime()) || parsed.getTime() >= Date.now() - 1000) return null;
+  return parsed.toISOString();
+}

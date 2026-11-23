@@ -51,6 +51,7 @@ const ADMIN = [
   { href: '/admin/compliance/funds', label: 'Fund Thresholds', icon: 'chart' },
   { href: '/admin/dashboards', label: 'Dashboards', icon: 'chart' },
   { href: '/admin/surfaces', label: 'Surface qualification', icon: 'layers' },
+  { href: '/admin/surface-builder', label: 'Surface Builder', icon: 'layers' },
   { href: '/admin/experiences', label: 'Record Experiences', icon: 'domains' },
   { href: '/admin/narratives', label: 'Narratives', icon: 'list' },
   { href: '/admin/skills', label: 'Skills', icon: 'list' },

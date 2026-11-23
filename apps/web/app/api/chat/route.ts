@@ -218,10 +218,21 @@ function withGlobalDates(
   const asOf = typeof context.asOfDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(context.asOfDate) ? context.asOfDate.slice(0, 10) : '';
   if (asOf && accepted.has('asOfDate') && !next.asOfDate) next.asOfDate = asOf;
   const known = typeof context.knowledgeDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(context.knowledgeDate) ? context.knowledgeDate.slice(0, 10) : '';
-  if (known && known < TODAY() && accepted.has('knowledgeDate') && !next.knowledgeDate) {
+  const instant = knowledgeInstantOf(context.knowledgeDate);
+  if (instant && accepted.has('knowledgeDate') && !next.knowledgeDate) {
+    // An exact instant, such as a certification's, applies as it is, even today.
+    next.knowledgeDate = instant;
+  } else if (known && known < TODAY() && accepted.has('knowledgeDate') && !next.knowledgeDate) {
     next.knowledgeDate = `${known}T23:59:59.999Z`;
   }
   return next;
+}
+
+/** The knowledge date when it is an exact instant (a timestamp), not a day. */
+function knowledgeInstantOf(value: unknown): string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return '';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
 }
 
 const MAX_SCREEN_JSON = 12000;
@@ -236,7 +247,9 @@ function screenContextBlock(context: Record<string, any> | null | undefined): st
   if (context.entityId) lines.push(`Entity id: ${context.entityId}`);
   if (context.attributeCode) lines.push(`Attribute: ${context.attributeCode}`);
   if (context.asOfDate) lines.push(`As-of date: ${context.asOfDate} (applied to your tool calls unless you pass another)`);
-  if (context.knowledgeDate && String(context.knowledgeDate).slice(0, 10) < TODAY()) {
+  if (context.datesPinnedBy && knowledgeInstantOf(context.knowledgeDate)) {
+    lines.push(`Knowledge: as known at ${knowledgeInstantOf(context.knowledgeDate)}. ${context.datesPinnedBy}: this page shows what was certified, and your tool calls read at the same As Of date and instant. Later changes are not in it; say so when it matters to the answer.`);
+  } else if (context.knowledgeDate && String(context.knowledgeDate).slice(0, 10) < TODAY()) {
     lines.push(`Knowledge date: ${context.knowledgeDate}. Data is limited to what was known by the end of that day, and your tool calls apply it. Say so when it matters to the answer.`);
   }
 

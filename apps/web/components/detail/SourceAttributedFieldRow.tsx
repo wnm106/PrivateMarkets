@@ -11,6 +11,7 @@ import { AttributeValueInput, listDisplayLabel, useAttributeDisplay, useAttribut
 import { referenceTarget } from '@/lib/attribute-display';
 import { entityRefHref, useEntityRef } from '@/lib/entity-reference';
 import { formatAttributeValue, isNumericAttribute, type FieldData } from './attribute-source';
+import { CopyTapFormula } from './CopyTapFormula';
 
 export { formatAttributeValue, type FieldData };
 
@@ -24,6 +25,8 @@ interface SourceAttributedFieldRowProps {
   asOfDate?: string;
   knowledgeDate?: string;
   entityId?: string;
+  /** The record's code, for the copied =TAP formula. */
+  entityCode?: string;
   calcRefreshKey?: string;
   presentation?: 'row' | 'card';
   spanRows?: number;
@@ -31,7 +34,7 @@ interface SourceAttributedFieldRowProps {
   required?: boolean;
 }
 
-export function SourceAttributedFieldRow({ field, onDrilldown, onValueChange, onAddSourceValue, onDeleteSourceValue, asOfDate, knowledgeDate, entityId, calcRefreshKey, presentation = 'row', spanRows = 1, required = false }: SourceAttributedFieldRowProps) {
+export function SourceAttributedFieldRow({ field, onDrilldown, onValueChange, onAddSourceValue, onDeleteSourceValue, asOfDate, knowledgeDate, entityId, entityCode, calcRefreshKey, presentation = 'row', spanRows = 1, required = false }: SourceAttributedFieldRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [availableSources, setAvailableSources] = useState<SourceOption[]>([]);
 
@@ -104,6 +107,17 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onValueChange, on
             <span className="std-icon" title={field.formula || 'Calculated value'}>ƒ</span>
           )}
           {field.standardized && <span className="std-icon" title="Standardized via list mapping">S</span>}
+          {/* Beside the name, where the pointer already is when reading a row. */}
+          {field.attributeCode && (entityCode || entityId) ? (
+            <CopyTapFormula
+              className="sa-tap-copy"
+              entityId={entityId}
+              entityCode={entityCode}
+              attributeCode={field.attributeCode}
+              asOfDate={asOfDate}
+              knowledgeDate={knowledgeDate}
+            />
+          ) : null}
         </div>
         <div
           className="sa-field-value-cell"
@@ -153,7 +167,7 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onValueChange, on
               setExpanded((open) => !open);
               onDrilldown?.(field.label);
             }}
-            title={field.calculated ? 'Show how this was calculated' : 'Show source values'}
+            title={field.calculated ? 'Show the calculation and source values' : 'Show source values'}
           >
             ⌄
           </button>

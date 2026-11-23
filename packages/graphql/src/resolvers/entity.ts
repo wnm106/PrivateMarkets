@@ -360,6 +360,25 @@ export const entityResolvers = {
       return entity;
     },
 
+    // Code, name and type only. Read under the caller's own access, so an
+    // unreadable record comes back as null.
+    entityIdentity: async (_: any, args: { entityId: string }, context: Context) => {
+      const { data, error } = await context.supabase
+        .schema('entity_instances')
+        .from('master_entities')
+        .select('id, entity_code, entity_name, domain_code')
+        .eq('id', args.entityId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return null;
+      return {
+        entityId: data.id,
+        entityCode: data.entity_code,
+        entityName: data.entity_name,
+        domainCode: data.domain_code,
+      };
+    },
+
     searchEntities: async (
       _: any,
       args: { query: string; limit?: number },

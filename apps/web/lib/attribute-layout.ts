@@ -28,6 +28,22 @@ export function fieldsForVisibility<T extends { populated: boolean; required?: b
   return items;
 }
 
+/**
+ * Fields whose name, code, section or value contains every word of the search, ignoring case.
+ * A blank search keeps every field.
+ */
+export function fieldsMatchingSearch<T extends { name: string; key: string; section?: string; value?: string | null }>(
+  items: T[],
+  search: string,
+): T[] {
+  const words = search.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return items;
+  return items.filter((item) => {
+    const text = [item.name, item.key, item.key.replace(/_/g, ' '), item.section, item.value].filter(Boolean).join(' ').toLowerCase();
+    return words.every((word) => text.includes(word));
+  });
+}
+
 export function clampAttributeSpan(columns?: number | null, rows?: number | null, maxColumns = ATTRIBUTE_GRID_COLUMNS) {
   return {
     columns: clamp(columns, 1, clamp(maxColumns, 1, ATTRIBUTE_GRID_COLUMNS)),

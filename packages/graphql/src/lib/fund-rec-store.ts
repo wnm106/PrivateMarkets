@@ -17,6 +17,19 @@ import {
   FUND_ADMIN_SOURCE, INTERNAL_SOURCE, loadNavLineAttributes, readSourceAmounts, sourceAmount, sourceText,
   type SourceValue,
 } from './nav-statement-lines';
+import { certificationAt } from './certification-store';
+
+/** The certification process a NAV close is certified under (golden_master.certification_processes). */
+export const CLOSE_PROCESS = 'FUND_CLOSE';
+
+/** The prior period's certification a close compares against: the one in force at the close's knowledge instant. */
+export interface PriorCertification {
+  id: string;
+  version: number;
+  periodEnd: string | null;
+  knowledgeAt: string;
+  certifiedAt: string;
+}
 
 const CODES = [
   'FUND_STRATEGY', 'FUND_TOTAL_COMMITMENTS', 'FUND_NET_IRR', 'FUND_CLOSE_FREQUENCY', 'FUND_CLOSE_LAG_DAYS',
@@ -107,6 +120,7 @@ export interface FundRecLoad {
   priorOpen: boolean;
   periods: string[];
   closeNotes: CloseNotes | null;
+  priorCertification: PriorCertification | null;
 }
 
 /** The report checks kept on a statement: { total, ties, checks: [...] }. Null when there are none or the text is not that. */
@@ -222,7 +236,17 @@ export async function loadFundRecInput(
   const certifiedAt = closeId ? dateOnly(facts.str(closeId, 'CLOSE_CERTIFIED_AT')) : '';
   const priorCloseId = closeFor(previous);
   const priorCertifiedAt = priorCloseId ? dateOnly(facts.str(priorCloseId, 'CLOSE_CERTIFIED_AT')) : '';
-  const priorKnowledge = priorCertifiedAt ? knowledgeInstant(priorCertifiedAt) : knowledge;
+  // Compare with the prior period as certified: the exact instant of the
+  // certification in force at this read's knowledge, so a re-certification of
+  // the prior period is picked up by an open close but never changes one
+  // already certified. A close certified before certifications were recorded
+  // falls back to the end of its certified day.
+  const priorCertification = priorCloseId
+    ? await certificationAt(supabase, CLOSE_PROCESS, priorCloseId, previous, knowledge).catch(() => null)
+    : null;
+  const priorKnowledge = priorCertification
+    ? priorCertification.knowledgeAt
+    : priorCertifiedAt ? knowledgeInstant(priorCertifiedAt) : knowledge;
   const lineIds = lineAttributes.map((line) => line.attributeId);
   const [currentLines, priorLines] = statementId
     ? await Promise.all([
@@ -521,6 +545,15 @@ export async function loadFundRecInput(
     closeNotes: closeId && facts.str(closeId, 'CLOSE_REC_NOTES')
       ? { notes: facts.str(closeId, 'CLOSE_REC_NOTES'), outcome: facts.str(closeId, 'CLOSE_REC_OUTCOME') }
       : null,
+    priorCertification: priorCertification
+      ? {
+        id: priorCertification.id,
+        version: priorCertification.version,
+        periodEnd: priorCertification.periodEnd,
+        knowledgeAt: priorCertification.knowledgeAt,
+        certifiedAt: priorCertification.certifiedAt,
+      }
+      : null,
   };
 }
 
@@ -531,7 +564,7 @@ export async function loadFundRec(
   todayInput: unknown,
   knowledgeInput: unknown,
   driftThresholdPct = 10,
-): Promise<RecReview & { periods: string[]; priorOpen: boolean; fundCode: string; closeNotes: CloseNotes | null }> {
+): Promise<RecReview & { periods: string[]; priorOpen: boolean; fundCode: string; closeNotes: CloseNotes | null; priorCertification: PriorCertification | null }> {
   const lookup = /^[0-9a-f-]{36}$/i.test(fundId) ? 'id' : 'entity_code';
   const { data: fund, error } = await supabase
     .from('master_entities')
@@ -542,7 +575,14 @@ export async function loadFundRec(
   if (!fund || fund.domain_code !== 'FUND') throw new Error('Fund not found');
   const loaded = await loadFundRecInput(supabase, fund, periodEnd, todayInput, knowledgeInput, driftThresholdPct);
   if (!loaded) throw new Error('This fund has no close calendar. Set a close frequency on the fund record.');
-  return { ...buildReview(loaded.input), periods: loaded.periods, priorOpen: loaded.priorOpen, fundCode: fund.entity_code, closeNotes: loaded.closeNotes };
+  return {
+    ...buildReview(loaded.input),
+    periods: loaded.periods,
+    priorOpen: loaded.priorOpen,
+    fundCode: fund.entity_code,
+    closeNotes: loaded.closeNotes,
+    priorCertification: loaded.priorCertification,
+  };
 }
 
 export interface FundRecSummary {

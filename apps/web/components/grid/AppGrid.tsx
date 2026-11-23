@@ -21,6 +21,10 @@ import {
   type SortChangedEvent,
 } from 'ag-grid-community';
 import { ColumnLikeFilter } from '@/components/grid/ColumnLikeFilter';
+import { GridDateInput } from '@/components/grid/GridDateInput';
+
+/** Replaces the grid's own date box (agDateInput) in every date filter. */
+const gridComponents = { agDateInput: GridDateInput };
 import { columnSearchFilterParams, prepareGridColumns } from '@/lib/grid-filters';
 
 const enterpriseLicense = process.env.NEXT_PUBLIC_AG_GRID_LICENSE_KEY;
@@ -248,6 +252,7 @@ export function AppGrid<T>({
         rowData={rows}
         columnDefs={columnDefs}
         defaultColDef={defaultColDef}
+        components={gridComponents}
         getRowId={getRowId ? (params: GetRowIdParams<T>) => getRowId(params.data) : undefined}
         domLayout={autoHeight ? 'autoHeight' : 'normal'}
         headerHeight={headerHeight}
@@ -260,6 +265,7 @@ export function AppGrid<T>({
         onSortChanged={onSortChanged}
         rowGroupPanelShow={rowGroupPanelShow}
         grandTotalRow={grandTotalRow}
+        suppressAggFuncInHeader
         pagination={pagination}
         paginationPageSize={paginationPageSize}
         paginationPageSizeSelector={pagination ? [20, 50, 100] : undefined}

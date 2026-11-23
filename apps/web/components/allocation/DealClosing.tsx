@@ -6,7 +6,7 @@ import { graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION } from '@/lib/gra
 import { attributeText } from '@/lib/experience';
 import { domainHref } from '@/lib/domain-routes';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
-import { useTemporalStore } from '@/lib/store';
+import { useSurfaceDates } from '@/components/certification/CertificationScope';
 import { usePublishTab } from '@/lib/view-context';
 
 const WORKSTREAM: Record<string, string> = {
@@ -170,8 +170,8 @@ export function DealClosing({
   closeDate?: string | null;
   onOpenTab: (tab: 'capital' | 'compliance') => void;
 }) {
-  const asOfDate = useTemporalStore((state) => state.asOfDate);
-  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+  const { asOfDate } = useSurfaceDates();
+  const { knowledgeDate } = useSurfaceDates();
   const [conditions, setConditions] = useState<Condition[]>([]);
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [flows, setFlows] = useState<FlowRow[]>([]);

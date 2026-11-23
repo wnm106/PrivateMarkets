@@ -12,6 +12,7 @@ export const PLATFORM_ADMIN_PREFIXES = [
   '/admin/dashboards',
   '/admin/narratives',
   '/admin/precedence',
+  '/admin/surface-builder',
 ];
 
 export function isPlatformAdminPath(pathname: string) {

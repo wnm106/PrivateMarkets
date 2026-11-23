@@ -100,6 +100,8 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const inspectOpen = inspect.view != null;
   const asOfDate = useTemporalStore((state) => state.asOfDate);
   const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+  // A certified surface reads at its own dates. The assistant reads at the same ones.
+  const pinnedDates = useTemporalStore((state) => state.pinnedDates);
   const chatVoice = useTemporalStore((state) => state.chatVoice);
   const setChatVoice = useTemporalStore((state) => state.setChatVoice);
 
@@ -203,8 +205,9 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
   const requestContext: ChatContext = useMemo(
     () => ({
       ...context,
-      asOfDate,
-      knowledgeDate,
+      asOfDate: pinnedDates?.asOfDate ?? asOfDate,
+      knowledgeDate: pinnedDates?.knowledgeDate ?? knowledgeDate,
+      ...(pinnedDates ? { datesPinnedBy: pinnedDates.label } : {}),
       toolContext: effectiveToolContext,
       skill: designerSkill,
       ...(viewFocus
@@ -240,7 +243,7 @@ export function ChatPanel({ context, toolContext }: ChatPanelProps) {
           ? { page: [viewFocus.label, viewFocus.summary].filter(Boolean).join(' · ') }
           : {}),
     }),
-    [context, effectiveToolContext, activeDesigner, viewFocus, livePage, asOfDate, knowledgeDate, designerSkill]
+    [context, effectiveToolContext, activeDesigner, viewFocus, livePage, asOfDate, knowledgeDate, pinnedDates, designerSkill]
   );
 
   /** Draft the assistant should iterate on, when a designer is open. */

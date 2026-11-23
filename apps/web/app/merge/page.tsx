@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { DISMISS_KEY, pairKey, readDismissed } from '@/lib/merge-dismissed';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { entityHref } from '@/components/detail/EntityGraphPanel';
 import { planChildMerge, type ChildPlan, type ChildRecord } from '@tapestrai/graphql/src/lib/entity-resolution/children';
@@ -71,7 +72,6 @@ interface MatchRule {
 type Band = 'very' | 'possible';
 type ChildPolicy = 'exact' | 'review' | 'move';
 
-const DISMISS_KEY = 'tapestrai.merge.dismissed';
 const REVIEW_KEY = 'tapestrai.merge.review';
 const ATTR_LABEL: Record<string, string> = {
   LEI: 'LEI',
@@ -92,11 +92,6 @@ const ATTR_LABEL: Record<string, string> = {
   ENTITY_NAME: 'name',
 };
 
-function pairKey(candidate: MergeCandidate) {
-  return candidate.left.id < candidate.right.id
-    ? `${candidate.left.id}:${candidate.right.id}`
-    : `${candidate.right.id}:${candidate.left.id}`;
-}
 
 interface ReviewItem {
   key: string;
@@ -115,14 +110,6 @@ function readReview(): ReviewItem[] {
   }
 }
 
-function readDismissed(): Set<string> {
-  try {
-    const raw = JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]');
-    return new Set(Array.isArray(raw) ? raw : []);
-  } catch {
-    return new Set();
-  }
-}
 
 function typeLabel(code: string) {
   const names: Record<string, string> = {

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
 import { attributeText } from '@/lib/experience';
-import { useTemporalStore } from '@/lib/store';
+import { useSurfaceDates } from '@/components/certification/CertificationScope';
 import { heldShare, spreadFromPricing } from '@/lib/servicing-schedule';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 import { DealActualReturns } from './DealActualReturns';
@@ -156,8 +156,8 @@ export function DealPerformance({
   tranches: Tranche[];
   rows: BookRow[];
 }) {
-  const asOfDate = useTemporalStore((state) => state.asOfDate);
-  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+  const { asOfDate } = useSurfaceDates();
+  const { knowledgeDate } = useSurfaceDates();
   const [model, setModel] = useState<PerformanceCase | null>(null);
   const [fees, setFees] = useState<PerformanceFees>({ management: 0, expenses: 0, carry: 0, hurdle: 0 });
   const [rating, setRating] = useState('');

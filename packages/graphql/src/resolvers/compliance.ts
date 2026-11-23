@@ -119,6 +119,10 @@ export const complianceResolvers = {
       return loadFundBoard(context);
     },
 
+    complianceDashboard: async (_: any, args: { asOfDate?: string | null; knowledgeDate?: string | null }, context: Context) => {
+      return loadComplianceDashboard(context, args.asOfDate || null, args.knowledgeDate || null);
+    },
+
     evaluateComplianceProforma: async (_: any, args: {
       anchorEntityId: string;
       legs: Array<{ securityId?: string | null; securityCode?: string | null; par: number; attributes?: Record<string, unknown> | null }>;
@@ -494,12 +498,13 @@ export const complianceResolvers = {
         if (holds == null && adjustments == null) {
           // The open page scores the book already saved on the deal. Nothing is
           // rebuilt or written: the funds holding it are read as the caller.
-          const anchors = await loadDealScoreAnchors(context.supabase, args.dealId, args.asOfDate);
+          const anchors = await loadDealScoreAnchors(context.supabase, args.dealId, args.asOfDate, args.knowledgeDate);
           dealCode = anchors.dealCode;
           asOf = anchors.asOf;
           clientId = anchors.clientId;
           fundIds = new Set(anchors.fundIds);
-          knowledgeDate = new Date().toISOString();
+          // A certified deal scores its saved book as known when it was certified.
+          knowledgeDate = anchors.knowledge || new Date().toISOString();
         } else {
           // An edit is staged as a what-if the rules read at one knowledge instant.
           // The draft is read as the caller, so it holds only the tranches and funds
@@ -1091,6 +1096,119 @@ async function loadFundBoard(context: Context) {
     results: (resultRows || [])
       .filter((row) => fundById.has(row.anchor_entity_id))
       .map(mapResult),
+  };
+}
+
+/** A date-only knowledge date means everything known by the end of that day. */
+export function knowledgeInstant(value: string | null): string | null {
+  if (!value) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T23:59:59.999Z` : value;
+}
+
+/**
+ * Every entity type with results, every active rule, the current thresholds,
+ * and the newest result per rule, entity, group and rank at the given dates.
+ * Nothing here names an entity type: the types come from the rules' anchors.
+ */
+async function loadComplianceDashboard(context: Context, asOfDate: string | null, knowledgeDate: string | null) {
+  const ruleResult = await cx(context)
+    .from('rules')
+    .select('id, rule_code, rule_name, rule_category, anchor_domain_code, is_active')
+    .eq('is_active', true)
+    .order('rule_name');
+  if (ruleResult.error) throw new Error(ruleResult.error.message);
+  const rules = ruleResult.data || [];
+  const ruleIds = rules.map((row) => row.id);
+  const domainCodes = [...new Set(rules.map((row) => row.anchor_domain_code as string))];
+
+  const [versionResult, thresholdResult, latestResult, domainResult] = await Promise.all([
+    ruleIds.length
+      ? cx(context)
+        .from('rule_versions')
+        .select('rule_id, version_number, result_unit, limit_direction, group_by_attribute_code, soft_limit_value, hard_limit_value')
+        .in('rule_id', ruleIds)
+        .eq('is_active', true)
+      : Promise.resolve({ data: [] as any[], error: null }),
+    ruleIds.length
+      ? cx(context)
+        .from('rule_thresholds')
+        .select('*')
+        .in('rule_id', ruleIds)
+        .eq('valid_to', '9999-12-31')
+      : Promise.resolve({ data: [] as any[], error: null }),
+    ruleIds.length
+      ? cx(context).rpc('latest_results_as_of', {
+        p_rule_ids: ruleIds,
+        p_as_of_date: asOfDate,
+        p_knowledge_date: knowledgeInstant(knowledgeDate),
+      })
+      : Promise.resolve({ data: [] as unknown[], error: null }),
+    domainCodes.length
+      ? context.supabase.from('domain_types').select('domain_code, domain_name').in('domain_code', domainCodes)
+      : Promise.resolve({ data: [] as any[], error: null }),
+  ]);
+  if (versionResult.error) throw new Error(versionResult.error.message);
+  if (thresholdResult.error) throw new Error(thresholdResult.error.message);
+  if (latestResult.error) throw new Error(latestResult.error.message);
+  if (domainResult.error) throw new Error(domainResult.error.message);
+
+  const versionByRule = new Map<string, any>();
+  for (const version of versionResult.data || []) {
+    const current = versionByRule.get(version.rule_id);
+    if (!current || version.version_number > current.version_number) versionByRule.set(version.rule_id, version);
+  }
+  const ruleById = new Map(rules.map((row) => [row.id, row]));
+  const domainName = new Map((domainResult.data || []).map((row: any) => [row.domain_code, row.domain_name]));
+  const latest = selectLatestFundResults(parseFundBoardResultPayload(latestResult.data)) as Array<any>;
+
+  const entityById = new Map<string, { entity_code?: string; entity_name?: string }>();
+  for (const row of latest) {
+    entityById.set(row.anchor_entity_id, { entity_code: row.anchor_entity_code, entity_name: row.anchor_entity_name });
+  }
+
+  const domains = domainCodes.map((code) => {
+    const domainRules = rules.filter((row) => row.anchor_domain_code === code);
+    const ids = new Set(domainRules.map((row) => row.id));
+    const rows = latest.filter((row) => ids.has(row.rule_id));
+    const count = (status: string) => rows.filter((row) => row.status === status).length;
+    return {
+      domainCode: code,
+      domainName: domainName.get(code) || code,
+      ruleCount: domainRules.length,
+      entityCount: new Set(rows.map((row) => row.anchor_entity_id)).size,
+      resultCount: rows.length,
+      passCount: count('PASS'),
+      softBreachCount: count('SOFT_BREACH'),
+      hardBreachCount: count('HARD_BREACH'),
+      noDataCount: count('NO_DATA'),
+    };
+  }).filter((domain) => domain.resultCount > 0);
+
+  return {
+    asOfDate,
+    knowledgeDate,
+    domains,
+    rules: rules.map((row) => {
+      const version = versionByRule.get(row.id);
+      return {
+        id: row.id,
+        ruleCode: row.rule_code,
+        ruleName: row.rule_name,
+        ruleCategory: row.rule_category,
+        anchorDomainCode: row.anchor_domain_code,
+        resultUnit: version?.result_unit || null,
+        limitDirection: version?.limit_direction || null,
+        groupByAttributeCode: version?.group_by_attribute_code || null,
+        softLimitValue: version?.soft_limit_value ?? null,
+        hardLimitValue: version?.hard_limit_value ?? null,
+      };
+    }),
+    thresholds: (thresholdResult.data || []).map((row) => mapThreshold(row, ruleById.get(row.rule_id), row.entity_id ? entityById.get(row.entity_id) : undefined)),
+    results: latest.map((row) => ({
+      ...mapResult(row),
+      anchorEntityCode: row.anchor_entity_code || null,
+      anchorEntityName: row.anchor_entity_name || null,
+    })),
   };
 }
 

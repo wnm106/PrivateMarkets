@@ -11,10 +11,13 @@ import {
 import { useTemporalStore } from '@/lib/store';
 import type { SourceKey } from '@/lib/data';
 import { AttributeSourcePanel } from './AttributeSourcePanel';
+import { CopyTapFormula } from './CopyTapFormula';
 import { fieldFromLineage, type FieldData, type LineageField } from './attribute-source';
 
 export interface AttributeInspectTarget {
   entityId: string;
+  /** The record's code, for the copied =TAP formula. Read from entityId when left out. */
+  entityCode?: string;
   entityName?: string;
   attributeCode: string;
   attributeName: string;
@@ -93,6 +96,8 @@ export function AttributeInspectProvider({ children }: { children: React.ReactNo
 /** Details for a right-clicked value. Fills the assistant dock on its own. */
 export function AttributeInspectPanel() {
   const { view, close } = useDetailDrawer();
+  const pageAsOf = useTemporalStore((state) => state.asOfDate);
+  const pageKnowledge = useTemporalStore((state) => state.knowledgeDate);
 
   useEffect(() => {
     if (!view) return;
@@ -125,6 +130,16 @@ export function AttributeInspectPanel() {
             <div className="chat-inspect-title">{title || 'Sources'}</div>
             {subtitle && <div className="chat-inspect-sub">{subtitle}</div>}
           </div>
+          {view?.kind === 'attribute' && (
+            <CopyTapFormula
+              className="chat-icon-btn"
+              entityId={view.target.entityId}
+              entityCode={view.target.entityCode}
+              attributeCode={view.target.attributeCode}
+              asOfDate={view.target.asOfDate || pageAsOf}
+              knowledgeDate={view.target.knowledgeDate || pageKnowledge}
+            />
+          )}
           <button type="button" className="chat-icon-btn" onClick={close} aria-label="Close sources">
             ✕
           </button>

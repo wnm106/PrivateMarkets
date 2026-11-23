@@ -94,6 +94,7 @@ export function EntityAttributeGrid({
 }) {
   const [sections, setSections] = useState<SectionRow[] | null>(null);
   const [message, setMessage] = useState('');
+  const [search, setSearch] = useState('');
   const actions = useRef<Actions>(null as unknown as Actions);
   const sectionReq = useRef(0);
 
@@ -224,20 +225,36 @@ export function EntityAttributeGrid({
       sortOrder: attribute.displayGroup || 0,
       name: attribute.attributeName,
     }));
+    const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return sectionsForDisplay(owned, sections).flatMap((group) => {
+      const sectionText = group.section.toLowerCase();
+      const items = group.items
+        .map((attribute, index) => ({ attribute, sequence: index + 1 }))
+        .filter(({ attribute }) => {
+          if (!terms.length) return true;
+          const haystack = [
+            attribute.attributeName,
+            attribute.attributeCode,
+            attribute.dataType,
+            attribute.referenceListCode,
+            sectionText,
+          ].filter(Boolean).join(' ').toLowerCase();
+          return terms.every((term) => haystack.includes(term));
+        });
+      if (terms.length && !items.length) return [];
       const header: SectionGridRow = {
         __kind: 'section',
         __id: sectionRowId(group.section),
         sectionName: group.section,
-        count: group.items.length,
+        count: items.length,
       };
-      const body = group.items.flatMap((attribute, index) => {
+      const body = items.flatMap(({ attribute, sequence }) => {
         const row: AttributeGridRow = {
           ...attribute,
           __kind: 'attribute',
           __id: attribute.id,
           __open: attribute.id === expandedId,
-          __sequence: index + 1,
+          __sequence: sequence,
         };
         if (attribute.id !== expandedId) return [row];
         const detail: DetailGridRow = { __kind: 'detail', __id: `${attribute.id}:detail`, attributeId: attribute.id };
@@ -245,7 +262,9 @@ export function EntityAttributeGrid({
       });
       return [header, ...body];
     });
-  }, [attributes, expandedId, sections]);
+  }, [attributes, expandedId, search, sections]);
+
+  const matchCount = rows.filter((row) => row.__kind === 'attribute').length;
 
   return (
     <div style={{ display: 'grid', gap: '12px' }}>
@@ -295,9 +314,26 @@ export function EntityAttributeGrid({
           setDrag(dragRef.current.id, null);
         }}
       >
-        <p style={{ margin: '0 0 8px', fontSize: '12px', color: 'var(--ink-3)' }}>
-          Drag an attribute to change its order, or drop it on another section.
-        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', margin: '0 0 8px' }}>
+          <input
+            type="search"
+            className="text-input"
+            placeholder="Search attributes by name, code, type, section or list"
+            aria-label="Search attributes"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Escape') setSearch(''); }}
+            style={{ width: '360px', maxWidth: '100%', padding: '6px 10px' }}
+          />
+          {search.trim() && (
+            <span style={{ fontSize: '12px', color: 'var(--ink-3)' }}>
+              {matchCount} of {attributes.length} attribute{attributes.length === 1 ? '' : 's'} match
+            </span>
+          )}
+          <p style={{ margin: 0, fontSize: '12px', color: 'var(--ink-3)' }}>
+            Drag an attribute to change its order, or drop it on another section.
+          </p>
+        </div>
         <AppGrid
           className="attribute-grid"
           rows={rows}
@@ -307,7 +343,7 @@ export function EntityAttributeGrid({
           enableSortFilter={false}
           rowGroupPanelShow="never"
           loading={sections === null}
-          emptyMessage={sections === null ? 'Loading…' : 'No attributes defined for this entity type yet.'}
+          emptyMessage={sections === null ? 'Loading…' : search.trim() ? 'No attributes match this search.' : 'No attributes defined for this entity type yet.'}
           context={context}
           layoutKey={expandedId || 'closed'}
           isFullWidthRow={(params) => {

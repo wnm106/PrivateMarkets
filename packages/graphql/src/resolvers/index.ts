@@ -35,6 +35,8 @@ import { responsibilityResolvers } from './responsibilities';
 import { agentResolvers } from './agents';
 import { covenantResolvers } from './covenants';
 import { excelResolvers } from './excel';
+import { viewResolvers } from './views';
+import { certificationResolvers } from './certification';
 
 export const resolvers = {
   Query: {
@@ -86,8 +88,11 @@ export const resolvers = {
     ...covenantResolvers.Query,
     ...agentUsageResolvers.Query,
     ...excelResolvers.Query,
+    ...viewResolvers.Query,
+    ...certificationResolvers.Query,
   },
   
+  Certification: certificationResolvers.Certification,
   Mutation: {
     ...entityResolvers.Mutation,
     ...entityAliasResolvers.Mutation,
@@ -131,6 +136,8 @@ export const resolvers = {
     ...agentResolvers.Mutation,
     ...covenantResolvers.Mutation,
     ...excelResolvers.Mutation,
+    ...viewResolvers.Mutation,
+    ...certificationResolvers.Mutation,
   },
   
   Subscription: {},

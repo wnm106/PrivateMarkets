@@ -41,7 +41,6 @@ export function ColumnLikeFilter(props: CustomFloatingFilterProps) {
       className="app-grid-like"
       type="search"
       value={value}
-      placeholder="Contains"
       aria-label={`Contains ${header}`}
       autoComplete="off"
       onMouseDown={(event) => event.stopPropagation()}

@@ -15,9 +15,13 @@ import { EntityAliases } from './EntityAliases';
 import { classifyRecordRelationships, singularRelatedRefs } from '@/lib/relationship-grids';
 import { definingParentDomains, toParentLinkCounts, type ParentLinkCount, type ParentRelationshipType } from '@/lib/parent-entities';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
-import { attributeSectionLinks, fieldsForVisibility, groupForDisplay, type AttributeSectionOrder, type FieldVisibility } from '@/lib/attribute-layout';
+import { attributeSectionLinks, fieldsForVisibility, fieldsMatchingSearch, groupForDisplay, type AttributeSectionOrder, type FieldVisibility } from '@/lib/attribute-layout';
 import { decompileCalcExpression } from '@/lib/calc-expression';
 import { usePublishTabs, useWarmTabs } from '@/lib/view-context';
+import { EntityTimeline } from './EntityTimeline';
+import { ActivityGrid } from './ActivityGrid';
+import { EntityAccessPanel, useCanManageEntityAccess } from '@/components/security/EntityAccessPanel';
+import type { ActivityData } from './types';
 import { RecordValuesProvider } from '@/components/forms/RecordValues';
 
 export interface TemplateAttribute {
@@ -67,6 +71,10 @@ interface GoldenRecordSectionsProps {
   lineageLoaded?: boolean;
   /** Reads the record's values again, after a version is deleted from a timeline. */
   onReload?: () => void | Promise<void>;
+  /** Every write to the record, for the Activity tab. Null while it loads. */
+  activities?: ActivityData[] | null;
+  /** Panels beside the attributes, shown on the Attributes tab only. */
+  aside?: ReactNode;
 }
 
 function formulaLabel(formula: string | null | undefined): string {
@@ -98,11 +106,14 @@ export function GoldenRecordSections({
   asOfDate,
   lineageLoaded = false,
   onReload,
+  activities = null,
+  aside,
 }: GoldenRecordSectionsProps) {
   const calcRefreshKey = lineageData
     .map((row) => `${row.attributeCode}:${row.currentValue ?? ''}:${row.lastUpdated ?? ''}`)
     .join('|');
-  const [tab, setTab] = useState<'attributes' | 'dashboards' | 'quality' | 'relationships' | 'documents' | 'aliases'>('attributes');
+  const [tab, setTab] = useState<'attributes' | 'timeline' | 'dashboards' | 'quality' | 'relationships' | 'documents' | 'aliases' | 'access' | 'activity'>('attributes');
+  const canManageAccess = useCanManageEntityAccess();
   const [aliasCount, setAliasCount] = useState<number | null>(null);
   const [relationshipCatalog, setRelationshipCatalog] = useState<{
     types: ParentRelationshipType[];
@@ -263,9 +274,9 @@ export function GoldenRecordSections({
     : null;
   const relationshipCount = shown ? shown.parents.length + shown.children.length : null;
 
-  // The assistant sees every tab of the record, not only the open one. Documents,
+  // The assistant sees every tab of the record, not only the open one. Timeline, documents,
   // dashboards and data quality are mounted hidden below and publish themselves.
-  const warmed = useWarmTabs(['documents', 'aliases', 'dashboards', 'quality'], tab);
+  const warmed = useWarmTabs(['timeline', 'documents', 'aliases', 'dashboards', 'quality', 'access'], tab);
   const shownIds = shown ? new Set([...shown.parents, ...shown.children].map((ref) => ref.entityId)) : null;
   const publishedAttributes = listedAttributes.map((attribute) => {
     const lineage = lineageMap.get(attribute.attributeCode);
@@ -282,6 +293,23 @@ export function GoldenRecordSections({
     };
   }).filter((row) => row.value !== null || row.required);
   usePublishTabs({
+    activity: {
+      label: 'Activity',
+      purpose: `Every value written to this ${entity.domainCode || 'record'}, newest first: who wrote it, when, to which field, from which source and for which effective dates.`,
+      howToRead: 'written is when the value was saved (system time). effectiveFrom and effectiveTo are the dates the value applies to; an open effectiveTo means it still applies. A null value means the field was cleared. Shows the latest writes known at the Knowledge date.',
+      data: activities ? {
+        count: activities.length,
+        writes: activities.slice(0, 100).map((item) => ({
+          written: item.time,
+          who: item.who,
+          field: item.attribute || item.text,
+          value: item.value === '' || item.value == null ? null : item.value,
+          source: item.sourceName || null,
+          effectiveFrom: item.validFrom || null,
+          effectiveTo: item.validTo && !item.validTo.startsWith('9999') ? item.validTo : null,
+        })),
+      } : null,
+    },
     attributes: {
       label: 'Attributes',
       purpose: `The ${entity.domainCode || 'record'}'s attribute values as of the selected dates, with the source that supplied each.`,
@@ -322,6 +350,11 @@ export function GoldenRecordSections({
           onClick={() => setTab('attributes')}
         />
         <SectionTab
+          label="Timeline"
+          active={tab === 'timeline'}
+          onClick={() => setTab('timeline')}
+        />
+        <SectionTab
           label="Dashboards"
           active={tab === 'dashboards'}
           onClick={() => setTab('dashboards')}
@@ -346,8 +379,31 @@ export function GoldenRecordSections({
           active={tab === 'aliases'}
           onClick={() => setTab('aliases')}
         />
+        {canManageAccess && (
+          <SectionTab
+            label="Access"
+            active={tab === 'access'}
+            onClick={() => setTab('access')}
+          />
+        )}
+        <SectionTab
+          label={activities ? `Activity (${activities.length})` : 'Activity'}
+          active={tab === 'activity'}
+          onClick={() => setTab('activity')}
+        />
       </div>
 
+      {canManageAccess && warmed.has('access') && (
+        <div hidden={tab !== 'access'}>
+          <EntityAccessPanel entityId={entity.id} publishAs="access" />
+        </div>
+      )}
+      {tab === 'activity' && <ActivityGrid activities={activities || []} loading={!activities} />}
+      {warmed.has('timeline') && (
+        <div hidden={tab !== 'timeline'}>
+          <EntityTimeline key={entity.id} entityId={entity.id} entityLabel={entity.entityName || entity.entityCode} knowledgeDate={knowledgeDate} />
+        </div>
+      )}
       {warmed.has('documents') && (
         <div hidden={tab !== 'documents'}>
           <RecordDocuments entityId={entity.id} entityName={entity.entityName} />
@@ -371,10 +427,12 @@ export function GoldenRecordSections({
       )}
       {warmed.has('quality') && (
         <div hidden={tab !== 'quality'}>
-          <DataQualityDashboard embedded active={tab === 'quality'} domainCode={entity.domainCode} entityId={entity.id} />
+          <DataQualityDashboard active={tab === 'quality'} domainCode={entity.domainCode} entityId={entity.id} />
         </div>
       )}
-      {tab === 'documents' || tab === 'aliases' || tab === 'dashboards' || tab === 'quality' ? null : tab === 'relationships' ? (
+      <div className={tab === 'attributes' && aside ? 'detail-layout' : undefined}>
+      <div>
+      {tab !== 'attributes' && tab !== 'relationships' ? null : tab === 'relationships' ? (
         !shown ? (
           <div className="field-section" aria-busy="true">
             <div style={{ padding: '16px 20px', color: 'var(--ink-3)', fontSize: '13px' }}>Loading…</div>
@@ -477,6 +535,7 @@ export function GoldenRecordSections({
             name: displayLabel,
             populated: hasValue,
             required: templateAttr.required === true,
+            value: hasValue ? fieldData.value : null,
             node: (
               <SourceAttributedFieldRow
                 field={fieldData}
@@ -489,6 +548,7 @@ export function GoldenRecordSections({
                 asOfDate={asOfDate}
                 knowledgeDate={knowledgeDate}
                 entityId={entity.id}
+                entityCode={entity.entityCode}
                 calcRefreshKey={calcRefreshKey}
               />
             ),
@@ -497,6 +557,9 @@ export function GoldenRecordSections({
         />
         </RecordValuesProvider>
       )}
+      </div>
+      {tab === 'attributes' && aside ? <div>{aside}</div> : null}
+      </div>
     </div>
   );
 }
@@ -518,6 +581,8 @@ interface AttributeDisplayNode {
   name: string;
   populated: boolean;
   required: boolean;
+  /** The value as shown, for search. */
+  value?: string | null;
   node: ReactNode;
 }
 
@@ -536,7 +601,9 @@ function AttributeSections({
   items: AttributeDisplayNode[];
 }) {
   const [visibility, setVisibility] = useState<FieldVisibility>('all');
-  const shown = fieldsForVisibility(items, visibility);
+  const [search, setSearch] = useState('');
+  const searched = fieldsMatchingSearch(items, search);
+  const shown = fieldsForVisibility(searched, visibility);
   const groups = groupForDisplay(shown, sections);
   const links = attributeSectionLinks(groups.map((group) => group.section));
   const sectionNav = links;
@@ -545,12 +612,12 @@ function AttributeSections({
   const jumpLock = useRef(0);
   const active = sectionNav.some((item) => item.id === activeSection) ? activeSection : (sectionNav[0]?.id || '');
   const showNav = sectionNav.length > 1;
-  const populatedCount = items.filter((item) => item.populated).length;
+  const populatedCount = searched.filter((item) => item.populated).length;
   const visibilityCount: Record<FieldVisibility, number> = {
-    all: items.length,
-    required: items.filter((item) => item.required).length,
+    all: searched.length,
+    required: searched.filter((item) => item.required).length,
     populated: populatedCount,
-    missing: items.length - populatedCount,
+    missing: searched.length - populatedCount,
   };
 
   useEffect(() => {
@@ -587,7 +654,9 @@ function AttributeSections({
 
   const emptyLabel = items.length === 0
     ? 'No attribute values yet.'
-    : visibility === 'required'
+    : search.trim() && searched.length === 0
+      ? `No fields match "${search.trim()}".`
+      : visibility === 'required'
       ? 'No required fields on this record type.'
       : visibility === 'populated'
         ? 'No populated fields.'
@@ -595,6 +664,15 @@ function AttributeSections({
 
   const filter = (
     <div className="attr-field-filter">
+      <input
+        type="search"
+        className="attr-field-search"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        onKeyDown={(event) => { if (event.key === 'Escape') setSearch(''); }}
+        placeholder="Search fields or values"
+        aria-label="Search attributes"
+      />
       <div className="rb-seg small" role="radiogroup" aria-label="Which fields to show">
         {FIELD_VISIBILITY.map((option) => (
           <button

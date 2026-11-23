@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
-import { useTemporalStore } from '@/lib/store';
+import { useSurfaceDates } from '@/components/certification/CertificationScope';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
 
 /**
@@ -67,7 +67,7 @@ export function DealActualReturns({
   dealName?: string | null;
   tranches: Array<{ id: string; name: string }>;
 }) {
-  const asOfDate = useTemporalStore((state) => state.asOfDate);
+  const { asOfDate } = useSurfaceDates();
   const [preset, setPreset] = useState<Preset>('ITD');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');

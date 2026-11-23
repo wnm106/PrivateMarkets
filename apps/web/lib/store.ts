@@ -7,6 +7,15 @@ import {
 
 export type Persona = 'steward' | 'ops' | 'governance';
 
+/** Dates a surface fixed for itself, such as a certified close. The assistant reads at these while the surface is open. */
+export interface PinnedDates {
+  asOfDate: string;
+  /** An exact knowledge instant (ISO timestamp). */
+  knowledgeDate: string;
+  /** What fixed them, such as "Certified 21 Oct 2026, 14:03 UTC by Pat". */
+  label: string;
+}
+
 interface TemporalState {
   asOfDate: string;
   knowledgeDate: string;
@@ -17,6 +26,9 @@ interface TemporalState {
   chatOpen: boolean;
   /** A question asked from outside the panel, waiting for the panel to send it. */
   chatDraft: string | null;
+  /** Set while a surface reads at fixed dates (a certification). Null otherwise. */
+  pinnedDates: PinnedDates | null;
+  setPinnedDates: (dates: PinnedDates | null) => void;
   setAsOfDate: (date: string) => void;
   setKnowledgeDate: (date: string) => void;
   setPersona: (persona: Persona) => void;
@@ -38,6 +50,8 @@ export const useTemporalStore = create<TemporalState>((set) => ({
   chatVoice: DEFAULT_CHAT_VOICE,
   chatOpen: false,
   chatDraft: null,
+  pinnedDates: null,
+  setPinnedDates: (pinnedDates) => set({ pinnedDates }),
   setAsOfDate: (date) => set({ asOfDate: date }),
   setKnowledgeDate: (date) => set({ knowledgeDate: date }),
   setPersona: (persona) => set({ persona }),

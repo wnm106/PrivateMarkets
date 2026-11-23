@@ -19,6 +19,32 @@ import { DEAL_PANEL_KEYS, mountedPanel, tabReason, useLiveSurface } from '@/comp
 import { useSurfaceNav } from '@/lib/surface-nav';
 import { attrBind, InspectValue, useInspectBind, type AttrBind } from '@/components/detail/InspectValue';
 import { usePublishTab, usePublishViewContext, useWarmTabs } from '@/lib/view-context';
+import { certifyBlockedBy, type Figures } from '@/lib/certification';
+import { CertifiedBanner, ReopenButton, SurfaceDatesProvider, useCertification } from '@/components/certification/CertificationScope';
+
+/** The certification process a deal's allocation is certified under (golden_master.certification_processes). */
+const ALLOCATION_PROCESS = 'DEAL_ALLOCATION';
+const LOCKED = 'This allocation is certified. Reopen it to change it.';
+
+/**
+ * The key figures of an allocation, as certified and as read again later:
+ * what each tranche and each portfolio holds. Sub-portfolios sum to their
+ * portfolio, so they are not listed.
+ */
+export function allocationFigures(preview: { allocated: number; unallocated: number; targetHold: number; tranches: Array<{ id: string; name: string; label?: string | null; allocated: number }>; rows: Array<{ fundId: string; fundName: string; level: string; total: number }> }): Figures {
+  const figures: Figures = {
+    allocated: { label: 'Allocated', value: preview.allocated },
+    unallocated: { label: 'Unallocated', value: preview.unallocated },
+    targetHold: { label: 'Target hold', value: preview.targetHold },
+  };
+  for (const tranche of preview.tranches) {
+    figures[`tranche:${tranche.id}`] = { label: `${tranche.label || tranche.name} allocated`, value: tranche.allocated };
+  }
+  for (const row of preview.rows.filter((item) => item.level === 'PORTFOLIO').slice(0, 80)) {
+    figures[`fund:${row.fundId}`] = { label: row.fundName, value: row.total };
+  }
+  return figures;
+}
 
 const REASONS = [
   ['LIQ', 'Liquidity or reserve constraint'],
@@ -147,8 +173,8 @@ interface Preview {
 }
 
 const PREVIEW = `
-  query PreviewAllocation($dealId: ID!, $asOfDate: Date, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
-    previewAllocation(dealId: $dealId, asOfDate: $asOfDate, holds: $holds, adjustments: $adjustments) {
+  query PreviewAllocation($dealId: ID!, $asOfDate: Date, $knowledgeDate: DateTime, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
+    previewAllocation(dealId: $dealId, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate, holds: $holds, adjustments: $adjustments) {
       dealName description stage strategy borrower borrowerId sponsor sponsorId pricing oid leverage maturity closeDate
       facilitySize targetHold allocated unallocated
       tranches { id name label size holdPct targetAmount allocated unfunded instrumentType rank pricing callProtection equityLinked coverage tickingFee status securityId }
@@ -263,7 +289,13 @@ function EditableValue({
 }
 
 export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName?: string }) {
-  const asOfDate = useTemporalStore((state) => state.asOfDate);
+  const userKnowledge = useTemporalStore((state) => state.knowledgeDate);
+  // A certified allocation reads at its certification: the As Of date and the
+  // knowledge instant it was certified at. Every tab reads the same dates.
+  const scope = useCertification({ processCode: ALLOCATION_PROCESS, subjectEntityId: dealId });
+  const { asOfDate, knowledgeDate } = scope.dates;
+  // Certified, in either view: the allocation cannot change until it is reopened.
+  const locked = Boolean(scope.certification);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [holds, setHolds] = useState<Record<string, number>>({});
   const [baselineHolds, setBaselineHolds] = useState<Record<string, number>>({});
@@ -289,9 +321,10 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const complianceScore = useDealComplianceScore({
     dealId,
     asOfDate,
+    knowledgeDate: scope.pinned ? knowledgeDate : null,
     holds,
     adjustments,
-    enabled: true,
+    enabled: scope.ready,
     live: liveScore,
   });
   const releaseTabs = seeded && (Boolean(complianceScore.board) || !complianceScore.loading);
@@ -323,7 +356,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const load = useCallback(async (local: { holds: Record<string, number>; adjustments: Adjustment[] } | null) => {
     const id = ++requestId.current;
     setLoading(true);
-    const variables: Record<string, unknown> = { dealId, asOfDate };
+    const variables: Record<string, unknown> = { dealId, asOfDate, knowledgeDate };
     if (local) {
       variables.holds = Object.entries(local.holds).map(([trancheId, holdPct]) => ({ trancheId, holdPct }));
       variables.adjustments = local.adjustments.map((item) => ({
@@ -358,18 +391,20 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
       setSeeded(true);
     }
     setLoading(false);
-  }, [asOfDate, dealId]);
+  }, [asOfDate, knowledgeDate, dealId]);
 
   const previewGate = useRef<string | null>(null);
   useEffect(() => {
-    const key = `${dealId}|${asOfDate || ''}`;
+    const key = `${dealId}|${asOfDate || ''}|${knowledgeDate || ''}`;
     if (previewGate.current === key) return;
+    // Read the certification first, so the first preview reads at the right dates.
+    if (!scope.ready) return;
     // Score first. The preview reads the same positions, and together they
     // push the score past the database statement cap.
     if (complianceScore.loading && !complianceScore.board) return;
     previewGate.current = key;
     void load(null);
-  }, [load, dealId, asOfDate, complianceScore.loading, complianceScore.board]);
+  }, [load, dealId, asOfDate, knowledgeDate, scope.ready, complianceScore.loading, complianceScore.board]);
 
   const skipSeededPreview = useRef(true);
   useEffect(() => {
@@ -385,6 +420,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   }, [adjustments, holds, load, seeded]);
 
   const commit = async () => {
+    if (locked) { setError(LOCKED); return; }
     setSaving(true);
     setNotice(null);
     const result = await graphqlMutation<{ commitAllocation: { errors: Array<{ message: string }> } }>(COMMIT, {
@@ -409,16 +445,20 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
     }
     setBaselineHolds({ ...holds });
     setNotice('Allocation saved.');
+    // Read the saved book back, so what is on screen is what can be certified.
+    void load(null);
   };
 
   const applyGridAmount = (row: Row, trancheId: string, amount: number) => {
     if (!preview) return;
+    if (locked) { setError(LOCKED); return; }
     setAdjustments((current) => adjustmentsForAmount(current, preview.rows, row, trancheId, amount));
     setError(null);
     setSelected(row.fundId);
   };
 
   const resetAllocation = () => {
+    if (locked) { setError(LOCKED); return; }
     setHolds(baselineHolds);
     setAdjustments([]);
     setEdit(null);
@@ -443,6 +483,38 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
     Math.abs((holds[tranche.id] ?? tranche.holdPct) - (baselineHolds[tranche.id] ?? tranche.holdPct)) < 1e-6
   ));
   const allocationDirty = adjustments.length > 0 || !holdsMatchBaseline;
+  // Only the saved book can be certified: no hold or amount changed on screen.
+  const matchesSaved = holdsMatchBaseline && adjustments.every((item) => item.saved);
+  const certifyAllocation = async () => {
+    if (!preview) return;
+    const blocked = certifyBlockedBy(userKnowledge);
+    if (blocked) { setError(blocked); return; }
+    if (!matchesSaved) { setError('Commit the allocation before certifying it.'); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      const made = await scope.certify(allocationFigures(preview));
+      setNotice(made.version > 1
+        ? `Allocation re-certified as version ${made.version}, As Of ${made.asOfDate}. This page now shows it as known now.`
+        : 'Allocation certified. This page now shows it as known when certified.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not certify');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const reopenAllocation = async (reason: string) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await scope.reopen(reason);
+      setNotice('Allocation reopened. It reads the same As Of date as known now and can be changed. Re-certifying keeps that As Of date.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not reopen');
+    } finally {
+      setSaving(false);
+    }
+  };
   const facility = preview?.facilitySize || 0;
   const blended = facility ? tranches.reduce((total, tranche) => total + tranche.size * (holds[tranche.id] ?? tranche.holdPct), 0) / facility : 0;
   const stageIndex = STAGES.indexOf(preview?.stage || '');
@@ -450,6 +522,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
 
   // Changing a hold is a request to recompute, so the saved amounts stop pinning the grid.
   const changeHolds = (update: (current: Record<string, number>) => Record<string, number>) => {
+    if (locked) { setError(LOCKED); return; }
     setHolds(update);
     setAdjustments((current) => (current.some((item) => item.saved) ? current.filter((item) => !item.saved) : current));
   };
@@ -459,6 +532,8 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   };
 
   const saveAttribute = async (code: string, value: string) => {
+    // A pinned page shows what was known when certified. An edit made here would not appear on it.
+    if (scope.pinned) { setError('This page shows the certified allocation. Switch to Current data to edit the deal.'); return; }
     const previous = preview;
     setPreview((current) => current ? applySavedFact(current, code, value) : current);
     setError(null);
@@ -514,6 +589,13 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
     purpose: 'How the deal\'s hold is allocated across our funds, by tranche: the allocation grid, liquidity and the portfolio detail.',
     howToRead: 'This is the allocation grid as shown, with any unsaved adjustments. Report allocations by portfolio, the top level in portfolios. A portfolio is a fund. Its subPortfolios are its sleeves and sum to it. Describe subPortfolios only when asked to break a portfolio down. Do not list them as separate funds, and never add them to the portfolio total. complianceRules are the rules this deal would worsen for that fund, read from the booked book without running them: now is the figure today, withDeal the figure with this allocation, room the dollars the fund can add before the limit, allocatedHere what the grid places in the tranches the rule counts. heldBy names the sub-portfolio a rule is set on when the portfolio has none. A full test of every rule is the Compliance tab\'s Hypo run.',
     data: preview ? {
+    certification: scope.certification
+      ? {
+        certifiedBy: scope.certification.certifiedBy, certifiedAt: scope.certification.certifiedAt,
+        asOfDate: scope.certification.asOfDate, knowledgeAt: scope.certification.knowledgeAt, version: scope.certification.version,
+        showing: scope.pinned ? 'the certified allocation, as known at knowledgeAt' : 'current data, not the certified allocation',
+      }
+      : null,
     tranches: tranches.map((tranche) => ({
       name: tranche.name,
       size: tranche.size,
@@ -563,6 +645,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
   const trancheBind = (tranche: Tranche, code: string, name: string) => attrBind(tranche.id, 'DEAL_TRANCHE', code, name, tranche.name);
 
   return (
+    <SurfaceDatesProvider value={scope.dates}>
     <div className="da">
       <header className="da-ribbon">
         <div className="da-title">
@@ -648,6 +731,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
 
       {error && <div className="xp-error">{error}</div>}
       {notice && <p className="da-note">{notice}</p>}
+      {scope.ready && <CertifiedBanner scope={scope} figures={preview && !loading ? allocationFigures(preview) : null} />}
       {loading && !preview && <div className="xp-empty">Loading allocation…</div>}
 
       {warmed.has('memo') && (
@@ -802,9 +886,22 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
               <div className="page-actions">
                 <button type="button" className="btn" onClick={() => setExpanded(new Set(preview.rows.filter((row) => row.level === 'PORTFOLIO').map((row) => row.fundId)))}>Expand all</button>
                 <button type="button" className="btn" onClick={() => setExpanded(new Set())}>Collapse all</button>
-                <button type="button" className="btn" disabled={!allocationDirty} onClick={resetAllocation}>Reset allocation</button>
-                <button type="button" className="btn" disabled={!adjustments.length} onClick={() => setAdjustments([])}>Clear adjustments</button>
-                <button type="button" className="btn btn-primary" disabled={saving} onClick={() => { void commit(); }}>{saving ? 'Saving…' : 'Commit allocation'}</button>
+                <button type="button" className="btn" disabled={locked || !allocationDirty} onClick={resetAllocation}>Reset allocation</button>
+                <button type="button" className="btn" disabled={locked || !adjustments.length} onClick={() => setAdjustments([])}>Clear adjustments</button>
+                {locked ? (
+                  <ReopenButton label="Reopen allocation" disabled={saving || !scope.ready} onReopen={reopenAllocation} />
+                ) : (
+                  <>
+                    <button type="button" className="btn btn-primary" disabled={saving || !scope.ready} onClick={() => { void commit(); }}>{saving ? 'Saving…' : 'Commit allocation'}</button>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={saving || !scope.ready || !matchesSaved || loading}
+                      title={matchesSaved ? 'Fix this allocation as known now. The page will keep showing it however the data changes.' : 'Commit the allocation before certifying it.'}
+                      onClick={() => { void certifyAllocation(); }}
+                    >{scope.reopened ? `Re-certify as of ${scope.reopened.asOfDate}` : 'Certify allocation'}</button>
+                  </>
+                )}
               </div>
             </div>
             <div className="da-main">
@@ -908,14 +1005,14 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
                     allocated={preview.allocated}
                     facility={facility}
                     edit={edit}
-                    onEdit={(trancheId, cell) => setEdit({
+                    onEdit={(trancheId, cell) => (locked ? setError(LOCKED) : setEdit({
                       fundId: selectedRow.fundId,
                       trancheId,
                       amount: ((cell?.amount || 0) / 1_000_000).toFixed(2),
                       reason: cell?.reasonCode || '',
                       note: '',
                       type: trancheId === '*' ? 'exclude' : 'override',
-                    })}
+                    }))}
                     onChange={setEdit}
                     onCancel={() => setEdit(null)}
                     readings={preview.capacities || []}
@@ -944,6 +1041,7 @@ export function AllocationBoard({ dealId, dealName }: { dealId: string; dealName
         </>
       )}
     </div>
+    </SurfaceDatesProvider>
   );
 }
 

@@ -20,6 +20,8 @@ export { ownRulesFilter } from './deal-compliance';
 export interface DealScoreArgs {
   dealId: string;
   asOfDate?: string | null;
+  /** Scores the saved book as known at this instant, such as a certification. Only for the saved book, not an edit. */
+  knowledgeDate?: string | null;
   holds?: any[] | null;
   adjustments?: any[] | null;
 }

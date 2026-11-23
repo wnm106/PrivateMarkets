@@ -226,8 +226,8 @@ function tally(results: FundResult[], directionFor: (result: FundResult) => stri
 }
 
 const SCORE = `
-  mutation ScoreDealCompliance($dealId: ID!, $asOfDate: Date, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
-    scoreDealCompliance(dealId: $dealId, asOfDate: $asOfDate, holds: $holds, adjustments: $adjustments) {
+  mutation ScoreDealCompliance($dealId: ID!, $asOfDate: Date, $knowledgeDate: DateTime, $holds: [AllocationHoldInput!], $adjustments: [AllocationAdjustmentInput!]) {
+    scoreDealCompliance(dealId: $dealId, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate, holds: $holds, adjustments: $adjustments) {
       rules { id ruleCode ruleName ruleCategory resultUnit limitDirection groupByAttributeCode groupLabel }
       results { id ruleId anchorEntityId groupByValue numeratorValue denominatorValue computedValue limitDirection softLimitValue hardLimitValue status rankPosition contributingCount }
       errors { message }
@@ -248,6 +248,7 @@ export interface DealComplianceScore {
 export function useDealComplianceScore({
   dealId,
   asOfDate,
+  knowledgeDate,
   holds,
   adjustments,
   enabled = true,
@@ -255,6 +256,8 @@ export function useDealComplianceScore({
 }: {
   dealId: string;
   asOfDate?: string | null;
+  /** Scores the saved book as known at this instant (a certification). An edit is always scored as known now. */
+  knowledgeDate?: string | null;
   holds: Record<string, number>;
   adjustments: ScoreAdjustment[];
   enabled?: boolean;
@@ -285,7 +288,7 @@ export function useDealComplianceScore({
         // A saved amount is not a what-if override. Scoring never changes the saved allocation.
         saved: item.saved === true ? true : undefined,
       }));
-      const savedKey = `${dealId}|${asOfDate || ''}|saved`;
+      const savedKey = `${dealId}|${asOfDate || ''}|${knowledgeDate || ''}|saved`;
       const request = live
         ? graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>(SCORE, {
           dealId,
@@ -296,6 +299,7 @@ export function useDealComplianceScore({
         : savedScoreRequests.get(savedKey) || graphqlMutation<{ scoreDealCompliance: Board & { errors: Array<{ message: string }> } }>(SCORE, {
           dealId,
           asOfDate: asOfDate || null,
+          knowledgeDate: knowledgeDate || null,
           holds: null,
           adjustments: null,
         });
@@ -322,7 +326,7 @@ export function useDealComplianceScore({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [dealId, asOfDate, enabled, requestKey]);
+  }, [dealId, asOfDate, knowledgeDate, enabled, requestKey]);
 
   return { board, loading, error };
 }

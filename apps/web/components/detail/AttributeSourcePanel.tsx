@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { sources, type FieldDrilldown, type SourceKey } from '@/lib/data';
-import { formatReceipt, isStaleReceipt, receiptAgeDays } from '@/lib/receipt-freshness';
+import { formatReceipt, isCalculationSource, isStaleReceipt, receiptAgeDays } from '@/lib/receipt-freshness';
 import { graphqlQuery } from '@/lib/graphql';
 import { AttributeValueInput, useAttributeDisplay, useAttributeListOptions, type ListOption } from '@/components/forms/AttributeValueInput';
 import { CalcBreakdownPanel } from './CalcBreakdownPanel';
@@ -45,7 +45,8 @@ export function AttributeSourcePanel({
   availableSources: availableSourcesProp,
   standalone = false,
 }: AttributeSourcePanelProps) {
-  const [drillTab, setDrillTab] = useState<'sources' | 'timeline'>('sources');
+  // A calculated field opens on its calculation. Its source values, the calculation's among them, are one tab over.
+  const [drillTab, setDrillTab] = useState<'calculation' | 'sources' | 'timeline'>(field.calculated ? 'calculation' : 'sources');
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [showAddSource, setShowAddSource] = useState(false);
   const [newSource, setNewSource] = useState<SourceKey>('manual');
@@ -91,9 +92,11 @@ export function AttributeSourcePanel({
     return () => { cancelled = true; };
   }, [availableSourcesProp]);
 
-  const availableSources = availableSourcesProp ?? fetchedSources;
+  const allSources = availableSourcesProp ?? fetchedSources;
+  // Values typed or reported here come from a real source. Only the calculation writes under its own source.
+  const availableSources = allSources.filter((source) => !isCalculationSource(source.key));
   const normalizedFieldSource = (field.source || '').toLowerCase() as SourceKey;
-  const dbSource = availableSources.find((source) => source.key === normalizedFieldSource);
+  const dbSource = allSources.find((source) => source.key === normalizedFieldSource);
   const src = dbSource
     ? { name: dbSource.name, hex: dbSource.hex }
     : (sources[normalizedFieldSource] ?? { name: field.source, hex: '#475569' });
@@ -149,12 +152,21 @@ export function AttributeSourcePanel({
       style={{ '--field-color': src.hex } as React.CSSProperties}
     >
       <div className="sa-drill-tabs" onClick={(event) => event.stopPropagation()}>
+        {field.calculated && (
+          <button
+            type="button"
+            className={`sa-drill-tab${drillTab === 'calculation' ? ' active' : ''}`}
+            onClick={() => setDrillTab('calculation')}
+          >
+            Calculation
+          </button>
+        )}
         <button
           type="button"
           className={`sa-drill-tab${drillTab === 'sources' ? ' active' : ''}`}
           onClick={() => setDrillTab('sources')}
         >
-          {field.calculated ? 'Calculation' : 'Data Source Sequence'}
+          Data Source Sequence
         </button>
         <button
           type="button"
@@ -171,7 +183,7 @@ export function AttributeSourcePanel({
           attributes={[{ code: field.attributeCode, name: field.label }]}
           canDelete={Boolean(onDeleteSourceValue) && field.editable !== false}
         />
-      ) : field.calculated && entityId && field.attributeCode ? (
+      ) : drillTab === 'calculation' && field.calculated && entityId && field.attributeCode ? (
         <CalcBreakdownPanel
           entityId={entityId}
           attributeCode={field.attributeCode}
@@ -194,7 +206,9 @@ export function AttributeSourcePanel({
             </div>
             {drilldown.candidates.map((c, i) => {
               const normalizedSrc = (c.src || '').toLowerCase();
-              const dbCandidate = availableSources.find((source) => source.key === normalizedSrc);
+              const dbCandidate = allSources.find((source) => source.key === normalizedSrc);
+              // The calculation's own row is read only: change its inputs or add a reported value instead.
+              const calculationRow = isCalculationSource(c.src);
               const cSrc = dbCandidate
                 ? { name: dbCandidate.name, hex: dbCandidate.hex }
                 : (sources[normalizedSrc as SourceKey] ?? { name: c.src, hex: '#475569' });
@@ -223,7 +237,7 @@ export function AttributeSourcePanel({
                         value={c.value}
                         dataType={field.dataType}
                         attributeCode={field.attributeCode}
-                        onSave={onAddSourceValue && field.attributeCode
+                        onSave={onAddSourceValue && field.attributeCode && !calculationRow
                           ? (next) => onAddSourceValue(field.attributeCode || field.label, c.src, next)
                           : undefined}
                       />
@@ -249,7 +263,7 @@ export function AttributeSourcePanel({
                     {c.status === 'no-data' && <span className="sa-status-badge no-data">NO DATA</span>}
                     {c.status === 'skipped' && <span className="sa-status-badge skipped">SKIPPED</span>}
                     {c.status === 'applied' && <span className="sa-status-badge applied">APPLIED</span>}
-                    {onDeleteSourceValue && c.value && c.value !== '—' && (
+                    {onDeleteSourceValue && !calculationRow && c.value && c.value !== '—' && (
                       pendingDelete === String(c.src) ? (
                         <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
                           <button

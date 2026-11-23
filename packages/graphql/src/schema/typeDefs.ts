@@ -110,6 +110,36 @@ type AttributeActivity {
   current: Boolean!
 }
 
+# One field on one version of the record in entityTimeline.
+type EntityTimelineValue {
+  attributeCode: String!
+  value: String
+  sourceName: String
+}
+
+# The record as it stood over one effective span. A new version starts each day a field's winning value changes.
+type EntityTimelineVersion {
+  effectiveFrom: Date!
+  # Last day in force. Null while the version still is.
+  effectiveTo: Date
+  values: [EntityTimelineValue!]!
+  # Attribute codes whose value differs from the version before. On the first version, every field with a value.
+  changed: [String!]!
+}
+
+type EntityTimelineAttribute {
+  attributeCode: String!
+  attributeName: String!
+}
+
+# The full record over effective time, as believed at the knowledge date. Versions are newest first.
+type EntityTimeline {
+  attributes: [EntityTimelineAttribute!]!
+  versions: [EntityTimelineVersion!]!
+  # True when older versions were left out to keep the list to the limit.
+  truncated: Boolean!
+}
+
 # Attribute Definition with Derived Attribute Support
 type AttributeDefinition {
   id: ID!
@@ -1100,6 +1130,45 @@ type ComplianceFundRule {
 type ComplianceFundBoard {
   funds: [ComplianceFundNode!]!
   rules: [ComplianceFundRule!]!
+  thresholds: [ComplianceThreshold!]!
+  results: [ComplianceEvaluationResult!]!
+}
+
+# One entity type that has compliance results at the dashboard's dates.
+type ComplianceDashboardDomain {
+  domainCode: String!
+  domainName: String!
+  ruleCount: Int!
+  entityCount: Int!
+  resultCount: Int!
+  passCount: Int!
+  softBreachCount: Int!
+  hardBreachCount: Int!
+  noDataCount: Int!
+}
+
+# An active rule with the settings of its current version.
+type ComplianceDashboardRule {
+  id: ID!
+  ruleCode: String!
+  ruleName: String!
+  ruleCategory: String!
+  anchorDomainCode: String!
+  resultUnit: String
+  limitDirection: String
+  groupByAttributeCode: String
+  # The version's own limits, used when no fund or group threshold is set.
+  softLimitValue: Float
+  hardLimitValue: Float
+}
+
+# Every entity type with results, every active rule, current thresholds, and
+# the newest result per rule, entity, group and rank at the given dates.
+type ComplianceDashboard {
+  asOfDate: Date
+  knowledgeDate: DateTime
+  domains: [ComplianceDashboardDomain!]!
+  rules: [ComplianceDashboardRule!]!
   thresholds: [ComplianceThreshold!]!
   results: [ComplianceEvaluationResult!]!
 }
@@ -2317,6 +2386,14 @@ type Me {
   impersonating: ImpersonationSession
 }
 
+"A record's code, name and type."
+type EntityIdentity {
+  entityId: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+}
+
 type EntityAccessRecord {
   entityId: ID!
   clientId: ID!
@@ -2599,6 +2676,23 @@ type MergeEntityRef {
   entityCode: String!
   entityName: String!
   domainCode: String!
+  # When the record was created. The older record of a pair is kept.
+  createdAt: DateTime
+  # Relationships that move onto the kept record if this one is retired.
+  relationshipCount: Int!
+  # The record's direct children, used to plan which children move and which collide.
+  children: [MergeChildRecord!]!
+}
+
+# A direct child of a merge candidate.
+type MergeChildRecord {
+  id: ID!
+  entityCode: String!
+  entityName: String!
+  domainCode: String!
+  createdAt: DateTime
+  # Records below this child, grandchildren included.
+  descendantCount: Int!
 }
 
 type MergeCandidate {
@@ -3306,6 +3400,51 @@ type CovenantDefinitionChoice {
   componentCount: Int!
 }
 
+"""A certification: what a person certified, and the As Of date and knowledge instant its page reads at from then on."""
+type Certification {
+  id: ID!
+  """What was certified, such as FUND_CLOSE or DEAL_ALLOCATION."""
+  processCode: String!
+  """The record it was certified on: a fund close, a deal."""
+  subjectEntityId: ID!
+  periodEnd: Date
+  """The As Of date a certified page reads at."""
+  asOfDate: Date!
+  """The knowledge instant a certified page reads at. Stamped by the database when certified."""
+  knowledgeAt: DateTime!
+  """The key figures the person saw: { key: { label, value } }."""
+  figures: JSON!
+  fingerprint: String!
+  note: String
+  certifiedBy: String
+  certifiedAt: DateTime!
+  """1 for the first certification of a record and period, then one more for each re-certification."""
+  version: Int!
+  """The reopened certification this one replaces."""
+  supersedesId: ID
+  """Certifications this one was read against, such as the prior period's close."""
+  dependsOn: [ID!]!
+  """Those certifications as they stand now. One that is revoked has been replaced since this was certified."""
+  dependencies: [Certification!]!
+  """Set when the certification was reopened. A revoked certification no longer pins its page."""
+  revokedAt: DateTime
+  revokedBy: String
+  revokeReason: String
+}
+
+input CertifyInput {
+  processCode: String!
+  subjectEntityId: ID!
+  """Leave out on a re-certification to keep the As Of date of the one it replaces. A different date is refused."""
+  asOfDate: Date
+  periodEnd: Date
+  """Certifications the page was read against, such as the prior period's close."""
+  dependsOn: [ID!]
+  """The key figures shown when certifying: { key: { label, value } }."""
+  figures: JSON
+  note: String
+}
+
 type Query {
   # Generic entity queries
   entities(
@@ -3316,6 +3455,8 @@ type Query {
   ): EntityConnection!
   
   entity(id: ID, entityCode: String, asOfDate: Date, knowledgeDate: DateTime): Entity
+  "A record's code, name and type, without its attributes. For labels and =TAP formulas."
+  entityIdentity(entityId: ID!): EntityIdentity
 
   """Match a record by its name, another stored name, a related name, or a parent name. ALIAS means the other name matched. Parent domains rank before child domains."""
   searchEntities(query: String!, limit: Int): [EntitySearchHit!]!
@@ -3358,7 +3499,7 @@ type Query {
   mergeCandidates(filter: MergeCandidateFilter): MergeCandidateResult!
   mergePreview(survivorId: ID!, retiredId: ID!, ruleCode: String): MergePreview!
   entityGraph(entityId: ID!, depth: Int, relationshipCodes: [String!]): EntityGraph!
-  previewAllocation(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): AllocationPreview!
+  previewAllocation(dealId: ID!, asOfDate: Date, knowledgeDate: DateTime, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): AllocationPreview!
   # Returns over any period. No start date is inception to date. The codes are series calcs such as DEAL_IRR_ITD.
   periodReturns(entityIds: [ID!]!, attributeCodes: [String!]!, startDate: Date, endDate: Date): [PeriodReturn!]!
   icMemo(dealId: ID!, asOfDate: Date): IcMemo!
@@ -3367,6 +3508,10 @@ type Query {
   fundRecBoard(asOfDate: Date, knowledgeDate: DateTime): JSON!
   """One fund close: statement integrity, roll-forward, fees, marks, drift, review items, and close steps."""
   fundRec(fundId: ID!, periodEnd: Date, asOfDate: Date, knowledgeDate: DateTime, driftThresholdPct: Float): JSON!
+  """The certification in force for a record (and period): the As Of date and knowledge instant its page is pinned to. Null when it is not certified."""
+  certification(processCode: String!, subjectEntityId: ID!, periodEnd: Date): Certification
+  """Every certification of a record, reopened ones included, newest first."""
+  certificationHistory(subjectEntityId: ID!, processCode: String): [Certification!]!
   """Positional cash flows matched to the fund's bank transactions, with the tie-out."""
   cashRec(fundId: ID!, periodEnd: Date, asOfDate: Date, knowledgeDate: DateTime): JSON!
   """Job types the worker can run."""
@@ -3476,6 +3621,7 @@ type Query {
   # Lineage and temporal queries
   fieldLineage(entityId: ID!, asOfDate: Date, knowledgeDate: DateTime): [FieldLineage!]!
   entityActivity(entityId: ID!, knowledgeDate: DateTime, attributeCode: String, limit: Int): [AttributeActivity!]!
+  entityTimeline(entityId: ID!, knowledgeDate: DateTime, limit: Int): EntityTimeline!
   temporalHistory(entityId: ID!, attributeCode: String!, fromDate: Date!, toDate: Date!): [TemporalValue!]!
   
   # DQ queries
@@ -3545,6 +3691,7 @@ type Query {
   complianceResultContributors(resultId: ID!): ComplianceResultContributors!
   compliancePopulationPreview(input: CompliancePopulationPreviewInput!): CompliancePopulationPreview!
   complianceFundBoard: ComplianceFundBoard!
+  complianceDashboard(asOfDate: Date, knowledgeDate: DateTime): ComplianceDashboard!
   # Booked book plus any number of buys and sells, scored together.
   evaluateComplianceProforma(
     anchorEntityId: ID!
@@ -3585,6 +3732,9 @@ type Query {
   narrativeRun(id: ID!): NarrativeRun
   runDataQueries(queries: JSON!, entityId: ID, entityCode: String, params: JSON, asOfDate: String, knowledgeDate: String): DataQueryResponse!
   gridQuery(input: GridQueryInput!): GridResult!
+  # Views: saved data tables for an entity type
+  entityViews(domainCode: String!): [EntityView!]!
+  entityView(id: ID!): EntityView
 
   # Surface composition
   surfaces: [SurfaceDefinition!]!
@@ -3655,6 +3805,10 @@ type Mutation {
   updateMatchRule(input: UpdateMatchRuleInput!): UpdateMatchRuleResult!
   createMatchRule(input: CreateMatchRuleInput!): UpdateMatchRuleResult!
   commitAllocation(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): AllocationPreview!
+  """Certify a process on a record. The database stamps the knowledge instant; from then on the record's page reads at that instant and the given As Of date."""
+  certify(input: CertifyInput!): Certification!
+  """Reopen: the certification stops pinning its page. It is kept, with who reopened it and why. The reason is required."""
+  revokeCertification(id: ID!, reason: String!): Certification!
   # Run the deal performance model on the committed allocation and store its outputs as attribute values.
   refreshDealPerformance(dealId: ID!, asOfDate: Date): DealPerformanceRefresh!
   
@@ -3749,7 +3903,7 @@ type Mutation {
   createComplianceScopeAssignment(input: CreateComplianceScopeAssignmentInput!): CreateComplianceScopeAssignmentResult!
   deleteComplianceScopeAssignment(id: ID!): DeleteComplianceScopeAssignmentResult!
   evaluateComplianceRule(input: EvaluateComplianceRuleInput!): EvaluateComplianceRuleResult!
-  scoreDealCompliance(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealComplianceScore!
+  scoreDealCompliance(dealId: ID!, asOfDate: Date, knowledgeDate: DateTime, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealComplianceScore!
   runDealHypo(dealId: ID!, asOfDate: Date, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): DealHypoRun!
   upsertComplianceThreshold(input: UpsertComplianceThresholdInput!): UpsertComplianceThresholdResult!
   deleteComplianceThreshold(id: ID!): DeleteComplianceThresholdResult!
@@ -3769,6 +3923,8 @@ type Mutation {
   createDashboard(input: CreateDashboardInput!): CreateDashboardResult!
   updateDashboard(id: ID!, input: UpdateDashboardInput!): UpdateDashboardResult!
   deleteDashboard(id: ID!): DeleteDashboardResult!
+  saveEntityView(id: ID, input: EntityViewInput!): SaveEntityViewResult!
+  deleteEntityView(id: ID!): DeleteEntityViewResult!
   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
   deleteNarrative(id: ID!): DeleteNarrativeResult!
@@ -4925,6 +5081,45 @@ type DataQueryResponse {
   warnings: [String!]!
   validationErrors: [String!]!
   asOfDate: String
+}
+
+# A saved data table for an entity type. Each column is an attribute of the
+# type or of a related record (a lookup), read as golden unless it names a source.
+type EntityView {
+  id: ID!
+  clientId: ID
+  domainCode: String!
+  viewName: String!
+  description: String
+  # [{ field: "PRICE" | "<alias>.PRICE", source?: "BLOOMBERG", label? }]
+  columns: JSON!
+  # [{ alias, direction: UP|DOWN, relationshipCode?, domainCode?, from?, label? }]
+  lookups: JSON!
+  sort: JSON!
+  displayOrder: Int!
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+
+input EntityViewInput {
+  domainCode: String!
+  viewName: String!
+  description: String
+  columns: JSON!
+  lookups: JSON
+  sort: JSON
+  displayOrder: Int
+  clientId: ID
+}
+
+type SaveEntityViewResult {
+  view: EntityView
+  errors: [MutationError!]!
+}
+
+type DeleteEntityViewResult {
+  success: Boolean!
+  errors: [MutationError!]!
 }
 
 input GridQueryInput {

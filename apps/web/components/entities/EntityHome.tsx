@@ -7,10 +7,12 @@ import { EntityReports } from '@/components/reporting/EntityReports';
 import { DOMAIN_TYPES_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, graphqlQuery } from '@/lib/graphql';
 import { definingParentDomains, mergeParentColumns, parentEntityColumns, toParentLinkCounts, type ParentEntityColumn } from '@/lib/parent-entities';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
+import { useTemporalStore } from '@/lib/store';
 import { useWarmTabs } from '@/lib/view-context';
 import { EntityAttributeTable, type RelatedAttributeColumn } from './EntityAttributeTable';
+import { EntityViews } from './EntityViews';
 
-type HomeTab = 'records' | 'dashboards' | 'quality';
+type HomeTab = 'records' | 'views' | 'dashboards' | 'quality';
 
 interface SelectedEntity {
   id: string;
@@ -36,7 +38,8 @@ export function EntityHome({
   onTotalChange?: (total: number) => void;
 }) {
   const [tab, setTab] = useState<HomeTab>('records');
-  const warmed = useWarmTabs(['records', 'dashboards', 'quality'], tab);
+  const warmed = useWarmTabs(['records', 'views', 'dashboards', 'quality'], tab);
+  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
   const [discovered, setDiscovered] = useState<ParentEntityColumn[]>([]);
 
@@ -88,6 +91,9 @@ export function EntityHome({
           <button type="button" role="tab" aria-selected={tab === 'records'} className={`xp-tab ${tab === 'records' ? 'active' : ''}`} onClick={() => setTab('records')}>
             Records
           </button>
+          <button type="button" role="tab" aria-selected={tab === 'views'} className={`xp-tab ${tab === 'views' ? 'active' : ''}`} onClick={() => setTab('views')}>
+            Views
+          </button>
           <button type="button" role="tab" aria-selected={tab === 'dashboards'} className={`xp-tab ${tab === 'dashboards' ? 'active' : ''}`} onClick={() => setTab('dashboards')}>
             Dashboards
           </button>
@@ -96,7 +102,7 @@ export function EntityHome({
           </button>
         </div>
         <div className="entity-home-scope">
-          {tab === 'quality' ? (
+          {tab === 'quality' || tab === 'views' ? (
             <span>Every record of this type</span>
           ) : selected ? (
             <>
@@ -130,6 +136,12 @@ export function EntityHome({
         </div>
       )}
 
+      {warmed.has('views') && (
+        <div hidden={tab !== 'views'} className="entity-home-pane">
+          <EntityViews domainCode={domainCode} domainKey={domainKey} asOfDate={asOfDate} knowledgeDate={knowledgeDate} />
+        </div>
+      )}
+
       {warmed.has('dashboards') && selected && (
         <div hidden={tab !== 'dashboards'}>
           <EntityReports domainCode={domainCode} entityId={selected.id} asOfDate={asOfDate} embedded />
@@ -141,7 +153,7 @@ export function EntityHome({
 
       {warmed.has('quality') && (
         <div hidden={tab !== 'quality'}>
-          <DataQualityDashboard embedded active={tab === 'quality'} domainCode={domainCode} />
+          <DataQualityDashboard active={tab === 'quality'} domainCode={domainCode} />
         </div>
       )}
     </div>

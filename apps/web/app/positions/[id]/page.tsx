@@ -8,8 +8,6 @@ import { GoldenRecordHeader } from '@/components/detail/GoldenRecordHeader';
 import { GoldenRecordSections, type TemplateAttribute, type LineageData } from '@/components/detail/GoldenRecordSections';
 import { SourceContributionPanel } from '@/components/detail/SourceContributionPanel';
 import { ActiveConflictsPanel } from '@/components/detail/ActiveConflictsPanel';
-import { EntityAccessPanel } from '@/components/security/EntityAccessPanel';
-import { ActivityFeedPanel } from '@/components/detail/ActivityFeedPanel';
 import { sources, type SourceKey } from '@/lib/data';
 import { getDomainConfig } from '@/lib/mock-data';
 import { useTemporalStore } from '@/lib/store';
@@ -52,21 +50,13 @@ export default function PositionDetailPage() {
   const [lineageLoaded, setLineageLoaded] = useState(false);
   const [templateAttributes, setTemplateAttributes] = useState<TemplateAttribute[]>([]);
   const [canRename, setCanRename] = useState(false);
-  const [activities, setActivities] = useState<ActivityData[]>([]);
+  const [activities, setActivities] = useState<ActivityData[] | null>(null);
   const conflicts: ConflictData[] = [];
   const sourceContributions: SourceContributionData[] = [];
-  let qualityScore = 0;
   let lastReviewedText = '—';
   if (entity) {
     const attrs = entity.attributes || {};
     const attrEntries = Object.entries(attrs);
-    if (attrEntries.length > 0) {
-      const filledCount = attrEntries.filter(([_, v]) => {
-        const val = v && typeof v === 'object' && 'value' in v ? v.value : v;
-        return val !== null && val !== undefined && val !== '';
-      }).length;
-      qualityScore = Math.round((filledCount / attrEntries.length) * 100);
-    }
     const sourceCounts = new Map<string, { name: string; count: number; color: string }>();
     lineageData.forEach((ld) => {
       ld.competingValues?.forEach((cv) => {
@@ -102,9 +92,9 @@ export default function PositionDetailPage() {
   }
   const loadActivity = useCallback(async (entityId: string) => {
     const result = await graphqlQuery<
-      { entityActivity: Array<{ attributeCode: string; attributeName: string; value: string | null; updatedAt: string; updatedBy: string; validFrom: string; validTo: string }> },
-      { entityId: string; knowledgeDate: string }
-    >(ENTITY_ACTIVITY_QUERY, { entityId, knowledgeDate }, 'network-only');
+      { entityActivity: Array<{ attributeCode: string; attributeName: string; value: string | null; updatedAt: string; updatedBy: string; validFrom: string; validTo: string; sourceName: string | null }> },
+      { entityId: string; knowledgeDate: string; limit: number }
+    >(ENTITY_ACTIVITY_QUERY, { entityId, knowledgeDate, limit: 100 }, 'network-only');
     setActivities((result.data?.entityActivity || []).map((entry) => ({
       who: entry.updatedBy || 'System',
       time: entry.updatedAt,
@@ -113,6 +103,7 @@ export default function PositionDetailPage() {
       value: entry.value ?? '',
       validFrom: entry.validFrom,
       validTo: entry.validTo,
+      sourceName: entry.sourceName,
       text: `${entry.attributeName || entry.attributeCode} set to ${entry.value ?? 'cleared'}`,
     })));
   }, [knowledgeDate]);
@@ -326,11 +317,8 @@ export default function PositionDetailPage() {
   }
   return (
     <div className="view-fade">
-      <GoldenRecordHeader id={entity.entityCode} name={entity.entityName} type={entity.templateName || entity.domainName || 'Position'} status={entity.isActive ? 'Active' : 'Inactive'} lastReviewed={lastReviewedText} quality={qualityScore} conflicts={conflicts.length} entityPath={`/positions/${id}`} listPath="/positions" listLabel="Positions" accentColor={domainConfig.color} onRename={canRename ? handleRename : undefined} mergeHref={isMasterEntity ? `/merge?entity=${entity.id}` : undefined} entityId={entity.id} />
-      <div className="detail-layout">
-        <div><GoldenRecordSections entity={entity} templateAttributes={templateAttributes} lineageData={lineageData} lineageLoaded={lineageLoaded} asOfDate={asOfDate} onAddAttribute={handleAddAttribute} onSourceChange={handleSourceChange} onValueChange={handleValueChange} onAddSourceValue={handleAddSourceValue} onDeleteSourceValue={handleDeleteSourceValue} /></div>
-        <div><EntityAccessPanel entityId={entity.id} /><SourceContributionPanel sources={sourceContributions} /><ActiveConflictsPanel conflicts={conflicts} entityId={entity.id} /><ActivityFeedPanel activities={activities} /></div>
-      </div>
+      <GoldenRecordHeader id={entity.entityCode} name={entity.entityName} type={entity.templateName || entity.domainName || 'Position'} status={entity.isActive ? 'Active' : 'Inactive'} lastReviewed={lastReviewedText} conflicts={conflicts.length} entityPath={`/positions/${id}`} listPath="/positions" listLabel="Positions" accentColor={domainConfig.color} onRename={canRename ? handleRename : undefined} mergeHref={isMasterEntity ? `/merge?entity=${entity.id}` : undefined} entityId={entity.id} />
+      <GoldenRecordSections entity={entity} templateAttributes={templateAttributes} lineageData={lineageData} lineageLoaded={lineageLoaded} asOfDate={asOfDate} onAddAttribute={handleAddAttribute} onSourceChange={handleSourceChange} onValueChange={handleValueChange} onAddSourceValue={handleAddSourceValue} onDeleteSourceValue={handleDeleteSourceValue} activities={activities} aside={<><SourceContributionPanel sources={sourceContributions} /><ActiveConflictsPanel conflicts={conflicts} entityId={entity.id} /></>} />
     </div>
   );
 }

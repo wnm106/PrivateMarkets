@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { graphqlQuery } from '@/lib/graphql';
 import { attributeText } from '@/lib/experience';
-import { useTemporalStore } from '@/lib/store';
+import { useSurfaceDates } from '@/components/certification/CertificationScope';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 import { usePublishTab } from '@/lib/view-context';
 import {
@@ -194,8 +194,8 @@ export function DealFinancials({
   borrowerId?: string | null;
   borrowerName?: string | null;
 }) {
-  const asOfDate = useTemporalStore((state) => state.asOfDate);
-  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+  const { asOfDate } = useSurfaceDates();
+  const { knowledgeDate } = useSurfaceDates();
   const [periods, setPeriods] = useState<StatementPeriod[]>([]);
   const [attributes, setAttributes] = useState<StatementAttribute[]>([]);
   const [sections, setSections] = useState<RegisterSection[]>([]);

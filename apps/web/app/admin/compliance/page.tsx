@@ -9,7 +9,12 @@ import {
   COMPLIANCE_RULES_QUERY,
   CREATE_COMPLIANCE_RULE_MUTATION,
   CREATE_COMPLIANCE_RULE_VERSION_MUTATION,
+  COMPLIANCE_DASHBOARD_QUERY,
 } from '@/lib/graphql';
+import { ComplianceDashboard } from '@/components/compliance/ComplianceDashboard';
+import { dashboardTabData, type ComplianceDashboardData } from '@/lib/compliance-dashboard';
+import { useTemporalStore } from '@/lib/store';
+import { usePublishTabs } from '@/lib/view-context';
 import { ComplianceRuleForm, ComplianceRuleFormData, buildComplianceVersionInput } from '@/components/forms/ComplianceRuleForm';
 import { AppGrid, type ColDef } from '@/components/grid/AppGrid';
 
@@ -64,6 +69,47 @@ export default function ComplianceRulesPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [tab, setTab] = useState<'dashboard' | 'rules'>('dashboard');
+  const asOfDate = useTemporalStore((state) => state.asOfDate);
+  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+  const [board, setBoard] = useState<ComplianceDashboardData | null>(null);
+  const [boardLoading, setBoardLoading] = useState(true);
+  const [boardError, setBoardError] = useState<string | null>(null);
+  const [domainCode, setDomainCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('tab') === 'rules') setTab('rules');
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBoardLoading(true);
+    setBoardError(null);
+    graphqlQuery<{ complianceDashboard: ComplianceDashboardData }, { asOfDate: string | null; knowledgeDate: string | null }>(
+      COMPLIANCE_DASHBOARD_QUERY,
+      { asOfDate: asOfDate || null, knowledgeDate: knowledgeDate || null },
+      'network-only',
+    ).then((result) => {
+      if (cancelled) return;
+      const next = result.data?.complianceDashboard;
+      if (result.error || !next) {
+        setBoardError(result.error?.message || 'The compliance results could not be loaded.');
+        setBoard(null);
+        return;
+      }
+      setBoard(next);
+      setDomainCode((current) => (
+        current && next.domains.some((item) => item.domainCode === current)
+          ? current
+          : [...next.domains].sort((a, b) => b.resultCount - a.resultCount)[0]?.domainCode || null
+      ));
+    }).catch((err) => {
+      if (!cancelled) setBoardError(err instanceof Error ? err.message : 'The compliance results could not be loaded.');
+    }).finally(() => {
+      if (!cancelled) setBoardLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [asOfDate, knowledgeDate]);
 
   const fetchRules = async () => {
     setLoading(true);
@@ -127,6 +173,46 @@ export default function ComplianceRulesPage() {
     },
   ], []);
 
+  const totals = useMemo(() => {
+    const domains = board?.domains || [];
+    return {
+      types: domains.length,
+      tests: domains.reduce((sum, item) => sum + item.resultCount, 0),
+      hard: domains.reduce((sum, item) => sum + item.hardBreachCount, 0),
+      soft: domains.reduce((sum, item) => sum + item.softBreachCount, 0),
+    };
+  }, [board]);
+
+  usePublishTabs({
+    dashboard: {
+      label: 'Dashboard',
+      purpose: 'Which entity types have compliance results, and for the selected type where each rule stands against its limit and how much cushion is left.',
+      howToRead: 'Results are the newest score for each rule, entity, group and rank at the As Of and Knowledge dates. Warning is the soft limit and Limit is the hard limit; a Maximum is breached above the limit and a Minimum below it. Cushion is the room left before the hard limit (the warning level when there is no hard limit), in the result unit; percentage results are in percentage points, and cushionPctOfLimit is that room as a share of the limit. A negative cushion is past the limit. Not scored means the rule has no result at these dates. Rows are sorted breaches first, then by least cushion.',
+      data: board ? dashboardTabData(board, domainCode) : null,
+    },
+    rules: {
+      label: 'Rules',
+      purpose: 'The rule book: every compliance rule, its category, anchor entity type, result unit and whether it is active.',
+      data: loading ? null : {
+        ruleCount: rules.length,
+        activeCount: rules.filter((rule) => rule.isActive).length,
+        rules: rules.slice(0, 120).map((rule) => ({
+          rule: rule.ruleName,
+          code: rule.ruleCode,
+          category: CATEGORY[rule.ruleCategory] || rule.ruleCategory,
+          anchor: plainCode(rule.anchorDomainCode),
+          result: rule.currentVersion ? unitLabel(rule.currentVersion.resultUnit) : 'No version',
+          active: rule.isActive,
+        })),
+      },
+    },
+    thresholds: {
+      label: 'Thresholds by fund',
+      purpose: 'Set the limit each fund applies for each rule.',
+      data: { note: 'This tab opens its own page, where the fund limits are edited. Its figures are read when that page is open.' },
+    },
+  });
+
   const handleCreate = async (data: ComplianceRuleFormData) => {
     setSubmitting(true);
     try {
@@ -186,14 +272,29 @@ export default function ComplianceRulesPage() {
           <h1>Compliance</h1>
           <p>Limits that score a fund, an issuer, or a book. A fund can keep the book limit or set its own.</p>
         </div>
+        <div className="da-facts">
+          <div className="da-fact big"><span>Hard breaches</span><strong className={totals.hard ? 'dn' : ''}>{board ? totals.hard : '—'}</strong></div>
+          <div className="da-fact"><span>Warnings</span><strong>{board ? totals.soft : '—'}</strong></div>
+          <div className="da-fact"><span>Tests</span><strong>{board ? totals.tests.toLocaleString() : '—'}</strong><small>{board ? `${totals.types} entity type${totals.types === 1 ? '' : 's'}` : ''}</small></div>
+          <div className="da-fact"><span>As of</span><strong>{asOfDate}</strong><small>Known by {knowledgeDate}</small></div>
+        </div>
       </header>
 
       <div className="da-tabs" role="tablist">
-        <button type="button" className="on">Rules</button>
+        <button type="button" className={tab === 'dashboard' ? 'on' : ''} onClick={() => setTab('dashboard')}>Dashboard</button>
+        <button type="button" className={tab === 'rules' ? 'on' : ''} onClick={() => setTab('rules')}>Rules</button>
         <button type="button" onClick={() => router.push('/admin/compliance/funds')}>Thresholds by fund</button>
       </div>
 
-      {showCreateForm ? (
+      {tab === 'dashboard' ? (
+        <ComplianceDashboard
+          data={board}
+          loading={boardLoading}
+          error={boardError}
+          selectedCode={domainCode}
+          onSelect={setDomainCode}
+        />
+      ) : showCreateForm ? (
         <section className="da-sec">
           <div className="da-sechead">
             <h2>New rule</h2>

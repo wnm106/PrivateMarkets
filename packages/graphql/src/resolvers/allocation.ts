@@ -8,6 +8,10 @@ import {
 } from '../lib/allocation-store';
 import type { AllocationAdjustment } from '../lib/allocation-engine';
 import { storeDealPerformance } from '../lib/deal-performance-store';
+import { activeCertification } from '../lib/certification-store';
+
+/** The certification process a deal's allocation is certified under (golden_master.certification_processes). */
+export const ALLOCATION_PROCESS = 'DEAL_ALLOCATION';
 
 /** GraphQL adjustment inputs as engine adjustments. `saved` is kept so a saved amount is not read as an override. */
 export function adjustments(input: any[] | null | undefined): AllocationAdjustment[] | null {
@@ -34,11 +38,12 @@ async function build(
   asOfDate: string | null | undefined,
   holdInput: any[] | null | undefined,
   adjustmentInput: any[] | null | undefined,
+  knowledgeDate?: string | null,
 ): Promise<AllocationPreview> {
   // Always read the compliance capacities. Without them the engine falls back
   // to the fund's own issuer, sponsor and unfunded limits, and the first view
   // of the saved book shows allocations no compliance rule capped.
-  const draft = await loadAllocationDraft(context.supabase, dealId, asOfDate, holds(holdInput), adjustments(adjustmentInput));
+  const draft = await loadAllocationDraft(context.supabase, dealId, asOfDate, holds(holdInput), adjustments(adjustmentInput), knowledgeDate);
   return previewFromDraft(draft);
 }
 
@@ -46,11 +51,11 @@ export const allocationResolvers = {
   Query: {
     previewAllocation: async (
       _: unknown,
-      args: { dealId: string; asOfDate?: string | null; holds?: any[] | null; adjustments?: any[] | null },
+      args: { dealId: string; asOfDate?: string | null; knowledgeDate?: string | null; holds?: any[] | null; adjustments?: any[] | null },
       context: Context,
     ) => {
       try {
-        return { ...(await build(context, args.dealId, args.asOfDate, args.holds, args.adjustments)), errors: [] };
+        return { ...(await build(context, args.dealId, args.asOfDate, args.holds, args.adjustments, args.knowledgeDate)), errors: [] };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Could not preview the allocation';
         return emptyPreview(args.dealId, message);
@@ -88,6 +93,10 @@ export const allocationResolvers = {
       context: Context,
     ) => {
       try {
+        // A certified allocation is pinned to what was known when it was certified. Reopen it first.
+        if (await activeCertification(context.supabase, ALLOCATION_PROCESS, args.dealId)) {
+          return emptyPreview(args.dealId, 'This allocation is certified. Reopen it before changing it.');
+        }
         const draft = await loadAllocationDraft(
           context.supabase,
           args.dealId,

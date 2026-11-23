@@ -6,7 +6,7 @@ import { graphqlQuery } from '@/lib/graphql';
 import { attributeText } from '@/lib/experience';
 import { domainHref } from '@/lib/domain-routes';
 import { attrBind, InspectValue } from '@/components/detail/InspectValue';
-import { useTemporalStore } from '@/lib/store';
+import { useSurfaceDates } from '@/components/certification/CertificationScope';
 import { usePublishTab } from '@/lib/view-context';
 import { addMonths, heldShare, monthKey, projectSchedule, spreadFromPricing, type ScheduleDraw, type ScheduleMonth } from '@/lib/servicing-schedule';
 
@@ -218,8 +218,8 @@ export function DealServicing({
   tranches: Tranche[];
   rows: BookRow[];
 }) {
-  const asOfDate = useTemporalStore((state) => state.asOfDate);
-  const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
+  const { asOfDate } = useSurfaceDates();
+  const { knowledgeDate } = useSurfaceDates();
   const [draws, setDraws] = useState<DrawRow[]>([]);
   const [covenants, setCovenants] = useState<Covenant[]>([]);
   const [readings, setReadings] = useState<Record<string, CovenantReading>>({});

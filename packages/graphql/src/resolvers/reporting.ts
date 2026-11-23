@@ -3,6 +3,7 @@ import {
   runDataQueries, validateDataQueries, runGrid, bindFilters, resolveEntityId, GridRequest,
 } from '../lib/data-query-engine';
 import { validateNarrative } from '../lib/narrative-engine';
+import { knowledgeInstant } from '../lib/temporal-attributes';
 
 const err = (field: string, message: string, code = 'DATABASE_ERROR') => ({ field, message, code });
 
@@ -262,7 +263,7 @@ export const reportingResolvers = {
         includeAnchor: !!i.includeAnchor,
         lookups: Array.isArray(i.lookups) ? i.lookups : [],
         asOfDate: asOf ? String(asOf).slice(0, 10) : null,
-        knowledgeDate: i.knowledgeDate || null,
+        knowledgeDate: i.knowledgeDate ? knowledgeInstant(i.knowledgeDate) : null,
         // filters may carry "param" bindings (dashboard filter inputs) or literal values
         filters: bindFilters(Array.isArray(i.filters) ? i.filters : [], params),
         columns: i.columns || [],

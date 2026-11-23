@@ -13,6 +13,8 @@ import { columnSearchFilterParams } from '@/lib/grid-filters';
 import { ADD_COMPETING_SOURCE_MUTATION, ATTRIBUTE_REGISTER_QUERY, ATTRIBUTE_SECTIONS_QUERY, DATA_SOURCE_QUERY, graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { attributesInDisplayOrder, type AttributeSectionOrder } from '@/lib/attribute-layout';
 import { GRID_QUERY, type GridResultPayload } from '@/lib/reporting';
+import { aggregateNumber, attributeAggregation, gridAggFunc, numericValue, type GridAggFunc } from '@/lib/grid-aggregation';
+import { listFilterToCodes, listLabel, useListLabels } from '@/lib/list-labels';
 import { usePublishTab } from '@/lib/view-context';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 import { isRowAttributeCode } from '@/components/detail/attribute-source';
@@ -60,6 +62,7 @@ interface CatalogAttr {
   weightAttributeCode?: string | null;
   displaySection?: string | null;
   displayGroup?: number | null;
+  referenceListCode?: string | null;
 }
 
 interface Col {
@@ -73,6 +76,8 @@ interface Col {
   editable: boolean;
   aggregationType?: string | null;
   weightAttributeCode?: string | null;
+  /** Set when the attribute stores a code from a reference list; the grid shows the label. */
+  listCode?: string | null;
 }
 
 type Filter = { field: string; op: string; value?: any };
@@ -104,34 +109,14 @@ function cellText(value: any): string {
   return String(value);
 }
 
-function columnAggFunc(col: Col): string | ((params: any) => number | null) | undefined {
-  if (col.kind !== 'num') return undefined;
-  const type = String(col.aggregationType || 'NONE').toUpperCase();
-  if (type === 'SUM') return 'sum';
-  if (type === 'AVG' || type === 'AVERAGE') return 'avg';
-  if (type === 'MIN') return 'min';
-  if (type === 'MAX') return 'max';
-  if (type === 'COUNT') return 'count';
-  if (type === 'WEIGHTED_AVG') {
-    const weightCode = col.weightAttributeCode;
-    if (!weightCode) return 'avg';
-    const weightedAvg = (params: any) => {
-      let weighted = 0;
-      let weightTotal = 0;
-      for (const leaf of params.rowNode?.allLeafChildren || []) {
-        const value = filterValue(leaf.data?.[col.code], col);
-        const weight = Number(leaf.data?.[weightCode]);
-        if (typeof value === 'number' && Number.isFinite(weight)) {
-          weighted += value * weight;
-          weightTotal += weight;
-        }
-      }
-      return weightTotal ? weighted / weightTotal : null;
-    };
-    Object.defineProperty(weightedAvg, 'name', { value: 'weighted avg' });
-    return weightedAvg;
-  }
-  return undefined;
+function columnAggFunc(col: Col): GridAggFunc | undefined {
+  if (col.kind !== 'num' || col.listCode) return undefined;
+  const weightCode = col.weightAttributeCode;
+  return gridAggFunc(
+    attributeAggregation(col.aggregationType, col.dataType),
+    (data) => numericValue(data?.[col.code]),
+    weightCode ? (data) => numericValue(data?.[weightCode]) : null,
+  );
 }
 
 function formatCell(value: any, col: Pick<Col, 'kind' | 'dataType'>): string {
@@ -332,7 +317,7 @@ function rowMatchesGlobal(row: Record<string, any>, columns: Col[], term: string
 function AggregateCell(props: any) {
   const col = props.col as Col;
   if (props.node?.group || props.node?.footer) {
-    const value = props.node.aggData?.[props.column?.getColId?.() || col.code] ?? props.value;
+    const value = aggregateNumber(props.node.aggData?.[props.column?.getColId?.() || col.code] ?? props.value);
     const text = formatCell(value, col);
     return text ? <span>{text}</span> : null;
   }
@@ -510,6 +495,7 @@ export function EntityAttributeTable({
             editable: a.isEditable !== false,
             aggregationType: a.aggregationType,
             weightAttributeCode: a.weightAttributeCode,
+            listCode: a.referenceListCode || null,
           }));
         setCatalog(cols);
       }
@@ -524,13 +510,26 @@ export function EntityAttributeTable({
     [scopeKey],
   );
 
+  // List columns store a code and show its label.
+  const listLabels = useListLabels(columns.map((col) => col.listCode || '').filter(Boolean));
+  const shownValue = useCallback((value: any, col: Col) => (
+    col.listCode ? listLabel(listLabels[col.listCode], value) : formatCell(value, col)
+  ), [listLabels]);
+
+  // The database compares stored codes, so a filter typed on a list column is
+  // sent as the codes whose label (or code) matches what was typed.
+  const serverGridFilters = useMemo(() => gridFilters.map((filter) => {
+    const listCode = columns.find((col) => col.code === filter.field)?.listCode;
+    return listCode ? listFilterToCodes(filter, listLabels[listCode]) as Filter : filter;
+  }), [gridFilters, columns, listLabels]);
+
   const filters = useMemo(() => {
     if (scopedIds && scopedIds.length === 0) return [];
     const global = globalSearch.trim();
     const base: Filter[] = global ? [{ field: 'entity_code', op: 'searchAny', value: global }] : [];
     const scope: Filter[] = scopedIds ? [{ field: 'entity_id', op: 'in', value: scopedIds }] : [];
-    return [...scope, ...base, ...gridFilters];
-  }, [globalSearch, gridFilters, scopedIds]);
+    return [...scope, ...base, ...serverGridFilters];
+  }, [globalSearch, serverGridFilters, scopedIds]);
 
   const loadPage = useCallback(async () => {
     if (!catalogReady) return;
@@ -682,7 +681,7 @@ export function EntityAttributeTable({
       filters: activeChips.map((chip) => chip.label),
       columns: columns.map((col) => col.name),
       rows: rows.slice(0, 60).map((row) => Object.fromEntries(
-        columns.map((col) => [col.name, formatCell(row[col.code], col) || null]).filter(([, value]) => value !== null),
+        columns.map((col) => [col.name, shownValue(row[col.code], col) || null]).filter(([, value]) => value !== null),
       )),
     } : null,
   } : null);
@@ -723,11 +722,16 @@ export function EntityAttributeTable({
         }
         return filterValue(params.data?.[col.code], col);
       },
+      // The cell keeps the stored code (the editor saves codes); filters and the
+      // value list read the label the cell shows.
+      filterValueGetter: col.listCode
+        ? (params) => shownValue(params.data?.[col.code], col) || null
+        : undefined,
       valueFormatter: (params) => {
         const raw = params.node?.group || params.node?.footer
-          ? params.value
+          ? aggregateNumber(params.value)
           : (params.data ? params.data[col.code] : params.value);
-        return formatCell(raw, col) || '';
+        return shownValue(raw, col) || '';
       },
       valueSetter: (params) => {
         if (!params.data || params.node?.group || params.node?.footer) return false;
@@ -755,7 +759,7 @@ export function EntityAttributeTable({
       });
     }
     return defs;
-  }, [columns, embedded]);
+  }, [columns, embedded, shownValue]);
 
   return (
     <>
@@ -832,6 +836,7 @@ export function EntityAttributeTable({
             inspect.open({
               entityId: String(event.data.entity_id),
               entityName: cellText(event.data.entity_name) || cellText(event.data.entity_code),
+              entityCode: cellText(event.data.entity_code) || undefined,
               attributeCode: col.code,
               attributeName: col.name,
               dataType: col.dataType,

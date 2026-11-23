@@ -18,8 +18,10 @@ export interface ChatContext {
   attributeCode?: string;
   /** As-of date the user is browsing with. */
   asOfDate?: string;
-  /** Knowledge date the user is browsing with: what was known by the end of that day. */
+  /** Knowledge date the user is browsing with: what was known by the end of that day, or an exact instant when a certification pins it. */
   knowledgeDate?: string;
+  /** Set when a certified surface fixed the dates: what fixed them. */
+  datesPinnedBy?: string;
   /**
    * Record or configuration on screen. A hint for the current turn; it does
    * not narrow which tools the assistant may call.

@@ -252,7 +252,8 @@ export default function FundThresholdsPage() {
       </header>
 
       <div className="da-tabs" role="tablist">
-        <button type="button" onClick={() => router.push('/admin/compliance')}>Rules</button>
+        <button type="button" onClick={() => router.push('/admin/compliance')}>Dashboard</button>
+        <button type="button" onClick={() => router.push('/admin/compliance?tab=rules')}>Rules</button>
         <button type="button" className="on">Thresholds by fund</button>
       </div>
 
