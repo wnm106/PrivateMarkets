@@ -119,14 +119,14 @@ Older migrations that use `ON CONFLICT` on the four columns alone ran before thi
 Push in version order, all at once (`npx supabase db push --include-all`, after the dry run), not the 2026-11-20 files on their own:
 
 1. The pending files listed above, and anything `db push --dry-run` lists from after the 11-17 snapshot, in version order. `20261031140000` comes before `20261105160000`, which has to run before the security migrations: it creates `tenancy.entity_ancestors`, and its `tenancy.is_entity_restricted` is replaced by 20261120100000. Run after them, it would put the old function back.
-2. `20261118210000_agents` and `20261118210000_document_refile` share a version. The CLI records one row per version, so check which of the two hosted has (`ops.agents`, `public.document_refile(uuid)`) and use `npx supabase migration repair` for the other before the push.
+2. `20261118210000_agents` and `document_refile` shared a version. `document_refile` is now `20261118210001` (see "Versions made unique on 2026-11-23" below).
 3. The 2026-11-20 security migrations, last, in order: `20261120100000_tenancy_hardening` (needs `tenancy.client_auth_requirements` from 20261109180000 and `ops.workflow_service_accounts` from 20261116130000), `20261120101000_function_lockdown`, `20261120102000_compliance_tenant_scope`, `20261120103000_shared_table_reads`, `20261120104000_job_queue_scope`, `20261120105000_merge_entities_repair`, `20261120106000_bitemporal_integrity`, `20261120107000_worker_scope`, `20261120108000_relationship_history`, `20261120130000_compliance_rule_version_atomic` (and any later 20261120 file). Several replace a function "with the body already in the database"; those bodies assume every earlier file has run.
 
 ## Testing the chain
 
 `npm run db:replay` builds a database from the migrations on plain Postgres with pgvector (`scripts/db-replay/shim.sql` stands in for what a Supabase project provides, with Supabase's starting grants). CI then runs `npm run guard:db`, `npm run test:db` and `bash scripts/db-test.sh --db-url "$DATABASE_URL"`, which checks every version is recorded (a file `legacy.txt` lists as broken may be missing), loads `supabase/tests/fixture.sql` (two clients, A and B) and runs `supabase/tests/NN_*.sql`. Each test file runs in a transaction that rolls back and fails on any check that fails.
 
-`scripts/db-test.sh` without `--db-url` builds its own throwaway cluster from `supabase/tests/supabase_stub.sql` and applies every file as the Supabase CLI would. It stops at the shared 20261118210000 version and at the migrations `legacy.txt` lists, so use the replay for a full build.
+`scripts/db-test.sh` without `--db-url` builds its own throwaway cluster from `supabase/tests/supabase_stub.sql` and applies every file as the Supabase CLI would. It refuses to start if two files share a version, and it stops at the migrations `legacy.txt` lists, so use the replay for a full build.
 
 
 ## Applied on 2026-11-22: 20261122200000_nav_pack
@@ -154,3 +154,21 @@ Three things differ from a plain `db push`:
 Before: no grant crossed clients and no support session was open, so the audit's two data clean-ups changed nothing. After: all six functions exist, `metadata_register.evaluate_*_formula` run for the service role only, and the 20 free versions plus `20261123052600` are recorded.
 
 Still not applied on the hosted project: the six older migrations under "Still pending" above, left as they were.
+
+## Versions made unique on 2026-11-23
+
+Merging master into the provisional-scopes branch left eight versions used by two files each (three for `20261122200000`). The hosted project records one row per version. For each version, the file it recorded is the one named in `supabase_migrations.schema_migrations.name`, and that file kept its version. The other file was renamed. Where it sorted before the recorded file, it moved to one second before the shared version. Otherwise it moved to one second after. That way the replay order did not change.
+
+| Was | Now | On the hosted project |
+|---|---|---|
+| `20261118210000_document_refile` | `20261118210001` | applied (`public.document_refile` exists), recorded by repair |
+| `20261122160000_feed_loads_keep_history` | `20261122160001` | applied (`golden_master.supersede_value`), recorded by repair |
+| `20261122170000_entity_codes_per_client` | `20261122165959` | applied (`entity_instances.entity_id_for_code`), recorded by repair |
+| `20261122180000_golden_source_as_known` | `20261122175959` | applied (`golden_master.golden_source_history`), recorded by repair |
+| `20261122190000_explain_golden_source` | `20261122185959` | applied (`golden_master.explain_golden_source`), recorded by repair |
+| `20261122200000_certifications` | `20261122195959` | **not applied**: no `golden_master.certifications` |
+| `20261122200000_population_preview_in_database` | `20261122200001` | applied (`compliance.preview_population`), recorded by repair |
+| `20261122210000_reresolve_golden_in_batches` | `20261122210001` | applied (`golden_master.reresolve_golden_sources`), recorded by repair |
+| `20261122220000_grid_lookup_entity_id` | `20261122220001` | **not applied**: `reporting.grid` does not return `<alias>.entity_id` |
+
+The recorded files kept their versions: `agents`, `entity_views`, `surface_blueprints`, `provisional_scopes`, `relationship_reads_set_check`, `nav_pack`, `dq_rules_describe_exceptions` and `chat_held_action_uses`. `20261123120000_compliance_results_as_of` is not applied there either.
