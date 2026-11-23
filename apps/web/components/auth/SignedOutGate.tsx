@@ -20,7 +20,7 @@ export function SignedOutGate({ onLeave }: { onLeave?: () => void }) {
 
     const leave = () => {
       onLeave?.();
-      window.location.replace(loginPath(pathname));
+      window.location.replace(loginPath(`${pathname}${window.location.search}`));
     };
 
     let cancelled = false;

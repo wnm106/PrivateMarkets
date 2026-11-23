@@ -14,7 +14,7 @@ import { AttributeInspectProvider } from '@/components/detail/AttributeInspect';
 import type { SurfaceNavLink } from '@/lib/surface-links';
 
 /** Routes rendered without the authenticated application chrome. */
-const BARE_PATHS = ['/welcome', '/login', '/no-access', '/portal', '/excel'];
+const BARE_PATHS = ['/welcome', '/login', '/no-access', '/portal', '/excel', '/oauth'];
 
 export function AppChrome({
   children,
