@@ -12,10 +12,15 @@
 #   db <schema.function> <table>
 #   ts <path> <table>
 db compliance.descendants_of entity_relationships
+db compliance.evaluate_pre_trade master_entities
+db compliance.evaluate_rule master_entities
 db compliance.get_anchor_entities master_entities
 db compliance.group_membership entity_relationships
+db compliance.latest_results_as_of master_entities
 db compliance.materialize_proforma_legs master_entities
+db compliance.preview_population master_entities
 db compliance.proforma_snapshot master_entities
+db compliance.result_contributor_values master_entities
 db compliance.security_test_metrics master_entities
 db compliance.walk_relationship entity_relationships
 db data_quality.entity_attribute_snapshot entity_attribute_values
@@ -28,6 +33,7 @@ db docs.document_json master_entities
 db docs.set_entities master_entities
 db entity_instances.enforce_attribute_value_client master_entities
 db entity_instances.enforce_relationship_client master_entities
+db entity_instances.entity_id_for_code master_entities
 db entity_instances.get_intersection_full master_entities
 db entity_instances.guard_entity_delete entity_attribute_values
 db entity_instances.guard_entity_delete entity_relationships
@@ -48,6 +54,8 @@ db golden_master.describe_calc_component master_entities
 db golden_master.enqueue_batch_dependents entity_relationships
 db golden_master.enqueue_for_attribute_change master_entities
 db golden_master.enqueue_relationship_edge master_entities
+db golden_master.explain_golden_source entity_attribute_values
+db golden_master.explain_golden_source master_entities
 db golden_master.expression_only_batch_slices entity_attribute_values
 db golden_master.expression_only_batch_slices entity_relationships
 db golden_master.golden_date entity_attribute_values
@@ -62,6 +70,7 @@ db golden_master.related_ids entity_relationships
 db golden_master.related_latest entity_relationships
 db golden_master.related_latest master_entities
 db golden_master.related_one entity_relationships
+db golden_master.reresolve_golden_sources entity_attribute_values
 db golden_master.series_batch_slices entity_attribute_values
 db golden_master.series_batch_slices entity_relationships
 db golden_master.shown_date entity_attribute_values
@@ -69,6 +78,7 @@ db golden_master.split_valid_time entity_attribute_values
 db golden_master.statement_covenant master_entities
 db golden_master.statement_series entity_relationships
 db golden_master.statement_series master_entities
+db golden_master.supersede_value entity_attribute_values
 db golden_master.winning_attribute_values entity_attribute_values
 db golden_master.write_derived_slices entity_attribute_values
 db golden_master.write_value entity_attribute_values
@@ -122,6 +132,7 @@ db reporting.resolve_entities entity_relationships
 db reporting.resolve_entities master_entities
 db reporting.value_query entity_attribute_values
 db reporting.value_query master_entities
+db tenancy.relationship_endpoint_ids master_entities
 # From 20261122160000_entity_views.sql, uncommitted when this list was made. Remove if that migration does not land.
 db reporting.view_values entity_attribute_values
 db tenancy.entity_access_rows master_entities

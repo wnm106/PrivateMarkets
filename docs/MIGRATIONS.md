@@ -166,9 +166,13 @@ Merging master into the provisional-scopes branch left eight versions used by tw
 | `20261122170000_entity_codes_per_client` | `20261122165959` | applied (`entity_instances.entity_id_for_code`), recorded by repair |
 | `20261122180000_golden_source_as_known` | `20261122175959` | applied (`golden_master.golden_source_history`), recorded by repair |
 | `20261122190000_explain_golden_source` | `20261122185959` | applied (`golden_master.explain_golden_source`), recorded by repair |
-| `20261122200000_certifications` | `20261122195959` | **not applied**: no `golden_master.certifications` |
+| `20261122200000_certifications` | `20261122195959` | was not applied (no `golden_master.certifications`); applied and recorded the same day |
 | `20261122200000_population_preview_in_database` | `20261122200001` | applied (`compliance.preview_population`), recorded by repair |
 | `20261122210000_reresolve_golden_in_batches` | `20261122210001` | applied (`golden_master.reresolve_golden_sources`), recorded by repair |
-| `20261122220000_grid_lookup_entity_id` | `20261122220001` | **not applied**: `reporting.grid` does not return `<alias>.entity_id` |
+| `20261122220000_grid_lookup_entity_id` | `20261122220001` | was not applied (`reporting.grid` did not return `<alias>.entity_id`); applied and recorded the same day |
 
-The recorded files kept their versions: `agents`, `entity_views`, `surface_blueprints`, `provisional_scopes`, `relationship_reads_set_check`, `nav_pack`, `dq_rules_describe_exceptions` and `chat_held_action_uses`. `20261123120000_compliance_results_as_of` is not applied there either.
+The recorded files kept their versions: `agents`, `entity_views`, `surface_blueprints`, `provisional_scopes`, `relationship_reads_set_check`, `nav_pack`, `dq_rules_describe_exceptions` and `chat_held_action_uses`.
+
+`20261122195959_certifications`, `20261122220001_grid_lookup_entity_id` and `20261123120000_compliance_results_as_of` were then applied in version order, in one transaction, after a dry run that rolled back, and recorded.
+
+The merge also brought 11 database functions with direct reads that were not on `scripts/guard/direct-reads.txt`. Master wrote most of them before the list existed. Two came from this branch's own new files (`latest_results_as_of`, `relationship_endpoint_ids`). They were added to the list, so the static guard flags those 11 lines once, on that commit.
