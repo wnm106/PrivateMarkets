@@ -2,6 +2,7 @@ import { browserStore, ExcelAuth, SESSION_KEY } from './lib/auth';
 import { FUNCTION_ID } from './lib/formula';
 import { GraphQLClient } from './lib/graphql';
 import { TapClient } from './lib/tap-client';
+import { TableSync } from './office/table-sync';
 import { ensureShortName, recalculateAll } from './office/workbook';
 import { mountPane } from './ui/pane';
 
@@ -47,6 +48,7 @@ const store = browserStore();
 const auth = new ExcelAuth(store);
 const graphql = new GraphQLClient(`${window.location.origin}/api/graphql`, auth);
 const tap = new TapClient(graphql);
+const tables = new TableSync(graphql, auth);
 
 // Another workbook's add-in signed in, refreshed or signed out.
 window.addEventListener('storage', (event) => {
@@ -74,7 +76,7 @@ function start(): void {
   const root = document.getElementById('app');
   if (root && !mounted) {
     try {
-      mountPane(root, { auth, graphql, tap, persistentSignIn: store.persistent });
+      mountPane(root, { auth, graphql, tap, persistentSignIn: store.persistent, tables });
       mounted = true;
     } catch (error) {
       showStartupProblem(describe(error));
@@ -96,6 +98,9 @@ function start(): void {
 
   // Opening the pane is the moment to make =TAP(...) available in this workbook.
   if (mounted && auth.email()) void ensureShortName();
+
+  // Synced tables: watch their filter cells, and catch up on any changed while the add-in was closed.
+  tables.start().catch((error) => console.error('Synced tables could not start:', error));
 }
 
 if (typeof Office === 'undefined') {
