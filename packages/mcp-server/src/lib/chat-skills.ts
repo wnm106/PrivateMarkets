@@ -674,7 +674,7 @@ const DQ_RULE_SLOTS: SlotDef[] = [
     id: 'expression',
     label: 'Failing condition',
     prompt: 'Here is the condition that marks a failing record. Does it say what you mean?',
-    clarity: 'A SQL predicate that is TRUE for records that FAIL, tried with preview_dq_rule on real records. One that fails every record is probably the wrong way round.',
+    clarity: 'A SQL predicate that is TRUE for records that FAIL, tried with preview_dq_rule on real records. One that fails every record is probably the wrong way round. A blank meets no condition about its value, so MARKET_CAP < 0 does not fail a blank market cap.',
     required: true,
     identity: true,
     dependents: ['specAccepted'],

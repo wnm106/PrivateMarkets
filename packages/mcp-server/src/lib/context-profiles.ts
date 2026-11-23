@@ -46,7 +46,7 @@ export const CONTEXT_PROFILES: Record<ToolContext, ContextProfile> = {
     name: 'data-quality',
     description: 'Managing data quality rules and resolving exceptions',
     allowedCategories: ['domain-read', 'dq', 'dq-admin'],
-    systemInstruction: `You are helping users manage data quality. You can view DQ exceptions, resolve them, and get DQ summaries. You can also read entity data for context. Focus on helping users understand and resolve data quality issues. DQ rule expressions are SQL predicates that are true for records that fail the rule, not predicates that describe passing records.`,
+    systemInstruction: `You are helping users manage data quality. You can view DQ exceptions, resolve them, and get DQ summaries. You can also read entity data for context. Focus on helping users understand and resolve data quality issues. DQ rule expressions are SQL predicates that are true for records that fail the rule, not predicates that describe passing records. A blank value meets no condition about its value: MARKET_CAP < 0 does not fail a blank market cap, and a missing required field is reported under availability.`,
   },
   'workflow': {
     name: 'workflow',

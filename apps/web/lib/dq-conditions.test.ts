@@ -20,6 +20,8 @@ describe('dq conditions', () => {
       'ISSUE_DATE <= END_OF_MONTH(PRICING_DATE)',
       'INTEREST_COVERAGE_RATIO >= MIN_INTEREST_COVERAGE',
       "NAME LIKE '%FUND%' AND NAME ILIKE '%usd%'",
+      "CURRENCY !~ '^[A-Z]{3}$'",
+      "PAYMENT_STATUS NOT IN ('EXPECTED', 'RECEIVED') AND CASHFLOW_DATE < CURRENT_DATE",
     ];
     for (const expression of cases) {
       const out = roundTrip(expression);

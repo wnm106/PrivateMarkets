@@ -23,7 +23,7 @@
     "db:seed": "supabase db seed",
     "db:reset": "supabase db reset --local --yes",
     "db:replay": "bash scripts/db-replay/replay.sh",
-    "test:db": "tsx scripts/db-tests/capacity-parity.ts && tsx scripts/db-tests/workflow-notices.ts && tsx scripts/db-tests/report-trigger.ts && tsx scripts/db-tests/provisional-scopes.ts",
+    "test:db": "tsx scripts/db-tests/capacity-parity.ts && tsx scripts/db-tests/workflow-notices.ts && tsx scripts/db-tests/report-trigger.ts && tsx scripts/db-tests/provisional-scopes.ts && tsx scripts/db-tests/dq-exception-rules.ts",
     "db:studio": "supabase studio",
     "generate:graphql": "graphql-codegen --config codegen.ts",
     "clean": "turbo run clean && rm -rf node_modules"

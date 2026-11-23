@@ -20,6 +20,8 @@ import {
   applyRhs,
   clauseIssue,
   isComparison,
+  isListOperator,
+  isPatternOperator,
   newClause,
   parseExpression,
   rhsText,
@@ -37,7 +39,9 @@ const TO_ROW: Record<string, string> = {
   '<': 'lt',
   '<=': 'lte',
   IN: 'in',
+  'NOT IN': 'not_in',
   '~': 'matches',
+  '!~': 'not_matches',
   LIKE: 'like',
   ILIKE: 'ilike',
 };
@@ -52,7 +56,9 @@ const FROM_ROW: Record<string, DqOperator> = {
   lt: '<',
   lte: '<=',
   in: 'IN',
+  not_in: 'NOT IN',
   matches: '~',
+  not_matches: '!~',
   like: 'LIKE',
   ilike: 'ILIKE',
 };
@@ -67,12 +73,14 @@ export const DQ_CONDITION_OPERATORS: ConditionOperator[] = [
   { value: 'lt', label: 'is less than' },
   { value: 'lte', label: 'is at most' },
   { value: 'in', label: 'is one of' },
+  { value: 'not_in', label: 'is not one of' },
   { value: 'matches', label: 'matches pattern', plainValue: true, placeholder: '^[A-Z]{2}$' },
+  { value: 'not_matches', label: 'does not match pattern', plainValue: true, placeholder: '^[A-Z]{3}$' },
   { value: 'like', label: 'is like', plainValue: true, placeholder: '%USD%' },
   { value: 'ilike', label: 'is like, ignoring case', plainValue: true, placeholder: '%usd%' },
 ];
 
-const PLAIN = new Set(['matches', 'like', 'ilike']);
+const PLAIN = new Set(['matches', 'not_matches', 'like', 'ilike']);
 const NO_VALUE = new Set(['is_null', 'is_not_null']);
 export const DQ_RIGHT_HINT = 'Use a value, another attribute, or a date such as END_OF_MONTH(CURRENT_DATE).';
 
@@ -117,8 +125,8 @@ function splitList(text: string): string[] {
 
 function rowRightText(clause: DqClause): string {
   if (!(clause.operator === 'IS NULL' || clause.operator === 'IS NOT NULL')) {
-    if (clause.operator === 'IN') return clause.values.join(', ');
-    if (clause.operator === '~' || clause.operator === 'LIKE' || clause.operator === 'ILIKE') return clause.value;
+    if (isListOperator(clause.operator)) return clause.values.join(', ');
+    if (isPatternOperator(clause.operator)) return clause.value;
     if (clause.valueKind === 'text' && clause.value) return quoteText(clause.value);
     return rhsText(clause);
   }
@@ -207,7 +215,7 @@ export function rowsToExpression(
     base.join = index === 0 ? null : group !== previousGroup ? 'OR' : row.logicOperator === 'OR' ? 'OR' : 'AND';
     previousGroup = group;
     const text = (row.rightText ?? row.value ?? '').trim();
-    if (operator === 'IN') base.values = splitList(text);
+    if (isListOperator(operator)) base.values = splitList(text);
     else if (PLAIN.has(row.operator)) base.value = row.rightText ?? row.value ?? '';
     else if (isComparison(operator)) {
       const patch = text ? applyRhs(base, text) : { value: '' };

@@ -181,7 +181,7 @@ export function DqRuleForm({ initial, lockIdentity, onSubmit, onCancel, submitti
           </button>
           <span className="rf-op" aria-hidden>→</span>
           <button type="button" className="rf-term num" onClick={() => jump('rb-conditions')}>
-            <span className="rf-k">A record passes when</span>
+            <span className="rf-k">An exception is raised when</span>
             <span className={`rf-v ${conditionText ? '' : 'rf-empty'}`}>{conditionText || 'Not defined yet'}</span>
             <span className="rf-s">{conditionCount ? `${conditionCount} condition${conditionCount > 1 ? 's' : ''}` : 'No conditions'}</span>
           </button>
@@ -302,7 +302,7 @@ export function DqRuleForm({ initial, lockIdentity, onSubmit, onCancel, submitti
               rows={3}
               style={{ resize: 'vertical' }}
               value={form.ruleDescription}
-              placeholder="What this rule checks, and when a blank value should pass"
+              placeholder="What this rule checks, and what an exception means"
               onChange={(event) => patch({ ruleDescription: event.target.value })}
             />
           </div>
@@ -310,7 +310,7 @@ export function DqRuleForm({ initial, lockIdentity, onSubmit, onCancel, submitti
       </section>
 
       <section className="rb-step tone-num" id="rb-conditions" data-cond-error={errors.ruleExpression ? '' : undefined}>
-        <StepHead n={2} title="Conditions" hint="When does a record pass?" tone="num" />
+        <StepHead n={2} title="Conditions" hint="When is an exception raised?" tone="num" />
         <div className="rb-body2">
           {!catalogReady ? (
             <div aria-busy="true" style={{ padding: '16px 4px', color: 'var(--ink-3)', fontSize: '13px' }}>Loading…</div>

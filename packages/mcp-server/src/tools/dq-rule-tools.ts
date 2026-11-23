@@ -45,7 +45,7 @@ const previewDQRule: ToolDefinition = {
     type: 'object',
     properties: {
       domainCode: { type: 'string', description: 'Entity type code from list_domain_types' },
-      ruleExpression: { type: 'string', description: 'SQL predicate that is true for records that fail' },
+      ruleExpression: { type: 'string', description: 'Conditions that raise the exception, for example MARKET_CAP < 0. A record fails when it meets every AND condition of any OR group. A blank value meets no condition about its value; test a blank only with ATTRIBUTE IS NULL.' },
       attributeCode: { type: 'string', description: 'The attribute the rule is about, when it has one' },
     },
     required: ['domainCode', 'ruleExpression'],
@@ -88,7 +88,7 @@ const previewDQRule: ToolDefinition = {
 
 const createDQRule: ToolDefinition = {
   name: 'create_dq_rule',
-  description: `Create a data quality rule. Call list_dq_rules first so you do not duplicate one, and preview_dq_rule so the expression is known to run. ruleType is ${RULE_TYPES.join(', ')}. severity is ${SEVERITIES.join(', ')}. ruleExpression is TRUE for records that FAIL. domainCode comes from list_domain_types and attributeCode from search_attributes.`,
+  description: `Create a data quality rule. Call list_dq_rules first so you do not duplicate one, and preview_dq_rule so the expression is known to run. ruleType is ${RULE_TYPES.join(', ')}. severity is ${SEVERITIES.join(', ')}. ruleExpression describes the exception: TRUE for records that FAIL. A blank value meets no condition about its value, so write MARKET_CAP < 0, not MARKET_CAP IS NULL OR MARKET_CAP < 0; whether a field must be present is the attribute's required flag. domainCode comes from list_domain_types and attributeCode from search_attributes.`,
   category: 'dq-admin',
   inputSchema: {
     type: 'object',
@@ -99,7 +99,7 @@ const createDQRule: ToolDefinition = {
       attributeCode: { type: 'string' },
       ruleType: { type: 'string', enum: RULE_TYPES },
       severity: { type: 'string', enum: SEVERITIES },
-      ruleExpression: { type: 'string', description: 'SQL predicate that is true for records that fail' },
+      ruleExpression: { type: 'string', description: 'Conditions that raise the exception, for example MARKET_CAP < 0. A record fails when it meets every AND condition of any OR group. A blank value meets no condition about its value; test a blank only with ATTRIBUTE IS NULL.' },
       ruleDescription: { type: 'string' },
       thresholdValue: { type: 'number' },
       autoRemediate: { type: 'boolean' },

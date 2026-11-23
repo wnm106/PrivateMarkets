@@ -30,10 +30,10 @@ The **Data Quality (DQ)** framework ensures data accuracy, completeness, and con
 
 | Type | Purpose | Example failure predicate |
 |------|---------|---------|
-| COMPLETENESS | Ensure required data exists | `name IS NULL` |
-| VALIDITY | Validate value format | `currency IS NULL OR currency NOT IN ('USD', 'EUR', 'GBP')` |
-| CONSISTENCY | Check cross-field logic | `amount IS NULL OR amount <= 0 OR currency IS NULL` |
-| TIMELINESS | Verify data freshness | `updated_at IS NULL OR updated_at <= NOW() - INTERVAL '30 days'` |
+| COMPLETENESS | Required data exists | Not a rule: mark the attribute required. Availability reports it. |
+| VALIDITY | Value format or range | `CURRENCY NOT IN ('USD', 'EUR', 'GBP')` |
+| CONSISTENCY | Cross-field logic | `MATURITY_DATE <= ISSUANCE_DATE` |
+| TIMELINESS | Dates against the as-of date | `DEAL_DATE > CURRENT_DATE` |
 | UNIQUENESS | Prevent duplicates | `duplicate_count > 1` |
 
 ## DQ Severity Levels
@@ -47,27 +47,26 @@ The **Data Quality (DQ)** framework ensures data accuracy, completeness, and con
 
 ## Rule Expression Syntax
 
-`rule_expression` is a SQL boolean predicate that is **true for records that fail**. Running it as a `WHERE` clause returns the violation population. A record passes only when the predicate is false. `NULL` does not match, so include `IS NULL` when a missing value is a failure.
+`rule_expression` describes the exception. A record fails when it meets every condition joined by AND, or every condition of any one group when groups are joined by OR. A record that meets no group passes.
+
+A blank value meets no condition about its value: `MARKET_CAP < 0` is not met by a blank market cap, and neither is `MARKET_CAP >= 0`. Whether a field must be present is the attribute's required flag, measured under availability. Test a blank only when a rule needs it, with `ATTRIBUTE IS NULL`, usually beside another condition. Conditions are compiled by `data_quality.compile_rule_expression`; supported forms are `IS [NOT] NULL`, comparisons with a number, a date, `CURRENT_DATE` or another attribute, `[NOT] IN (...)`, `~` and `!~` with a quoted pattern, and `IS [NOT] UNDER`.
 
 ```sql
--- Missing value
-name IS NULL
-
--- Value not in the allowed set (missing counts as a failure)
-currency IS NULL OR currency NOT IN ('USD', 'EUR', 'GBP')
-
 -- Out of range
-price IS NULL OR price < 0
-nav IS NULL OR nav NOT BETWEEN 10 AND 100
+MARKET_CAP < 0
+AMORT_PERCENT_OF_ORIGINAL < -100 OR AMORT_PERCENT_OF_ORIGINAL > 100
 
--- Pattern mismatch
-isin IS NULL OR isin !~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$'
+-- Value not in the allowed set
+PAYMENT_STATUS NOT IN ('EXPECTED', 'RECEIVED', 'PAID')
 
--- Stale timestamp
-updated_at IS NULL OR updated_at <= NOW() - INTERVAL '30 days'
+-- Format
+ISIN !~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$'
 
--- Custom failure
-CASE WHEN status = 'CLOSED' AND close_date IS NULL THEN true ELSE false END
+-- One field against another
+CALL_END_DATE < CALL_DATE
+
+-- Needed only when another field says so
+IS_DEFAULTED NOT IN ('false') AND DEFAULT_DATE IS NULL
 ```
 
 ## Creating a DQ Rule

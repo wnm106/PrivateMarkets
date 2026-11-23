@@ -14,7 +14,9 @@ export type DqOperator =
   | '<'
   | '<='
   | 'IN'
+  | 'NOT IN'
   | '~'
+  | '!~'
   | 'LIKE'
   | 'ILIKE';
 
@@ -45,7 +47,7 @@ export interface DqClause {
 
 export const DQ_OPERATORS: Array<{ value: DqOperator; label: string; hint: string }> = [
   { value: 'IS NOT NULL', label: 'is present', hint: 'The attribute has a value.' },
-  { value: 'IS NULL', label: 'is blank', hint: 'A blank value passes. Use or when a missing value should not fail the other checks.' },
+  { value: 'IS NULL', label: 'is blank', hint: 'The attribute has no value. Only this condition is met by a blank; every other condition is not.' },
   { value: '=', label: 'equals', hint: 'Compare with a value or another attribute.' },
   { value: '!=', label: 'does not equal', hint: 'Compare with a value or another attribute.' },
   { value: '>', label: 'is greater than', hint: 'Compare with a value or another attribute.' },
@@ -53,7 +55,9 @@ export const DQ_OPERATORS: Array<{ value: DqOperator; label: string; hint: strin
   { value: '<', label: 'is less than', hint: 'Compare with a value or another attribute.' },
   { value: '<=', label: 'is at most', hint: 'Compare with a value or another attribute.' },
   { value: 'IN', label: 'is one of', hint: 'Matching ignores case. Paste a list to add many values at once.' },
+  { value: 'NOT IN', label: 'is not one of', hint: 'A value outside the list. Matching ignores case. A blank is not met.' },
   { value: '~', label: 'matches pattern', hint: 'A regular expression, such as ^[A-Z]{2}$ for two letters.' },
+  { value: '!~', label: 'does not match pattern', hint: 'A value that breaks the format, such as ^[A-Z]{3}$ for a currency code. A blank is not met.' },
   { value: 'LIKE', label: 'is like', hint: '% matches any text and _ matches one character. Case sensitive.' },
   { value: 'ILIKE', label: 'is like, ignoring case', hint: 'Same as is like, without case sensitivity.' },
 ];
@@ -65,12 +69,12 @@ export const DQ_REFERENCES: Array<{ token: string; detail: string }> = [
   { token: 'START_OF_QUARTER(date) / END_OF_QUARTER(date)', detail: 'The first or last day of the calendar quarter containing that date.' },
   { token: 'START_OF_YEAR(date) / END_OF_YEAR(date)', detail: 'The first or last day of the calendar year containing that date.' },
   { token: 'Attribute', detail: 'Another attribute on the same record, for example INTEREST_COVERAGE_RATIO >= MIN_INTEREST_COVERAGE.' },
-  { token: 'AND', detail: 'Both conditions must pass. AND is applied before OR.' },
-  { token: 'OR', detail: 'Either side can pass. Use this with “is blank” so a missing value does not fail a format check.' },
-  { token: 'IS NULL', detail: 'The attribute is blank.' },
+  { token: 'AND', detail: 'The exception is raised only when both conditions are met. AND is applied before OR.' },
+  { token: 'OR', detail: 'The exception is raised when either side is met in full.' },
+  { token: 'IS NULL', detail: 'The attribute is blank. A blank meets no other condition, so MARKET_CAP < 0 is not met by a blank market cap.' },
   { token: 'IS NOT NULL', detail: 'The attribute has a value.' },
-  { token: 'IN', detail: "One of a quoted list, for example COUNTRY IN ('US', 'GB')." },
-  { token: '~', detail: "A regular expression in quotes, for example ISIN ~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$'." },
+  { token: 'IN / NOT IN', detail: "In or outside a quoted list, for example COUNTRY NOT IN ('US', 'GB')." },
+  { token: '~ / !~', detail: "Matches, or does not match, a regular expression in quotes, for example ISIN !~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$'." },
   { token: 'LIKE / ILIKE', detail: 'A pattern in quotes. % matches any text and _ matches one character.' },
 ];
 
@@ -95,6 +99,16 @@ export function dateFnByToken(token: string): DqDateFn | null {
   const key = token.trim().toUpperCase();
   if (key === 'YESTERDAY') return 'previous_day';
   return (DQ_DATE_FNS.find((item) => item.token === key)?.value as DqDateFn | undefined) || null;
+}
+
+/** IN and NOT IN take a list of values. */
+export function isListOperator(operator: DqOperator) {
+  return operator === 'IN' || operator === 'NOT IN';
+}
+
+/** Operators whose value is a pattern typed as is. */
+export function isPatternOperator(operator: DqOperator) {
+  return operator === '~' || operator === '!~' || operator === 'LIKE' || operator === 'ILIKE';
 }
 
 export function operatorNeedsValue(operator: DqOperator) {
@@ -148,15 +162,14 @@ function serializeClause(clause: DqClause): string {
   const attribute = clause.attribute.trim();
   if (!attribute) return '';
   if (clause.operator === 'IS NULL' || clause.operator === 'IS NOT NULL') return `${attribute} ${clause.operator}`;
-  if (clause.operator === 'IN') {
+  if (isListOperator(clause.operator)) {
     const items = clause.values.map((item) => item.trim()).filter(Boolean);
     if (!items.length) return '';
-    return `${attribute} IN (${items.map(quote).join(', ')})`;
+    return `${attribute} ${clause.operator} (${items.map(quote).join(', ')})`;
   }
-  if (clause.operator === '~' || clause.operator === 'LIKE' || clause.operator === 'ILIKE') {
+  if (isPatternOperator(clause.operator)) {
     if (!clause.value) return '';
-    const op = clause.operator === '~' ? '~' : clause.operator;
-    return `${attribute} ${op} ${quote(clause.value)}`;
+    return `${attribute} ${clause.operator} ${quote(clause.value)}`;
   }
   if (clause.valueKind === 'current_date' || clause.valueKind === 'relative') {
     return `${attribute} ${clause.operator} ${serializeDateCall(clause.dateFn, '')}`;
@@ -246,11 +259,11 @@ export function describeClause(clause: DqClause, name: string, nameFor: (code: s
   const subject = name.trim() || 'this attribute';
   const op = DQ_OPERATORS.find((item) => item.value === clause.operator)?.label || clause.operator.toLowerCase();
   if (!operatorNeedsValue(clause.operator)) return `${subject} ${op}`;
-  if (clause.operator === 'IN') {
+  if (isListOperator(clause.operator)) {
     const values = clause.values.map((item) => item.trim()).filter(Boolean);
     return values.length ? `${subject} ${op} ${previewList(values)}` : `${subject} ${op} the values you add`;
   }
-  if (clause.operator === '~' || clause.operator === 'LIKE' || clause.operator === 'ILIKE') {
+  if (isPatternOperator(clause.operator)) {
     return clause.value ? `${subject} ${op} “${clause.value}”` : `${subject} ${op} a pattern`;
   }
   return `${subject} ${op} ${describeComparisonTarget(clause, nameFor)}`;
@@ -288,8 +301,8 @@ export function formatExpression(expression: string): string {
 export function clauseIssue(clause: DqClause, dataType?: string | null): string | null {
   if (!clause.attribute.trim()) return 'Choose an attribute.';
   if (!operatorNeedsValue(clause.operator)) return null;
-  if (clause.operator === 'IN') return clause.values.some((item) => item.trim()) ? null : 'Add at least one allowed value.';
-  if (clause.operator === '~' || clause.operator === 'LIKE' || clause.operator === 'ILIKE') {
+  if (isListOperator(clause.operator)) return clause.values.some((item) => item.trim()) ? null : 'Add at least one value.';
+  if (isPatternOperator(clause.operator)) {
     return clause.value ? null : 'Enter the pattern.';
   }
   if (clause.valueKind === 'current_date' || clause.valueKind === 'relative') return null;
@@ -391,8 +404,8 @@ function parseOne(text: string): DqClause | null {
   if (match) return { ...clause, attribute: match[1], operator: 'IS NOT NULL' };
   match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+IS\s+NULL$/i);
   if (match) return { ...clause, attribute: match[1], operator: 'IS NULL' };
-  match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'((?:[^']|'')*)'$/i);
-  if (match) return { ...clause, attribute: match[1], operator: '~', valueKind: 'text', value: unquote(match[2]), dateFn: null };
+  match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(!~|~)\s*'((?:[^']|'')*)'$/i);
+  if (match) return { ...clause, attribute: match[1], operator: match[2] as DqOperator, valueKind: 'text', value: unquote(match[3]), dateFn: null };
   match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+(I?LIKE)\s*'((?:[^']|'')*)'$/i);
   if (match) {
     return {
@@ -404,11 +417,12 @@ function parseOne(text: string): DqClause | null {
       dateFn: null,
     };
   }
-  match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+IN\s*\((.*)\)\s*$/i);
+  match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+(NOT\s+IN|IN)\s*\((.*)\)\s*$/i);
   if (match) {
-    const values = [...match[2].matchAll(/'((?:[^']|'')*)'/g)].map((item) => unquote(item[1]));
+    const values = [...match[3].matchAll(/'((?:[^']|'')*)'/g)].map((item) => unquote(item[1]));
     if (!values.length) return null;
-    return { ...clause, attribute: match[1], operator: 'IN', values, dateFn: null };
+    const operator: DqOperator = /^NOT/i.test(match[2]) ? 'NOT IN' : 'IN';
+    return { ...clause, attribute: match[1], operator, values, dateFn: null };
   }
   match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(>=|<=|<>|!=|=|>|<)\s*(.+)$/i);
   if (match) {

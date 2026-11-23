@@ -415,7 +415,7 @@ function qualityTabInfo(where: string) {
     'dq-quality': {
       label: 'Data quality: Quality',
       purpose: `Whether ${where} pass the data quality rules, by rule.`,
-      howToRead: `A rule expression is true for records that fail it. failing counts records failing the rule, accepted are failures someone has accepted. resolved and introduced compare with the start of the period. ${SCORE_READING}`,
+      howToRead: `A rule expression describes the exception: a record fails when it meets every condition of any group. A blank value meets no condition about its value, so blanks are counted under availability, not here. failing counts records failing the rule, accepted are failures someone has accepted. resolved and introduced compare with the start of the period. ${SCORE_READING}`,
     },
     'dq-trajectory': {
       label: 'Data quality: Trajectory',

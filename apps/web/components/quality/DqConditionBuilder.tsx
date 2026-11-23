@@ -74,7 +74,7 @@ export function DqConditionBuilder({ expression, attributes, domains, preview, o
     <div className="dq-builder">
       <div className="dq-summary">
         <div>
-          <div className="dq-kicker">A record passes when</div>
+          <div className="dq-kicker">An exception is raised when</div>
           <p>{summary}</p>
           {!rawMode && issue && rows.length > 0 && <p className="dq-note">Finish the marked condition before saving.</p>}
         </div>
@@ -120,7 +120,7 @@ export function DqConditionBuilder({ expression, attributes, domains, preview, o
           patchRight={(text, operator) => dqPatchRight(text, operator)}
           allowMixed={false}
           emptyText="No conditions yet. A rule needs at least one."
-          leadText="Record passes when"
+          leadText="Exception when"
           preview={preview}
           onCommit={setRows}
         />

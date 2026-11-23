@@ -14,6 +14,8 @@ import {
   describeRule,
   formatExpression,
   isComparison,
+  isListOperator,
+  isPatternOperator,
   literalKindFor,
   newClause,
   operatorNeedsValue,
@@ -44,12 +46,12 @@ interface DqExpressionEditorProps {
 const OPERATOR_GROUPS: Array<{ label: string; values: DqOperator[] }> = [
   { label: 'Presence', values: ['IS NOT NULL', 'IS NULL'] },
   { label: 'Comparison', values: ['=', '!=', '>', '>=', '<', '<='] },
-  { label: 'List', values: ['IN'] },
-  { label: 'Pattern', values: ['~', 'LIKE', 'ILIKE'] },
+  { label: 'List', values: ['IN', 'NOT IN'] },
+  { label: 'Pattern', values: ['~', '!~', 'LIKE', 'ILIKE'] },
 ];
 
 const GUIDANCE: Partial<Record<DqOperator, string>> = {
-  'IS NULL': 'A blank value passes. Use or when a missing value should not fail the other checks.',
+  'IS NULL': 'Met only when the attribute has no value. A blank meets no other condition.',
   '~': 'A regular expression, such as ^[A-Z]{2}$ for two letters.',
   LIKE: '% matches any text and _ matches one character. Case sensitive.',
   ILIKE: 'Same as is like, without case sensitivity.',
@@ -135,7 +137,7 @@ export function DqExpressionEditor({ expression, attributes, domains = [], onCha
     <div className="dq-builder">
       <div className="dq-summary">
         <div>
-          <div className="dq-kicker">A record passes when</div>
+          <div className="dq-kicker">An exception is raised when</div>
           <p>{summary}</p>
           {!rawMode && mixedJoins && <p className="dq-note">And is checked before or.</p>}
           {!rawMode && issue && <p className="dq-note">Finish the marked condition before saving.</p>}
@@ -228,7 +230,7 @@ export function DqExpressionEditor({ expression, attributes, domains = [], onCha
                   )}
                 </div>
                 <ClauseHint clause={clause} />
-                {clause.operator === 'IN' && (
+                {isListOperator(clause.operator) && (
                   <InValues values={clause.values} onChange={(values) => update(clause.id, { values })} />
                 )}
                 {issues[index] && <p className="dq-clause-issue">{issues[index]}</p>}
@@ -289,14 +291,14 @@ function ValueSlot({
   const [draft, setDraft] = useState(canonical);
   useEffect(() => { setDraft(canonical); }, [canonical]);
 
-  if (!operatorNeedsValue(clause.operator) || clause.operator === 'IN') return null;
-  if (clause.operator === '~' || clause.operator === 'LIKE' || clause.operator === 'ILIKE') {
+  if (!operatorNeedsValue(clause.operator) || isListOperator(clause.operator)) return null;
+  if (isPatternOperator(clause.operator)) {
     return (
       <input
         className="text-input dq-value"
         aria-label="Pattern"
         value={clause.value}
-        placeholder={clause.operator === '~' ? '^[A-Z]{2}$' : '%USD%'}
+        placeholder={clause.operator === '~' || clause.operator === '!~' ? '^[A-Z]{2}$' : '%USD%'}
         onChange={(event) => onChange({ value: event.target.value, valueKind: 'text', dateFn: null })}
       />
     );
