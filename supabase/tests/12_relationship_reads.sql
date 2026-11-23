@@ -91,8 +91,10 @@ SELECT tests.login('a0000000-0000-0000-0000-00000000000a');
 SELECT tests.expect_error('A analyst (read only) cannot add a link between A records',
     $$INSERT INTO entity_instances.entity_relationships (parent_entity_id, child_entity_id, relationship_type, relationship_code, valid_from)
       VALUES ('aaaaaaaa-0000-0000-0000-0000000000f2', 'aaaaaaaa-0000-0000-0000-0000000000f1', 'TEST_LINK', 'TEST_LINK', DATE '2020-01-01')$$);
-SELECT tests.expect_rows('A analyst deletes no link',
-    $$DELETE FROM entity_instances.entity_relationships r USING tests.rel_links l WHERE r.id = l.id RETURNING 1$$, 0);
+-- Signed-in users have no DELETE on the table at all (bitemporal_integrity), so the
+-- statement is refused; reaching zero rows would also be a pass.
+SELECT tests.expect_denied('A analyst deletes no link',
+    $$DELETE FROM entity_instances.entity_relationships r USING tests.rel_links l WHERE r.id = l.id RETURNING 1$$);
 
 SELECT tests.login('a0000000-0000-0000-0000-00000000000b');
 SELECT tests.expect_error('A steward cannot add a link to a client-B record',
