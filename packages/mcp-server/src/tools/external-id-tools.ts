@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { ambiguousCodeMessage } from '@tapestrai/graphql/src/lib/entity-code';
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
 
@@ -27,7 +28,13 @@ async function resolveEntityIds(supabase: SupabaseClient, refs: unknown): Promis
       .select('id, entity_code')
       .in('entity_code', codes);
     if (error) throw error;
-    ids.push(...(data || []).map((row: Row) => row.id));
+    // A code is unique within a client only. A caller in two clients may see it twice; say so rather than mix them.
+    const seen = new Set<string>();
+    for (const row of (data || []) as Row[]) {
+      if (seen.has(row.entity_code)) throw new Error(ambiguousCodeMessage(row.entity_code));
+      seen.add(row.entity_code);
+      ids.push(row.id);
+    }
   }
   return [...new Set(ids)];
 }

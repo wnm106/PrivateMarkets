@@ -16,6 +16,7 @@
  */
 
 import { overlayTemporalAttributes } from './temporal-attributes';
+import { CODE_LOOKUP_LIMIT, oneByCode } from './entity-code';
 
 export type DataQueryAggregation =
   | 'SUM' | 'AVG' | 'MIN' | 'MAX' | 'COUNT' | 'COUNT_DISTINCT' | 'WEIGHTED_AVG';
@@ -348,9 +349,9 @@ async function fetchAnchor(supabase: any, id?: string | null, code?: string | nu
   if (id) q = q.eq('entity_id', id);
   else if (code) q = q.eq('entity_code', code);
   else return null;
-  const { data, error } = await q.limit(1);
+  const { data, error } = await q.limit(id ? 1 : CODE_LOOKUP_LIMIT);
   if (error) throw new Error(`Failed to load context entity: ${error.message}`);
-  return data?.[0] || null;
+  return id ? data?.[0] || null : oneByCode(data, code as string);
 }
 
 /** Resolves an entity id from id or code (as the caller). */

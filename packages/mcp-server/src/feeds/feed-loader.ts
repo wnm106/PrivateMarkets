@@ -748,11 +748,12 @@ function resolutionFrom(domainCode: string, entity: EntityDraft, hit: Extract<Re
   };
 }
 
-async function availableEntityCode(db: SupabaseClient, code: string): Promise<string> {
+/** A code not yet used in this client. Codes are unique within a client; other clients may use the same one. */
+async function availableEntityCode(db: SupabaseClient, clientId: string, code: string): Promise<string> {
   const base = code.slice(0, 80);
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const candidate = (attempt === 0 ? base : `${base}-${attempt + 1}`).slice(0, 100);
-    const existing = await db.schema('entity_instances').from('master_entities').select('id').eq('entity_code', candidate).maybeSingle();
+    const existing = await db.schema('entity_instances').from('master_entities').select('id').eq('client_id', clientId).eq('entity_code', candidate).maybeSingle();
     if (existing.error) throw new Error(existing.error.message);
     if (!existing.data) return candidate;
   }
@@ -1165,7 +1166,7 @@ export async function executeParsedFeed(
           const single = await db.schema('entity_instances').from('master_entities').insert(payload.find((row) => row.entity_code === entity.code)!).select('id').single();
           let created = single;
           if (created.error && /duplicate key|entity_code/i.test(created.error.message || '')) {
-            const storedCode = await availableEntityCode(db, entity.code);
+            const storedCode = await availableEntityCode(db, catalog.clientId, entity.code);
             created = await db.schema('entity_instances').from('master_entities').insert({ ...payload.find((row) => row.entity_code === entity.code)!, entity_code: storedCode }).select('id').single();
           }
           if (created.error || !created.data) {

@@ -979,10 +979,13 @@ export async function commitAllocation(
       for (const cell of row.cells) codes.set(positionCode(row.fundId, cell.trancheId, 'H'), `${row.fundId}|${cell.trancheId}|PROPOSAL`);
     }
     const list = [...codes.keys()];
+    if (list.length && !draft.clientId) throw new Error('The allocation has no client, so its positions cannot be found by code.');
     for (let index = 0; index < list.length; index += 100) {
+      // Codes are unique within a client only, so look in the deal's client.
       const { data, error } = await supabase
         .from('master_entities')
         .select('id, entity_code')
+        .eq('client_id', draft.clientId as string)
         .in('entity_code', list.slice(index, index + 100));
       if (error) throw new Error(error.message);
       for (const row of data || []) existing.set(codes.get(row.entity_code)!, row.id);

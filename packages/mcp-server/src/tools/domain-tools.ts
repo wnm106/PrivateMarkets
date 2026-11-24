@@ -1,5 +1,6 @@
 import { fetchEntitySearchHits } from '@tapestrai/graphql/src/lib/entity-search';
 import { assembleAttributeSearch } from '@tapestrai/graphql/src/lib/semantic-aliases';
+import { CODE_LOOKUP_LIMIT, oneByCode } from '@tapestrai/graphql/src/lib/entity-code';
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
 
@@ -179,8 +180,11 @@ const getEntity: ToolDefinition = {
     else if (args.entityCode) query = query.eq('entity_code', args.entityCode);
     else throw new Error('Must provide entityId or entityCode');
 
-    const { data, error } = await query.single();
+    // A code is unique within a client only, so a caller in two clients can see it twice.
+    const { data: rows, error } = await query.limit(CODE_LOOKUP_LIMIT);
     if (error) throw error;
+    const data = args.entityId ? rows?.[0] ?? null : oneByCode(rows, args.entityCode);
+    if (!data) throw new Error(`No record matches ${args.entityId || args.entityCode}.`);
     return data;
   },
 };

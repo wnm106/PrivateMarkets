@@ -18,6 +18,7 @@ import {
   describeRules,
   SurfaceFact,
 } from '../lib/surface-composition/resolve';
+import { CODE_LOOKUP_LIMIT, oneByCode } from '../lib/entity-code';
 
 interface SurfaceRow {
   id: string;
@@ -266,8 +267,9 @@ async function loadEntityFacts(
     .from('entity_master')
     .select('entity_id, entity_code, entity_name, domain_code, template_id, attributes, parent_relationships, child_relationships');
   query = entityId ? query.eq('entity_id', entityId) : query.eq('entity_code', entityCode as string);
-  const { data, error } = await query.maybeSingle();
+  const { data: rows, error } = await query.limit(CODE_LOOKUP_LIMIT);
   if (error) throw new Error(`Failed to load entity: ${error.message}`);
+  const data = entityId ? rows?.[0] ?? null : oneByCode(rows, entityCode as string);
   if (!data) return null;
 
   let templateCode: string | null = null;

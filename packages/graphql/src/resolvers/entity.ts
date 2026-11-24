@@ -7,6 +7,7 @@ import { templateSide } from '../lib/template-inheritance';
 import { dirtyAttributeCodes } from './calculation';
 import { ensureAttributeSection } from './metadata';
 import { resolveEntityClientId, resolveSchemaClientId, withClientNames } from './schema-scope';
+import { CODE_LOOKUP_LIMIT, oneByCode } from '../lib/entity-code';
 
 function normalizePrecedenceChain(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -259,12 +260,10 @@ export const entityResolvers = {
         return null;
       }
       
-      const { data, error } = await query.single();
-      
-      if (error) {
-        if (error.code === 'PGRST116') return null;
-        throw error;
-      }
+      const { data: rows, error } = await query.limit(CODE_LOOKUP_LIMIT);
+      if (error) throw error;
+      const data = args.id ? rows?.[0] ?? null : oneByCode(rows, args.entityCode as string);
+      if (!data) return null;
       
       const entity = await attachCompositeMembers(mapEntityRow(data), context);
       // The master projection keeps every still-open value. Replace it with the
