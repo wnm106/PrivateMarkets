@@ -274,3 +274,63 @@ describe('entity match for loads', () => {
     expect(hit.via).toBe('name');
   });
 });
+
+describe('looking up the record a value names', () => {
+  const APEX_ID = '6f1c2a4e-1b2c-4d3e-8f9a-0b1c2d3e4f5a';
+  const securities = () => {
+    const index = new EntityMatchIndex(catalog, 'SECURITY', 'client-1');
+    index.add(entity({ id: APEX_ID, code: 'SEC-1', name: 'Apex Industries 5% 2030', domainCode: 'SECURITY', identifiers: new Map([['ISIN', ['US0378331005']]]) }));
+    index.add(entity({ id: 'sec-2', code: 'SEC-2', name: 'Shared Name', domainCode: 'SECURITY' }));
+    index.add(entity({ id: 'sec-3', code: 'SEC-3', name: 'Shared Name', domainCode: 'SECURITY' }));
+    index.add(entity({ id: 'sec-4', code: 'SEC-4', name: 'Retired Note', domainCode: 'SECURITY', active: false }));
+    return index;
+  };
+
+  it('finds a record by its id, ignoring case', () => {
+    const hit = securities().lookup(APEX_ID.toUpperCase());
+    expect(hit.kind).toBe('match');
+    if (hit.kind === 'match') expect(hit.via).toBe('id');
+  });
+
+  it('finds a record by its code, ignoring punctuation', () => {
+    const hit = securities().lookup('sec 1');
+    expect(hit.kind === 'match' && hit.entity.id).toBe(APEX_ID);
+  });
+
+  it('finds a record by an identifier value', () => {
+    const hit = securities().lookup('US 0378331005');
+    expect(hit.kind === 'match' && [hit.entity.id, hit.via]).toEqual([APEX_ID, 'identifier']);
+  });
+
+  it('finds a record by its name', () => {
+    const hit = securities().lookup('APEX INDUSTRIES 5% 2030');
+    expect(hit.kind === 'match' && [hit.entity.id, hit.via]).toEqual([APEX_ID, 'name']);
+  });
+
+  it('reports a name two records hold as ambiguous', () => {
+    const hit = securities().lookup('Shared Name');
+    expect(hit.kind).toBe('ambiguous');
+    if (hit.kind === 'ambiguous') expect(hit.entities.map((item) => item.id).sort()).toEqual(['sec-2', 'sec-3']);
+  });
+
+  it('does not find an inactive record or an unknown value', () => {
+    expect(securities().lookup('SEC-4').kind).toBe('none');
+    expect(securities().lookup('Nothing Like It').kind).toBe('none');
+  });
+
+  it('uses the identifier holder on the date asked', () => {
+    const index = new EntityMatchIndex(catalog, 'SECURITY', 'client-1');
+    index.add(entity({
+      id: 'old', code: 'SEC-OLD', name: 'Old', domainCode: 'SECURITY',
+      identifierTerms: new Map([['CUSIP', [{ value: '037833100', validFrom: '2020-01-01', validTo: '2023-12-31' }]]]),
+    }));
+    index.add(entity({
+      id: 'new', code: 'SEC-NEW', name: 'New', domainCode: 'SECURITY',
+      identifierTerms: new Map([['CUSIP', [{ value: '037833100', validFrom: '2024-01-01', validTo: '9999-12-31' }]]]),
+    }));
+    const then = index.lookup('037833100', '2022-06-30');
+    const now = index.lookup('037833100', '2025-06-30');
+    expect(then.kind === 'match' && then.entity.id).toBe('old');
+    expect(now.kind === 'match' && now.entity.id).toBe('new');
+  });
+});

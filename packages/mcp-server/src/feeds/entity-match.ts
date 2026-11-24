@@ -45,6 +45,14 @@ export interface IncomingEntity {
   aliases?: string[];
 }
 
+/** The record a value in another record's column names, such as a position's fund. */
+export type LookupHit =
+  | { kind: 'match'; entity: MatchEntity; via: 'id' | 'code' | 'identifier' | 'name' }
+  | { kind: 'ambiguous'; entities: MatchEntity[]; message: string }
+  | { kind: 'none'; message: string };
+
+const ENTITY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export type ResolveHit =
   | { kind: 'match'; entity: MatchEntity; via: 'code' | 'identifier' | 'name' }
   | { kind: 'ambiguous'; via: 'code' | 'identifier' | 'name'; entities: MatchEntity[]; message: string }
@@ -180,6 +188,29 @@ export class EntityMatchIndex {
     const named = this.collectNames(incoming);
     if (!named.length) return { kind: 'none' };
     return this.choose(named, 'name', incoming.code) || { kind: 'none' };
+  }
+
+  /**
+   * The record a single value names, the way a file names a parent or a referenced
+   * record: its id, then the same lookup a row gets (a dated identifier, the code,
+   * any identifier, then the name or an alias). The value is tried as a code, an
+   * identifier value and a name at once.
+   */
+  lookup(raw: string, asOf?: string): LookupHit {
+    const value = raw.trim();
+    if (!value) return { kind: 'none', message: 'No value given.' };
+    if (ENTITY_ID.test(value)) {
+      const entity = this.byId.get(value.toLowerCase()) || this.byId.get(value);
+      if (entity && this.matchable(entity)) return { kind: 'match', entity, via: 'id' };
+    }
+    const hit = this.resolve({ code: value, name: value, attributes: new Map() }, asOf);
+    if (hit.kind === 'match') return hit;
+    if (hit.kind === 'ambiguous') {
+      const labels = hit.entities.slice(0, 5).map((entity) => entity.code).join(', ');
+      return { kind: 'ambiguous', entities: hit.entities, message: `"${value}" names ${hit.entities.length} ${this.domainCode} records (${labels}).` };
+    }
+    if (hit.kind === 'rejected') return { kind: 'none', message: hit.message };
+    return { kind: 'none', message: `No ${this.domainCode} record matches "${value}".` };
   }
 
   private tracks(code: string): boolean {

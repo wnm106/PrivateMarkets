@@ -6,8 +6,7 @@ import { parseTabularFile } from './parse-table';
 import { POSITION_FILE_MAP } from './position-file-map';
 import { normalizeSourceCode, resolveRowContext } from './row-context';
 import { compactIdentifier } from '../../../graphql/src/lib/entity-resolution/similarity';
-import type { DomainLoadStats, EntityResolution, EntityResolutionDecision, FeedLoadResult, FeedMap, FeedPreview, LoadReject, NormalizationHit, ParsedTable } from './types';
-import { emptyReferenceIndex, indexReferences, matchReference, referenceLookups, type ReferenceIndex } from './references';
+import type { DomainLoadStats, FeedDomainSpec, EntityResolution, EntityResolutionDecision, FeedLoadResult, FeedMap, FeedPreview, LoadReject, NormalizationHit, ParsedTable } from './types';
 import { applyTransform, coerceAttributeValue, dayBefore, planPeriod, indexListParents, indexReferenceLists, listLevelKey, normalizeToList, parseUsDate, type ListValueRow } from './values';
 import { planTreeValues, type ListParents, type TreeAttribute } from './tree-values';
 
@@ -349,62 +348,6 @@ function normalizationFor(
   return { stored: normalized.canonicalCode || raw, hit };
 }
 
-/**
- * Lookups for every record the reference values in these drafts could name:
- * records in this file (already given ids) and records already stored for the client.
- */
-async function loadReferenceIndexes(
-  db: SupabaseClient,
-  catalog: Catalog,
-  entities: EntityDraft[],
-  fileIds: Map<string, Map<string, string>>,
-  drafts: Map<string, EntityDraft[]>,
-): Promise<Map<string, ReferenceIndex>> {
-  const rawsByDomain = new Map<string, Set<string>>();
-  for (const entity of entities) {
-    for (const period of entity.periods.values()) {
-      for (const [attributeCode, raw] of period.attributes) {
-        const target = referenceDomainOf(catalog.attributes.get(attributeCode));
-        if (!target || !raw.trim()) continue;
-        if (!rawsByDomain.has(target)) rawsByDomain.set(target, new Set());
-        rawsByDomain.get(target)!.add(raw.trim());
-      }
-    }
-  }
-
-  const indexes = new Map<string, ReferenceIndex>();
-  for (const [target, raws] of rawsByDomain) {
-    const index = emptyReferenceIndex();
-    const inFile = fileIds.get(target);
-    if (inFile) {
-      indexReferences(index, (drafts.get(target) || []).flatMap((draft) => {
-        const id = inFile.get(draft.code);
-        return id ? [{ id, code: draft.code, name: draft.name }] : [];
-      }));
-    }
-    const { ids, texts } = referenceLookups(raws);
-    const lookups: Array<{ column: 'id' | 'entity_code' | 'entity_name'; values: string[] }> = [
-      { column: 'id', values: ids },
-      { column: 'entity_code', values: texts },
-      { column: 'entity_name', values: texts },
-    ];
-    for (const lookup of lookups) {
-      for (let from = 0; from < lookup.values.length; from += 200) {
-        const found = await db.schema('entity_instances').from('master_entities')
-          .select('id, entity_code, entity_name')
-          .eq('domain_code', target)
-          .eq('client_id', catalog.clientId)
-          .is('merged_into_id', null)
-          .in(lookup.column, lookup.values.slice(from, from + 200));
-        if (found.error) throw new Error(found.error.message);
-        indexReferences(index, (found.data || []).map((row: any) => ({ id: row.id, code: row.entity_code, name: row.entity_name })));
-      }
-    }
-    indexes.set(target, index);
-  }
-  return indexes;
-}
-
 function distinctNormalizations(hits: NormalizationHit[]): NormalizationHit[] {
   const seen = new Map<string, NormalizationHit>();
   for (const hit of hits) {
@@ -504,17 +447,37 @@ async function pageRows(
   return rows;
 }
 
-async function loadIdentifierCatalog(db: SupabaseClient, domainCode: string): Promise<{ catalog: IdentifierCatalog; attributeIds: Map<string, string> }> {
+/** What an identifier attribute holds, so a file value can be put in the stored form before it is compared. */
+interface IdentifierMeta {
+  id: string;
+  data_type: string;
+  reference_domain_code: string | null;
+  reference_list_code: string | null;
+}
+
+async function loadIdentifierCatalog(db: SupabaseClient, domainCode: string): Promise<{ catalog: IdentifierCatalog; attributeIds: Map<string, string>; attributeMeta: Map<string, IdentifierMeta> }> {
   const definitions = await db.schema('metadata_register').from('entity_identifier_definitions').select('attribute_codes').eq('domain_code', domainCode).eq('is_active', true);
   if (definitions.error) throw new Error(definitions.error.message);
   const catalog = identifierCatalog((definitions.data || []).map((row: { attribute_codes?: string[] }) => row.attribute_codes || []));
   const codes = [...new Set([...catalog.singles, ...catalog.composites.flat()])];
   const attributeIds = new Map<string, string>();
-  if (!codes.length) return { catalog, attributeIds };
-  const attributes = await db.schema('metadata_register').from('attribute_register').select('id, attribute_code').in('attribute_code', codes);
+  const attributeMeta = new Map<string, IdentifierMeta>();
+  if (!codes.length) return { catalog, attributeIds, attributeMeta };
+  const attributes = await db.schema('metadata_register').from('attribute_register')
+    .select('id, attribute_code, data_type, reference_domain_code, reference_list_code')
+    .in('attribute_code', codes);
   if (attributes.error) throw new Error(attributes.error.message);
-  for (const row of attributes.data || []) attributeIds.set(String(row.attribute_code).toUpperCase(), row.id);
-  return { catalog, attributeIds };
+  for (const row of attributes.data || []) {
+    const code = String(row.attribute_code).toUpperCase();
+    attributeIds.set(code, row.id);
+    attributeMeta.set(code, {
+      id: row.id,
+      data_type: row.data_type,
+      reference_domain_code: row.reference_domain_code ?? null,
+      reference_list_code: row.reference_list_code ?? null,
+    });
+  }
+  return { catalog, attributeIds, attributeMeta };
 }
 
 async function loadEntityMatchIndex(
@@ -604,6 +567,104 @@ async function loadEntityMatchIndex(
   return index;
 }
 
+/** Whether the loader puts this column's values on the attribute's list before storing them. */
+function normalizesToList(map: FeedMap, domain: FeedDomainSpec, attributeCode: string, listCode: string | null | undefined): boolean {
+  if (!listCode) return false;
+  const sourceColumn = domain.attributes.find((attribute) => attribute.attributeCode === attributeCode)?.column;
+  const transformKind = sourceColumn ? map.transforms?.[sourceColumn]?.kind : undefined;
+  return transformKind === 'list' || (transformKind === undefined && !map.transforms);
+}
+
+type RecordLookupResult =
+  | { kind: 'match'; id: string; via: 'id' | 'code' | 'identifier' | 'name' }
+  | { kind: 'ambiguous' | 'none'; message: string };
+
+type RecordLookup = (domainCode: string, raw: string, asOf: string) => Promise<RecordLookupResult>;
+
+/**
+ * Finds the record a value names in another record's column: a parent column, or a
+ * reference attribute such as a position's fund or security. It uses the same lookup
+ * a row gets when it is matched to a stored record. A record this file loads is found
+ * by its code in the file first. Otherwise the record type's match index for this pass
+ * is used, so a record the file matched or is about to create is found by its
+ * identifiers and name too. A record type the file does not load is looked up among
+ * stored records.
+ */
+export function createRecordLookup(
+  db: SupabaseClient,
+  clientId: string,
+  pass: { indexes: Map<string, EntityMatchIndex>; ids: Map<string, Map<string, string>> },
+  stored: Map<string, Promise<EntityMatchIndex>>,
+): RecordLookup {
+  const storedIndex = (domainCode: string) => {
+    let index = stored.get(domainCode);
+    if (!index) {
+      index = loadIdentifierCatalog(db, domainCode)
+        .then(({ catalog, attributeIds }) => loadEntityMatchIndex(db, domainCode, clientId, [], catalog, attributeIds));
+      stored.set(domainCode, index);
+    }
+    return index;
+  };
+  return async (domainCode, raw, asOf) => {
+    const value = raw.trim();
+    if (!value) return { kind: 'none', message: `No ${domainCode} given.` };
+    const inFile = pass.ids.get(domainCode)?.get(value);
+    if (inFile) return { kind: 'match', id: inFile, via: 'code' };
+    const index = pass.indexes.get(domainCode) || await storedIndex(domainCode);
+    const hit = index.lookup(value, asOf);
+    if (hit.kind !== 'match') return hit;
+    // A record this file creates has no id until it is written. Use the one it was given.
+    const id = hit.entity.provisional ? pass.ids.get(domainCode)?.get(hit.entity.code) : hit.entity.id;
+    if (!id) return { kind: 'none', message: `${domainCode} ${hit.entity.code} was not loaded.` };
+    return { kind: 'match', id, via: hit.via };
+  };
+}
+
+/**
+ * A row's identifier values in the form they are stored, so they can be compared with
+ * stored identifiers. A reference part names another record and is stored as that
+ * record's id: the row's value is looked up, and when the row has no column for it
+ * the parent column for that record type supplies it, so a position's fund and
+ * security fill the fund and security parts of its composite key. Dates and numbers
+ * are coerced and list values put on their list, as they are when stored.
+ */
+export async function identifierAttributes(
+  entity: EntityDraft,
+  domain: FeedDomainSpec,
+  map: FeedMap,
+  catalog: Catalog,
+  matchCatalog: IdentifierCatalog,
+  attributeMeta: Map<string, IdentifierMeta>,
+  lookup: RecordLookup,
+  asOf: string,
+): Promise<Map<string, string>> {
+  const attributes = new Map(entity.attributes);
+  const tracked = new Set([...matchCatalog.singles, ...matchCatalog.composites.flat()]);
+  for (const code of tracked) {
+    const target = attributeMeta.get(code)?.reference_domain_code;
+    if (!target || attributeMeta.get(code)?.data_type !== 'REFERENCE' || [...attributes.keys()].some((key) => key.toUpperCase() === code)) continue;
+    const parentCode = entity.parents.get(target);
+    if (parentCode) attributes.set(code, parentCode);
+  }
+  for (const [attributeCode, raw] of attributes) {
+    const code = attributeCode.toUpperCase();
+    if (!tracked.has(code) || !raw.trim()) continue;
+    const meta = attributeMeta.get(code);
+    if (!meta) continue;
+    if (meta.data_type === 'REFERENCE' && meta.reference_domain_code) {
+      const found = await lookup(meta.reference_domain_code, raw, asOf);
+      if (found.kind === 'match') attributes.set(attributeCode, found.id);
+      continue;
+    }
+    const listed = normalizesToList(map, domain, attributeCode, meta.reference_list_code)
+      ? normalizationFor(catalog, attributeCode, raw).stored
+      : raw;
+    const coerced = coerceAttributeValue(listed, meta.data_type);
+    if (coerced && !('error' in coerced) && coerced.golden_value != null) attributes.set(attributeCode, String(coerced.golden_value));
+  }
+  return attributes;
+}
+
 async function storeDraftAliases(db: SupabaseClient, entities: EntityDraft[], idByCode: Map<string, string>): Promise<void> {
   const rows: { entity_id: string; alias_code: string; alias_label: string; alias_kind: string; is_active: boolean; updated_at: string }[] = [];
   for (const entity of entities) {
@@ -658,10 +719,10 @@ function decisionFor(decisions: EntityResolutionDecision[] | undefined, domainCo
   return decisions?.find((item) => item.domainCode === domainCode && item.fileCode === fileCode);
 }
 
-function sharedIdentifiers(entity: EntityDraft, catalog: IdentifierCatalog): { attributeCode: string; value: string }[] {
+function sharedIdentifiers(attributes: Map<string, string>, catalog: IdentifierCatalog): { attributeCode: string; value: string }[] {
   const tracked = new Set([...catalog.singles, ...catalog.composites.flat()]);
   const found: { attributeCode: string; value: string }[] = [];
-  for (const [code, value] of entity.attributes) {
+  for (const [code, value] of attributes) {
     const key = code.trim().toUpperCase();
     if (!tracked.has(key) || !value.trim()) continue;
     found.push({ attributeCode: key, value });
@@ -678,7 +739,7 @@ function resolutionFrom(domainCode: string, entity: EntityDraft, hit: Extract<Re
     via: hit.via,
     message: hit.message,
     candidates: hit.entities.filter((item) => !item.provisional).map((item) => ({ id: item.id, code: item.code, name: item.name })),
-    identifiers: sharedIdentifiers(entity, catalog),
+    identifiers: sharedIdentifiers(entity.attributes, catalog),
   };
 }
 
@@ -696,12 +757,12 @@ async function availableEntityCode(db: SupabaseClient, code: string): Promise<st
 async function cleanseDuplicateIdentifiers(
   db: SupabaseClient,
   entityIds: string[],
-  entity: EntityDraft,
+  attributes: Map<string, string>,
   catalog: IdentifierCatalog,
   attributeIds: Map<string, string>,
   asOf: string,
 ) {
-  const shared = sharedIdentifiers(entity, catalog);
+  const shared = sharedIdentifiers(attributes, catalog);
   if (!shared.length || !entityIds.length) return;
   const now = new Date().toISOString();
   for (const identifier of shared) {
@@ -836,27 +897,8 @@ export async function executeParsedFeed(
 
   const ids = new Map<string, Map<string, string>>();
   const domainByCode = new Map(map.domains.map((domain) => [domain.domainCode, domain]));
-  const externalByDomain = new Map<string, Set<string>>();
-  for (const domain of map.domains) {
-    for (const parent of domain.parents) {
-      if (domainByCode.has(parent.parentDomainCode) || !parent.existing) continue;
-      const codes = externalByDomain.get(parent.parentDomainCode) || new Set<string>();
-      for (const entity of drafts.get(domain.domainCode) || []) {
-        const code = entity.parents.get(parent.parentDomainCode);
-        if (code) codes.add(code);
-      }
-      externalByDomain.set(parent.parentDomainCode, codes);
-    }
-  }
-  const externalIds = new Map<string, Map<string, string>>();
-  for (const [domainCode, codes] of externalByDomain) {
-    const list = [...codes];
-    const found = list.length
-      ? await db.schema('entity_instances').from('master_entities').select('id, entity_code').eq('domain_code', domainCode).in('entity_code', list)
-      : { data: [], error: null };
-    if (found.error) throw new Error(found.error.message);
-    externalIds.set(domainCode, new Map((found.data || []).map((row: any) => [row.entity_code, row.id])));
-  }
+  // The writing pass finds parents and referenced records with the same lookup, against the ids it writes.
+  const loadPass = { indexes: new Map<string, EntityMatchIndex>(), ids };
   const domainStats: DomainLoadStats[] = [];
   const warnings: string[] = [];
   const errors: string[] = [];
@@ -872,15 +914,25 @@ export async function executeParsedFeed(
   const receivedAt = new Date().toISOString();
   const resolutions: EntityResolution[] = [];
 
+  // Records of a type this file does not load, shared by both passes.
+  const storedIndexes = new Map<string, Promise<EntityMatchIndex>>();
+  // What the check pass gave each file record, so a later record type can find its parents.
+  const checkPass = { indexes: new Map<string, EntityMatchIndex>(), ids: new Map<string, Map<string, string>>() };
+  const checkLookup = createRecordLookup(db, catalog.clientId, checkPass, storedIndexes);
   for (const domainCode of order) {
     const domain = domainByCode.get(domainCode);
     if (!domain) continue;
     const entities = drafts.get(domainCode) || [];
-    const { catalog: matchCatalog, attributeIds } = await loadIdentifierCatalog(db, domainCode);
+    const { catalog: matchCatalog, attributeIds, attributeMeta } = await loadIdentifierCatalog(db, domainCode);
     const index = await loadEntityMatchIndex(db, domainCode, catalog.clientId, entities.map((entity) => entity.code), matchCatalog, attributeIds);
+    const given = new Map<string, string>();
+    checkPass.indexes.set(domainCode, index);
+    checkPass.ids.set(domainCode, given);
     for (const entity of entities) {
-      const incoming = { code: entity.code, name: entity.name, attributes: entity.attributes, aliases: entity.aliases.map((alias) => alias.aliasLabel) };
-      const hit = index.resolve(incoming, entity.asOf || asOfDate);
+      const asOf = entity.asOf || asOfDate;
+      const attributes = await identifierAttributes(entity, domain, map, catalog, matchCatalog, attributeMeta, checkLookup, asOf);
+      const incoming = { code: entity.code, name: entity.name, attributes, aliases: entity.aliases.map((alias) => alias.aliasLabel) };
+      const hit = index.resolve(incoming, asOf);
       const decision = decisionFor(decisions, domainCode, entity.code);
       if (hit.kind === 'ambiguous' && !decision) {
         resolutions.push(resolutionFrom(domainCode, entity, hit, asOfDate, matchCatalog));
@@ -889,19 +941,24 @@ export async function executeParsedFeed(
       if (hit.kind === 'ambiguous' && decision?.action === 'ignore') continue;
       if (hit.kind === 'ambiguous' && decision?.action === 'map') {
         const chosen = hit.entities.find((item) => item.id === decision.entityId);
-        if (chosen) index.absorb(chosen.id, incoming);
+        if (chosen) {
+          index.absorb(chosen.id, incoming);
+          given.set(entity.code, chosen.id);
+        }
         continue;
       }
       if (hit.kind === 'match') {
         index.absorb(hit.entity.id, incoming);
+        given.set(entity.code, hit.entity.id);
         continue;
       }
       if (hit.kind === 'rejected') continue;
       const identifiers = new Map<string, string[]>();
-      for (const [attributeCode, value] of entity.attributes) {
+      for (const [attributeCode, value] of attributes) {
         if (!value.trim()) continue;
         identifiers.set(attributeCode.toUpperCase(), [value]);
       }
+      given.set(entity.code, `pending:${entity.code}`);
       index.add({
         id: `pending:${entity.code}`,
         code: entity.code,
@@ -942,6 +999,7 @@ export async function executeParsedFeed(
     };
   }
 
+  const lookup = createRecordLookup(db, catalog.clientId, loadPass, storedIndexes);
   for (const domainCode of order) {
     const domain = domainByCode.get(domainCode);
     if (!domain) continue;
@@ -959,9 +1017,12 @@ export async function executeParsedFeed(
     if (!templateId) warnings.push(`Template ${domain.templateCode} was not found. Entities will load without it.`);
 
     const codes = entities.map((entity) => entity.code);
-    const { catalog: matchCatalog, attributeIds } = await loadIdentifierCatalog(db, domainCode);
+    const { catalog: matchCatalog, attributeIds, attributeMeta } = await loadIdentifierCatalog(db, domainCode);
     const index = await loadEntityMatchIndex(db, domainCode, catalog.clientId, codes, matchCatalog, attributeIds);
+    loadPass.indexes.set(domainCode, index);
     const idByCode = new Map<string, string>();
+    // Identifier values in stored form, kept for clearing duplicates after a "create" decision.
+    const matchedAttributes = new Map<string, Map<string, string>>();
     const linkedTo = new Map<string, string>();
     const pending = new Map<string, EntityDraft>();
     const cleanseIds = new Map<string, string[]>();
@@ -975,8 +1036,11 @@ export async function executeParsedFeed(
     };
 
     for (const entity of entities) {
-      const incoming = { code: entity.code, name: entity.name, attributes: entity.attributes, aliases: entity.aliases.map((alias) => alias.aliasLabel) };
-      let hit = index.resolve(incoming, entity.asOf || asOfDate);
+      const asOf = entity.asOf || asOfDate;
+      const attributes = await identifierAttributes(entity, domain, map, catalog, matchCatalog, attributeMeta, lookup, asOf);
+      matchedAttributes.set(entity.code, attributes);
+      const incoming = { code: entity.code, name: entity.name, attributes, aliases: entity.aliases.map((alias) => alias.aliasLabel) };
+      let hit = index.resolve(incoming, asOf);
       const decision = decisionFor(decisions, domainCode, entity.code);
       if (hit.kind === 'ambiguous') {
         if (decision?.action === 'ignore') continue;
@@ -1042,7 +1106,7 @@ export async function executeParsedFeed(
       }
       const provisionalId = `pending:${entity.code}`;
       const identifiers = new Map<string, string[]>();
-      for (const [attributeCode, value] of entity.attributes) {
+      for (const [attributeCode, value] of attributes) {
         if (!value.trim()) continue;
         identifiers.set(attributeCode.toUpperCase(), [value]);
       }
@@ -1076,7 +1140,7 @@ export async function executeParsedFeed(
     for (const entity of toCreate) {
       const targets = cleanseIds.get(entity.code) || [];
       if (!targets.length) continue;
-      await cleanseDuplicateIdentifiers(db, targets, entity, matchCatalog, attributeIds, entity.asOf || asOfDate);
+      await cleanseDuplicateIdentifiers(db, targets, matchedAttributes.get(entity.code) || entity.attributes, matchCatalog, attributeIds, entity.asOf || asOfDate);
     }
     for (let offset = 0; offset < toCreate.length; offset += 200) {
       const chunk = toCreate.slice(offset, offset + 200);
@@ -1177,8 +1241,6 @@ export async function executeParsedFeed(
       pendingAttributes.length = 0;
     };
 
-    const referenceIndexes = await loadReferenceIndexes(db, catalog, entities, ids, drafts);
-
     for (const entity of entities) {
       const entityId = idByCode.get(entity.code);
       if (!entityId) continue;
@@ -1212,9 +1274,7 @@ export async function executeParsedFeed(
           warnings.push(`${domainCode} ${entity.code}: attribute ${attributeCode} is not registered`);
           continue;
         }
-        const sourceColumn = domain.attributes.find((attribute) => attribute.attributeCode === attributeCode)?.column;
-        const transformKind = sourceColumn ? map.transforms?.[sourceColumn]?.kind : undefined;
-        const normalize = Boolean(meta.reference_list_code) && (transformKind === 'list' || (transformKind === undefined && !map.transforms));
+        const normalize = normalizesToList(map, domain, attributeCode, meta.reference_list_code);
         const normalized = normalize ? normalizationFor(catalog, attributeCode, raw) : { stored: raw, hit: null };
         const hit = normalized.hit;
         let stored = normalized.stored;
@@ -1225,19 +1285,18 @@ export async function executeParsedFeed(
           warnings.push(`${domainCode} ${entity.code}: ${attributeCode} ${why}`);
           reject({ kind: 'value', domainCode, entityCode: entity.code, attributeCode, value: raw, message: why, row: origin?.row, column: origin?.column });
         }
-        // A reference stores the id of the record it names, found by id, code or name.
+        // A reference stores the id of the record it names, found the way parents are found:
+        // by id, code, an identifier, or a name only one record holds.
         const referenceDomain = referenceDomainOf(meta);
         let referenceMatch: string | null = null;
         if (referenceDomain) {
-          const match = matchReference(referenceIndexes.get(referenceDomain) || emptyReferenceIndex(), raw);
+          const match = await lookup(referenceDomain, raw, validFrom);
           if (match.kind === 'match') {
             stored = match.id;
-            referenceMatch = match.matchType;
+            referenceMatch = match.via;
           } else {
             referenceMatch = match.kind;
-            const why = match.kind === 'ambiguous'
-              ? `More than one ${referenceDomain} record is named "${raw}". Stored as typed.`
-              : `No ${referenceDomain} record matches "${raw}". Stored as typed.`;
+            const why = `${match.message} Stored as typed.`;
             warnings.push(`${domainCode} ${entity.code}: ${attributeCode} ${why}`);
             reject({ kind: 'value', domainCode, entityCode: entity.code, attributeCode, value: raw, message: why, row: origin?.row, column: origin?.column });
           }
@@ -1408,13 +1467,17 @@ export async function executeParsedFeed(
           reject({ kind: 'link', domainCode, entityCode: entity.code, message: `No ${parent.parentDomainCode} code on this row` });
           continue;
         }
-        const parentId = ids.get(parent.parentDomainCode)?.get(parentCode) || externalIds.get(parent.parentDomainCode)?.get(parentCode);
-        if (!parentId) {
+        const parentHit = await lookup(parent.parentDomainCode, parentCode, entity.asOf || asOfDate);
+        if (parentHit.kind !== 'match') {
           relationshipStats.failed += 1;
-          errors.push(`${domainCode} ${entity.code} references unknown ${parent.parentDomainCode} ${parentCode}`);
-          reject({ kind: 'link', domainCode, entityCode: entity.code, value: parentCode, message: `${parent.parentDomainCode} ${parentCode} was not found` });
+          const why = parentHit.kind === 'ambiguous' ? parentHit.message : `${parent.parentDomainCode} ${parentCode} was not found`;
+          errors.push(parentHit.kind === 'ambiguous'
+            ? `${domainCode} ${entity.code}: ${parentHit.message}`
+            : `${domainCode} ${entity.code} references unknown ${parent.parentDomainCode} ${parentCode}`);
+          reject({ kind: 'link', domainCode, entityCode: entity.code, value: parentCode, message: why });
           continue;
         }
+        const parentId = parentHit.id;
         const relationship = chooseRelationship(domainCode, parent.parentDomainCode, catalog.relationshipTypes);
         if (!relationship) {
           relationshipStats.failed += 1;
