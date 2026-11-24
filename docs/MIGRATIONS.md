@@ -176,3 +176,9 @@ The recorded files kept their versions: `agents`, `entity_views`, `surface_bluep
 `20261122195959_certifications`, `20261122220001_grid_lookup_entity_id` and `20261123120000_compliance_results_as_of` were then applied in version order, in one transaction, after a dry run that rolled back, and recorded.
 
 The merge also brought 11 database functions with direct reads that were not on `scripts/guard/direct-reads.txt`. Master wrote most of them before the list existed. Two came from this branch's own new files (`latest_results_as_of`, `relationship_endpoint_ids`). They were added to the list, so the static guard flags those 11 lines once, on that commit.
+
+## Not yet applied: the drift threshold
+
+`20261124090000_fund_drift_threshold` adds one fund setting, `FUND_DRIFT_THRESHOLD_PCT`, and puts it on the fund templates. Metadata only: no fund is given a value, so every fund keeps 10%.
+
+It has not been applied to the hosted project, and it was not replayed on a fresh database where it was written (no pgvector there); the CI `database` job replays it. Until it is applied the reconciliation reads 10% for every fund, as before, and changing the threshold on the Period drift tab fails with the attribute not found. Apply it before the app built from the same change is out.

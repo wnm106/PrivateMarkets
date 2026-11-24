@@ -13,6 +13,7 @@
  */
 
 import { buildPack, emptyPack, feeSegments, type PackComponentKey, type PackInput, type PackReview } from './nav-pack';
+import type { CashStanding } from './cash-rec';
 
 /** Two dollar figures tie when they are closer than this. */
 export const TIE = 5000;
@@ -222,6 +223,22 @@ export interface RecInput {
   close: { id: string; name?: string; signoff: StepState; certifiedAt: string | null; certifiedBy: string | null; certifiedNav: number | null } | null;
   dispositions: Record<string, RecDisposition>;
   driftThresholdPct: number;
+  /** Where the cash reconciliation of the period stands. Null or absent when it was not read. */
+  cash?: RecCashStanding | null;
+}
+
+/** Where the cash reconciliation stands, read from its own summary (cash-rec.ts), never worked out again here. */
+export type RecCashStanding = CashStanding;
+
+/** What is wrong with a decision on a review item. Null means it can be recorded. The page and the workflow tool both ask this. */
+export function decisionProblem(input: { decision: string; note?: string | null }): string | null {
+  if (input.decision !== 'ACCEPT' && input.decision !== 'ADJUST' && input.decision !== 'QUERY') return 'decision must be ACCEPT, ADJUST, or QUERY.';
+  if (input.decision !== 'ACCEPT' && !String(input.note || '').trim()) {
+    return input.decision === 'ADJUST'
+      ? 'An adjustment needs a note saying what is adjusted and why.'
+      : 'A query needs a note with the question for the administrator.';
+  }
+  return null;
 }
 
 /* ---------------------------------------------------------------- calendar */
@@ -312,13 +329,14 @@ const STEPS = [
   { key: 'pack', name: 'Admin pack received and logged', owner: 'Fund accountant', frac: 27 / 37, rule: 'Done when the administrator\'s NAV statement for the period is on file. Every later step waits on it.' },
   { key: 'statements', name: 'Statements tie to each other', owner: 'Fund accountant', frac: 29 / 37, rule: 'Done when every check of the statements against each other, the position book and the NAV pack ties. A check that breaks blocks the step and certification; a check with a figure missing leaves it in progress.' },
   { key: 'evidence', name: 'Cash and capital tied to outside evidence', owner: 'Fund accountant', frac: 29 / 37, rule: 'Done when closing cash ties to the bank statement, contributions and distributions tie to their notices, and the credit facility ties to the lender statement. A break blocks; missing evidence leaves it in progress.' },
+  { key: 'cash', name: 'Cash reconciled to bank transactions', owner: 'Fund accountant', frac: 30 / 37, rule: 'Done when position book cash equals bank activity for the period after adjustments, and no pair the rules propose waits for approval. Until then it holds certification. A period with no bank transactions on file has nothing to reconcile and holds nothing.' },
   { key: 'roll', name: 'Position roll-forward and P&L attribution', owner: 'Portfolio accountant', frac: 30 / 37, rule: 'Done when the roll-forward reaches the reported ending value and each of its totals ties to its statement line. Any line that breaks blocks the step and certification.' },
   { key: 'val', name: 'Marks and accruals reviewed', owner: 'Valuation analyst', frac: 33 / 37, rule: 'Done when every mark and accrual item in the review queue is accepted or adjusted. An item queried with the administrator blocks it.' },
   { key: 'fees', name: 'Management and performance fees reviewed', owner: 'Fund accountant', frac: 34 / 37, rule: 'Done when every fee item in the review queue is accepted or adjusted. An item queried with the administrator blocks it.' },
   { key: 'drift', name: 'Prior period drift explained', owner: 'Senior reviewer', frac: 34 / 37, rule: 'Done when every unexplained move over the drift threshold is accepted or adjusted in the review queue. An item queried with the administrator blocks it.' },
   { key: 'queries', name: 'Admin queries resolved', owner: 'Fund accountant', frac: 35 / 37, rule: 'Done when no review item is out with the administrator. Each open query blocks certification until it is accepted or adjusted.' },
-  { key: 'signoff', name: 'Reviewer sign-off', owner: 'Senior reviewer', frac: 36 / 37, rule: 'Set by the reviewer on this page. It records the review; certification does not wait on it.' },
-  { key: 'certify', name: 'NAV certified', owner: 'Fund CFO', frac: 1, rule: 'Done when the NAV is certified with Certify NAV at the top of the page. Certifying is offered once no check breaks, the roll-forward ties and every review item is accepted or adjusted.' },
+  { key: 'signoff', name: 'Reviewer sign-off', owner: 'Senior reviewer', frac: 36 / 37, rule: 'Set to Done by the reviewer on this page once the review is complete. Certification waits on it.' },
+  { key: 'certify', name: 'NAV certified', owner: 'Fund CFO', frac: 1, rule: 'Done when the NAV is certified with Certify NAV at the top of the page. Certifying is offered once no check breaks, the roll-forward ties, every review item is accepted or adjusted, cash is reconciled and the reviewer has signed off.' },
 ] as const;
 
 export type StepKey = (typeof STEPS)[number]['key'];
@@ -554,6 +572,7 @@ export interface RecSources {
   signoff: RecBind[];
   period: RecBind[];
   progress: RecBind[];
+  driftThreshold: RecBind[];
 }
 
 export interface RecReview {
@@ -626,6 +645,10 @@ export interface RecReview {
   closeEntityId: string | null;
   statementId: string | null;
   signoff: StepState;
+  /** Where the cash reconciliation stands, when it was read with the close. */
+  cash: RecCashStanding | null;
+  /** The move, in percent, above which an unexplained line is drift. Set on the fund. */
+  driftThresholdPct: number;
   sources: RecSources;
 }
 
@@ -646,6 +669,7 @@ export interface RecRollResult {
 const ATTR: Record<string, [name: string, dataType: string, domainCode: string]> = {
   FUND_CLOSE_FREQUENCY: ['Close Frequency', 'REFERENCE_LIST', 'FUND'],
   FUND_CLOSE_LAG_DAYS: ['Certification Lag (days)', 'INTEGER', 'FUND'],
+  FUND_DRIFT_THRESHOLD_PCT: ['Drift Threshold', 'PERCENTAGE', 'FUND'],
   FUND_MGMT_FEE_RATE_PCT: ['Management Fee Rate', 'PERCENTAGE', 'FUND'],
   FUND_PREF_RETURN_PCT: ['Preferred Return', 'PERCENTAGE', 'FUND'],
   FUND_CARRY_PCT: ['Carried Interest', 'PERCENTAGE', 'FUND'],
@@ -958,6 +982,8 @@ function buildRoll(
     ['Interest receivable, ending', sumKey('endAccrued'), recNow, rollField('ROLL_END_ACCRUED'), binds(lineBind('rec'))],
     ['Interest earned (cash pay)', sumKey('interest'), interest, activity('interest', 'ROLL_INTEREST_EARNED'), binds(lineBind('cashInt'))],
     ['Fees and other income', sumKey('fees'), fees, activity('fees', 'ROLL_FEE_INCOME'), binds(lineBind('feeInc'))],
+    ['Interest and fees received', -total[3], present(received) ? -received : null, binds(openingField('beginAccrued'), activity('interest', 'ROLL_INTEREST_EARNED'), activity('fees', 'ROLL_FEE_INCOME'), rollField('ROLL_END_ACCRUED')), binds(lineBind('cashInt'), lineBind('feeInc'), lineBind('cfRec'))],
+    ['Net amortization', total[7], 0, activity('amort', 'ROLL_AMORTIZATION'), []],
     ['Total investment P&L', total[10], pl, binds(activity('interest', 'ROLL_INTEREST_EARNED'), activity('fees', 'ROLL_FEE_INCOME'), activity('pik', 'ROLL_PIK'), activity('amort', 'ROLL_AMORTIZATION'), activity('realized', 'ROLL_REALIZED_GAIN'), activity('unrealizedChg', 'ROLL_UNREALIZED_CHANGE')), binds(lineBind('cashInt'), lineBind('feeInc'), lineBind('pik'), lineBind('realized'), lineBind('unrealized'))],
   ];
   const ties = tieRows.map(([line, rollforward, stmt, rollSources, statementLineSources]) => ({
@@ -1512,6 +1538,18 @@ export function buildReview(input: RecInput): RecReview {
     : !roll.present ? ['Not started', 'No position roll-forward loaded']
       : rollBreaks ? ['Blocked', `${rollBreaks} of ${roll.ties.length + 1} lines break`]
         : ['Done', `${roll.ties.length + 1} of ${roll.ties.length + 1} tie`];
+  // Cash holds the close once there are bank transactions to reconcile against: not tied, or a proposed pair nobody approved.
+  const cash = input.cash ?? null;
+  const cashHolds = Boolean(cash?.bankOnFile) && (!cash!.tied || cash!.proposed > 0);
+  const cashOpen = cash ? [
+    cash.tied ? '' : `$${Math.abs(cash.residual).toLocaleString('en-US', { maximumFractionDigits: 0 })} apart`,
+    cash.proposed ? `${cash.proposed} proposed pair${cash.proposed === 1 ? '' : 's'} to approve` : '',
+  ].filter(Boolean).join(', ') : '';
+  const cashState: [StepState, string] = !hasStatement ? ['Not started', 'Waiting on admin pack']
+    : !cash ? ['Not started', 'Cash reconciliation not read']
+      : !cash.bankOnFile ? ['Not started', 'No bank transactions on file for the period']
+        : cashHolds ? ['In progress', cashOpen]
+          : ['Done', 'Tied to the bank'];
   const statementsState = checkState('statements');
   const evidenceState = checkState('evidence');
   const marksState = tabState('val');
@@ -1525,11 +1563,12 @@ export function buildReview(input: RecInput): RecReview {
     val: marksState,
     fees: feesState,
     drift: driftState,
-    queries: queries ? ['Blocked', `${queries} open with admin`] : ['Done', 'None open'],
-    signoff: [signoff, ''],
+    cash: cashState,
+    queries: !hasStatement ? ['Not started', 'Waiting on admin pack'] : queries ? ['Blocked', `${queries} open with admin`] : ['Done', 'None open'],
+    signoff: [signoff, signoff === 'Done' ? 'Signed off' : hasStatement ? 'Certification waits on it' : ''],
     certify: certified ? ['Done', input.close?.certifiedAt ?? 'Certified'] : ['Not started', 'Waiting on prior steps'],
   };
-  const tabFor: Partial<Record<StepKey, string>> = { pack: 'inputs', statements: 'integrity', evidence: 'integrity', roll: 'roll', val: 'val', fees: 'fees', drift: 'drift', queries: 'breaks' };
+  const tabFor: Partial<Record<StepKey, string>> = { pack: 'inputs', statements: 'integrity', evidence: 'integrity', cash: 'cash', roll: 'roll', val: 'val', fees: 'fees', drift: 'drift', queries: 'breaks' };
   const checkSources = (group: RecCheck['group']) => binds(...scoped.filter((check) => check.group === group).flatMap((check) => [check.aSources, check.bSources]));
   const itemSources = (tab: RecItem['tab']) => binds(...items.filter((item) => item.tab === tab).flatMap((item) => [item.adminSources, item.oursSources, item.effectSources]));
   const dueSources = binds(fundOf('FUND_CLOSE_LAG_DAYS'), statementOf('STATEMENT_PERIOD_END'), closeOf('CLOSE_PERIOD_END'));
@@ -1537,6 +1576,7 @@ export function buildReview(input: RecInput): RecReview {
     pack: binds(statementOf('STATEMENT_RECEIVED_DATE')),
     statements: checkSources('statements'),
     evidence: checkSources('evidence'),
+    cash: [],
     roll: binds(...roll.ties.flatMap((tie) => [tie.rollSources, tie.statementSources]), ...roll.totalSources),
     val: itemSources('val'),
     fees: itemSources('fees'),
@@ -1550,7 +1590,9 @@ export function buildReview(input: RecInput): RecReview {
     const [state, detail] = stepState[step.key];
     return {
       key: step.key, name: step.name, owner: step.owner, due, state, detail, rule: step.rule,
-      overdue: state !== 'Done' && due < today, tab: tabFor[step.key] ?? null, manual: step.key === 'signoff',
+      // A step with nothing to work on is not late: cash with no bank transactions on file.
+      overdue: state !== 'Done' && due < today && !(step.key === 'cash' && hasStatement && !cash?.bankOnFile),
+      tab: tabFor[step.key] ?? null, manual: step.key === 'signoff',
       sources: stepSources[step.key], dueSources,
     };
   });
@@ -1603,7 +1645,9 @@ export function buildReview(input: RecInput): RecReview {
         : rollBreaks ? 'Position roll-forward does not tie'
           : queries ? `${queries} query${queries === 1 ? '' : 's'} open with the admin`
             : openItems ? `${openItems} item${openItems === 1 ? '' : 's'} still open`
-              : null;
+              : cashHolds ? `Cash reconciliation is open: ${cashOpen}`
+                : signoff !== 'Done' ? 'Reviewer sign-off is not done'
+                  : null;
   const canCertify = !certified && certifyBlock == null;
 
   /* health -------------------------------------------------------------- */
@@ -1617,7 +1661,13 @@ export function buildReview(input: RecInput): RecReview {
   else if (breaks || rollBreaks || queries) {
     health = 'BLOCKED';
     healthNote = [breaks ? `${breaks} break${breaks === 1 ? '' : 's'}` : '', rollBreaks ? 'roll-forward off' : '', queries ? `${queries} with admin` : ''].filter(Boolean).join(', ');
-  } else { health = 'IN_REVIEW'; healthNote = openItems ? `${openItems} item${openItems === 1 ? '' : 's'} to decide` : 'Ready to certify'; }
+  } else {
+    health = 'IN_REVIEW';
+    healthNote = openItems ? `${openItems} item${openItems === 1 ? '' : 's'} to decide`
+      : cashHolds ? 'Cash to reconcile'
+        : signoff !== 'Done' ? 'Awaiting reviewer sign-off'
+          : 'Ready to certify';
+  }
   const atRisk = health !== 'CERTIFIED' && (overdue > 0 || daysToTarget < 0);
   const navReportedSources = binds(lineOf('netAssets'));
   const navPriorSources = P('netAssets') != null ? binds(priorOf('netAssets')) : binds(lineOf('chBegin'));
@@ -1635,6 +1685,7 @@ export function buildReview(input: RecInput): RecReview {
     signoff: binds(closeOf('CLOSE_SIGNOFF')),
     period: binds(statementOf('STATEMENT_PERIOD_END'), closeOf('CLOSE_PERIOD_END')),
     progress: binds(closeOf('CLOSE_SIGNOFF'), certifiedSources),
+    driftThreshold: binds(fundOf('FUND_DRIFT_THRESHOLD_PCT')),
   };
 
   return {
@@ -1697,6 +1748,8 @@ export function buildReview(input: RecInput): RecReview {
     closeEntityId: input.close?.id ?? null,
     statementId: input.statement?.id ?? null,
     signoff,
+    cash,
+    driftThresholdPct: input.driftThresholdPct,
     sources,
   };
 }

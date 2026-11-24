@@ -1,10 +1,11 @@
-import type { RecBind, RecReview } from '@tapestrai/graphql/src/lib/fund-rec';
+import { decisionProblem, type RecBind, type RecReview } from '@tapestrai/graphql/src/lib/fund-rec';
 import type { FundRecBoard } from '@tapestrai/graphql/src/lib/fund-rec-store';
 import { CREATE_ENTITY_MUTATION, UPDATE_ENTITY_MUTATION, graphqlMutation } from '@/lib/graphql';
 import type { Figures } from '@/lib/certification';
 import type { CashRec } from '@/lib/cash-rec';
 
 export type { RecBind, RecReview, FundRecBoard };
+export { decisionProblem };
 export type FundRec = RecReview & {
   periods: string[];
   priorOpen: boolean;
@@ -22,8 +23,8 @@ export const FUND_REC_BOARD_QUERY = `
 `;
 
 export const FUND_REC_QUERY = `
-  query FundRec($fundId: ID!, $periodEnd: Date, $asOfDate: Date, $knowledgeDate: DateTime, $driftThresholdPct: Float) {
-    fundRec(fundId: $fundId, periodEnd: $periodEnd, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate, driftThresholdPct: $driftThresholdPct)
+  query FundRec($fundId: ID!, $periodEnd: Date, $asOfDate: Date, $knowledgeDate: DateTime) {
+    fundRec(fundId: $fundId, periodEnd: $periodEnd, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate)
     cashRec(fundId: $fundId, periodEnd: $periodEnd, asOfDate: $asOfDate, knowledgeDate: $knowledgeDate)
   }
 `;
@@ -177,6 +178,9 @@ export async function recordDecision(
   decision: 'ACCEPT' | 'ADJUST' | 'QUERY' | '',
   note: string,
 ): Promise<void> {
+  // The same rule the workflow tool holds a decision to: an adjustment or a query says why.
+  const problem = decision ? decisionProblem({ decision, note }) : null;
+  if (problem) throw new Error(problem);
   const closeId = await ensureClose(ctx);
   const attributes = {
     DISPOSITION_DECISION: decision,
@@ -203,6 +207,12 @@ export async function recordDecision(
       validFrom: ctx.asOfDate,
     }],
   });
+}
+
+/** The drift threshold is a setting of the fund, so every reader of the close uses the same one. */
+export async function setDriftThreshold(ctx: WriteContext, percent: number): Promise<void> {
+  if (!Number.isFinite(percent) || percent <= 0) throw new Error('The drift threshold must be a percentage above zero.');
+  await update(ctx.rec.fundId, { FUND_DRIFT_THRESHOLD_PCT: String(percent) }, ctx.asOfDate);
 }
 
 export async function setSignoff(ctx: WriteContext, value: string): Promise<void> {

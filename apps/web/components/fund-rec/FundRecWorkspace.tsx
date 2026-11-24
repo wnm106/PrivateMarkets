@@ -9,14 +9,14 @@ import { useTemporalStore } from '@/lib/store';
 import { useSurfaceNav } from '@/lib/surface-nav';
 import { usePublishTabs, withoutSources, type TabPayload } from '@/lib/view-context';
 import {
-  CLOSE_PROCESS, FUND_REC_QUERY, HEALTH_LABEL, certify, healthTone, longDate, millions, percent, recFigures, recordDecision, reopen,
-  setSignoff, shortDate, signedMillions, stepTone,
+  CLOSE_PROCESS, FUND_REC_QUERY, HEALTH_LABEL, certify, decisionProblem, healthTone, longDate, millions, percent, recFigures, recordDecision, reopen,
+  setDriftThreshold, setSignoff, shortDate, signedMillions, stepTone,
   type FundRec, type RecBind,
 } from '@/lib/fund-rec';
 import { certifyBlockedBy, replacedDependencies, type Certification, type CertificationView } from '@/lib/certification';
 import { CertifiedBanner, ReopenButton, useCertification } from '@/components/certification/CertificationScope';
 import {
-  cashMoney, saveCashAdjustment, saveCashMatch, saveCashRules, unmatchCash,
+  cashMoney, removeCashAdjustment, saveCashAdjustment, saveCashMatch, saveCashRules, unmatchCash,
   type CashRec, type CashRule,
 } from '@/lib/cash-rec';
 import { summarizeBreaks, type BreakEntry, type BreakSummary } from '@tapestrai/graphql/src/lib/nav-breaks';
@@ -64,7 +64,7 @@ const REC_TAB_INFO = {
   close: {
     label: 'Close status',
     purpose: 'Where this period\'s NAV close stands: the steps to certify, who owns them, what blocks certification and which review items are still undecided.',
-    howToRead: 'health and certifyBlock say whether the NAV can be certified now. steps are the close steps in order: rule says what makes a step done and worked names the tab where it is worked. items are the review items from the fees, marks and drift tabs; decision is null while undecided. cashReconciliation is the cash tie-out worked beside the steps; it does not hold certification.',
+    howToRead: 'health and certifyBlock say whether the NAV can be certified now. steps are the close steps in order: rule says what makes a step done and worked names the tab where it is worked. items are the review items from the fees, marks and drift tabs; decision is null while undecided; an adjustment or a query needs a note. cashReconciliation is where the cash step stands. Certification waits on every step before it, the reviewer sign-off included.',
   },
   pack: {
     label: 'NAV pack',
@@ -109,7 +109,7 @@ const REC_TAB_INFO = {
   drift: {
     label: 'Period drift',
     purpose: 'How each statement line moved since the prior period, and which large moves are explained.',
-    howToRead: 'change is current minus prior. flagged lines moved more than the threshold; explained says why, when known.',
+    howToRead: 'change is current minus prior. flagged lines moved more than thresholdPct, the fund\'s drift threshold, which every reader of the close uses; explained says why, when known.',
   },
   inputs: {
     label: 'Rec inputs',
@@ -178,7 +178,7 @@ function recTabs(
         certified: rec.certified, canCertify: rec.canCertify, certifyBlock: rec.certifyBlock, targetDate: rec.targetDate, daysToTarget: rec.daysToTarget,
         navReported: rec.navReported, navProposed: rec.navProposed, navPrior: rec.navPrior, navChangePct: rec.navChangePct, netIrr: rec.netIrr,
         adjustments: rec.adjustments, stepsDone: rec.stepsDone, steps: rec.steps.map((step) => ({ name: step.name, owner: step.owner, due: step.due, state: step.state, detail: step.detail, overdue: step.overdue, rule: step.rule, worked: isTab(step.tab) ? TAB_LABEL[step.tab] : null })),
-        cashReconciliation: cash ? { standing: cashStanding(cash), tied: cash.summary.tied, residual: cash.summary.residual, holdsCertification: false } : null,
+        cashReconciliation: cash ? { standing: cashStanding(cash), tied: cash.summary.tied, residual: cash.summary.residual } : null,
         itemsDecided: rec.itemsDecided, itemsOpen: undecided.length, openItems: head(undecided, 40).map(item),
         insights: insights?.map((point) => point) ?? null,
         certification: certification
@@ -268,7 +268,7 @@ function recTabs(
     },
     drift: {
       ...tabInfo('drift'),
-      data: { drift: head(rec.drift, 120), items: rec.items.filter((row) => row.tab === 'drift').map(item) },
+      data: { thresholdPct: rec.driftThresholdPct, drift: head(rec.drift, 120), items: rec.items.filter((row) => row.tab === 'drift').map(item) },
     },
     inputs: {
       ...tabInfo('inputs'),
@@ -283,12 +283,13 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   const [rec, setRec] = useState<FundRec | null>(null);
   const [cash, setCash] = useState<CashRec | null>(null);
   const [period, setPeriod] = useState<string | null>(null);
-  const [threshold, setThreshold] = useState(10);
   const [tab, setTab] = useState<TabKey>(isTab(initialTab) ? initialTab : 'close');
   const [guideOpen, setGuideOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
+  /** Why a decision on an item was not recorded, shown on the item until it is put right. */
+  const [itemProblems, setItemProblems] = useState<Record<string, string>>({});
   const [insights, setInsights] = useState<RecInsight[] | null>(null);
   const [insightError, setInsightError] = useState<string | null>(null);
   const [insightTry, setInsightTry] = useState(0);
@@ -307,14 +308,14 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   const load = useCallback(async () => {
     const result = await graphqlQuery<{ fundRec: FundRec; cashRec: CashRec }, Record<string, unknown>>(
       FUND_REC_QUERY,
-      { fundId, periodEnd: period ?? pinnedPeriod, asOfDate, knowledgeDate: dates.knowledgeDate, driftThresholdPct: threshold },
+      { fundId, periodEnd: period ?? pinnedPeriod, asOfDate, knowledgeDate: dates.knowledgeDate },
       'network-only',
     );
     if (result.error) { setError(result.error.message || 'Could not load the close'); return; }
     setRec(result.data?.fundRec ?? null);
     setCash(result.data?.cashRec ?? null);
     setError(null);
-  }, [fundId, period, pinnedPeriod, asOfDate, dates.knowledgeDate, threshold]);
+  }, [fundId, period, pinnedPeriod, asOfDate, dates.knowledgeDate]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -467,7 +468,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
       <div className={tab === 'cash' ? 'da-main solo' : 'da-main'}>
         <div>
           <StepGuide tab={tab} open={guideOpen} onToggle={setGuideOpen} />
-          {tab === 'close' && <CloseTab rec={rec} cash={cash} onOpen={openTab} onSignoff={(label) => run(() => setSignoff(ctx, SIGNOFF_BY_LABEL[label]))} />}
+          {tab === 'close' && <CloseTab rec={rec} onOpen={openTab} onSignoff={(label) => run(() => setSignoff(ctx, SIGNOFF_BY_LABEL[label]))} />}
           {tab === 'breaks' && breaks && <BreaksTab summary={breaks} onOpen={openTab} />}
           {tab === 'pack' && <NavPackTab pack={rec.pack} checks={rec.checks} />}
           {tab === 'stmt' && <StatementTab rec={rec} onOpen={openTab} />}
@@ -477,7 +478,9 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
                 cash={cash}
                 busy={busy}
                 locked={locked}
+                step={rec.steps.find((step) => step.key === 'cash') ?? null}
                 fundHref={`/funds/${rec.fundId}/overview`}
+                onRemoveAdjustment={(adjustmentId: string) => run(() => removeCashAdjustment(adjustmentId, asOfDate))}
                 onApprove={(bankTxnId) => run(async () => {
                   const txn = cash.transactions.find((row) => row.id === bankTxnId);
                   if (!txn) return;
@@ -497,7 +500,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
           {tab === 'integrity' && <IntegrityTab rec={rec} />}
           {tab === 'fees' && <FeesTab rec={rec} />}
           {tab === 'val' && <MarksTab rec={rec} />}
-          {tab === 'drift' && <DriftTab rec={rec} threshold={threshold} onThreshold={setThreshold} />}
+          {tab === 'drift' && <DriftTab rec={rec} busy={busy} onThreshold={(value) => run(() => setDriftThreshold(ctx, value))} />}
           {tab === 'inputs' && <InputsTab rec={rec} onOpen={openTab} />}
         </div>
 
@@ -506,7 +509,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
             <h2 className="da-qtitle">Review queue</h2>
             <p className="da-note">
               {decided} of {rec.items.length} items decided.{' '}
-              {locked || 'Accept takes the administrator\'s figure. Adjust keeps ours and moves the proposed NAV by the NAV effect. Query admin holds certification until it is answered. Press a decision again to clear it.'}
+              {locked || 'Accept takes the administrator\'s figure. Adjust keeps ours and moves the proposed NAV by the NAV effect. Query admin holds certification until it is answered. Adjust and Query need a note saying why. Press a decision again to clear it.'}
             </p>
             <div className="da-bar"><i style={{ width: `${rec.items.length ? (decided / rec.items.length) * 100 : 100}%` }} /></div>
             {rec.items.map((item) => {
@@ -536,7 +539,13 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
                         className={`${item.decision === value ? 'on' : ''} ${value.toLowerCase()}`}
                         sources={decisionSources}
                         display={label}
-                        onClick={() => run(() => recordDecision(ctx, item, item.decision === value ? '' : value, note))}
+                        onClick={() => {
+                          const next = item.decision === value ? '' : value;
+                          const problem = next ? decisionProblem({ decision: next, note }) : null;
+                          setItemProblems((current) => ({ ...current, [item.id]: problem ?? '' }));
+                          if (problem) { document.getElementById(`rec-note-${item.id}`)?.focus(); return; }
+                          void run(() => recordDecision(ctx, item, next, note));
+                        }}
                       >{label}</RecPress>
                     ))}
                   </div>
@@ -545,11 +554,20 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
                     display={note}
                     value={note}
                     disabled={rec.certified}
-                    onChange={(value) => setNotes((current) => ({ ...current, [item.id]: value }))}
+                    id={`rec-note-${item.id}`}
+                    onChange={(value) => {
+                      setNotes((current) => ({ ...current, [item.id]: value }));
+                      if (value.trim()) setItemProblems((current) => ({ ...current, [item.id]: '' }));
+                    }}
                     onBlur={() => {
-                      if (item.dispositionId && note !== item.note) void run(() => recordDecision(ctx, item, item.decision ?? '', note));
+                      if (!item.dispositionId || note === item.note) return;
+                      // A decision that needs a note keeps the one it has until another is written.
+                      const problem = item.decision ? decisionProblem({ decision: item.decision, note }) : null;
+                      setItemProblems((current) => ({ ...current, [item.id]: problem ?? '' }));
+                      if (!problem) void run(() => recordDecision(ctx, item, item.decision ?? '', note));
                     }}
                   />
+                  {itemProblems[item.id] ? <p className="da-qproblem" role="alert">{itemProblems[item.id]}</p> : null}
                 </div>
               );
             })}
@@ -586,20 +604,23 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
 }
 
 function RecNote({
-  sources, display, value, disabled, onChange, onBlur,
+  sources, display, value, disabled, id, onChange, onBlur,
 }: {
   sources: RecBind[];
   display: string;
   value: string;
   disabled: boolean;
+  id: string;
   onChange: (value: string) => void;
   onBlur: () => void;
 }) {
   return (
     <RecBit className="da-qnote-wrap" sources={sources} display={display || 'Note for the file'}>
       <input
+        id={id}
         className="da-qnote"
-        placeholder="Note for the file"
+        aria-label="Note for the file"
+        placeholder="Note for the file. Needed to adjust or query."
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
@@ -623,7 +644,7 @@ function RecNotes({ notes, outcome }: { notes: string; outcome: string }) {
   );
 }
 
-function CloseTab({ rec, cash, onOpen, onSignoff }: { rec: FundRec; cash: CashRec | null; onOpen: (tab: TabKey) => void; onSignoff: (label: string) => void }) {
+function CloseTab({ rec, onOpen, onSignoff }: { rec: FundRec; onOpen: (tab: TabKey) => void; onSignoff: (label: string) => void }) {
   const next = rec.steps.find((step) => step.state !== 'Done');
   return (
     <>
@@ -661,12 +682,6 @@ function CloseTab({ rec, cash, onOpen, onSignoff }: { rec: FundRec; cash: CashRe
           </tbody>
         </table>
       </div>
-      {cash && (
-        <p className="da-note da-also">
-          Beside the steps, cash reconciliation: {cashStanding(cash)}. It does not hold certification.{' '}
-          <button type="button" className="da-link" onClick={() => onOpen('cash')}>Open cash reconciliation</button>
-        </p>
-      )}
     </section>
     {rec.closeNotes?.notes ? <RecNotes notes={rec.closeNotes.notes} outcome={rec.closeNotes.outcome} /> : null}
     </>
@@ -1064,15 +1079,19 @@ function MarksTab({ rec }: { rec: FundRec }) {
   );
 }
 
-function DriftTab({ rec, threshold, onThreshold }: { rec: FundRec; threshold: number; onThreshold: (value: number) => void }) {
+function DriftTab({ rec, busy, onThreshold }: { rec: FundRec; busy: boolean; onThreshold: (value: number) => void }) {
+  const threshold = rec.driftThresholdPct;
+  const choices = [...new Set([5, 10, 15, 25, threshold])].sort((left, right) => left - right);
   return (
     <section className="da-sec">
       <div className="da-sechead">
         <h2>Prior period to current period</h2>
         <p>
           Each movement should be explained by a flow in the pack. Unexplained moves above{' '}
-          <select value={threshold} onChange={(event) => onThreshold(Number(event.target.value))}>{[5, 10, 15, 25].map((value) => <option key={value} value={value}>{value}%</option>)}</select>{' '}
-          go to the review queue.
+          <RecBit sources={rec.sources.driftThreshold} display={`${threshold}%`}>
+            <select aria-label="Drift threshold" value={threshold} disabled={busy || rec.certified} onChange={(event) => onThreshold(Number(event.target.value))}>{choices.map((value) => <option key={value} value={value}>{value}%</option>)}</select>
+          </RecBit>{' '}
+          go to the review queue. The threshold is saved on the fund, so the page, the workflows and the assistant all read this close the same way.{rec.certified ? ' It cannot be changed while the close is certified.' : ''}
         </p>
       </div>
       <div className="da-gridwrap"><table className="da-grid">

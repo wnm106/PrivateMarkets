@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_CASH_RULES,
   buildCashRec,
+  cashStanding,
   clearingAdjustment,
   inBusinessWindow,
   settlementAmount,
@@ -143,6 +144,15 @@ describe('tie-out', () => {
     ));
     expect(tied.summary.tied).toBe(true);
     expect(tied.summary.positionTied).toBe(tied.summary.bankTied);
+  });
+
+  it('gives the close its standing: tied or not, what waits for approval, and whether there is a bank side at all', () => {
+    const open = buildCashRec(input([flow('CF-A', 'P1', 'INTEREST', 1_000)], [txn('BTX-A', 950)]));
+    expect(cashStanding(open)).toEqual({
+      bankOnFile: true, tied: false, residual: 50, positionTied: 1_000, bankTied: 950, proposed: 1, openTransactions: 0, openFlows: 0,
+    });
+    const noBank = buildCashRec(input([flow('CF-A', 'P1', 'INTEREST', 1_000)], []));
+    expect(cashStanding(noBank)).toMatchObject({ bankOnFile: false, tied: false, proposed: 0, openFlows: 1 });
   });
 });
 

@@ -153,6 +153,21 @@ export interface CashRec extends CashRecInput {
   summary: CashRecSummary;
 }
 
+/** Where a cash reconciliation stands, as a NAV close needs it. */
+export interface CashStanding {
+  /** Bank transactions are on file for the period. Without them there is nothing to reconcile against. */
+  bankOnFile: boolean;
+  tied: boolean;
+  /** Position book less bank, after adjustments. */
+  residual: number;
+  positionTied: number;
+  bankTied: number;
+  /** Pairs the rules propose that nobody has approved yet. */
+  proposed: number;
+  openTransactions: number;
+  openFlows: number;
+}
+
 const CENT = 0.01;
 
 const CASH_OUT = new Set([
@@ -400,6 +415,21 @@ export function clearingAdjustment(residual: number): { amount: number; side: Ad
   if (Math.abs(gap) < CENT) return null;
   if (gap > 0) return { amount: gap, side: 'BANK' };
   return { amount: cents(-gap), side: 'POSITION' };
+}
+
+/** The standing of a cash reconciliation, read from its summary. The close holds on this and nothing else. */
+export function cashStanding(rec: Pick<CashRec, 'transactions' | 'summary'>): CashStanding {
+  const { summary } = rec;
+  return {
+    bankOnFile: rec.transactions.length > 0,
+    tied: summary.tied,
+    residual: summary.residual,
+    positionTied: summary.positionTied,
+    bankTied: summary.bankTied,
+    proposed: summary.proposedCount,
+    openTransactions: summary.openTxnCount,
+    openFlows: summary.openFlowCount,
+  };
 }
 
 function ruleName(rules: readonly CashRule[], kind: CashRuleKind, ruleId: string | null): string {

@@ -7,7 +7,7 @@ import {
   CASH_RULE_CONFIDENCE, bankLagDays, cashMoney, cashTypeLabel, clearingAdjustment, moveCashRule, shiftBusinessDays,
   type AdjustmentSide, type CashRec, type CashRule,
 } from '@/lib/cash-rec';
-import { longDate, type RecBind } from '@/lib/fund-rec';
+import { longDate, stepTone, type FundRec, type RecBind } from '@/lib/fund-rec';
 import { RecBit, RecCell } from './RecInspect';
 
 /** The stored attribute a cash figure is read from, for the right-click sources panel. */
@@ -69,7 +69,9 @@ export function CashRecTab({
   cash,
   busy,
   locked,
+  step,
   fundHref,
+  onRemoveAdjustment,
   onApprove,
   onPair,
   onUnmatch,
@@ -80,8 +82,11 @@ export function CashRecTab({
   busy: boolean;
   /** Why nothing here can be changed: the close is certified. Null when it can. */
   locked: string | null;
+  /** The close step this tab works, with where it stands and what makes it done. */
+  step: FundRec['steps'][number] | null;
   /** The fund record, where bank accounts are added. */
   fundHref: string;
+  onRemoveAdjustment: (adjustmentId: string) => Promise<void>;
   onApprove: (bankTxnId: string) => Promise<void>;
   onPair: (bankTxnId: string, flowIds: string[]) => Promise<void>;
   onUnmatch: (matchId: string) => Promise<void>;
@@ -183,6 +188,12 @@ export function CashRecTab({
       </div>
 
       {locked && <div className="cert-banner cert-warn"><span><strong>Read only.</strong> {locked}</span></div>}
+      {step && (
+        <p className="da-standing">
+          <span className={`da-st ${stepTone(step.state)}`}>{step.state}</span>
+          <span className="da-note"><b>{step.detail}.</b> {step.rule}</span>
+        </p>
+      )}
       <p className="da-note cr-scope">
         In this period: position cash flows dated after {longDate(cash.priorPeriodEnd)} up to {longDate(cash.periodEnd)}, and bank transactions in the same dates
         or up to {lagDays} business days after, through {longDate(bankThrough)}, so a late settlement can be paired. Non-cash flows stay on the roll-forward. Money leaving the fund is negative.
@@ -390,6 +401,19 @@ export function CashRecTab({
                     <tr key={item.id}>
                       <RecCell sources={src(item.id, item.reason, 'CASH_ADJUSTMENT', 'ADJ_REASON', 'Reason')} display={item.reason}><Link href={`${domainHref('CASH_ADJUSTMENT')}/${item.id}`}>{item.reason}</Link><small><RecBit sources={src(item.id, item.reason, 'CASH_ADJUSTMENT', 'ADJ_SIDE', 'Side')} display={item.side}>{item.side === 'BANK' ? 'Bank' : 'Position book'}</RecBit></small></RecCell>
                       <RecCell className="num" sources={src(item.id, item.reason, 'CASH_ADJUSTMENT', 'ADJ_AMOUNT', 'Amount', 'CURRENCY')} display={cashMoney(item.amount)}>{cashMoney(item.amount)}</RecCell>
+                      {!locked && (
+                        <td className="act">
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            disabled={frozen}
+                            aria-label={`Remove the adjustment: ${item.reason}`}
+                            onClick={() => {
+                              if (window.confirm(`Remove this adjustment of ${cashMoney(item.amount)}? The tie-out goes back to what it was without it. The record is kept, retired.`)) void onRemoveAdjustment(item.id);
+                            }}
+                          >Remove</button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

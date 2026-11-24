@@ -137,6 +137,11 @@ export async function unmatchCash(matchId: string, asOfDate: string): Promise<vo
   await update(matchId, {}, asOfDate, false);
 }
 
+/** Take a posted adjustment back. The record is kept, retired, with its history. */
+export async function removeCashAdjustment(adjustmentId: string, asOfDate: string): Promise<void> {
+  await update(adjustmentId, {}, asOfDate, false);
+}
+
 export async function saveCashAdjustment(
   rec: CashRec,
   amount: number,

@@ -11162,10 +11162,16 @@ details.rb-sec[open] > .rb-head .rb-chev { transform: rotate(225deg); }
 .da-note.da-also { margin-top: 10px; }
 .da-actions { margin: 10px 0 0; display: flex; gap: 8px; }
 .da-standing { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 8px 0; }
+.da-standing .da-note { flex: 1; min-width: 280px; }
 .da-steps td small { max-width: 52ch; margin-top: 2px; }
+.da-steps .da-st { white-space: nowrap; }
+/* What holds certification can be a long line: it wraps in its box and leaves the figures their room. */
+.fund-rec .da-holdbox { max-width: 340px; }
 .da-steps tr.next td:first-child { box-shadow: inset 3px 0 0 #0b5d73; }
 .da-qhead .da-link { font-size: 11.5px; white-space: nowrap; }
 .cr-pickhint { flex-basis: 100%; }
+.cr .da-mini td.act { width: 86px; text-align: right; }
+.da-qproblem { margin: 0; color: var(--red); font-size: 12px; }
 .cr-tie tr.of td { color: var(--da-muted); padding-left: 24px; }
 @media (max-width: 760px) {
   .da-guide dl div { grid-template-columns: 1fr; gap: 2px; }

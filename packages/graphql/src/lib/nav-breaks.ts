@@ -244,11 +244,30 @@ function rollEntries(review: Review): BreakEntry[] {
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
+/** The cash reconciliation, while it holds certification: not tied, or a proposed pair nobody approved. */
+function cashEntries(review: Review): BreakEntry[] {
+  const cash = review.cash;
+  if (!cash?.bankOnFile || (cash.tied && !cash.proposed)) return [];
+  const open = `${plural(cash.openTransactions, 'bank transaction')} and ${plural(cash.openFlows, 'cash flow')} have no pair`;
+  const waiting = cash.proposed ? ` ${plural(cash.proposed, 'pair')} the rules propose ${cash.proposed === 1 ? 'waits' : 'wait'} for approval.` : '';
+  return [{
+    kind: 'break', id: 'cash', title: 'Cash reconciliation: position book against bank',
+    reported: cash.positionTied, expected: cash.bankTied, difference: cash.residual, unit: 'USD',
+    cause: cash.tied
+      ? `Position book cash and bank activity agree after adjustments.${waiting}`
+      : `Position book cash and bank activity for the period do not agree after adjustments: ${open}.${waiting}`,
+    action: cash.tied
+      ? 'Approve or correct each proposed pair in the review tray of the cash reconciliation.'
+      : 'Approve the proposed pairs, pair what is left by hand, and post an adjustment for each difference whose cause is known.',
+    owner: 'Fund accountant', blocking: true, tab: 'cash',
+  }];
+}
+
 /** The summary of one fund's reconciliation for one period. */
 export function summarizeBreaks(review: Review): BreakSummary {
   const checkBreaks = review.checks.filter((check) => check.result === 'Break').map(checkEntry);
   const rollBreaks = rollEntries(review);
-  const breaks = [...checkBreaks, ...rollBreaks];
+  const breaks = [...checkBreaks, ...rollBreaks, ...cashEntries(review)];
   // The lines that hold the roll-forward step: the walk and each tie to a statement line.
   const rollLines = review.roll?.present ? review.roll.ties.length + 1 : 0;
   const missing = review.checks.filter((check) => check.result === 'Missing').map(checkEntry);

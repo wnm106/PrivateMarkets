@@ -276,13 +276,17 @@ The agent reads the same reconciliation the pages draw (`get_nav_reconciliation`
 | Change | Tool | Notes |
 |---|---|---|
 | A decision on a review item | `record_rec_decision` | Accept, adjust, or query the administrator. Adjust and query need a note. Refused on a certified period |
-| A cash pair | `approve_cash_match` | A pair the rules propose keeps its rule and confidence. Any other is a manual match with its variance. Refused if either side is already paired |
-| A cash adjustment | `post_cash_adjustment` | Needs a reason. The agent is told to post one only for a difference whose cause is established, never to clear a residual |
+| A cash pair | `approve_cash_match` | A pair the rules propose keeps its rule and confidence. Any other is a manual match with its variance. Refused if either side is already paired, and on a certified period |
+| A cash adjustment | `post_cash_adjustment` | Needs a reason. The agent is told to post one only for a difference whose cause is established, never to clear a residual. Refused on a certified period |
 | The notes | `save_reconciliation_notes` | One per fund, applied after that fund's other changes |
 
 Each change is checked against the reconciliation again when it is applied, so a change that no longer fits is refused instead of recorded. An approved decision or adjustment is signed in its note: "Approved by Ada Reviewer in workflow run …".
 
-**No workflow signs off or certifies.** There is no tool for either. Both stay with a person on the reconciliation page.
+**No workflow signs off or certifies.** There is no tool for either. Both stay with a person on the reconciliation page. Certifying waits on both: the reviewer sets sign-off to Done, and only then is Certify NAV offered.
+
+**What holds certification** is decided in one place, `buildReview` in `packages/graphql/src/lib/fund-rec.ts`, and the page, the tools and the break summary read it: a check that breaks, a line of the position roll-forward that does not tie, a query open with the administrator, a review item with no decision, a cash reconciliation that is open, and a sign-off that is not Done. Cash is open while position book cash and bank activity differ after adjustments, or a pair the rules propose waits for approval. A period with no bank transactions on file has nothing to reconcile and holds nothing.
+
+**The drift threshold is a fund setting** (`FUND_DRIFT_THRESHOLD_PCT`, 10 when blank). The page changes it on the Period drift tab, and every reader of the close uses it, so a workflow sees the review queue a person sees.
 
 ### The notes
 
@@ -299,7 +303,8 @@ The reconciliation page (`/fund-rec/<fund>`) is where a person works the same cl
 - **How this step works**, at the top of every tab, says what the step establishes, what its terms mean, whether it holds certification, and what to do when it does not tie. The text is in `apps/web/lib/rec-guide.ts`. It quotes the reconciliation's own tolerances and is published to the assistant with each tab, so the page and the assistant explain a step the same way. Change it when a step's behaviour changes.
 - **Close status** lists the ten close steps. Each says what makes it done (`rule` on the step, set beside the step in `packages/graphql/src/lib/fund-rec.ts`) and has a button to the tab where it is worked.
 - **Breaks** lists everything that holds certification: checks that break, lines of the position roll-forward that do not tie, and review items not yet accepted or adjusted. Each entry names the tab where it is settled.
-- **Cash reconciliation** does not hold certification. On a certified close it is read only, like the review queue.
+- **Cash reconciliation** is a step of the close and holds certification until it ties. On a certified close it is read only, like the review queue.
+- A decision on a review item needs a note to adjust or to query, on the page as in a workflow. Both ask `decisionProblem`.
 
 ### Setting up
 

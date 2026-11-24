@@ -19,7 +19,8 @@ describe('how each step of the NAV review works', () => {
     for (const key of ['roll', 'cash', 'fees', 'val', 'drift', 'stmt'] as RecGuideKey[]) {
       assert.ok(REC_GUIDE[key].points.some(([term]) => term === 'What it holds'), key);
     }
-    assert.match(guideText('cash'), /does not block certification/);
+    assert.match(guideText('cash'), /Certification, until position book cash equals bank activity/);
+    assert.match(guideText('close'), /reviewer sign-off that is not Done/);
     assert.match(guideText('roll'), /blocks this step and certification/);
   });
 

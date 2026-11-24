@@ -12,7 +12,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadCashRec } from './cash-rec-store';
 import type { AdjustmentSide, CashRec, CashRuleKind } from './cash-rec';
-import type { Decision } from './fund-rec';
+import { decisionProblem, type Decision } from './fund-rec';
 import { loadFundRec } from './fund-rec-store';
 import { recOutcome } from './rec-digest';
 import { writeGoldenValue } from './golden-write';
@@ -182,17 +182,17 @@ export interface DecisionInput extends PeriodRef {
   note?: string | null;
 }
 
-const DECISIONS: readonly Decision[] = ['ACCEPT', 'ADJUST', 'QUERY'];
+// What is wrong with a decision before anything is read: one rule, shared with the page.
+export { decisionProblem };
 
-/** What is wrong with a decision before anything is read. Empty means it can be recorded. */
-export function decisionProblem(input: { decision: string; note?: string | null }): string | null {
-  if (!DECISIONS.includes(input.decision as Decision)) return 'decision must be ACCEPT, ADJUST, or QUERY.';
-  if (input.decision !== 'ACCEPT' && !String(input.note || '').trim()) {
-    return input.decision === 'ADJUST'
-      ? 'An adjustment needs a note saying what is adjusted and why.'
-      : 'A query needs a note with the question for the administrator.';
-  }
-  return null;
+/**
+ * The cash reconciliation of a period that can still be changed. A certified
+ * period is refused, the same as a decision on one: reopen it first.
+ */
+async function openCashRec(supabase: SupabaseClient, input: PeriodRef, asOf: string): Promise<CashRec> {
+  const cashRead = loadCashRec(supabase, input.fundId, input.periodEnd, asOf, null);
+  requireOpen(await loadFundRec(supabase, input.fundId, input.periodEnd, asOf, null, null, { cashRec: cashRead }));
+  return cashRead;
 }
 
 /** Accept the administrator's figure on a review item, propose an adjustment, or query the administrator. */
@@ -278,7 +278,7 @@ export interface CashMatchInput extends PeriodRef {
 
 /** Pair one bank transaction with the positional cash flows it settled. */
 export async function approveCashMatch(supabase: SupabaseClient, input: CashMatchInput, asOf: string = today()) {
-  const rec = await loadCashRec(supabase, input.fundId, input.periodEnd, asOf, null);
+  const rec = await openCashRec(supabase, input, asOf);
   const flowIds = [...new Set((input.flowIds || []).map(String).filter(Boolean))];
   const pairing = cashPairing(rec, input.bankTxnId, flowIds);
   const txn = rec.transactions.find((row) => row.id === input.bankTxnId)!;
@@ -318,7 +318,7 @@ export async function postCashAdjustment(supabase: SupabaseClient, input: CashAd
   if (!Number.isFinite(amount) || amount === 0) throw new Error('An adjustment needs an amount that is not zero.');
   if (input.side !== 'POSITION' && input.side !== 'BANK') throw new Error('side must be POSITION or BANK.');
   if (!reason) throw new Error('An adjustment needs a reason.');
-  const rec = await loadCashRec(supabase, input.fundId, input.periodEnd, asOf, null);
+  const rec = await openCashRec(supabase, input, asOf);
   const adjustmentId = await createRecord(supabase, {
     code: `${rec.fundCode}-CASH-ADJ-${stamp(rec.periodEnd)}-${unique()}`,
     name: reason.slice(0, 80),

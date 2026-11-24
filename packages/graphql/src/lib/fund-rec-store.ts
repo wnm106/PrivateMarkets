@@ -31,10 +31,23 @@ export interface PriorCertification {
   certifiedAt: string;
 }
 import { loadNavPack } from './nav-pack-store';
+import { cashStanding, type CashRec } from './cash-rec';
+import { loadCashRec } from './cash-rec-store';
+
+/** The drift threshold when the fund sets none. */
+export const DEFAULT_DRIFT_THRESHOLD_PCT = 10;
+
+export interface FundRecLoadOptions {
+  /**
+   * The cash reconciliation of the same fund, period and dates, when the caller
+   * is reading it anyway. Otherwise the close reads it itself.
+   */
+  cashRec?: Promise<CashRec>;
+}
 import type { PackActivity, PackHolding } from './nav-pack';
 
 const CODES = [
-  'FUND_STRATEGY', 'FUND_TOTAL_COMMITMENTS', 'FUND_NET_IRR', 'FUND_CLOSE_FREQUENCY', 'FUND_CLOSE_LAG_DAYS',
+  'FUND_STRATEGY', 'FUND_TOTAL_COMMITMENTS', 'FUND_NET_IRR', 'FUND_CLOSE_FREQUENCY', 'FUND_CLOSE_LAG_DAYS', 'FUND_DRIFT_THRESHOLD_PCT',
   'FUND_MGMT_FEE_RATE_PCT', 'FUND_PREF_RETURN_PCT', 'FUND_CARRY_PCT', 'FUND_CATCH_UP_PCT',
   'FUND_CAPITAL_MODEL', 'FUND_MGMT_FEE_BASIS', 'FUND_PERF_FEE_BASIS',
   'FUND_MGMT_FEE_STEPDOWN_DATE', 'FUND_MGMT_FEE_STEPDOWN_RATE_PCT', 'FUND_MGMT_FEE_STEPDOWN_BASIS',
@@ -176,8 +189,10 @@ export async function loadFundRecInput(
   periodEndInput: string | null | undefined,
   todayInput: unknown,
   knowledgeInput: unknown,
-  driftThresholdPct: number,
+  /** A what-if threshold. Null reads the fund's own, which is what every saved reading uses. */
+  driftThresholdOverride: number | null | undefined,
   shared?: Facts,
+  options: FundRecLoadOptions = {},
 ): Promise<FundRecLoad | null> {
   const today = asOfDate(todayInput);
   const knowledge = knowledgeInstant(knowledgeInput);
@@ -187,6 +202,10 @@ export async function loadFundRecInput(
   if (frequencyCode !== 'MONTHLY' && frequencyCode !== 'QUARTERLY') return null;
   const frequency: Frequency = frequencyCode;
   const lagDays = facts.num(fund.id, 'FUND_CLOSE_LAG_DAYS') ?? 37;
+  const fundThreshold = facts.num(fund.id, 'FUND_DRIFT_THRESHOLD_PCT');
+  const driftThresholdPct = driftThresholdOverride != null && driftThresholdOverride > 0 ? driftThresholdOverride
+    : fundThreshold != null && fundThreshold > 0 ? fundThreshold
+      : DEFAULT_DRIFT_THRESHOLD_PCT;
   const periodEnd = periodEndInput ? periodEndInput.slice(0, 10) : periodEndOnOrBefore(frequency, today);
   const tie = [today, knowledge] as const;
 
@@ -216,6 +235,11 @@ export async function loadFundRecInput(
     ?? datedStatements[datedStatements.length - 1]?.id
     ?? null;
   const statementPeriod = statementId ? dateOnly(facts.str(statementId, 'STATEMENT_PERIOD_END')) : '';
+  // The close holds on cash once the pack is in, so the cash reconciliation is read beside it, not after.
+  const cashRead: Promise<CashRec | null> = options.cashRec
+    ?? (statementId ? loadCashRec(supabase, fund.id, periodEnd, today, knowledge) : Promise.resolve(null));
+  // Awaited at the end; a failure must not go unhandled while the rest loads.
+  cashRead.catch(() => undefined);
   /* What the statement says as of its own period end: the date its prior column is at, and the checks the report made of itself. */
   const atPeriodEnd = statementId ? await facts.snapshot([statementId], periodEnd, knowledge) : new Map<string, ValueRow>();
   const comparative = statementId ? dateOnly(facts.strIn(atPeriodEnd, statementId, 'STATEMENT_COMPARATIVE_DATE')) : '';
@@ -563,6 +587,7 @@ export async function loadFundRecInput(
       : null,
     dispositions,
     driftThresholdPct,
+    cash: await cashRead.then((rec) => (rec && rec.fundId === fund.id && rec.periodEnd === periodEnd ? cashStanding(rec) : null)),
   };
   return {
     input,
@@ -589,7 +614,8 @@ export async function loadFundRec(
   periodEnd: string | null | undefined,
   todayInput: unknown,
   knowledgeInput: unknown,
-  driftThresholdPct = 10,
+  driftThresholdPct: number | null = null,
+  options: FundRecLoadOptions = {},
 ): Promise<RecReview & { periods: string[]; priorOpen: boolean; fundCode: string; closeNotes: CloseNotes | null; priorCertification: PriorCertification | null }> {
   const lookup = /^[0-9a-f-]{36}$/i.test(fundId) ? 'id' : 'entity_code';
   const { data: fund, error } = await supabase
@@ -599,7 +625,7 @@ export async function loadFundRec(
     .maybeSingle();
   if (error) throw new Error(error.message);
   if (!fund || fund.domain_code !== 'FUND') throw new Error('Fund not found');
-  const loaded = await loadFundRecInput(supabase, fund, periodEnd, todayInput, knowledgeInput, driftThresholdPct);
+  const loaded = await loadFundRecInput(supabase, fund, periodEnd, todayInput, knowledgeInput, driftThresholdPct, undefined, options);
   if (!loaded) throw new Error('This fund has no close calendar. Set a close frequency on the fund record.');
   return {
     ...buildReview(loaded.input),
@@ -698,7 +724,7 @@ export async function loadFundRecBoard(
   const knowledge = knowledgeInstant(knowledgeInput);
   const facts = await Facts.open(supabase, today, knowledge);
   const list = await funds(supabase);
-  const loads = await Promise.all(list.map((fund) => loadFundRecInput(supabase, fund, null, today, knowledge, 10, facts)
+  const loads = await Promise.all(list.map((fund) => loadFundRecInput(supabase, fund, null, today, knowledge, null, facts)
     .then((loaded) => ({ fund, loaded }))));
   const rows = loads
     .filter((entry): entry is { fund: Named; loaded: FundRecLoad } => entry.loaded != null)

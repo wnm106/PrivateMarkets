@@ -10,6 +10,7 @@ import {
   stepDue,
   sumCashflows,
   targetDate,
+  type RecCashStanding,
   type RecInput,
   type RecLine,
   type RecPosition,
@@ -244,6 +245,24 @@ describe('position roll-forward', () => {
     expect(review.steps.find((step) => step.key === 'roll')?.state).toBe('Blocked');
   });
 
+  it('holds on every column the page compares: interest and fees received, and net amortization', () => {
+    const { roll } = buildReview(input());
+    expect(roll.ties.map((tie) => tie.line)).toEqual(expect.arrayContaining(['Interest and fees received', 'Net amortization']));
+    expect(roll.ties.find((tie) => tie.line === 'Interest and fees received')).toMatchObject({ result: 'Ties' });
+    expect(roll.ties.find((tie) => tie.line === 'Interest and fees received')!.rollforward / M).toBeCloseTo(12.8, 6);
+    // The cash flow statement's change in interest receivable no longer agrees with the balance sheet.
+    const lines = statementLines().map((row) => (row.statement === 'CASH' && /interest receivable/i.test(row.label) ? { ...row, admin: -1.4 * M } : row));
+    const off = buildReview(input({ lines }));
+    expect(off.roll.ties.find((tie) => tie.line === 'Interest and fees received')).toMatchObject({ result: 'Break' });
+    expect(off.roll.tied).toBe(false);
+    expect(off.certifyBlock).toBe('Position roll-forward does not tie');
+    // Amortization the statements do not show is a break, not a column to check by eye.
+    const amortized = positions();
+    amortized[0].roll!.amort += 0.3 * M;
+    amortized[0].roll!.endFv += 0.3 * M;
+    expect(buildReview(input({ positions: amortized })).roll.ties.find((tie) => tie.line === 'Net amortization')).toMatchObject({ result: 'Break' });
+  });
+
   it('lists each roll-forward line that breaks with the breaks, since it holds certification', () => {
     const moved = positions();
     moved[0].roll!.endFv += 2 * M;
@@ -255,8 +274,8 @@ describe('position roll-forward', () => {
     expect(walk.difference! / M).toBeCloseTo(2, 6);
     expect(summary.entries.find((entry) => entry.id === 'roll:Ending fair value')).toMatchObject({ kind: 'break', blocking: true, tab: 'roll' });
     expect(summary.counts.breaks).toBe(review.breaks + 2);
-    expect(summary.counts).toMatchObject({ rollLines: 13, rollTies: 11 });
-    expect(summary.markdown).toMatch(/Position roll-forward: 11 of 13 lines tie\./);
+    expect(summary.counts).toMatchObject({ rollLines: 15, rollTies: 13 });
+    expect(summary.markdown).toMatch(/Position roll-forward: 13 of 15 lines tie\./);
     expect(summarizeBreaks(buildReview(input())).entries.some((entry) => entry.id.startsWith('roll:'))).toBe(false);
   });
 });
@@ -266,9 +285,15 @@ describe('close steps', () => {
     const review = buildReview(input());
     expect(review.steps.every((step) => step.rule.length > 20)).toBe(true);
     expect(Object.fromEntries(review.steps.map((step) => [step.key, step.tab]))).toEqual({
-      pack: 'inputs', statements: 'integrity', evidence: 'integrity', roll: 'roll', val: 'val', fees: 'fees', drift: 'drift',
+      pack: 'inputs', statements: 'integrity', evidence: 'integrity', cash: 'cash', roll: 'roll', val: 'val', fees: 'fees', drift: 'drift',
       queries: 'breaks', signoff: null, certify: null,
     });
+  });
+
+  it('starts no step before the pack is in, the queries step included', () => {
+    const review = buildReview(input({ statement: null, lines: [], positions: [], evidence: { bank: null, lender: null } }));
+    expect(review.steps.filter((step) => step.key !== 'signoff').every((step) => step.state === 'Not started')).toBe(true);
+    expect(review.stepsDone).toBe(0);
   });
 
   it('blocks the statements step when a NAV pack check breaks, as certification is', () => {
@@ -319,12 +344,66 @@ describe('review items', () => {
     const base = buildReview(input());
     const decisions = Object.fromEntries(base.items.map((item) => [item.id, { id: null, decision: 'ACCEPT' as const, note: '' }]));
     expect(base.canCertify).toBe(false);
-    const done = buildReview(input({ dispositions: decisions }));
+    const signed = { id: 'C1', signoff: 'Done' as const, certifiedAt: null, certifiedBy: null, certifiedNav: null };
+    const done = buildReview(input({ dispositions: decisions, close: signed }));
     expect(done.canCertify).toBe(true);
-    const queried = buildReview(input({ dispositions: { ...decisions, fee: { id: null, decision: 'QUERY' as const, note: '' } } }));
+    expect(done.healthNote).toBe('Ready to certify');
+    const queried = buildReview(input({ close: signed, dispositions: { ...decisions, fee: { id: null, decision: 'QUERY' as const, note: '' } } }));
     expect(queried.canCertify).toBe(false);
     expect(queried.health).toBe('BLOCKED');
     expect(queried.steps.find((step) => step.key === 'queries')?.state).toBe('Blocked');
+  });
+});
+
+describe('what holds certification besides the checks', () => {
+  const decided = () => Object.fromEntries(buildReview(input()).items.map((item) => [item.id, { id: null, decision: 'ACCEPT' as const, note: '' }]));
+  const signed = { id: 'C1', signoff: 'Done' as const, certifiedAt: null, certifiedBy: null, certifiedNav: null };
+  const cash = (extra: Partial<RecCashStanding> = {}): RecCashStanding => ({
+    bankOnFile: true, tied: true, residual: 0, positionTied: 5 * M, bankTied: 5 * M, proposed: 0, openTransactions: 0, openFlows: 0, ...extra,
+  });
+
+  it('waits on the reviewer sign-off', () => {
+    const review = buildReview(input({ dispositions: decided() }));
+    expect(review.canCertify).toBe(false);
+    expect(review.certifyBlock).toBe('Reviewer sign-off is not done');
+    expect(review.health).toBe('IN_REVIEW');
+    expect(review.healthNote).toBe('Awaiting reviewer sign-off');
+    expect(review.steps.find((step) => step.key === 'signoff')).toMatchObject({ state: 'Not started', detail: 'Certification waits on it' });
+    expect(buildReview(input({ dispositions: decided(), close: signed })).canCertify).toBe(true);
+  });
+
+  it('waits on the cash reconciliation while it does not tie or a proposed pair is not approved', () => {
+    const apart = buildReview(input({ dispositions: decided(), close: signed, cash: cash({ tied: false, residual: -2150, bankTied: 5 * M + 2150, openTransactions: 1 }) }));
+    expect(apart.canCertify).toBe(false);
+    expect(apart.certifyBlock).toBe('Cash reconciliation is open: $2,150 apart');
+    expect(apart.steps.find((step) => step.key === 'cash')).toMatchObject({ state: 'In progress', detail: '$2,150 apart', tab: 'cash' });
+    expect(apart.healthNote).toBe('Cash to reconcile');
+    const entry = summarizeBreaks(apart).entries.find((item) => item.id === 'cash')!;
+    expect(entry).toMatchObject({ kind: 'break', blocking: true, tab: 'cash', difference: -2150, owner: 'Fund accountant' });
+    expect(entry.cause).toMatch(/1 bank transaction and 0 cash flows have no pair/);
+
+    const waiting = buildReview(input({ dispositions: decided(), close: signed, cash: cash({ proposed: 3 }) }));
+    expect(waiting.certifyBlock).toBe('Cash reconciliation is open: 3 proposed pairs to approve');
+    expect(summarizeBreaks(waiting).entries.find((item) => item.id === 'cash')!.action).toMatch(/Approve or correct each proposed pair/);
+
+    const tied = buildReview(input({ dispositions: decided(), close: signed, cash: cash() }));
+    expect(tied.canCertify).toBe(true);
+    expect(tied.steps.find((step) => step.key === 'cash')).toMatchObject({ state: 'Done', detail: 'Tied to the bank' });
+    expect(summarizeBreaks(tied).entries.some((item) => item.id === 'cash')).toBe(false);
+  });
+
+  it('holds nothing on cash when no bank transactions are on file, and does not call the step late', () => {
+    const review = buildReview(input({ dispositions: decided(), close: signed, cash: cash({ bankOnFile: false, tied: false, residual: -2.8 * M }) }));
+    expect(review.canCertify).toBe(true);
+    expect(review.steps.find((step) => step.key === 'cash')).toMatchObject({ state: 'Not started', detail: 'No bank transactions on file for the period', overdue: false });
+    expect(summarizeBreaks(review).entries.some((item) => item.id === 'cash')).toBe(false);
+  });
+
+  it('carries the drift threshold in force, so every reader sees the one the fund sets', () => {
+    expect(buildReview(input()).driftThresholdPct).toBe(10);
+    const loose = buildReview(input({ driftThresholdPct: 25 }));
+    expect(loose.driftThresholdPct).toBe(25);
+    expect(loose.items.filter((item) => item.tab === 'drift').length).toBeLessThan(buildReview(input()).items.filter((item) => item.tab === 'drift').length);
   });
 });
 
