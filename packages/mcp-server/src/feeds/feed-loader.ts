@@ -488,16 +488,21 @@ async function loadEntityMatchIndex(
   catalog: IdentifierCatalog,
   attributeIds: Map<string, string>,
 ): Promise<EntityMatchIndex> {
+  if (!clientId) throw new Error('A client is required to match records');
   const index = new EntityMatchIndex(catalog, domainCode, clientId);
+  // Only the loading client's records are read. The loader runs with the service key,
+  // so this filter is what keeps one client's load away from another client's records.
   const domainRows = await pageRows((from, to) => db.schema('entity_instances').from('master_entities')
     .select('id, entity_code, entity_name, domain_code, client_id, is_active, merged_into_id')
     .eq('domain_code', domainCode)
+    .eq('client_id', clientId)
     .range(from, to));
   const codeRows: any[] = [];
   for (let offset = 0; offset < codes.length; offset += 100) {
     const chunk = codes.slice(offset, offset + 100);
     const existing = await db.schema('entity_instances').from('master_entities')
       .select('id, entity_code, entity_name, domain_code, client_id, is_active, merged_into_id')
+      .eq('client_id', clientId)
       .in('entity_code', chunk);
     if (existing.error) throw new Error(existing.error.message);
     codeRows.push(...(existing.data || []));

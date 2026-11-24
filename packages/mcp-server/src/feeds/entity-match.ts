@@ -29,7 +29,8 @@ export interface MatchEntity {
   code: string;
   name: string;
   domainCode: string;
-  clientId: string | null;
+  /** The owning client. Every record belongs to exactly one. */
+  clientId: string;
   active: boolean;
   provisional: boolean;
   identifiers: Map<string, string[]>;
@@ -141,7 +142,7 @@ export class EntityMatchIndex {
   ) {}
 
   add(entity: MatchEntity): void {
-    if (this.byId.has(entity.id)) return;
+    if (this.byId.has(entity.id) || !this.ownedByClient(entity)) return;
     this.byId.set(entity.id, entity);
     this.indexCode(entity, entity.code);
     this.indexName(entity, entity.name);
@@ -218,10 +219,15 @@ export class EntityMatchIndex {
     return this.catalog.composites.some((composite) => composite.includes(code));
   }
 
+  /** A record of the loading client. Records of any other client are never matched, named or reported. */
+  private ownedByClient(entity: MatchEntity): boolean {
+    return Boolean(this.clientId) && entity.clientId === this.clientId;
+  }
+
   private matchable(entity: MatchEntity): boolean {
     return entity.active
       && entity.domainCode === this.domainCode
-      && (!entity.clientId || entity.clientId === this.clientId);
+      && this.ownedByClient(entity);
   }
 
   private push(index: Map<string, MatchEntity[]>, key: string, entity: MatchEntity): void {
@@ -299,9 +305,6 @@ export class EntityMatchIndex {
     if (!entity.active) return { kind: 'rejected', message: `${code} matches inactive ${entity.code}` };
     if (entity.domainCode !== this.domainCode) {
       return { kind: 'rejected', message: `${code} already exists as ${entity.domainCode}, not ${this.domainCode}` };
-    }
-    if (entity.clientId && entity.clientId !== this.clientId) {
-      return { kind: 'rejected', message: `${code} already belongs to another client` };
     }
     // A previous load stored the name in the code column. Prefer the entity that already had its own code.
     if (sameLabel(entity.code, entity.name)) {

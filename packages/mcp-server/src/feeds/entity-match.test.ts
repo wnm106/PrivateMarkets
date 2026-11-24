@@ -130,13 +130,34 @@ describe('entity match for loads', () => {
     expect(hit.via).toBe('identifier');
   });
 
-  it('ignores the same name on another client and rejects a code owned by another client', () => {
+  it('never matches, names or mentions another client\'s record', () => {
     const index = indexWith([
-      entity({ id: 'other', code: 'ISS-9', name: 'Bench Issuer 1', clientId: 'client-2' }),
+      entity({ id: 'other', code: 'ISS-9', name: 'Bench Issuer 1', clientId: 'client-2', identifiers: new Map([['LEI', ['549300OTHERCLIENT0001']]]) }),
     ]);
     expect(index.resolve({ code: 'NEW', name: 'Bench Issuer 1', attributes: new Map() }).kind).toBe('none');
-    const codeHit = index.resolve({ code: 'ISS-9', name: 'Different', attributes: new Map() });
-    expect(codeHit.kind).toBe('rejected');
+    // The same code is treated as a new record; nothing says another client holds it.
+    expect(index.resolve({ code: 'ISS-9', name: 'Different', attributes: new Map() })).toEqual({ kind: 'none' });
+    expect(index.resolve({ code: 'NEW', name: 'New', attributes: new Map([['LEI', '549300OTHERCLIENT0001']]) }).kind).toBe('none');
+    for (const value of ['other', 'ISS-9', 'Bench Issuer 1', '549300OTHERCLIENT0001']) {
+      const hit = index.lookup(value);
+      expect(hit.kind).toBe('none');
+      if (hit.kind === 'none') expect(hit.message).toBe(`No ISSUER record matches "${value}".`);
+    }
+  });
+
+  it('does not let another client\'s record make one of this client\'s ambiguous', () => {
+    const index = indexWith([
+      entity({ id: 'mine', code: 'ISS-1', name: 'Northwind' }),
+      entity({ id: 'theirs', code: 'ISS-2', name: 'Northwind', clientId: 'client-2' }),
+    ]);
+    const hit = index.resolve({ code: 'FILE', name: 'Northwind', attributes: new Map() });
+    expect(hit.kind === 'match' && hit.entity.id).toBe('mine');
+  });
+
+  it('matches nothing when no client is given', () => {
+    const index = new EntityMatchIndex(catalog, 'ISSUER', '');
+    index.add(entity({ id: 'x', code: 'ISS-1', name: 'Northwind', clientId: '' }));
+    expect(index.resolve({ code: 'ISS-1', name: 'Northwind', attributes: new Map() }).kind).toBe('none');
   });
 
   it('rejects a code that already belongs to another domain', () => {

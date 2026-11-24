@@ -94,6 +94,20 @@ describe('composite keys that name parent records', () => {
     expect(positions.resolve({ code: row.code, name: row.name, attributes }, row.asOf).kind).toBe('none');
   });
 
+  it('does not tie a position to another client\'s fund or security', async () => {
+    const funds = new EntityMatchIndex(identifierCatalog([]), 'FUND', 'client-1');
+    funds.add(record({ id: 'their-fund', code: 'FND-X', name: 'Other Client Fund', domainCode: 'FUND', clientId: 'client-2' }));
+    const securities = new EntityMatchIndex(identifierCatalog([['ISIN']]), 'SECURITY', 'client-1');
+    securities.add(record({ id: 'their-sec', code: 'SEC-X', name: 'Other Client Loan', domainCode: 'SECURITY', clientId: 'client-2', identifiers: new Map([['ISIN', ['US9999999999']]]) }));
+    const pass = { indexes: new Map([['FUND', funds], ['SECURITY', securities]]), ids: new Map<string, Map<string, string>>() };
+    const lookup = createRecordLookup({} as SupabaseClient, 'client-1', pass, new Map());
+    const row = draft({ TRADE_DATE: '1/5/2026' }, { FUND: 'FND-X', SECURITY: 'US9999999999' });
+    const attributes = await identifierAttributes(row, domain, map, catalog, positionKey, attributeMeta, lookup, row.asOf);
+    expect(attributes.get('PORTFOLIO_FUND_ID')).toBe('FND-X');
+    expect(attributes.get('SECURITY_ID')).toBe('US9999999999');
+    expect((await lookup('FUND', 'Other Client Fund', row.asOf)).kind).toBe('none');
+  });
+
   it('finds a parent the same file loads by its code in the file', async () => {
     const { lookup } = setup();
     const pass = { indexes: new Map<string, EntityMatchIndex>(), ids: new Map([['FUND', new Map([['NEW-FUND', 'dry:FUND:NEW-FUND']])]]) };
