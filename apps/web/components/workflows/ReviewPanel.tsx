@@ -4,11 +4,12 @@ import { Fragment, useMemo, useRef, useState, type CSSProperties, type ReactNode
 import { LIST_VALUE_TOOL, setPath, unanswered, unmetListValues, type Confidence, type ItemDecision, type ProposalAction, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
 import { ChangeSettings, readArg } from '@/components/workflows/ChangeSettings';
 import { ReviewAssignment } from '@/components/workflows/ReviewerPicker';
+import { BorrowerViews, FinSection, useCovenantData, useFinData } from '@/components/workflows/review-sections/FinSections';
 import { AgentViews, RecSection, useRecData, type Decider } from '@/components/workflows/review-sections/RecSections';
 import { useReportProgress } from '@/components/workflows/stages/useProgress';
 import { graphqlMutation } from '@/lib/graphql';
 import { markdownToHtml } from '@/lib/markdown';
-import { recKeys, reviewSections, sectioned } from '@/lib/review-sections';
+import { byRecord, finKey, finKeys, groupsByRecord, isRecSection, recKey, recKeys, reviewSections, sectioned } from '@/lib/review-sections';
 import type { CheckProgress } from '@/lib/workflow-checklist';
 import { reviewNextStep, summaryLead } from '@/lib/workflow-run-view';
 import { DECIDE_REVIEW, showValue, when, type MutationErrors, type ReviewView } from '@/lib/workflows';
@@ -16,10 +17,12 @@ import { DECIDE_REVIEW, showValue, when, type MutationErrors, type ReviewView } 
 /**
  * A person's review of what an agent step proposed.
  *
- * The table lists every change with how sure the agent is. Changes it is
- * confident in can be approved together. The rest are walked through one at a
- * time: what exactly will change, why, what it is based on, and the questions
- * that have to be answered before it can run.
+ * It is laid out in the order a person decides: what to do now, what the
+ * agent found in a few lines, where things stand, then each change with the
+ * agent's recommendation and what it rests on. Changes the agent is confident
+ * in can be approved together. The rest are walked through one at a time.
+ * A person who cannot decide the review reads the same page without the
+ * call to act: the run's own banner already says who it is waiting on.
  */
 
 type Choice = 'APPROVE' | 'REJECT';
@@ -140,6 +143,12 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
   const views = useMemo(() => review.proposal?.views || [], [review.proposal]);
   const keys = useMemo(() => recKeys(sections, views), [sections, views]);
   const recData = useRecData(keys);
+  // A borrower financials review reads each borrower's quarter, and each covenant a certificate value is for.
+  const borrowerKeys = useMemo(() => finKeys(sections, views), [sections, views]);
+  const finData = useFinData(borrowerKeys.borrowers);
+  const covenantData = useCovenantData(borrowerKeys.covenants);
+  /** The review items a decision card shows, so a view does not show them a second time. */
+  const decidedBelow = useMemo(() => new Set(items.filter((item) => item.tool === 'record_rec_decision').map((item) => String(item.args.itemId || '')).filter(Boolean)), [items]);
 
   const confident = items.filter((item) => !item.needsReview);
   const attention = items.filter((item) => item.needsReview);
@@ -229,7 +238,9 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
     if (questions > 0) return { text: `Needs ${plural(questions, 'answer')}`, fg: '#b45309' };
     if (unmet(item).length > 0) return { text: 'Needs the new list value', fg: '#b91c1c' };
     if (choice === 'APPROVE') return { text: 'Approved', fg: '#166534' };
-    return item.needsReview ? { text: 'Look closely', fg: '#b45309' } : { text: 'Ready to approve', fg: 'var(--ink-3)' };
+    // Someone who cannot decide the review is told where each change stands, not asked to act on it.
+    if (!canDecide) return { text: open ? 'Not decided yet' : 'Not decided', fg: 'var(--ink-3)' };
+    return item.needsReview ? { text: 'Yours to decide', fg: '#b45309' } : { text: 'Ready to approve', fg: 'var(--ink-3)' };
   };
 
   const decided = items.length - undecided.length;
@@ -254,8 +265,11 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
   const approveConfident = () => setChoices((current) => ({ ...current, ...Object.fromEntries(confident.filter((item) => !current[item.id]).map((item) => [item.id, 'APPROVE' as Choice])) }));
   const applyLabel = approved.length === 0 ? 'Confirm: change nothing' : `Apply ${plural(approved.length, 'approved change')}`;
 
-  /** Everything about one change: what it depends on, every setting, why, and what it is based on. */
-  function detailsOf(item: ProposalItem): ReactNode {
+  /**
+   * Everything about one change: what it depends on, every setting, why, and what it is based on.
+   * `bare` leaves out the reasons and sources, for a card that already shows them.
+   */
+  function detailsOf(item: ProposalItem, bare = false): ReactNode {
     return (
       <>
         {item.tool === LIST_VALUE_TOOL && (
@@ -280,7 +294,7 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
             approved too. {unmet(item).length > 0 ? 'That change is not approved: approve it, or choose a value already on the list here.' : 'Or choose a value already on the list here, and reject the addition.'}
           </div>
         ))}
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) minmax(260px, 1fr)', gap: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: bare ? 'minmax(0, 1fr)' : 'minmax(260px, 1fr) minmax(260px, 1fr)', gap: 20 }}>
           <div>
             <div style={sectionLabel}>Exactly what will happen</div>
             <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 6 }}>
@@ -297,7 +311,7 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
               onEdit={(key, value) => edit(item, key, value)}
             />
           </div>
-          <div>
+          {!bare && <div>
             <div style={sectionLabel}>Why</div>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>{item.rationale || 'The agent gave no reason.'}</div>
             {item.fixes && item.fixes.length > 0 && (
@@ -320,35 +334,55 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
                 </ul>
               </>
             )}
-          </div>
+          </div>}
         </div>
       </>
     );
   }
 
-  /** The general table of changes: one row each, opened to its detail. */
+  /**
+   * The general table of changes: one row each, opened to its detail. When a record has several changes,
+   * the rows sit under the record's name, said once. A column that would say the same on every row is left out.
+   */
   function changeTable(list: ProposalItem[]): ReactNode {
+    const groups = byRecord(list);
+    const grouped = groupsByRecord(groups);
+    const rowsInOrder = grouped ? groups.flatMap((group) => group.items) : list;
+    const firstOf = new Map(grouped ? groups.map((group) => [group.items[0].id, group]) : []);
+    const mixedActions = new Set(list.map((item) => item.action)).size > 1;
+    const columns = 4 + (mixedActions ? 1 : 0) + (grouped ? 0 : 1);
     return (
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
               <th style={{ ...head, width: 150 }}>Your decision</th>
-              <th style={{ ...head, width: 70 }}>Action</th>
-              <th style={head}>On</th>
+              {mixedActions && <th style={{ ...head, width: 70 }}>Action</th>}
+              {!grouped && <th style={head}>On</th>}
               <th style={head}>What changes</th>
               <th style={{ ...head, width: 100 }}>Agent is</th>
               <th style={{ ...head, width: 130 }}>Status</th>
             </tr>
           </thead>
           <tbody>
-            {list.map((item) => {
+            {rowsInOrder.map((item) => {
               const choice = choices[item.id];
               const status = statusFor(item);
+              const group = firstOf.get(item.id);
               const isOpen = expanded === item.id;
               const attentionIndex = attention.findIndex((candidate) => candidate.id === item.id);
               return (
                 <Fragment key={item.id}>
+                  {group && (
+                    <tr>
+                      <td colSpan={columns} style={{ ...cell, background: 'var(--bg-alt)', padding: '7px 10px' }}>
+                        <span style={{ fontWeight: 600 }}>{group.label}</span>{' '}
+                        <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+                          · {group.kind} · {plural(group.items.length, 'change')}, {group.items.filter((entry) => choices[entry.id]).length} decided
+                        </span>
+                      </td>
+                    </tr>
+                  )}
                   <tr
                     ref={(element) => {
                       rows.current[item.id] = element;
@@ -380,11 +414,13 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
                         ))}
                       </div>
                     </td>
-                    <td style={cell}><span style={chip(ACTION[item.action].fg, ACTION[item.action].bg)}>{ACTION[item.action].label}</span></td>
-                    <td style={cell}>
-                      <div style={{ fontWeight: 600 }}>{item.target.label}</div>
-                      <div style={{ fontSize: 11, color: 'var(--ink-4)' }}>{item.target.kind}</div>
-                    </td>
+                    {mixedActions && <td style={cell}><span style={chip(ACTION[item.action].fg, ACTION[item.action].bg)}>{ACTION[item.action].label}</span></td>}
+                    {!grouped && (
+                      <td style={cell}>
+                        <div style={{ fontWeight: 600 }}>{item.target.label}</div>
+                        <div style={{ fontSize: 11, color: 'var(--ink-4)' }}>{item.target.kind}</div>
+                      </td>
+                    )}
                     <td style={cell}>
                       {item.summary}
                       {item.fixes && item.fixes.length > 0 && (
@@ -398,7 +434,7 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
                   </tr>
                   {isOpen && (
                     <tr>
-                      <td colSpan={6} style={{ ...cell, background: '#f8fafc', padding: '14px 18px' }}>
+                      <td colSpan={columns} style={{ ...cell, background: '#f8fafc', padding: '14px 18px' }}>
                         {attentionIndex >= 0 && <div style={{ fontSize: 11, color: '#b45309', fontWeight: 700, marginBottom: 8 }}>NEEDS YOUR ATTENTION · {attentionIndex + 1} OF {attention.length}</div>}
                         {detailsOf(item)}
 
@@ -437,13 +473,33 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
     edit: (item, key, value) => edit(item, key, value === null || value === undefined ? null : typeof value === 'string' ? value : typeof value === 'number' ? String(value) : JSON.stringify(value)),
     status: (item) => statusFor(item),
     questions: (item) => openQuestions(item).length,
-    details: (item) => detailsOf(item),
+    details: (item) => detailsOf(item, true),
     register: (id, element) => {
       rows.current[id] = element;
     },
     expanded,
     expand: (id) => setExpanded(id),
   };
+
+  /** A change in a few words: the review item it decides, or what the agent's summary says before its first colon. */
+  function shortTitle(item: ProposalItem): string {
+    if (item.tool === 'save_reconciliation_notes') return 'The notes kept on the close';
+    if (item.tool === 'save_borrower_review') return 'The review notes kept on the quarter';
+    if (item.tool === 'record_borrower_covenant_value') {
+      const key = finKey(item.args.entityId, item.args.testDate);
+      const test = key ? covenantData.get(key.key)?.test : null;
+      if (test) return `${test.name}: the certificate value`;
+    }
+    if (item.tool === 'record_rec_decision') {
+      const key = recKey(item.args.fundId, item.args.periodEnd);
+      const found = key ? recData.get(key.key)?.rec?.items.find((entry) => entry.id === String(item.args.itemId || '')) : null;
+      if (found) return found.title;
+    }
+    // A short summary is already a title. A long one is cut at its first colon.
+    if (item.summary.length <= 72) return item.summary;
+    const head = item.summary.split(': ')[0];
+    return head.length >= 8 && head.length < item.summary.length ? head : item.summary;
+  }
 
   /** What the person looking at this review has to do now, and the button that does it. */
   function callToAction() {
@@ -452,7 +508,7 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
     let detail = base.detail;
     if (canDecide && items.length > 0) {
       if (next) {
-        headline = `Next: ${next.summary}`;
+        headline = `Next: ${shortTitle(next)}`;
         const questions = openQuestions(next).length;
         detail = `${decided} of ${items.length} decided.${questions > 0 ? ` This one needs ${plural(questions, 'answer')} from you before it can be approved.` : next.needsReview ? ' The agent flagged this one for a close look.' : ''}`;
       } else if (ready) {
@@ -462,13 +518,20 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
         headline = 'An approved change needs its new list value approved too.';
       }
     }
-    const acting = canDecide;
     return (
-      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', background: acting ? '#fff7ed' : '#f8fafc', borderLeft: `4px solid ${acting ? '#c2410c' : '#94a3b8'}`, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', background: '#fff7ed', borderLeft: '4px solid #c2410c', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: acting ? '#c2410c' : '#475569' }}>{acting ? 'What you need to do' : 'Nothing for you to do'}</div>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: '#c2410c' }}>What you need to do</div>
           <div style={{ fontSize: 14.5, fontWeight: 600, marginTop: 2 }}>{headline}</div>
           {detail && <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{detail}</div>}
+          {/* Apply can be pressed here, so a refusal is said here too, not only at the foot of the review. */}
+          {errors.length > 0 && (
+            <div role="alert" style={{ color: 'var(--red)', fontSize: 13, marginTop: 4 }}>
+              {errors.map((message) => (
+                <div key={message}>{message}</div>
+              ))}
+            </div>
+          )}
         </div>
         {canDecide && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -497,7 +560,6 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
     <section style={{ border: '1px solid var(--line-strong)', borderRadius: 8, background: 'var(--surface)', overflow: 'hidden' }}>
       <header style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', background: open ? '#fffbeb' : 'var(--bg-alt)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={chip('#92400e', '#fde8c0')}>Human review</span>
           <strong style={{ fontSize: 15 }}>{review.title}</strong>
           {!open && <span style={chip(review.status === 'APPROVED' ? '#166534' : '#475569', review.status === 'APPROVED' ? '#dcfce7' : '#f1f5f9')}>{review.status === 'APPROVED' ? 'Approved' : review.status === 'REJECTED' ? 'Rejected' : 'Cancelled'} {when(review.decidedAt)}</span>}
         </div>
@@ -505,24 +567,21 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
         <ReviewAssignment review={review} canManage={canManage} onChanged={onDecided} />
       </header>
 
-      {open && callToAction()}
+      {canDecide && callToAction()}
 
       {review.summary && <AgentSummary text={review.summary} />}
 
-      <AgentViews views={views} data={recData} />
+      <AgentViews views={views.filter((view) => view.view.startsWith('rec.'))} data={recData} covered={decidedBelow} />
+      <BorrowerViews views={views.filter((view) => view.view.startsWith('fin.'))} data={finData} />
 
       <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', borderBottom: '1px solid var(--line)' }}>
         <div style={{ fontSize: 13 }}>
-          <strong>{plural(items.length, 'change')} proposed.</strong>{' '}
-          {items.length > 0 && (
-            <>
-              The agent is confident in {confident.length}
-              {attention.length > 0 ? `, and ${attention.length} ${attention.length === 1 ? 'needs' : 'need'} your attention` : ''}.
-            </>
-          )}
+          <strong>{items.length === 0 ? 'Nothing to decide.' : `${plural(items.length, 'thing')} to decide.`}</strong>{' '}
+          {items.length > 0 && (attention.length === 0 ? 'The agent is confident in all of them.' : confident.length === 0 ? `The agent asks you to look closely at ${attention.length === 1 ? 'it' : attention.length === 2 ? 'both' : `all ${attention.length}`}.` : `The agent is confident in ${confident.length} and asks you to look closely at ${attention.length}.`)}
+          {open && items.length > 0 && ' Nothing is written until the decisions are applied.'}
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
-          {(['CREATE', 'UPDATE', 'DELETE'] as const).map((action) => {
+          {!inSections && new Set(items.map((item) => item.action)).size > 1 && (['CREATE', 'UPDATE', 'DELETE'] as const).map((action) => {
             const count = items.filter((item) => item.action === action).length;
             return count > 0 ? <span key={action} style={chip(ACTION[action].fg, ACTION[action].bg)}>{count} {ACTION[action].label.toLowerCase()}{count === 1 ? '' : 's'}</span> : null;
           })}
@@ -548,7 +607,13 @@ export function ReviewPanel({ review, canManage = false, onDecided, onProgress }
                     </span>
                     <span style={{ fontSize: 12.5, color: 'var(--ink-3)', flexBasis: '100%' }}>{section.howTo}</span>
                   </div>
-                  {section.kind === 'general' ? changeTable(section.items) : <div style={{ padding: '0 16px 14px' }}><RecSection section={section} data={recData} decider={decider} all={items} /></div>}
+                  {section.kind === 'general' ? (
+                    changeTable(section.items)
+                  ) : (
+                    <div style={{ padding: '0 16px 14px' }}>
+                      {isRecSection(section.kind) ? <RecSection section={section} data={recData} decider={decider} all={items} /> : <FinSection section={section} fin={finData} covenants={covenantData} decider={decider} all={items} />}
+                    </div>
+                  )}
                 </div>
               );
             })}

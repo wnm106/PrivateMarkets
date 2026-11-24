@@ -56,6 +56,22 @@ export interface CatalogSurface {
   kind: 'catalog' | 'sdk' | 'experience';
 }
 
+/** A compliance rule the engine already interprets, so a prototype's rule can map to it. */
+export interface CatalogComplianceRule {
+  code: string;
+  name: string;
+  category?: string | null;
+  anchorDomainCode?: string | null;
+  /** The setting names in its metadata (not their values). */
+  metadataKeys: string[];
+}
+
+export interface CatalogReferenceList {
+  code: string;
+  name: string;
+  domainCode?: string | null;
+}
+
 export interface PlatformCatalog {
   domains: CatalogDomain[];
   attributes: CatalogAttribute[];
@@ -63,6 +79,8 @@ export interface PlatformCatalog {
   tools: CatalogTool[];
   skills: CatalogSkill[];
   surfaces: CatalogSurface[];
+  complianceRules?: CatalogComplianceRule[];
+  referenceLists?: CatalogReferenceList[];
   /** Parts of the catalog that could not be read, with the reason. */
   gaps: string[];
 }

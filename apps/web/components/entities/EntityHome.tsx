@@ -2,17 +2,21 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard';
+import { DataQualityDashboard, unopenedQualityTabs } from '@/components/quality/DataQualityDashboard';
 import { EntityReports } from '@/components/reporting/EntityReports';
 import { DOMAIN_TYPES_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, graphqlQuery } from '@/lib/graphql';
 import { definingParentDomains, mergeParentColumns, parentEntityColumns, toParentLinkCounts, type ParentEntityColumn } from '@/lib/parent-entities';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
 import { useTemporalStore } from '@/lib/store';
-import { usePublishTab, useWarmTabs } from '@/lib/view-context';
+import { usePublishTab, usePublishTabs, useWarmTabs } from '@/lib/view-context';
 import { EntityAttributeTable, type RelatedAttributeColumn } from './EntityAttributeTable';
 import { EntityViews } from './EntityViews';
 
 type HomeTab = 'records' | 'views' | 'dashboards' | 'quality';
+
+const NO_PARENTS: ParentEntityColumn[] = [];
+/** How long the grid waits for the parent columns before it loads without them. */
+const PARENT_WAIT_MS = 2000;
 
 interface SelectedEntity {
   id: string;
@@ -38,10 +42,21 @@ export function EntityHome({
   onTotalChange?: (total: number) => void;
 }) {
   const [tab, setTab] = useState<HomeTab>('records');
-  const warmed = useWarmTabs(['records', 'views', 'dashboards', 'quality'], tab);
+  // Data Quality is not warmed: its figures are read only when the user opens that tab.
+  // Until then the page publishes the tab's name and purpose with a note saying so.
+  const warmed = useWarmTabs(['records', 'views', 'dashboards'], tab);
+  const qualityOpened = warmed.has('quality');
+  usePublishTabs(qualityOpened ? {} : unopenedQualityTabs({ domainCode }));
   const knowledgeDate = useTemporalStore((state) => state.knowledgeDate);
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
-  const [discovered, setDiscovered] = useState<ParentEntityColumn[]>([]);
+  // The parent columns found for one entity type. Kept with the type they belong to, so a
+  // change of type never shows, or loads the grid with, the previous type's columns.
+  const [parents, setParents] = useState<{ domainCode: string; columns: ParentEntityColumn[] } | null>(null);
+  const [parentWaitOver, setParentWaitOver] = useState<string | null>(null);
+  const discovered = parents?.domainCode === domainCode ? parents.columns : NO_PARENTS;
+  // The grid waits for the parent columns so it loads once, with them. If they are slow it
+  // goes ahead without them and loads again when they arrive.
+  const parentsReady = parents?.domainCode === domainCode || parentWaitOver === domainCode;
   // With a record chosen, EntityReports publishes the Dashboards tab. Without one the
   // tab shows only a prompt, and says so (docs/SURFACE_TABS.md).
   usePublishTab('dashboards', selected ? null : {
@@ -57,7 +72,9 @@ export function EntityHome({
 
   useEffect(() => {
     let cancelled = false;
-    setDiscovered([]);
+    const waitTimer = window.setTimeout(() => {
+      if (!cancelled) setParentWaitOver(domainCode);
+    }, PARENT_WAIT_MS);
     Promise.all([
       graphqlQuery<
         { relationshipTypes: Array<{ relationshipCode: string; parentDomainCode?: string | null; childDomainCode?: string | null; cardinality?: string | null }> },
@@ -78,12 +95,15 @@ export function EntityHome({
       for (const domain of domains.data?.domainTypes || []) names[domain.domainCode] = domain.domainName;
       const linkCounts = toParentLinkCounts((counts.data || []) as Array<Record<string, unknown>>);
       const types = relationships.data?.relationshipTypes || [];
-      const parents = definingParentDomains(domainCode, intersections.data?.intersectionTypes || []);
-      setDiscovered(parentEntityColumns(domainCode, types, names, linkCounts, parents));
+      const definingParents = definingParentDomains(domainCode, intersections.data?.intersectionTypes || []);
+      setParents({ domainCode, columns: parentEntityColumns(domainCode, types, names, linkCounts, definingParents) });
     }).catch(() => {
-      if (!cancelled) setDiscovered([]);
-    });
-    return () => { cancelled = true; };
+      if (!cancelled) setParents({ domainCode, columns: [] });
+    }).finally(() => window.clearTimeout(waitTimer));
+    return () => {
+      cancelled = true;
+      window.clearTimeout(waitTimer);
+    };
   }, [domainCode]);
 
   const parentColumns = useMemo(
@@ -134,6 +154,7 @@ export function EntityHome({
             refreshKey={refreshKey}
             emptyMessage={emptyMessage}
             related={parentColumns}
+            relatedReady={parentsReady}
             onTotalChange={onTotalChange}
             selectedId={selected?.id}
             onSelect={setSelected}
@@ -158,7 +179,7 @@ export function EntityHome({
         <NeedsSelection onChoose={() => setTab('records')} />
       )}
 
-      {warmed.has('quality') && (
+      {qualityOpened && (
         <div hidden={tab !== 'quality'}>
           <DataQualityDashboard active={tab === 'quality'} domainCode={domainCode} />
         </div>

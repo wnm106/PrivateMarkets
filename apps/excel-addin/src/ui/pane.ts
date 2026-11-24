@@ -87,10 +87,20 @@ export function mountPane(root: HTMLElement, services: Services): void {
     account.replaceChildren();
     const email = auth.email();
     if (email) {
+      const clientName = auth.clientName();
       account.append(
-        h('p', { className: 'who' }, ['Signed in as ', h('strong', {}, [email])]),
+        h('p', { className: 'who' }, [
+          'Signed in as ',
+          h('strong', {}, [email]),
+          ...(clientName ? [' in ', h('strong', {}, [clientName])] : []),
+        ]),
         h('button', { type: 'button', onClick: () => { void signOut(); } }, ['Sign out']),
       );
+      if (clientName) {
+        account.append(h('p', { className: 'help' }, [
+          'Formulas and tables read this client only. To work in another client, sign out and sign in again.',
+        ]));
+      }
       if (services.persistentSignIn === false) {
         account.append(h('p', { className: 'help' }, [
           'This browser blocks storage for add-ins, so you will sign in again each time you open the workbook.',

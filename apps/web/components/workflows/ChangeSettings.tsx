@@ -1,9 +1,10 @@
 'use client';
 
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { attributeFor, isLockedArg, type MissingField, type ProposalItem } from '@tapestrai/graphql/src/lib/workflow-proposal';
-import { AttributeValueInput, listDisplayLabel, useAttributeDisplay, useAttributeListOptions } from '@/components/forms/AttributeValueInput';
+import { AttributeName, AttributeValueInput, listDisplayLabel, useAttributeDisplay, useAttributeListOptions } from '@/components/forms/AttributeValueInput';
 import { formatAttributeDisplay } from '@/lib/attribute-display';
+import { listOf, mappingView } from '@/lib/workflow-step-detail';
 import { argRows, showValue } from '@/lib/workflows';
 
 /**
@@ -102,8 +103,72 @@ function PlainInput({ field, dataType, value, onChange, label, style }: { field?
   return <AttributeValueInput value={value} onChange={onChange} dataType={dataType} ariaLabel={label} style={style} />;
 }
 
-const note: CSSProperties = { fontSize: 11, color: 'var(--ink-4)', fontWeight: 400, lineHeight: 1.4 };
 const link: CSSProperties = { border: 'none', background: 'none', padding: 0, fontSize: 11, color: 'var(--entity-link)', cursor: 'pointer', fontWeight: 600 };
+const note: CSSProperties = { fontSize: 11, color: 'var(--ink-4)', fontWeight: 400, lineHeight: 1.4 };
+const th: CSSProperties = { padding: '4px 10px', fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', textAlign: 'left', borderBottom: '1px solid var(--line)', background: 'var(--bg-alt)', whiteSpace: 'nowrap' };
+const td: CSSProperties = { padding: '4px 10px', fontSize: 12.5, fontWeight: 400, verticalAlign: 'top', borderBottom: '1px solid var(--line)', wordBreak: 'break-word' };
+const ROWS_SHOWN = 12;
+
+/** Whether a setting holds a list of records, which is shown as a table and not as one value. */
+function isRows(value: unknown): value is unknown[] {
+  return Array.isArray(value) && value.length > 0 && value.every((row) => row && typeof row === 'object' && !Array.isArray(row));
+}
+
+/**
+ * A setting that is a list of records. A file's column mappings read as where
+ * each column goes; any other list is a table of its own columns.
+ */
+function RowsSetting({ label, value }: { label: string; value: unknown[] }) {
+  const [all, setAll] = useState(false);
+  const mapping = mappingView(value);
+  const table = mapping
+    ? { columns: ['Column in the file', 'Goes to', 'Read as'], rows: mapping.rows.map((row) => ({ cells: [row.column, row.code ? <AttributeName key="to" code={row.code} fallback={row.goesTo} /> : row.goesTo, row.readAs] as ReactNode[], title: row.code || undefined })) }
+    : (() => {
+        const list = listOf(label, value, value.length);
+        return { columns: list.columns, rows: list.rows.map((cells) => ({ cells: cells as ReactNode[], title: undefined as string | undefined })) };
+      })();
+  const shown = all ? table.rows : table.rows.slice(0, ROWS_SHOWN);
+  return (
+    <div style={{ padding: '6px 10px 8px 13px' }}>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 4 }}>
+        {label}
+        <span style={{ color: 'var(--ink-4)' }}>
+          {' '}· {mapping ? `${mapping.rows.length} of ${value.length} columns used` : `${value.length}`}
+        </span>
+      </div>
+      <div style={{ overflowX: 'auto', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              {table.columns.map((column) => (
+                <th key={column} scope="col" style={th}>{column}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((row, index) => (
+              <tr key={index} title={row.title}>
+                {row.cells.map((cell, at) => (
+                  <td key={at} style={{ ...td, fontWeight: at === 0 ? 600 : 400, whiteSpace: mapping && at === 2 ? 'nowrap' : undefined }}>{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {table.rows.length > ROWS_SHOWN && (
+        <button type="button" style={{ ...link, marginTop: 4, fontSize: 12 }} onClick={() => setAll((current) => !current)}>
+          {all ? 'Show the first few' : `Show all ${table.rows.length}`}
+        </button>
+      )}
+      {mapping && mapping.leftOut.length > 0 && (
+        <div style={{ ...note, fontSize: 12, marginTop: 4 }}>
+          Left out of the load: {mapping.leftOut.join(', ')}.
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface Props {
   item: ProposalItem;
@@ -130,6 +195,8 @@ export function ChangeSettings({ item, canDecide, answers, edits, recordedArgs, 
     <div style={{ display: 'grid', gap: 2 }}>
       {rows.map((row) => {
         const field = questions.get(row.key);
+        const held = field ? undefined : readArg(item.args, row.key);
+        if (isRows(held)) return <RowsSetting key={row.key} label={labelFor(row.key, field)} value={held} />;
         const attributeCode = attributeFor(item.args, row.key);
         const dataType = dataTypeFor(row.key, field);
         const label = labelFor(row.key, field);
@@ -176,6 +243,8 @@ export function ChangeSettings({ item, canDecide, answers, edits, recordedArgs, 
                   <SettingValue attributeCode={attributeCode} dataType={dataType} value={applied} />
                   <div style={note}>Edited by the reviewer. The agent proposed {row.value || 'nothing'}.</div>
                 </>
+              ) : row.key === 'entityId' && value && value === item.target.entityId && item.target.label ? (
+                <span title={value}>{item.target.label}</span>
               ) : (
                 <SettingValue attributeCode={attributeCode} dataType={dataType} value={value} />
               )}

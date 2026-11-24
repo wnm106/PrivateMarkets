@@ -744,6 +744,67 @@ to the same tenancy/RLS rules as the web app.
 Access tokens expire. When the configured token ages out, calls start failing --
 supply a fresh user token and restart the server.
 
+### Remote MCP endpoint (claude.ai connectors)
+
+`POST /api/mcp` serves the same MCP server over Streamable HTTP, for an assistant
+that cannot run a local process. A person adds it in Claude under Settings ->
+Connectors -> Add custom connector, with the address `https://<app>/api/mcp`.
+Claude sends them to tapestr.ai to sign in and approve, and after that calls the
+endpoint as them. Nobody copies a token, and Claude renews it when it expires.
+
+| Part | Where | What it does |
+| --- | --- | --- |
+| The server | `packages/mcp-server/src/create-server.ts` | Tools, resources and prompts. The stdio process and the endpoint both build it here |
+| HTTP | `packages/mcp-server/src/http.ts` | Answers one request in JSON and keeps nothing between requests |
+| Endpoint | `apps/web/app/api/mcp/route.ts` | Reads the caller's token, applies the client's sign-in rules, runs the request as that person |
+| Discovery | `apps/web/app/.well-known/oauth-protected-resource` | Names the Supabase Auth server as the one that signs people in (RFC 9728) |
+| Approval page | `apps/web/app/oauth/consent`, `components/auth/OAuthConsent.tsx` | Shows who is asking and where the answer goes, and records Approve or Do not connect |
+| Addresses and rules | `apps/web/lib/mcp-remote.ts` | The paths, the 401 challenge, which tools are offered |
+
+**Sign-in** is the Supabase Auth server's OAuth 2.1 flow. The token it issues is
+an ordinary user access token with one more claim, `client_id`, so tenancy and
+row level security apply exactly as in the app. The custom access token hook
+runs when it is issued, and the endpoint asks `tenancy.current_sign_in_decision`
+on every request, so a client's sign-in rules hold here too: a refused method, a
+check that could not be read, or a second factor still owed answers `403`.
+
+**What is offered.** Tools that read, and tools that only stage or draft (`read`
+and `stage` in `ToolEffect`). A tool that changes live records, rules or settings
+is not listed and a call to it is refused: in the app's chat such a call is held
+for the person to confirm, and an outside assistant has no such hold. The list is
+`REMOTE_TOOL_EFFECTS` in `lib/mcp-remote.ts`. This limits the tools, not the
+token: the token carries the person's own access, which is what the approval
+page tells them.
+
+**Turning it on for a hosted project** (Supabase Dashboard):
+
+1. Authentication -> OAuth Server: enable it and set the authorization path to
+   `/oauth/consent`. The path is joined to the Site URL, so the Site URL under
+   Authentication -> URL Configuration must be the app's public address.
+2. Let Claude register, one of:
+   - Allow dynamic registration on the same page. Claude then registers itself.
+     So can any other app, which is why the approval page shows where the answer
+     goes; or
+   - Leave it off and add an app under Authentication -> OAuth Apps with the
+     redirect URL `https://claude.ai/api/mcp/auth_callback`. Give its client id
+     to whoever adds the connector: in Claude it goes under the connector's
+     advanced settings, "Use your own OAuth client".
+3. The app must be reachable from the internet over HTTPS on port 443. Behind a
+   proxy that does not pass `X-Forwarded-Host` and `X-Forwarded-Proto`, set
+   `MCP_PUBLIC_ORIGIN` to the app's public address.
+
+Locally, `supabase/config.toml` turns the same things on (`[auth.oauth_server]`).
+Claude cannot reach `localhost`; use a tunnel, or test the flow with the MCP
+Inspector (`npx @modelcontextprotocol/inspector`).
+
+Two things to know:
+
+- Supabase does not bind a token to one resource (RFC 8707), so the endpoint
+  accepts any valid user access token for the project, as `/api/chat` does.
+- Whether a token issued this way carries the second-factor mark of the session
+  that approved it has not been tested. If it does not, people in a client that
+  requires an authenticator code are refused with a message saying so.
+
 ### Conversation history
 
 | Method | Path | Purpose |

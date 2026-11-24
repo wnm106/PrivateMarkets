@@ -1,0 +1,335 @@
+<style>
+.x-shell{display:grid;grid-template-columns:264px minmax(0,1fr);gap:14px;align-items:start}
+.da-panel.x-rail{position:sticky;top:8px;height:auto;max-height:calc(100vh - 16px);padding:10px 8px}
+.x-rail h2{margin:2px 8px 8px;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.x-ent{display:flex;flex-direction:column;gap:3px;width:100%;padding:7px 8px;border:1px solid transparent;border-radius:8px;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
+.x-ent:hover{background:var(--bg-alt)}
+.x-ent.m{padding-left:22px}
+.x-ent[aria-current="true"]{border-color:var(--accent-2);background:var(--bg-alt)}
+.x-er{display:flex;align-items:center;gap:6px;min-width:0}
+.x-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.x-ent.m .x-nm{font-weight:500}
+.x-sub{font-size:11.5px;color:var(--ink-3)}
+.x-sub .da-track{margin:0 0 0 auto}
+.x-sub .da-track i{width:14px}
+.x-add{width:100%;justify-content:center;margin-top:8px}
+.x-dis{opacity:.5;cursor:default}
+.da .page-header{box-shadow:none}
+.x-tree th,.x-tree td{white-space:nowrap}
+.x-tree th,.x-tree td{padding:6px 10px}
+.x-tree tbody tr.sub td:first-child{padding-left:28px}
+.x-tree tbody tr[data-open]{cursor:pointer}
+.x-pills .da-st+.da-st{margin-left:4px}
+.da-st.x-soft{background:var(--surface);color:var(--amber);border:1px solid var(--amber);padding:0 7px}
+.da-st.x-ahead{background:var(--badge-info-bg);color:var(--badge-info-fg)}
+.x-fig.ok{color:var(--green)}.x-fig.warn{color:var(--amber)}.x-fig.bad{color:var(--red)}.x-fig.ahead{color:var(--accent-2)}
+.x-cov{display:inline-flex;align-items:center;gap:6px}
+.x-cov i{width:14px;height:6px;border-radius:2px;background:var(--accent-2)}
+.x-cov.nil{color:var(--ink-4)}.x-cov.nil i{background:var(--line)}
+.x-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:0}
+.x-dot.above{background:var(--red)}.x-dot.below{background:var(--amber)}.x-dot.in{background:var(--green)}.x-dot.under{background:var(--accent-2)}
+.x-dot.at{background:var(--surface);border:2px solid var(--green)}.x-dot.none{background:none;border:1px solid var(--ink-4)}
+.x-mx td.num{min-width:132px}
+.x-mx .imp{font-style:italic;color:var(--ink-3)}
+.x-mx .nil{color:var(--ink-4)}
+.x-intro .da-note{max-width:86ch;margin-top:4px}
+@media (max-width:860px){.x-shell{grid-template-columns:1fr}.da-panel.x-rail{position:static;max-height:none}}
+</style>
+<div class="da">
+  <div class="crumbs"><a class="crumb-link" href="#">Target Manager</a><span class="sep">›</span><span class="crumb-current">Overview</span></div>
+
+  <header class="page-header">
+    <div class="page-title-block">
+      <div><div class="page-title">Target Manager</div><div class="page-meta">Fund-of-Funds &amp; Directs</div></div>
+      <div class="cr-seg" role="group" aria-label="View">
+        <button id="vEdit" aria-pressed="false">Assign targets</button>
+        <button id="vOv" class="on" aria-pressed="true">Overview</button>
+        <button id="vPipe" aria-pressed="false">Pipeline</button>
+      </div>
+    </div>
+    <div class="page-actions">
+      <button class="btn btn-sm x-dis" id="undoBtn" title="Undo last change (Ctrl+Z)" disabled>Undo</button>
+      <button class="btn btn-sm" id="exportBtn" title="Copy all targets as CSV">Copy CSV</button>
+      <button class="btn btn-sm" id="resetBtn" title="Restore the example clients and targets">Reset example</button>
+    </div>
+  </header>
+
+  <div class="x-shell">
+    <nav class="da-panel x-rail" id="rail" aria-label="Clients and mandates">
+      <h2>Clients &amp; mandates</h2>
+
+      <button class="x-ent c" data-ent="ctr" aria-current="false">
+        <span class="x-er"><b class="x-nm" title="Commonwealth Teachers’ Retirement">Commonwealth Teachers’ Retirement</b><em class="cr-n">14</em><span class="da-st breach" title="5 compliance breaches">5</span></span>
+        <span class="x-er x-sub"><span><span data-attr="FUND_TOTAL_COMMITMENTS">$2B</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">70</span> inv</span><span class="da-st ok" title="2026 pacing velocity">1.04x</span><span class="da-track" title="Strategy: 6 · Region: 4 · Structure: 4"><i class="on"></i><i class="on"></i><i class="on"></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="ctr-pe" aria-current="false">
+        <span class="x-er"><b class="x-nm">PE Primary Sleeve</b><em class="cr-n">17</em><span class="da-st breach" title="3 compliance breaches">3</span></span>
+        <span class="x-er x-sub"><span><span data-attr="FUND_TOTAL_COMMITMENTS">$1.2B</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">30</span> inv</span><span class="da-st ok" title="2026 pacing velocity">1.06x</span><span class="da-track" title="Strategy: 9 · Region: 3 · Structure: 5"><i class="on"></i><i class="on"></i><i class="on"></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="ctr-cra" aria-current="false">
+        <span class="x-er"><b class="x-nm">Credit &amp; Real Assets Sleeve</b><em class="cr-n">9</em></span>
+        <span class="x-er x-sub"><span><span data-attr="FUND_TOTAL_COMMITMENTS">$450M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">14</span> inv</span><span class="da-st breach" title="2026 pacing velocity">0.77x</span><span class="da-track" title="Strategy: 7 · Region: 2 · Structure: 0"><i class="on"></i><i class="on"></i><i></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="ctr-co" aria-current="false">
+        <span class="x-er"><b class="x-nm">Co-Investment Sleeve</b><em class="cr-n">7</em><span class="da-st breach" title="2 compliance breaches">2</span></span>
+        <span class="x-er x-sub"><span><span data-attr="FUND_TOTAL_COMMITMENTS">$400M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">24</span> inv</span><span class="da-st ok" title="2026 pacing velocity">1.14x</span><span class="da-track" title="Strategy: 4 · Region: 0 · Structure: 3"><i class="on"></i><i></i><i class="on"></i></span></span>
+      </button>
+      <button class="x-ent c" data-ent="hfo" aria-current="false">
+        <span class="x-er"><b class="x-nm">Halvorsen Family Office</b><em class="cr-n">3</em><span class="da-st breach" title="1 compliance breach">1</span></span>
+        <span class="x-er x-sub"><span><span data-attr="FUND_TOTAL_COMMITMENTS">$450M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">40</span> inv</span><span class="da-st ok" title="2026 pacing velocity">0.96x</span><span class="da-track" title="Strategy: 0 · Region: 3 · Structure: 0"><i></i><i class="on"></i><i></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="hfo-div" aria-current="false">
+        <span class="x-er"><b class="x-nm">Diversified Sleeve</b><em class="cr-n">4</em><span class="da-st breach" title="1 compliance breach">1</span></span>
+        <span class="x-er x-sub"><span><span data-attr="FUND_TOTAL_COMMITMENTS">$450M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">40</span> inv</span><span class="da-st ok" title="2026 pacing velocity">0.96x</span><span class="da-track" title="Strategy: 4 · Region: 0 · Structure: 0"><i class="on"></i><i></i><i></i></span></span>
+      </button>
+      <button class="x-ent c" data-ent="nmi" aria-current="false">
+        <span class="x-er"><b class="x-nm" title="Northgate Mutual Insurance">Northgate Mutual Insurance</b><em class="cr-n">2</em><span class="da-st breach" title="3 compliance breaches">3</span></span>
+        <span class="x-er x-sub"><span><span data-attr="FUND_TOTAL_COMMITMENTS">$900M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">40</span> inv</span><span class="da-st ok" title="2026 pacing velocity">1.11x</span><span class="da-track" title="Strategy: 2 · Region: 0 · Structure: 0"><i class="on"></i><i></i><i></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="nmi-pc" aria-current="false">
+        <span class="x-er"><b class="x-nm">Private Credit Sleeve</b><em class="cr-n">10</em><span class="da-st breach" title="3 compliance breaches">3</span></span>
+        <span class="x-er x-sub"><span><span data-attr="FUND_TOTAL_COMMITMENTS">$600M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">28</span> inv</span><span class="da-st x-ahead" title="2026 pacing velocity">1.16x</span><span class="da-track" title="Strategy: 8 · Region: 2 · Structure: 0"><i class="on"></i><i class="on"></i><i></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="nmi-sec" aria-current="false">
+        <span class="x-er"><b class="x-nm">Secondaries Sleeve</b><em class="cr-n">6</em></span>
+        <span class="x-er x-sub"><span><span data-attr="FUND_TOTAL_COMMITMENTS">$200M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">10</span> inv</span><span class="da-st breach" title="2026 pacing velocity">0.85x</span><span class="da-track" title="Strategy: 3 · Region: 0 · Structure: 3"><i class="on"></i><i></i><i class="on"></i></span></span>
+      </button>
+
+      <button class="btn btn-sm x-add" id="addSleeve">+ Add mandate sleeve</button>
+    </nav>
+
+    <main id="main">
+      <div class="x-intro">
+        <div class="pipe-head" style="margin-bottom:0">
+          <h1>Target coverage across clients</h1>
+        </div>
+        <p class="da-note">Each client carries macro targets and a macro deployment pace; each sleeve carries its own. Velocity compares deployment so far this year with the time-weighted annual target. Select a row to open it, or a matrix cell to jump to that level.</p>
+      </div>
+
+      <section class="da-sec">
+        <div class="da-sechead"><h2>Programs</h2></div>
+        <div class="da-main solo">
+          <div class="da-gridwrap">
+            <table class="da-grid x-tree">
+              <thead><tr>
+                <th>Client / mandate</th><th class="num">Program</th><th class="num">Inv.</th><th>% basis</th><th>Start</th><th class="num">Annual target</th><th class="num">2026 deployed</th><th>Velocity</th><th class="num">Since inception</th><th>Compliance</th><th class="num">Strategy</th><th class="num">Region</th><th class="num">Structure</th><th class="num">Targets</th>
+              </tr></thead>
+              <tbody>
+                <tr class="par" data-open="ctr">
+                  <td><b>Commonwealth Teachers’ Retirement</b></td>
+                  <td class="num" data-attr="FUND_TOTAL_COMMITMENTS" data-editable="true">$2B</td>
+                  <td class="num" data-attr="FUND_TARGET_INVESTMENT_COUNT" data-editable="true">70</td>
+                  <td data-attr="FUND_TARGET_PERCENT_BASIS" data-editable="true">Program</td>
+                  <td data-attr="INCEPTION_DATE">Jan 2022</td>
+                  <td class="num" data-attr="FUND_ANNUAL_DEPLOYMENT_TARGET" data-editable="true">$340M</td>
+                  <td class="num">$310.7M</td>
+                  <td><span class="da-st ok">1.04x · On pace</span></td>
+                  <td class="num"><span class="x-fig warn">0.89x</span></td>
+                  <td class="x-pills"><span class="da-st breach">Breach 3</span><span class="da-st x-soft">Soft breach 2</span><span class="da-st near">Watch 1</span></td>
+                  <td class="num"><span class="x-cov"><i></i>6</span></td><td class="num"><span class="x-cov"><i></i>4</span></td><td class="num"><span class="x-cov"><i></i>4</span></td>
+                  <td class="num"><b>14</b></td>
+                </tr>
+                <tr class="sub" data-open="ctr-pe">
+                  <td>PE Primary Sleeve</td>
+                  <td class="num" data-attr="FUND_TOTAL_COMMITMENTS" data-editable="true">$1.2B</td>
+                  <td class="num" data-attr="FUND_TARGET_INVESTMENT_COUNT" data-editable="true">30</td>
+                  <td data-attr="FUND_TARGET_PERCENT_BASIS" data-editable="true">Parent level</td>
+                  <td data-attr="INCEPTION_DATE">Apr 2022</td>
+                  <td class="num" data-attr="FUND_ANNUAL_DEPLOYMENT_TARGET" data-editable="true">$180M</td>
+                  <td class="num">$167M</td>
+                  <td><span class="da-st ok">1.06x · On pace</span></td>
+                  <td class="num"><span class="x-fig ok">1.07x</span></td>
+                  <td class="x-pills"><span class="da-st breach">Breach 1</span><span class="da-st x-soft">Soft breach 2</span><span class="da-st near">Watch 1</span></td>
+                  <td class="num"><span class="x-cov"><i></i>9</span></td><td class="num"><span class="x-cov"><i></i>3</span></td><td class="num"><span class="x-cov"><i></i>5</span></td>
+                  <td class="num">17</td>
+                </tr>
+                <tr class="sub" data-open="ctr-cra">
+                  <td>Credit &amp; Real Assets Sleeve</td>
+                  <td class="num" data-attr="FUND_TOTAL_COMMITMENTS" data-editable="true">$450M</td>
+                  <td class="num" data-attr="FUND_TARGET_INVESTMENT_COUNT" data-editable="true">14</td>
+                  <td data-attr="FUND_TARGET_PERCENT_BASIS" data-editable="true">Program</td>
+                  <td data-attr="INCEPTION_DATE">Jan 2023</td>
+                  <td class="num" data-attr="FUND_ANNUAL_DEPLOYMENT_TARGET" data-editable="true">$110M</td>
+                  <td class="num">$74M</td>
+                  <td><span class="da-st breach">0.77x · Behind</span></td>
+                  <td class="num"><span class="x-fig bad">0.71x</span></td>
+                  <td class="x-pills"><span class="da-st ok">Pass 8</span></td>
+                  <td class="num"><span class="x-cov"><i></i>7</span></td><td class="num"><span class="x-cov"><i></i>2</span></td><td class="num"><span class="x-cov nil"><i></i>–</span></td>
+                  <td class="num">9</td>
+                </tr>
+                <tr class="sub" data-open="ctr-co">
+                  <td>Co-Investment Sleeve</td>
+                  <td class="num" data-attr="FUND_TOTAL_COMMITMENTS" data-editable="true">$400M</td>
+                  <td class="num" data-attr="FUND_TARGET_INVESTMENT_COUNT" data-editable="true">24</td>
+                  <td data-attr="FUND_TARGET_PERCENT_BASIS" data-editable="true">Program</td>
+                  <td data-attr="INCEPTION_DATE">Jul 2023</td>
+                  <td class="num" data-attr="FUND_ANNUAL_DEPLOYMENT_TARGET" data-editable="true">$70M</td>
+                  <td class="num">$69.7M</td>
+                  <td><span class="da-st ok">1.14x · On pace</span></td>
+                  <td class="num"><span class="x-fig ahead">1.18x</span></td>
+                  <td class="x-pills"><span class="da-st breach">Breach 2</span></td>
+                  <td class="num"><span class="x-cov"><i></i>4</span></td><td class="num"><span class="x-cov nil"><i></i>–</span></td><td class="num"><span class="x-cov"><i></i>3</span></td>
+                  <td class="num">7</td>
+                </tr>
+                <tr class="par" data-open="hfo">
+                  <td><b>Halvorsen Family Office</b></td>
+                  <td class="num" data-attr="FUND_TOTAL_COMMITMENTS" data-editable="true">$450M</td>
+                  <td class="num" data-attr="FUND_TARGET_INVESTMENT_COUNT" data-editable="true">40</td>
+                  <td data-attr="FUND_TARGET_PERCENT_BASIS" data-editable="true">Program</td>
+                  <td data-attr="INCEPTION_DATE">Jan 2022</td>
+                  <td class="num" data-attr="FUND_ANNUAL_DEPLOYMENT_TARGET" data-editable="true">$60M</td>
+                  <td class="num">$50.5M</td>
+                  <td><span class="da-st ok">0.96x · On pace</span></td>
+                  <td class="num"><span class="x-fig warn">0.93x</span></td>
+                  <td class="x-pills"><span class="da-st breach">Breach 1</span></td>
+                  <td class="num"><span class="x-cov nil"><i></i>–</span></td><td class="num"><span class="x-cov"><i></i>3</span></td><td class="num"><span class="x-cov nil"><i></i>–</span></td>
+                  <td class="num"><b>3</b></td>
+                </tr>
+                <tr class="sub" data-open="hfo-div">
+                  <td>Diversified Sleeve</td>
+                  <td class="num" data-attr="FUND_TOTAL_COMMITMENTS" data-editable="true">$450M</td>
+                  <td class="num" data-attr="FUND_TARGET_INVESTMENT_COUNT" data-editable="true">40</td>
+                  <td data-attr="FUND_TARGET_PERCENT_BASIS" data-editable="true">Program</td>
+                  <td data-attr="INCEPTION_DATE">Jan 2022</td>
+                  <td class="num" data-attr="FUND_ANNUAL_DEPLOYMENT_TARGET" data-editable="true">$60M</td>
+                  <td class="num">$50.5M</td>
+                  <td><span class="da-st ok">0.96x · On pace</span></td>
+                  <td class="num"><span class="x-fig warn">0.93x</span></td>
+                  <td class="x-pills"><span class="da-st breach">Breach 1</span></td>
+                  <td class="num"><span class="x-cov"><i></i>4</span></td><td class="num"><span class="x-cov nil"><i></i>–</span></td><td class="num"><span class="x-cov nil"><i></i>–</span></td>
+                  <td class="num">4</td>
+                </tr>
+                <tr class="par" data-open="nmi">
+                  <td><b>Northgate Mutual Insurance</b></td>
+                  <td class="num" data-attr="FUND_TOTAL_COMMITMENTS" data-editable="true">$900M</td>
+                  <td class="num" data-attr="FUND_TARGET_INVESTMENT_COUNT" data-editable="true">40</td>
+                  <td data-attr="FUND_TARGET_PERCENT_BASIS" data-editable="true">Program</td>
+                  <td data-attr="INCEPTION_DATE">Jan 2023</td>
+                  <td class="num" data-attr="FUND_ANNUAL_DEPLOYMENT_TARGET" data-editable="true">$150M</td>
+                  <td class="num">$146.5M</td>
+                  <td><span class="da-st ok">1.11x · On pace</span></td>
+                  <td class="num"><span class="x-fig warn">0.87x</span></td>
+                  <td class="x-pills"><span class="da-st breach">Breach 3</span><span class="da-st near">Watch 1</span></td>
+                  <td class="num"><span class="x-cov"><i></i>2</span></td><td class="num"><span class="x-cov nil"><i></i>–</span></td><td class="num"><span class="x-cov nil"><i></i>–</span></td>
+                  <td class="num"><b>2</b></td>
+                </tr>
+                <tr class="sub" data-open="nmi-pc">
+                  <td>Private Credit Sleeve</td>
+                  <td class="num" data-attr="FUND_TOTAL_COMMITMENTS" data-editable="true">$600M</td>
+                  <td class="num" data-attr="FUND_TARGET_INVESTMENT_COUNT" data-editable="true">28</td>
+                  <td data-attr="FUND_TARGET_PERCENT_BASIS" data-editable="true">Parent level</td>
+                  <td data-attr="INCEPTION_DATE">Jan 2023</td>
+                  <td class="num" data-attr="FUND_ANNUAL_DEPLOYMENT_TARGET" data-editable="true">$100M</td>
+                  <td class="num">$102M</td>
+                  <td><span class="da-st x-ahead">1.16x · Ahead</span></td>
+                  <td class="num"><span class="x-fig ok">1.02x</span></td>
+                  <td class="x-pills"><span class="da-st breach">Breach 3</span></td>
+                  <td class="num"><span class="x-cov"><i></i>8</span></td><td class="num"><span class="x-cov"><i></i>2</span></td><td class="num"><span class="x-cov nil"><i></i>–</span></td>
+                  <td class="num">10</td>
+                </tr>
+                <tr class="sub" data-open="nmi-sec">
+                  <td>Secondaries Sleeve</td>
+                  <td class="num" data-attr="FUND_TOTAL_COMMITMENTS" data-editable="true">$200M</td>
+                  <td class="num" data-attr="FUND_TARGET_INVESTMENT_COUNT" data-editable="true">10</td>
+                  <td data-attr="FUND_TARGET_PERCENT_BASIS" data-editable="true">Program</td>
+                  <td data-attr="INCEPTION_DATE">Apr 2024</td>
+                  <td class="num" data-attr="FUND_ANNUAL_DEPLOYMENT_TARGET" data-editable="true">$60M</td>
+                  <td class="num">$44.5M</td>
+                  <td><span class="da-st breach">0.85x · Behind</span></td>
+                  <td class="num"><span class="x-fig bad">0.72x</span></td>
+                  <td class="x-pills"><span class="da-st near">Watch 1</span></td>
+                  <td class="num"><span class="x-cov"><i></i>3</span></td><td class="num"><span class="x-cov nil"><i></i>–</span></td><td class="num"><span class="x-cov"><i></i>3</span></td>
+                  <td class="num">6</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="da-sec">
+        <div class="da-sechead">
+          <h2>Target matrix</h2>
+          <div class="cr-tools">
+            <select id="ovLens" aria-label="Hierarchy"><option value="strategy" selected>Strategy</option><option value="region">Region</option><option value="structure">Structure</option></select>
+            <select id="ovDepth" aria-label="Level"><option value="1" selected>Category</option><option value="2">Asset Class</option><option value="3">Strategy</option><option value="4">Sub-Strategy</option></select>
+            <select id="ovMeasure" aria-label="Measure"><option value="pct" selected>% target</option><option value="usd">$ target</option><option value="n"># investments</option></select>
+          </div>
+        </div>
+        <div class="da-main solo">
+          <div class="da-gridwrap">
+            <table class="da-grid fit x-tree x-mx">
+              <thead><tr><th>Client / mandate</th><th class="num">Primary</th><th class="num">Secondary</th><th class="num">Co-Investment</th><th class="num">Separate Account</th></tr></thead>
+              <tbody>
+                <tr class="par">
+                  <td><b>Commonwealth Teachers’ Retirement</b></td>
+                  <td class="num" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr|strategy|Primary" title="Commonwealth Teachers’ Retirement · Primary · Above max"><span class="x-dot above"></span><b>55%</b><small>50%–60%</small></td>
+                  <td class="num" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr|strategy|Secondary" title="Commonwealth Teachers’ Retirement · Secondary · Below min"><span class="x-dot below"></span><b>20%</b><small>15%–25%</small></td>
+                  <td class="num" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr|strategy|Co-Investment" title="Commonwealth Teachers’ Retirement · Co-Investment · Below min"><span class="x-dot below"></span><b>25%</b><small>20%–30%</small></td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr|strategy|Separate Account" title="Commonwealth Teachers’ Retirement · Separate Account">·</td>
+                </tr>
+                <tr class="sub">
+                  <td>PE Primary Sleeve</td>
+                  <td class="num imp" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-pe|strategy|Primary" title="PE Primary Sleeve · Primary · No target"><span class="x-dot none"></span>≈75%</td>
+                  <td class="num imp" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-pe|strategy|Secondary" title="PE Primary Sleeve · Secondary · No target"><span class="x-dot none"></span>≈25%</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-pe|strategy|Co-Investment" title="PE Primary Sleeve · Co-Investment">·</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-pe|strategy|Separate Account" title="PE Primary Sleeve · Separate Account">·</td>
+                </tr>
+                <tr class="sub">
+                  <td>Credit &amp; Real Assets Sleeve</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-cra|strategy|Primary" title="Credit &amp; Real Assets Sleeve · Primary">·</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-cra|strategy|Secondary" title="Credit &amp; Real Assets Sleeve · Secondary">·</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-cra|strategy|Co-Investment" title="Credit &amp; Real Assets Sleeve · Co-Investment">·</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-cra|strategy|Separate Account" title="Credit &amp; Real Assets Sleeve · Separate Account">·</td>
+                </tr>
+                <tr class="sub">
+                  <td>Co-Investment Sleeve</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-co|strategy|Primary" title="Co-Investment Sleeve · Primary">·</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-co|strategy|Secondary" title="Co-Investment Sleeve · Secondary">·</td>
+                  <td class="num imp" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-co|strategy|Co-Investment" title="Co-Investment Sleeve · Co-Investment · No target"><span class="x-dot none"></span>≈100%</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="ctr-co|strategy|Separate Account" title="Co-Investment Sleeve · Separate Account">·</td>
+                </tr>
+                <tr class="par">
+                  <td><b>Halvorsen Family Office</b></td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="hfo|strategy|Primary" title="Halvorsen Family Office · Primary">·</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="hfo|strategy|Secondary" title="Halvorsen Family Office · Secondary">·</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="hfo|strategy|Co-Investment" title="Halvorsen Family Office · Co-Investment">·</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="hfo|strategy|Separate Account" title="Halvorsen Family Office · Separate Account">·</td>
+                </tr>
+                <tr class="sub">
+                  <td>Diversified Sleeve</td>
+                  <td class="num" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="hfo-div|strategy|Primary" title="Diversified Sleeve · Primary · In range · over target"><span class="x-dot in"></span><b>50%</b><small>40%–60%</small></td>
+                  <td class="num" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="hfo-div|strategy|Secondary" title="Diversified Sleeve · Secondary · In range · under target"><span class="x-dot in"></span><b>30%</b><small>20%–35%</small></td>
+                  <td class="num" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="hfo-div|strategy|Co-Investment" title="Diversified Sleeve · Co-Investment · In range · under target"><span class="x-dot in"></span><b>20%</b><small>10%–25%</small></td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="hfo-div|strategy|Separate Account" title="Diversified Sleeve · Separate Account">·</td>
+                </tr>
+                <tr class="par">
+                  <td><b>Northgate Mutual Insurance</b></td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi|strategy|Primary" title="Northgate Mutual Insurance · Primary">·</td>
+                  <td class="num" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi|strategy|Secondary" title="Northgate Mutual Insurance · Secondary · 90% of target"><span class="x-dot under"></span><b>25%</b></td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi|strategy|Co-Investment" title="Northgate Mutual Insurance · Co-Investment">·</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi|strategy|Separate Account" title="Northgate Mutual Insurance · Separate Account">·</td>
+                </tr>
+                <tr class="sub">
+                  <td>Private Credit Sleeve</td>
+                  <td class="num" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi-pc|strategy|Primary" title="Private Credit Sleeve · Primary · At target"><span class="x-dot at"></span><b>70%</b></td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi-pc|strategy|Secondary" title="Private Credit Sleeve · Secondary">·</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi-pc|strategy|Co-Investment" title="Private Credit Sleeve · Co-Investment">·</td>
+                  <td class="num" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi-pc|strategy|Separate Account" title="Private Credit Sleeve · Separate Account · In range · over target"><span class="x-dot in"></span><b>30%</b><small>20%–40%</small></td>
+                </tr>
+                <tr class="sub">
+                  <td>Secondaries Sleeve</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi-sec|strategy|Primary" title="Secondaries Sleeve · Primary">·</td>
+                  <td class="num imp" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi-sec|strategy|Secondary" title="Secondaries Sleeve · Secondary · No target"><span class="x-dot none"></span>≈100%</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi-sec|strategy|Co-Investment" title="Secondaries Sleeve · Co-Investment">·</td>
+                  <td class="num nil" data-attr="FUND_TARGET_MATRIX" data-editable="true" data-go="nmi-sec|strategy|Separate Account" title="Secondaries Sleeve · Separate Account">·</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <p class="da-note" style="margin-top:8px">Only levels with at least one target appear as columns. Small figures are the min–max band; the dot shows where commitments sit against it. Italic ≈ values are implied from the other measure.</p>
+      </section>
+    </main>
+  </div>
+</div>

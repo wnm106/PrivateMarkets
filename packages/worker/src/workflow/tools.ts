@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { ToolRegistry } from '@tapestrai/mcp-server/src/lib/tool-registry';
+import { registerBorrowerTools } from '@tapestrai/mcp-server/src/tools/borrower-tools';
 import { registerComplianceTools } from '@tapestrai/mcp-server/src/tools/compliance-tools';
 import { registerDocumentTools } from '@tapestrai/mcp-server/src/tools/document-tools';
 import { registerDomainTools } from '@tapestrai/mcp-server/src/tools/domain-tools';
@@ -104,6 +105,7 @@ export function buildRegistry(): ToolRegistry {
   registerNavReportTools(registry);
   registerSelectionTools(registry);
   registerDocumentTools(registry);
+  registerBorrowerTools(registry);
   return registry;
 }
 

@@ -326,3 +326,138 @@ export async function saveEntityAliases(
   const { error } = await supabase.from('entity_aliases').upsert(rows, { onConflict: 'entity_id,alias_code' });
   if (error) throw new Error(error.message);
 }
+
+// ---------------------------------------------------------------------------
+// The alias lists, read in one place
+// ---------------------------------------------------------------------------
+
+export interface AttributeAliasWord {
+  attributeId: string;
+  aliasLabel: string;
+  aliasCode: string | null;
+  domainCode: string | null;
+}
+
+/**
+ * The words one client uses: its own aliases and the names it gives entity
+ * types first, then the shared aliases those do not replace. The database puts
+ * the lists together (metadata_register.alias_words), so import mapping, chat
+ * search and the Excel formula builder all read the same words.
+ */
+export interface AliasWords {
+  /** The client the words are for. Null means the shared lists only. */
+  clientId: string | null;
+  /** Entity type code to the name the client gives that type. */
+  labels: Record<string, string>;
+  domainAliases: DomainAlias[];
+  nameAliases: EntityNameAlias[];
+  attributeAliases: AttributeAliasWord[];
+  /** Fields the client hides. Still stored and loadable; shown as hidden where a person picks a field. */
+  hiddenAttributeIds: string[];
+}
+
+export const NO_ALIAS_WORDS: AliasWords = {
+  clientId: null,
+  labels: {},
+  domainAliases: [],
+  nameAliases: [],
+  attributeAliases: [],
+  hiddenAttributeIds: [],
+};
+
+function mapTypeWord(row: any): DomainAlias {
+  return { domainCode: String(row.domain_code), aliasLabel: String(row.alias_label), aliasCode: String(row.alias_code || '') };
+}
+
+function mapAttributeWord(row: any): AttributeAliasWord {
+  return {
+    attributeId: String(row.attribute_id),
+    aliasLabel: String(row.alias_label),
+    aliasCode: row.alias_code ? String(row.alias_code) : null,
+    domainCode: row.domain_code ? String(row.domain_code) : null,
+  };
+}
+
+/** The answer of metadata_register.alias_words, as the app reads it. */
+export function parseAliasWords(value: unknown): AliasWords {
+  const row = (typeof value === 'string' ? JSON.parse(value) : value) as Record<string, any> | null;
+  if (!row || typeof row !== 'object') return NO_ALIAS_WORDS;
+  const list = (key: string): any[] => (Array.isArray(row[key]) ? row[key] : []);
+  const labels: Record<string, string> = {};
+  if (row.labels && typeof row.labels === 'object') {
+    for (const [code, name] of Object.entries(row.labels)) {
+      if (typeof name === 'string' && name.trim()) labels[code] = name;
+    }
+  }
+  return {
+    clientId: row.client_id ? String(row.client_id) : null,
+    labels,
+    domainAliases: list('types').filter((item) => item?.domain_code && item?.alias_label).map(mapTypeWord),
+    nameAliases: list('names').filter((item) => item?.domain_code && item?.alias_label).map(mapTypeWord),
+    attributeAliases: list('attributes').filter((item) => item?.attribute_id && item?.alias_label).map(mapAttributeWord),
+    hiddenAttributeIds: list('hidden_attribute_ids').map(String),
+  };
+}
+
+/** Field id to the other words for that field. */
+export function aliasLabelsByAttribute(words: Pick<AliasWords, 'attributeAliases'>): Map<string, string[]> {
+  const labels = new Map<string, string[]>();
+  for (const alias of words.attributeAliases) {
+    const list = labels.get(alias.attributeId) || [];
+    if (!list.includes(alias.aliasLabel)) list.push(alias.aliasLabel);
+    labels.set(alias.attributeId, list);
+  }
+  return labels;
+}
+
+type AliasReader = {
+  from: (table: string) => any;
+  rpc?: (fn: string, args?: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { message: string } | null }>;
+  schema?: (name: string) => any;
+};
+
+/**
+ * The shared lists read from the three tables, as every reader did before the
+ * database could put them together. Used when that function is not there yet,
+ * so a build deployed ahead of its migration reads what it always read.
+ */
+async function sharedAliasWords(tables: { from: (table: string) => any }): Promise<AliasWords> {
+  const [types, names, attributes] = await Promise.all([
+    tables.from('domain_aliases').select('domain_code, alias_label, alias_code').eq('is_active', true),
+    tables.from('entity_name_aliases').select('domain_code, alias_label, alias_code').eq('is_active', true),
+    tables.from('attribute_aliases').select('attribute_id, alias_label, alias_code, domain_code').eq('is_active', true),
+  ]);
+  const failure = types.error || names.error || attributes.error;
+  if (failure) throw new Error(failure.message);
+  return {
+    ...NO_ALIAS_WORDS,
+    domainAliases: (types.data || []).map(mapTypeWord),
+    nameAliases: (names.data || []).map(mapTypeWord),
+    attributeAliases: (attributes.data || []).map(mapAttributeWord),
+  };
+}
+
+/**
+ * The words to match on. With no `clientId`, the caller's own session decides
+ * the client (a signed-in request). Server code that reads everything passes
+ * the client a job is for, or null for the shared lists.
+ */
+export async function loadAliasWords(
+  supabase: AliasReader,
+  options: { clientId?: string | null } = {},
+): Promise<AliasWords> {
+  const forNamedClient = 'clientId' in options;
+  const register = forNamedClient && supabase.schema ? supabase.schema('metadata_register') : supabase;
+  try {
+    const call = forNamedClient
+      ? register.rpc?.('alias_words', { p_client_id: options.clientId ?? null })
+      : supabase.rpc?.('session_alias_words');
+    if (call) {
+      const { data, error } = await call;
+      if (!error && data) return parseAliasWords(data);
+    }
+  } catch {
+    // Fall through to the tables.
+  }
+  return sharedAliasWords(register);
+}

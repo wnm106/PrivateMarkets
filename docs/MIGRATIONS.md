@@ -38,6 +38,14 @@ To mark one as applied without running it: `npx supabase migration repair --stat
 2. Apply it: `npx supabase db push` once nothing else is pending, or `npx supabase db query --linked -f <file>` followed by `npx supabase migration repair --status applied <version>`.
 3. A request through `db query --linked` is cut off after about two minutes. A migration that does more than that, such as solving a formula for every record, has to be split, or run over a direct connection with `psql`.
 
+## Applied on 2026-11-24
+
+`20261124090000_required_parents` was applied through `db query --linked` after a dry run in a transaction that was not committed, and recorded as applied. It adds `relationship_types.required_unless_attribute_code`, exempts library covenants from needing a deal, and links four sample securities to their sample issuers. `supabase/seed/ocio_harbor_lite.sql` was run again after it: Harbor Lite now has 22 issuer records with its 113 securities linked to them, and the Securities, Market Data and Deals modules turned on. One record on the hosted project still has no required parent, by decision: the cash match `HSCF2-FUND-MATCH-20260930-HSCF2-BTX-11-mw46kev8`.
+
+## Seed re-applied on 2026-11-23
+
+`supabase/seed/ocio_harbor_lite.sql` was run again on the hosted project, after a dry run in a transaction that was not committed. It replaces Harbor Lite's two JSON attributes (`OCIO_TARGET_MATRIX`, `OCIO_PACING_OVERRIDES`) with the `OCIO_TARGET` entity type: one Allocation Target record per fund, hierarchy and level, linked by `OCIO_TARGET_FUND`, with each minimum, target and maximum as its own attribute. It created 74 records holding 175 values and deleted the two attributes and their 18 seeded values; no hand-entered value existed. No migration was involved.
+
 ## Applied on 2026-11-21
 
 `20261114160000_compliance_capacity_and_proforma` (never applied before; the new capacity path needs its proforma functions) and `20261121130000_capacity_reads_the_evaluator` were applied together in one transaction through the Management API, after a dry run in a rolled-back transaction, and recorded in `supabase_migrations.schema_migrations`.
@@ -175,4 +183,51 @@ The recorded files kept their versions: `agents`, `entity_views`, `surface_bluep
 
 `20261122195959_certifications`, `20261122220001_grid_lookup_entity_id` and `20261123120000_compliance_results_as_of` were then applied in version order, in one transaction, after a dry run that rolled back, and recorded.
 
+`20261123150000_statement_review_notes` was applied on 2026-11-23 after a dry run that rolled back, and recorded. It registers `STATEMENT_REVIEW_NOTES` and `STATEMENT_REVIEW_OUTCOME` on the statement period and assigns them to its template, for the Borrower financials workflow's review notes ([WORKFLOWS.md](WORKFLOWS.md#borrower-financials)). It changes no function and no value.
+
 The merge also brought 11 database functions with direct reads that were not on `scripts/guard/direct-reads.txt`. Master wrote most of them before the list existed. Two came from this branch's own new files (`latest_results_as_of`, `relationship_endpoint_ids`). They were added to the list, so the static guard flags those 11 lines once, on that commit.
+
+## Applied on 2026-11-23: OCIO for Harbor Lite
+
+Each was dry-run in a transaction that rolled back, then applied with `npx supabase db query --linked -f <file>` and recorded with `migration repair`.
+
+- `20261123170000_client_reference_lists` gives `metadata_register.reference_lists` a nullable `client_id`, like entity types and attributes. A list's values follow their list. Reads and writes use `tenancy.schema_row_visible` and `tenancy.can_write_schema_row`. An attribute may draw only from a global list or its own client's list.
+- `20261123190000_proforma_for_signed_in_users` makes pro forma and investment capacity work for signed-in users. `compliance.cleanup_proforma` deletes a hypothetical position's values and links before the position, and only positions marked `proforma`, so `guard_entity_delete` no longer refuses it. `compliance.materialize_proforma_legs` sets `golden_master.trusted_writer` for its own inserts, and `entity_instances.guard_relationship_rows` now honours that mark as the value guard does, so the trade is known at the caller's Knowledge date rather than at `now()`. `compliance.proforma_snapshot` checks each leg's security on its own; the join it replaced ran `has_entity_access` over every record (5.6s of 6.5s). A signed-in one-leg snapshot went from failing after 6.6s to about 1s.
+- `20261123180000_proforma_temp_deletes_have_where` changes four bare `DELETE FROM <temp table>;` statements in `compliance.evaluate_proforma` and `compliance.deal_capacity_observations` to `WHERE TRUE`. The API runs with safe updates on, so every pro forma from a signed-in user failed with "DELETE requires a WHERE clause". The functions are otherwise the definitions in force on the hosted project.
+
+`supabase/seed/ocio_harbor_lite.sql` was applied the same way. It writes only Harbor Lite rows: four tree lists, 31 `OCIO_*` attributes on the global FUND, SECURITY, POSITION and DEAL_FUNDING_PLAN types, 249 sample records (`OCIO-*`), 22 compliance rules (`OCIO_*`) with per-sleeve thresholds, and the `ocio` module granted to Harbor Lite. It can be run again. `OCIO_OWNERSHIP_PCT` was created by the first run and then removed; the fund-size rule now divides by the underlying fund size itself.
+
+A later run on 2026-11-23 added Harbor Lite's Fund security template, `OCIO_SECURITY_FUND`. It also added the Harbor Lite list and attribute `OCIO_ASSET_TYPE` (Fund, Direct / Co-Investment, Separate Account), derived from each security's investment type. Primary funds, secondaries and funds of funds are Fund. The template has four sections: Identification, OCIO classification, Fund terms, and Geography and sector. Its 25 fields are every `OCIO_*` security attribute plus the global fields that describe a fund (name, manager, manager record, currency, description, investment company). Asset type and currency are required. The 84 sample securities whose asset type is Fund use it, including 10 pipeline-deal securities. A rerun keeps each record's template in line with its asset type.
+
+## Applied on 2026-11-24: 20261123200000_small_scope_reads_by_record
+
+Dry-run in a transaction that rolled back, then applied with `npx supabase db query --linked -f <file>` and recorded with `migration repair`.
+
+An entity list for a client with few records was as slow as one for a client with many, because two reads went through every client's attribute values:
+
+- `golden_master.persisted_attribute_values` and the by-source read in `reporting.view_values` filtered with `= ANY(COALESCE(ids, '{}'))`. The grid reaches them without the ids known at plan time, and Postgres does not run a `COALESCE` ahead of the row security check, so the filter could not be an index condition. They now filter with `= ANY(ids)`. A null list still matches nothing.
+- `public.data_quality_dashboard`, which every entity list loads for its Data Quality tab, joined the values table to the records in scope with nested loops off, so both of its value reads scanned the whole table. It now finds the records in scope first and filters both reads on that list. The scope rule is unchanged.
+
+The dry run ran old and new in one transaction as a signed-in user, each call twice. For Harbor Lite's 113 securities the grid went from 1,311 and 666 ms to 505 ms, and the Data Quality call from 2,410 and 478 ms to 502 and 151 ms. For 725 securities the grid went from 4,909 and 1,529 ms to 1,022 ms, and the Data Quality call from 2,796 and 816 ms to 483 and 469 ms. Results were the same, except that the dashboard's entity list can order records that tie on count and name differently; that order was already arbitrary.
+
+Timings on the hosted project swing several times over between runs, so compare old and new in the same transaction.
+
+## Applied on 2026-11-24: 20261124120000_client_catalog_presentation
+
+What a client calls an entity type and the shared fields it hides ([ALIASES.md](ALIASES.md), "Per client"). It adds `client_domain_settings` and `client_attribute_settings`, `tenancy.presentation_client_id`, and replaces the views `public.domain_types` and `public.attribute_register` and the function `public.get_attributes_with_aggregation`. No record changes.
+
+A dry run on the hosted project on 2026-11-24, in a transaction that rolled back, applied it and checked it as a member of one client, as staff simulating a client, as the service role and signed out. Reading the catalog took the same time before and after (the views' two lookups run once per statement).
+
+It was applied in one transaction with `npx supabase db query --linked -f <file>` and recorded with `migration repair`. Afterwards all 61 entity types read under their catalog names and all 1,204 attributes were returned, with no client setting stored.
+
+Since it was applied, `domain_name` and `is_visible` cannot be written through the public views. An app built before this change writes them there (the entity type edit form, and the Visible box on an attribute), so those two actions fail in that build until the app from this change is deployed. It writes the catalog tables instead. Nothing else in the older build is affected.
+
+## Applied on 2026-11-24: 20261124130000_client_aliases
+
+A client's own aliases ([ALIASES.md](ALIASES.md), "A client's words"). It goes after `20261124120000_client_catalog_presentation`: it reads that migration's tables and replaces its `public.client_catalog_settings`. It adds a nullable `client_id` to `domain_aliases`, `entity_name_aliases` and `attribute_aliases`, replaces each list's unique index with one for shared aliases and one per client, recreates the three public alias views with `client_id` at the end, and adds `metadata_register.alias_words`, `public.session_alias_words`, `public.add_client_domain_alias` and `public.remove_client_domain_alias`. No record changes.
+
+A dry run on the hosted project on 2026-11-24 applied both migrations in one transaction that rolled back. With no client words, `session_alias_words` returned the 90 shared aliases the three tables hold. A client word for another type replaced the shared one for that client only, and a member could not write a shared alias or another client's.
+
+It was applied the same way, straight after the first. Afterwards a signed-in member read the same 90 shared aliases as before (10 for entity types, 10 for record names, 70 for fields), with no client alias stored, and the import screen's catalog returned the same 2,344 targets through the new reader.
+
+This one has no order to keep with the app. The app reads the words through one loader that falls back to the three tables when the function is missing, so it works before and after.

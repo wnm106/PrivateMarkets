@@ -1,4 +1,5 @@
 import type { RunInputField } from './workflow-filters';
+import { blockExits, blockWidth, fileImportBlock } from './workflow-blocks';
 import type { WorkflowGraph, WorkflowNode } from './workflow-graph';
 
 /**
@@ -65,6 +66,8 @@ function selectRecords(x: number, y: number): WorkflowNode {
 
 /** Told to every agent, so it stays inside the run's records. */
 const SELECTION_RULE = `The "Select records" step says which records this run covers. If it lists records, work on those and no others, and do not propose a change to any other record. If it says the run is not filtered, it covers every record the steps before you returned.`;
+
+const FILE_TEXT_RULE = `A table is not the whole file. A stored file's words are there too: get_position_file_text gives every page, with the notes under a table and the footnotes at the foot of the page, and with find it goes straight to the passages that hold the words you give. Read them before you rely on a figure that carries a footnote mark, a label such as "adjusted", "pro forma", "restated" or "unaudited", or a total you cannot tie. When a note changes what a figure means, say so in the evidence, in the file's own words, with the page. Once a file is kept as a document (documentId on the file), search_documents with that documentId finds a passage by its meaning.`;
 
 const READ_TOOLS = [
   'list_dq_exceptions',
@@ -133,6 +136,9 @@ const PACK_READ_TOOLS = [
   'list_position_file_imports',
   'get_position_file_import',
   'get_position_file_tables',
+  'get_position_file_text',
+  'search_documents',
+  'get_document_section',
   'list_position_file_mapping_targets',
   'preview_position_file_load',
   'get_nav_reconciliation',
@@ -157,6 +163,9 @@ const REC_READ_TOOLS = [
   'get_data_quality_checks',
   'list_position_file_imports',
   'get_position_file_import',
+  'get_position_file_text',
+  'search_documents',
+  'get_document_section',
   'query_data',
   'get_model_map',
 ];
@@ -168,6 +177,7 @@ ${SELECTION_RULE} The "Funds in this run" step lists those funds, the period eac
 
 1. Find each fund's pack. The "Files received" step lists stored files, newest first. A fund's pack is every file not yet loaded (status READY or FAILED) that belongs to that fund and its period: judge by the file name, its as-of date, and what is in it. Bank statements and our own position or cash extracts for the period belong too. Leave files for other funds or periods alone. A file already loaded (SUCCEEDED) is done unless "Funds in this run" still shows what it should have supplied as missing. A fund with no file to load needs nothing here: say so and move on.
 2. Read each file's tables (get_position_file_tables). A pack is often a workbook: a balance sheet, a statement of operations, a schedule of investments, a cash ledger. Decide what each table is and whether the reconciliation needs it. Cover sheets, notes, and tables that repeat another are not loaded: say so in the summary.
+   ${FILE_TEXT_RULE}
 3. Map each table you will load. Start from the mapping Load data suggests for the selected table (get_position_file_import) and from the allowed targets (list_position_file_mapping_targets, narrowed by record type). Read the model map if you are unsure which record type holds what. Every table needs one column mapped to a record type's code. Map a column only to a target that exists. A column with nowhere to go is left out and named in the summary; do not force it onto a near miss.
 4. Set the as-of date to the fund's period end, and the source: FUND_ADMIN for anything the administrator produced, INTERNAL for our own books, and the bank's own source for a bank statement if one is listed.
 5. Try every mapping with preview_position_file_load, and fix it until nothing is refused or what is refused is understood. Records the preview would create that you expected to match are a warning: the pack may spell a position or security differently from our records. Check before proposing, and say what you found.
@@ -181,6 +191,8 @@ const REC_INSTRUCTIONS = `Reconcile each fund in this run: the NAV, the position
 Period end: "{{input.periodEnd}}" (blank means the period each fund is now closing).
 
 ${SELECTION_RULE} The "Closes after loading" step lists those funds with the period each is closing. Take the funds one at a time and finish one before starting the next. Pass the period end above to every reconciliation tool when one is given.
+
+${FILE_TEXT_RULE} The "Load the packs" step names the file each table came from.
 
 For each fund, start by reading its NAV reconciliation yourself (get_nav_reconciliation), so you have all of it as it stands after the load. What the earlier steps returned is below, and may be cut short. The "Load the packs" step says which tables loaded and which did not: a table that failed to load is a gap in everything that follows for its fund, so name it. A fund that is not ready to reconcile gets no decisions: its notes say what is missing and who supplies it.
 
@@ -235,7 +247,7 @@ const NAV_BREAKS_INSTRUCTIONS = `Explain what breaks or is open in this fund's N
 
 The run covers one fund and one filed report. The "Load the report" step says which fund (its fund.id and fund.code) and which period end; use those with every tool, and propose nothing on any other fund. The "Review the NAV" step summarized the reconciliation after the load: every check that breaks, every check with a figure missing, every review item still open, and every input not on file, each with both figures. The "Write the notes" step already kept that summary as the close's notes.
 
-Start by reading the summary yourself (get_nav_breaks with that fund and period end), then the reconciliation (get_nav_reconciliation) when you need the detail of a figure. What the report says about itself is in get_nav_report. Recalculate nothing by hand: the reconciliation already has every figure, and your job is to explain the difference from the statements, the fund's terms, and the report.
+Start by reading the summary yourself (get_nav_breaks with that fund and period end), then the reconciliation (get_nav_reconciliation) when you need the detail of a figure. What the report says about itself is in get_nav_report. The report's notes are in the stored file ("Load the report" gives its instanceId): the fee terms, the basis of each accrual, what was restated and why. ${FILE_TEXT_RULE} Recalculate nothing by hand: the reconciliation already has every figure, and your job is to explain the difference from the statements, the fund's terms, and the report.
 
 For each break:
 - Say what the two figures are, where each comes from, and the difference.
@@ -615,6 +627,193 @@ Say how many bank transactions you saw, how many matches, and which transactions
   },
 ];
 
+const QUARTER_END: RunInputField = { key: 'periodEnd', label: 'Quarter end', type: 'date', help: 'Leave blank for the latest quarter that has ended.' };
+
+const BORROWER_READ_TOOLS = [
+  'get_borrower_financials',
+  'list_position_file_imports',
+  'get_position_file_import',
+  'get_position_file_tables',
+  'get_position_file_text',
+  'get_entity',
+  'list_entities',
+  'get_field_lineage',
+  'get_temporal_history',
+  'get_data_quality_checks',
+  'list_documents',
+  'search_documents',
+  'get_document_section',
+  'query_data',
+  'get_model_map',
+];
+
+const BORROWER_REVIEW_INSTRUCTIONS = `Review each borrower's financials for the quarter: how the business moved, whether the covenants hold, and whether the borrower's certificate agrees with our calculation. Then write the quarter's review notes.
+Quarter end: "{{input.periodEnd}}" (blank means the latest quarter that has ended).
+
+The borrower is the issuer the statements name. The "Issuer" step says which one: the file named it, or a person chose it. Work on that issuer and no other, and do not propose a change to any other record. The "Financials and covenants now" step holds each borrower as it stands now: the statement lines by quarter, how each key line moved, every covenant tested under the deal's own definition with the certificate beside it, and what is open.
+
+The file came in through the standard import, and a person did each part of it. "Receive the file" names the file handed to the run (result.fileName, result.importInstanceId). "Map the file" is where they confirmed where each column goes, "Check the values" where they approved the staged batch, and "Promote to live records" says what was written. Values the promotion refused are a gap in everything that follows, so name them.
+
+Work one borrower at a time. Start by reading it yourself with every line (get_borrower_financials with allLines true), so you have all of it and not a cut-down copy.
+
+${FILE_TEXT_RULE} In a borrower's package the notes are where an add-back is described, a covenant figure is said to be pro forma, and a prior quarter is restated.
+
+The compliance certificate
+- Find it. It is the file handed to the run when that file holds a certificate, or more often a file of its own beside the statements: list_position_file_imports lists stored files newest first, and list_documents the documents kept. Judge by the file's name, its date, and what is in it (get_position_file_tables, get_position_file_text). Leave another borrower's or another quarter's certificate alone. With no certificate to be found, say so: it is a gap, and asking the borrower for it is an action.
+- For each covenant the certificate certifies, find the covenant on the borrower's deal (covenantId) by its metric. Where no certificate value is on file for the quarter, or the one on file differs from the certificate, propose one record_borrower_covenant_value with the figure exactly as certified, the quarter end as testDate, and where it is in the file as the note: the file's name, the page or table, and the line. Do not adjust the figure. A certified covenant you cannot match to one on file is not proposed: name it in the notes.
+- A certificate often says how a figure was reached in a footnote (an add-back taken, cash netted, a pro forma adjustment). Read it (get_position_file_text with find) and put what it says in the evidence, in its own words with the page.
+
+Trends
+- Read revenue, the margins, EBITDA, cash, debt and cash from operations across the quarters. Say what moved and by how much, on the quarter and on the year, using the tool's own figures. Lines the tool marks as notable come first.
+- Explain a move from the lines beneath it: a margin from the costs, EBITDA from revenue and costs, cash from operations, working capital and debt. Say plainly when the statements do not explain it. Do not speculate about the business beyond what is on file.
+- A line that looks wrong (a sign flipped, a quarter ten times its neighbours, a balance sheet that does not balance) is a data question, not a trend. Check where the value came from (get_field_lineage, get_temporal_history). Propose submit_manual_override only when a second source on file shows the right value; otherwise raise it in the notes as a question for the borrower.
+
+Covenants
+- Recalculate nothing by hand. The calculated value, its numerator and denominator, the limit and the status are the platform's, under the deal's own definition. Your job is to say what they mean and what follows.
+- For each covenant: the calculated value against the limit, the cushion, and how it has moved over the history. A covenant past its limit or close to it comes first.
+- Certificate against calculation. Where the certificate differs from our calculation, say by how much and which side of the limit each figure falls. Establish the cause from what is on file when you can: an add-back the certificate takes that the definition caps or leaves out, a different period, cash netted that the definition does not allow, a line that did not load. Look first at the certificate's own footnotes and the notes to the statements (get_position_file_text with find on the covenant's name, "add-back", "pro forma", "adjusted"): the borrower usually says there how it reached its figure. Quote what it says, with the page. Compare with the value under the house definition when it helps. When the two fall on different sides of the limit, say so in the first sentence: that is the finding that matters most.
+- A covenant with no certificate value on file, or that cannot be calculated, is a gap. Name what supplies it.
+- Never waive, cure or declare anything. Say what a person has to decide.
+
+Show your evidence (show_reviewer)
+For each borrower, show its financials (fin.borrower) with focus on the covenants you want the reviewer to look at (their covenantId) and the codes of the lines that moved most. In why, say in one sentence what to check.
+
+Notes (save_borrower_review)
+Propose one change per borrower that keeps its notes for the quarter, with dependsOn naming every other change you proposed for that borrower so it is applied after them. Write them for the credit committee and for whoever picks the name up next quarter. Markdown, in this order, short:
+## Outcome
+Two or three sentences: how the quarter went, whether every covenant holds, and the one thing a person has to decide or chase.
+## Trends
+One bullet per line that matters: the figure, the move on the quarter and the year, and the cause when the statements show it.
+## Covenants
+One bullet per covenant: calculated against the limit, the cushion, the certificate's figure, and whether the two agree. Past the limit first.
+## Certificate differences
+Each difference: both figures, the gap, the cause if established, and what settles it. Leave the section out when there is none.
+## Actions
+A numbered list. Each says what is to be done, who does it (credit analyst, deal team, the borrower, the agent bank), and by when if the agreement sets a date. What bears on a covenant past its limit comes first.
+## Questions for the borrower
+Each question in full, ready to send.
+Use figures from the tools only, with names, never record ids. Say plainly what you could not establish.
+
+Keep each proposal short. The summary line is at most twelve words and starts with the borrower's name. The rationale is one or two sentences: the finding, then why this change follows. Evidence lines are single facts with their figures. HIGH confidence only when a second source confirms it.
+
+Finish with a summary for the reviewer of at most three sentences and three bullets: what held, what did not, and which proposals need their judgement.`;
+
+/** File intake: the import block on the file the run was started with. */
+function fileIntakeGraph(): WorkflowGraph {
+  const block = fileImportBlock({ file: '{{input.importInstanceId}}', ids: { index: 'receive' }, at: { x: 220, y: 160 } });
+  return {
+    nodes: [
+      { ...startStep({ inputs: [{ key: 'importInstanceId', label: 'Stored file', type: 'text', help: 'The id of a file in Load data.' }] }), position: { x: 0, y: 160 } },
+      ...block.nodes,
+      { id: 'end', type: 'end', label: 'End', position: { x: 220 + blockWidth(block), y: 160 }, config: {} },
+    ],
+    edges: [{ id: 'e1', from: 'start', to: block.entry }, ...block.edges, ...blockExits(block, { loaded: 'end', stopped: 'end' })],
+  };
+}
+
+/**
+ * Borrower financials: the run starts with the file. The issuer is found from the file, a person chooses it
+ * when the file does not name one surely enough, and the quarter's statements then come in through the import
+ * block and the review follows. With no file there is no issuer, so the run ends. Stopping the import part way
+ * ends it.
+ */
+function borrowerFinancialsGraph(): WorkflowGraph {
+  const block = fileImportBlock({
+    expecting: 'The quarterly financial statements the borrower sent. Its compliance certificate is read later from the stored files, so upload that too if it is not there yet.',
+    at: { x: 220, y: 160 },
+  });
+  // The issuer is settled between indexing the file and understanding it, and the "before" figures are read
+  // there too, so they are the figures as they stood before anything was loaded.
+  const GAP_X = 220;
+  const extra = 6;
+  const shifted = block.nodes.map((node) => (node.id === 'file' || node.id === 'index' ? node : { ...node, position: { ...node.position, x: node.position.x + GAP_X * extra } }));
+  const lead = 220 + GAP_X * 2;
+  const after = 220 + blockWidth(block) + GAP_X * extra;
+  const figures = { entityIds: '{{steps.select.entityIds}}', periodEnd: '{{input.periodEnd}}' };
+  const issuer = { instanceId: block.file, recordType: 'ISSUER' };
+  return {
+    nodes: [
+      startStep({ inputs: [QUARTER_END] }),
+      ...shifted,
+      { id: 'identify', type: 'tool', label: 'Find the issuer in the file', position: { x: lead, y: 160 }, config: { tool: 'find_file_record', args: issuer, allowWrite: false } },
+      { id: 'identified', type: 'branch', label: 'Did the file name one issuer?', position: { x: lead + GAP_X, y: 160 }, config: { path: 'steps.identify.identified', op: 'truthy', value: null } },
+      {
+        id: 'pick',
+        type: 'stage',
+        label: 'Choose the issuer',
+        position: { x: lead + GAP_X * 2, y: 280 },
+        config: {
+          screen: 'intake.record',
+          title: 'Choose the issuer',
+          instructions: 'The file did not name an issuer surely enough. Choose the issuer these statements are about, from those the file resembles or by searching.',
+          args: { importInstanceId: block.file, recordType: 'ISSUER' },
+          people: [],
+          roles: [],
+          dueInHours: null,
+        },
+      },
+      { id: 'select', type: 'tool', label: 'Issuer', position: { x: lead + GAP_X * 3, y: 160 }, config: { tool: 'find_file_record', args: { ...issuer, entityId: '{{steps.pick.result.entityId}}' }, allowWrite: false } },
+      { id: 'before', type: 'tool', label: 'Financials on file', position: { x: lead + GAP_X * 4, y: 160 }, config: { tool: 'get_borrower_financials', args: figures, allowWrite: false } },
+      { id: 'any', type: 'branch', label: 'Any statements or deals on file?', position: { x: lead + GAP_X * 5, y: 160 }, config: { path: 'steps.before.borrowers', op: 'truthy', value: null } },
+      { id: 'recalculate', type: 'tool', label: 'Recalculate the covenants', position: { x: after, y: -20 }, config: { tool: 'recalculate_borrower_covenants', args: figures, allowWrite: true } },
+      { id: 'after', type: 'tool', label: 'Financials and covenants now', position: { x: after + 240, y: 160 }, config: { tool: 'get_borrower_financials', args: figures, allowWrite: false } },
+      {
+        id: 'analyze',
+        type: 'agent',
+        label: 'Review trends and covenants',
+        position: { x: after + 480, y: 160 },
+        config: {
+          instructions: BORROWER_REVIEW_INSTRUCTIONS,
+          tools: BORROWER_READ_TOOLS,
+          proposable: ['save_borrower_review', 'record_borrower_covenant_value', 'submit_manual_override'],
+          showable: ['fin.borrower'],
+          maxRounds: 40,
+          provider: 'claude',
+        },
+      },
+      {
+        id: 'review',
+        type: 'review',
+        label: 'Review the quarter',
+        position: { x: after + 720, y: 160 },
+        config: {
+          source: 'analyze',
+          title: 'Review the quarter',
+          instructions:
+            'Check each certificate value is the figure the borrower certified, read where the borrower stands, then the notes. Approve the notes to keep them on the quarter, and edit them first if you disagree with a finding. Waivers, cures and any notice to the borrower stay with you and the deal team.',
+          skipWhenEmpty: true,
+        },
+      },
+      { id: 'record', type: 'apply', label: 'Keep the review', position: { x: after + 960, y: 80 }, config: { review: 'review' } },
+      { id: 'final', type: 'tool', label: 'Where each borrower stands now', position: { x: after + 1200, y: 80 }, config: { tool: 'get_borrower_financials', args: figures, allowWrite: false } },
+      { id: 'end', type: 'end', label: 'End', position: { x: after + 1440, y: 160 }, config: {} },
+    ],
+    edges: [
+      { id: 'e0', from: 'start', to: block.entry },
+      // The block's own link from indexing to understanding is replaced by the steps that settle the issuer.
+      ...block.edges.filter((edge) => !(edge.from === 'index' && edge.to === 'understand')),
+      { id: 'e1', from: 'index', to: 'identify' },
+      { id: 'e2', from: 'identify', to: 'identified' },
+      { id: 'e3', from: 'identified', to: 'select', when: 'true' },
+      { id: 'e4', from: 'identified', to: 'pick', when: 'false' },
+      { id: 'e5', from: 'pick', to: 'select', when: 'chosen' },
+      { id: 'e6', from: 'pick', to: 'end', when: 'none' },
+      { id: 'e7', from: 'select', to: 'before' },
+      { id: 'e8', from: 'before', to: 'any' },
+      { id: 'e9', from: 'any', to: 'understand', when: 'true' },
+      { id: 'e10', from: 'any', to: 'end', when: 'false' },
+      ...blockExits(block, { loaded: 'recalculate', noFile: 'end', stopped: 'end' }),
+      { id: 'e11', from: 'recalculate', to: 'after' },
+      { id: 'e12', from: 'after', to: 'analyze' },
+      { id: 'e13', from: 'analyze', to: 'review' },
+      { id: 'e14', from: 'review', to: 'record', when: 'approved' },
+      { id: 'e15', from: 'review', to: 'end', when: 'rejected' },
+      { id: 'e16', from: 'record', to: 'final' },
+      { id: 'e17', from: 'final', to: 'end' },
+    ],
+  };
+}
+
 export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
   {
     code: 'DATA_CLEANUP',
@@ -862,7 +1061,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
           position: { x: 2200, y: 60 },
           config: {
             instructions: NAV_BREAKS_INSTRUCTIONS,
-            tools: ['get_nav_breaks', 'get_nav_reconciliation', 'get_position_reconciliation', 'get_nav_report', 'get_entity', 'get_field_lineage', 'get_temporal_history', 'query_data', 'get_model_map'],
+            tools: ['get_nav_breaks', 'get_nav_reconciliation', 'get_position_reconciliation', 'get_nav_report', 'get_position_file_text', 'search_documents', 'get_document_section', 'get_entity', 'get_field_lineage', 'get_temporal_history', 'query_data', 'get_model_map'],
             proposable: ['record_rec_decision', 'save_reconciliation_notes'],
             showable: ['rec.nav'],
             maxRounds: 30,
@@ -912,6 +1111,14 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
         { id: 'e17', from: 'after', to: 'end' },
       ],
     },
+  },
+  {
+    code: 'BORROWER_FINANCIALS',
+    name: 'Borrower financials',
+    description:
+      'Takes the financial statements of a quarter from received file to review notes. A person hands the run the file, or uploads it. The issuer is found from the file by searching its values among the stored issuers; when the file does not name one surely enough, a person chooses it. The file then goes through the standard import: read and indexed for search, confirmed, mapped onto the statement lines, staged, checked against the data quality rules and promoted. The covenants are stored again from the new lines. An agent then reads the trends, tests each covenant against its limit, reads the compliance certificate the borrower sent and checks it against our calculation, and writes the review notes for a person to approve. With no file the run ends, because nothing says which issuer to review; stopping the import part way ends the run. A run takes one file.',
+    inputExample: { periodEnd: '' },
+    graph: borrowerFinancialsGraph(),
   },
   {
     code: 'DATA_QUALITY_BRIEF',
@@ -1002,109 +1209,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
     description:
       'Takes one stored file to live records as a guided run: the file is indexed for search, a person confirms what it is and where each column goes, the values are staged and checked against the data quality rules, the person corrects what is wrong and approves, and the batch is promoted. Nothing is live until the batch is approved. Start it with the stored file.',
     inputExample: { importInstanceId: '' },
-    graph: {
-      nodes: [
-        { ...startStep({ inputs: [{ key: 'importInstanceId', label: 'Stored file', type: 'text', help: 'The id of a file in Load data.' }] }), position: { x: 0, y: 160 } },
-        {
-          id: 'receive',
-          type: 'tool',
-          label: 'Index for search',
-          position: { x: 220, y: 160 },
-          config: { tool: 'index_position_file_import', args: { instanceId: '{{input.importInstanceId}}' }, allowWrite: true },
-        },
-        {
-          id: 'understand',
-          type: 'stage',
-          label: 'Understand the file',
-          position: { x: 440, y: 160 },
-          config: {
-            screen: 'intake.understand',
-            title: 'Confirm what this file is',
-            instructions: 'Check what was read from the file, the kind of document it is, and the record it is about, before mapping its columns.',
-            args: { importInstanceId: '{{input.importInstanceId}}' },
-            people: [],
-            roles: [],
-            dueInHours: null,
-          },
-        },
-        {
-          id: 'map',
-          type: 'stage',
-          label: 'Map the file',
-          position: { x: 660, y: 160 },
-          config: {
-            screen: 'load.map',
-            title: 'Confirm where each column goes',
-            instructions: 'Check what was found in the file, decide any column the reading was unsure of, and set the date the values are as of.',
-            args: { importInstanceId: '{{input.importInstanceId}}' },
-            people: [],
-            roles: [],
-            dueInHours: null,
-          },
-        },
-        {
-          id: 'stage',
-          type: 'tool',
-          label: 'Stage the values',
-          position: { x: 880, y: 160 },
-          config: {
-            tool: 'stage_position_file_import',
-            args: { instanceId: '{{input.importInstanceId}}', resolutions: '{{steps.map.result.resolutions}}' },
-            allowWrite: true,
-          },
-        },
-        { id: 'staged', type: 'branch', label: 'Was it staged?', position: { x: 1100, y: 160 }, config: { path: 'steps.stage.kind', op: 'eq', value: 'staged' } },
-        {
-          id: 'quality',
-          type: 'stage',
-          label: 'Check the values',
-          position: { x: 1320, y: 160 },
-          config: {
-            screen: 'load.quality',
-            title: 'Check the staged values',
-            instructions: 'Correct any value that fails a check, then approve the batch to make it live, or discard it.',
-            args: { batchId: '{{steps.stage.batch.id}}' },
-            people: [],
-            roles: [],
-            dueInHours: null,
-          },
-        },
-        {
-          id: 'promote',
-          type: 'tool',
-          label: 'Promote to live records',
-          position: { x: 1540, y: 80 },
-          config: {
-            tool: 'promote_load_batch',
-            args: { batchId: '{{steps.stage.batch.id}}', overrideReason: '{{steps.quality.result.overrideReason}}' },
-            allowWrite: true,
-          },
-        },
-        {
-          id: 'discard',
-          type: 'tool',
-          label: 'Discard the batch',
-          position: { x: 1540, y: 260 },
-          config: { tool: 'discard_load_batch', args: { batchId: '{{steps.stage.batch.id}}' }, allowWrite: true },
-        },
-        { id: 'end', type: 'end', label: 'End', position: { x: 1760, y: 160 }, config: {} },
-      ],
-      edges: [
-        { id: 'e1', from: 'start', to: 'receive' },
-        { id: 'e11', from: 'receive', to: 'understand' },
-        { id: 'e12', from: 'understand', to: 'map', when: 'confirmed' },
-        { id: 'e13', from: 'understand', to: 'end', when: 'abandoned' },
-        { id: 'e2', from: 'map', to: 'stage', when: 'confirmed' },
-        { id: 'e3', from: 'map', to: 'end', when: 'abandoned' },
-        { id: 'e4', from: 'stage', to: 'staged' },
-        { id: 'e5', from: 'staged', to: 'quality', when: 'true' },
-        { id: 'e6', from: 'staged', to: 'end', when: 'false' },
-        { id: 'e7', from: 'quality', to: 'promote', when: 'approved' },
-        { id: 'e8', from: 'quality', to: 'discard', when: 'discarded' },
-        { id: 'e9', from: 'promote', to: 'end' },
-        { id: 'e10', from: 'discard', to: 'end' },
-      ],
-    },
+    graph: fileIntakeGraph(),
   },
   {
     code: 'BLANK',

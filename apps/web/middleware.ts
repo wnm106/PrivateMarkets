@@ -117,8 +117,9 @@ export async function middleware(request: NextRequest) {
   }
 
   // A signed-out visitor never sees the application shell, including the home page.
+  // The query goes with them: the approval page (/oauth/consent) is useless without its request id.
   if (!user && !isPublic && !isApiOrAsset) {
-    return redirectTo(loginPath(pathname));
+    return redirectTo(loginPath(`${pathname}${request.nextUrl.search}`));
   }
 
   // A client's sign-in rules apply after the session exists. Direct data calls

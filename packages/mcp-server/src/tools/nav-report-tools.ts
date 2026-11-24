@@ -3,6 +3,7 @@ import { loadFundRec } from '@tapestrai/graphql/src/lib/fund-rec-store';
 import { summarizeBreaks } from '@tapestrai/graphql/src/lib/nav-breaks';
 import { saveRecNotes } from '@tapestrai/graphql/src/lib/rec-actions';
 import { userIdOf } from '../agent/harness';
+import { indexImportFile } from '../feeds/import-document';
 import { loadNavReport, readNavReport } from '../feeds/nav-report';
 import { sessionClientId } from '../feeds/session-client';
 import { ToolRegistry } from '../lib/tool-registry';
@@ -69,7 +70,7 @@ const readNavReportTool: ToolDefinition = {
 const loadNavReportTool: ToolDefinition = {
   name: 'load_nav_report',
   description:
-    'Load a stored financial report onto its fund as the administrator\'s figures: the NAV statement at the period end and at the date it compares with, the flows for the months between, the report\'s own checks, and one position per investment in the schedule of investments at the period end. One batch, which Load data can revert. A report with holds (see get_nav_report) is refused unless confirmed is true, which only a person\'s confirmation should set. Loading the same report again changes nothing already on file.',
+    'Load a stored financial report onto its fund as the administrator\'s figures: the NAV statement at the period end and at the date it compares with, the flows for the months between, the report\'s own checks, and one position per investment in the schedule of investments at the period end. One batch, which Load data can revert. A report with holds (see get_nav_report) is refused unless confirmed is true, which only a person\'s confirmation should set. Loading the same report again changes nothing already on file. The report is also kept as a searchable document if it is not one already, every page of it, so its notes and footnotes can be read and searched.',
   category: 'reconciliation',
   inputSchema: {
     type: 'object',
@@ -83,14 +84,20 @@ const loadNavReportTool: ToolDefinition = {
     },
     required: ['instanceId'],
   },
-  execute: async (args, supabase) => loadNavReport(String(args.instanceId), await sessionClientId(supabase), {
-    fundId: given(args),
-    entityIds: selected(args),
-    periodEnd: text(args.periodEnd),
-    receivedDate: text(args.receivedDate),
-    confirmed: args.confirmed === true || args.confirmed === 'true',
-    userId: await userIdOf(supabase),
-  }),
+  execute: async (args, supabase) => {
+    const clientId = await sessionClientId(supabase);
+    const loaded = await loadNavReport(String(args.instanceId), clientId, {
+      fundId: given(args),
+      entityIds: selected(args),
+      periodEnd: text(args.periodEnd),
+      receivedDate: text(args.receivedDate),
+      confirmed: args.confirmed === true || args.confirmed === 'true',
+      userId: await userIdOf(supabase),
+    });
+    // Never fails the load: a report that cannot be indexed still loaded, and the note says why it was not.
+    const document = await indexImportFile(String(args.instanceId), clientId).catch(() => null);
+    return document ? { ...loaded, document: { indexed: document.indexed, documentId: document.documentId, note: document.note } } : loaded;
+  },
 };
 
 const summarizeBreaksTool: ToolDefinition = {

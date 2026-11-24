@@ -48,8 +48,9 @@ import { supabaseBrowserClient } from '@/lib/supabase-browser';
 import { TemplateAttributePicker, type PickerAttribute } from '@/components/forms/TemplateAttributePicker';
 import { EntityAttributeGrid } from '@/components/admin/EntityAttributeGrid';
 import { AttributeSectionsPanel } from '@/components/admin/AttributeSectionsPanel';
+import { ClientCatalogPanel } from '@/components/admin/ClientCatalogPanel';
 
-type TabType = 'attributes' | 'sections' | 'templates' | 'relationships' | 'identifiers' | 'intersections';
+type TabType = 'attributes' | 'sections' | 'templates' | 'relationships' | 'identifiers' | 'intersections' | 'client';
 
 interface DomainGroup {
   id: string;
@@ -63,7 +64,10 @@ interface DomainGroup {
 interface DomainType {
   id: string;
   domainCode: string;
+  /** What the client this session is working in calls the type. */
   domainName: string;
+  /** The catalog's own name, which the edit form changes. */
+  catalogName?: string;
   description?: string;
   isActive: boolean;
   clientId?: string | null;
@@ -95,6 +99,8 @@ interface Attribute {
   displaySpanRows?: number | null;
   isEditable?: boolean;
   isVisible?: boolean;
+  catalogIsVisible?: boolean;
+  hiddenForClient?: boolean;
   aggregationType?: string;
   weightAttributeCode?: string;
   numericPrecision?: number;
@@ -853,6 +859,9 @@ export default function EntityTypeDetailPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <div className="page-title">{domain.domainName}</div>
               <span className="mono" style={{ fontSize: '12px', color: 'var(--ink-3)' }}>{domain.domainCode}</span>
+              {domain.catalogName && domain.catalogName !== domain.domainName && (
+                <span style={{ fontSize: '12px', color: 'var(--ink-3)' }}>Catalog name: {domain.catalogName}</span>
+              )}
               <SchemaScopeBadge clientId={domain.clientId} clientName={domain.clientName} />
               {domain.enabledForSearch === false && (
                 <span style={{
@@ -956,6 +965,11 @@ export default function EntityTypeDetailPage() {
           isActive={activeTab === 'intersections'}
           onClick={() => setActiveTab('intersections')}
         />
+        <TabButton
+          label="For this client"
+          isActive={activeTab === 'client'}
+          onClick={() => setActiveTab('client')}
+        />
       </div>
 
       {/* Tab Content */}
@@ -976,6 +990,19 @@ export default function EntityTypeDetailPage() {
             onPatch={(id, patch) => {
               setAttributes((current) => current.map((attribute) => attribute.id === id ? { ...attribute, ...patch } : attribute));
             }}
+          />
+        </Section>
+      )}
+
+      {activeTab === 'client' && (
+        <Section
+          title="For this client"
+          subtitle="What the client you are working in calls this entity type, and which of its fields it hides"
+        >
+          <ClientCatalogPanel
+            domainCode={domain.domainCode}
+            onNameChanged={(name) => setDomain((current) => current ? { ...current, domainName: name } : current)}
+            onFieldsChanged={() => { void refreshAttributes(); }}
           />
         </Section>
       )}
@@ -1532,7 +1559,8 @@ function EditDomainModal({
     : groups;
   const blocked = descendantCodes(domain.domainCode, domains);
   const [formData, setFormData] = useState({
-    domainName: domain.domainName,
+    // The catalog's name: domainName may be what one client calls the type.
+    domainName: domain.catalogName || domain.domainName,
     description: domain.description || '',
     isActive: domain.isActive,
     groupCode: domain.group?.groupCode || '',

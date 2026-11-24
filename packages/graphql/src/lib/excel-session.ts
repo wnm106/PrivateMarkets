@@ -17,6 +17,11 @@ export interface ExcelSession {
   expiresAt: number;
   userId: string;
   email: string;
+  /**
+   * The client this sign-in works in, for the pane to show. Display only: the
+   * database holds the choice against the session and applies it (tenancy.session_clients).
+   */
+  clientName?: string;
   /** Public project values, so the add-in can refresh its own token. */
   supabaseUrl: string;
   anonKey: string;
@@ -57,12 +62,14 @@ export function parseExcelSessionMessage(message: unknown): ExcelSession | null 
   } catch {
     return null;
   }
+  const clientName = text(raw.clientName);
   return {
     accessToken,
     refreshToken,
     expiresAt,
     userId,
     email: text(raw.email) || '',
+    ...(clientName ? { clientName } : {}),
     supabaseUrl: supabaseUrl.replace(/\/+$/, ''),
     anonKey,
   };

@@ -90,6 +90,18 @@ redirect_uri = ""
 enabled = true
 uri = "pg-functions://postgres/tenancy/custom_access_token_hook"
 
+# Lets an outside assistant (a claude.ai connector) sign a person in and call
+# /api/mcp as them: the Auth server acts as an OAuth 2.1 server. The person
+# approves on the app's own page at authorization_url_path, which is joined to
+# site_url. Dynamic registration lets the assistant register itself; without it,
+# each one is added by hand under Authentication -> OAuth Apps.
+# On a hosted project these are set under Authentication -> OAuth Server.
+# See docs/API.md, "Remote MCP endpoint".
+[auth.oauth_server]
+enabled = true
+authorization_url_path = "/oauth/consent"
+allow_dynamic_registration = true
+
 [edge_runtime]
 policy = "per_worker"
 

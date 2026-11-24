@@ -27,6 +27,8 @@ interface EntityLike {
   entityName?: string | null;
   domainCode: string;
   templateCode?: string | null;
+  /** The record's own template, as entity_master stores it. */
+  templateId?: string | null;
   attributes?: Record<string, unknown> | null;
   parentRelationships?: Array<{ parentEntityId?: string | null; parentEntityName?: string | null; parentDomainCode?: string | null; relationshipCode?: string | null }> | null;
   childRelationships?: Array<{ childEntityId?: string | null; childEntityName?: string | null; childDomainCode?: string | null; relationshipCode?: string | null }> | null;
@@ -167,7 +169,7 @@ export async function effectiveTemplatesFor(
     return {
       id: entity.id,
       domainCode: entity.domainCode,
-      ownTemplateId: entity.templateCode ? byCode.get(entity.templateCode)?.id || null : null,
+      ownTemplateId: entity.templateId || (entity.templateCode ? byCode.get(entity.templateCode)?.id || null : null),
       onDate: (dateCode ? dayOf(entity.attributes?.[dateCode]) : '') || fallbackDate,
       links: linksOf(entity),
     };
@@ -209,7 +211,7 @@ async function loadEntities(supabase: SupabaseClient, entityIds: string[]): Prom
   for (const part of chunks(ids)) {
     const { data, error } = await supabase
       .from('entity_master')
-      .select('entity_id, entity_name, domain_code, template_code, attributes, parent_relationships, child_relationships')
+      .select('entity_id, entity_name, domain_code, template_id, attributes, parent_relationships, child_relationships')
       .in('entity_id', part);
     if (error) throw new Error(error.message);
     for (const row of data || []) {
@@ -217,7 +219,7 @@ async function loadEntities(supabase: SupabaseClient, entityIds: string[]): Prom
         id: row.entity_id,
         entityName: row.entity_name,
         domainCode: row.domain_code,
-        templateCode: row.template_code,
+        templateId: row.template_id,
         attributes: row.attributes || {},
         parentRelationships: (row.parent_relationships || []).map((rel: any) => ({
           parentEntityId: rel.parent_entity_id,

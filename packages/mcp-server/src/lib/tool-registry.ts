@@ -115,6 +115,10 @@ export class ToolRegistry {
     return tool.execute(args, supabase);
   }
 
+  hasTool(name: string): boolean {
+    return this.tools.has(name);
+  }
+
   /** What calling the tool does (see ToolEffect). An unknown tool is a write. */
   effectOf(name: string): ToolEffect {
     const tool = this.tools.get(name);

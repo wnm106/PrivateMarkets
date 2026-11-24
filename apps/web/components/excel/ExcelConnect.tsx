@@ -17,6 +17,10 @@ import { forgetBrowserSession, publicSupabaseConfig, supabaseBrowserClient } fro
  * to the add-in with Office's messageParent and forgotten by this browser, so the
  * add-in is its only holder. Office delivers the message only to an add-in page
  * on this same origin.
+ *
+ * A person in more than one client picks the client here. The choice is stored
+ * against the session in the database (tenancy.choose_session_client), which
+ * then scopes every read and write Excel makes. It is set once per sign-in.
  */
 
 const OFFICE_JS = 'https://appsforoffice.microsoft.com/lib/1/hosted/office.js';
@@ -32,16 +36,29 @@ declare global {
   }
 }
 
+/** A client the person may work in from Excel. */
+interface ClientChoice {
+  id: string;
+  name: string;
+}
+
 type Step =
   | { kind: 'loading' }
   | { kind: 'signin'; error: string | null }
   | { kind: 'mfa' }
-  | { kind: 'confirm'; email: string }
+  | { kind: 'client'; email: string; clients: ClientChoice[] }
+  /**
+   * `client` is null for an account in no client. `chosen` is true when this session
+   * already holds the choice. `others` are the clients to go back to, when there are any.
+   */
+  | { kind: 'confirm'; email: string; client: ClientChoice | null; chosen: boolean; others: ClientChoice[]; error: string | null }
   | { kind: 'blocked'; reason: string }
-  | { kind: 'sent'; email: string }
+  | { kind: 'sent'; email: string; clientName: string | null }
   | { kind: 'outside' };
 
 type SignInDecision = { allowed?: boolean; reason?: string | null; mfa_required?: boolean; mfa_satisfied?: boolean };
+
+type ClientChoiceRow = { client_id?: string; client_code?: string; client_name?: string; is_chosen?: boolean };
 
 /** Load office.js once. It clears history.pushState/replaceState, which the router needs. */
 function loadOffice(): Promise<OfficeDialogHost | null> {
@@ -95,7 +112,29 @@ export function ExcelConnect() {
       setStep({ kind: 'mfa' });
       return;
     }
-    setStep({ kind: 'confirm', email: userData.user.email || '' });
+    // The clients this sign-in may work in. Excel works in one.
+    const { data: rows, error: choicesError } = await client.schema('tenancy').rpc('session_client_choices');
+    if (choicesError) {
+      setStep({ kind: 'blocked', reason: 'Your clients could not be read, so Excel was not connected. Close this window and try again.' });
+      return;
+    }
+    const email = userData.user.email || '';
+    const choices = (Array.isArray(rows) ? (rows as ClientChoiceRow[]) : []).filter((row) => row.client_id);
+    const toChoice = (row: ClientChoiceRow): ClientChoice => ({
+      id: String(row.client_id),
+      name: row.client_name || row.client_code || 'Unnamed client',
+    });
+    const chosen = choices.find((row) => row.is_chosen);
+    if (chosen) {
+      setStep({ kind: 'confirm', email, client: toChoice(chosen), chosen: true, others: [], error: null });
+      return;
+    }
+    const clients = choices.map(toChoice);
+    if (clients.length > 1) {
+      setStep({ kind: 'client', email, clients });
+      return;
+    }
+    setStep({ kind: 'confirm', email, client: clients[0] ?? null, chosen: false, others: [], error: null });
   }, []);
 
   useEffect(() => {
@@ -113,6 +152,7 @@ export function ExcelConnect() {
   }, [evaluate]);
 
   const connect = async () => {
+    if (step.kind !== 'confirm') return;
     const office = officeRef.current;
     const send = office?.context?.ui?.messageParent;
     if (!send) {
@@ -130,17 +170,26 @@ export function ExcelConnect() {
         setStep({ kind: 'signin', error: 'Your sign-in ended. Sign in again.' });
         return;
       }
+      // The session is handed to Excel only once the database holds its client.
+      if (step.client && !step.chosen) {
+        const { error } = await client.schema('tenancy').rpc('choose_session_client', { p_client_id: step.client.id });
+        if (error) {
+          setStep({ ...step, error: `Excel was not connected: ${step.client.name} could not be set as this sign-in's client. Try again, or use a different account.` });
+          return;
+        }
+      }
       send(excelSessionMessage({
         accessToken: session.access_token,
         refreshToken: session.refresh_token,
         expiresAt: session.expires_at ?? Math.floor(Date.now() / 1000) + (session.expires_in || 3600),
         userId: session.user.id,
         email: session.user.email || '',
+        ...(step.client ? { clientName: step.client.name } : {}),
         supabaseUrl: publicSupabaseConfig.url,
         anonKey: publicSupabaseConfig.anonKey,
       }));
       forgetBrowserSession('excel');
-      setStep({ kind: 'sent', email: session.user.email || '' });
+      setStep({ kind: 'sent', email: session.user.email || '', clientName: step.client?.name ?? null });
     } finally {
       setWorking(false);
     }
@@ -197,11 +246,53 @@ export function ExcelConnect() {
           <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">{step.reason}</div>
         )}
 
+        {step.kind === 'client' && (
+          <div className="space-y-3">
+            <p className="text-sm text-gray-700">
+              <span className="font-medium">{step.email || 'Your account'}</span> belongs to more than one client. Choose the client Excel will work in.
+            </p>
+            <ul className="space-y-2" aria-label="Clients">
+              {step.clients.map((choice) => (
+                <li key={choice.id}>
+                  <button
+                    type="button"
+                    onClick={() => setStep({
+                      kind: 'confirm',
+                      email: step.email,
+                      client: choice,
+                      chosen: false,
+                      others: step.clients,
+                      error: null,
+                    })}
+                    disabled={working}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm text-left text-gray-800 hover:bg-gray-50"
+                  >
+                    {choice.name}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs text-gray-500">Every formula and table in Excel reads this client until you sign out of Excel.</p>
+            <button
+              type="button"
+              onClick={() => { void switchAccount(); }}
+              disabled={working}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
+            >
+              Use a different account
+            </button>
+          </div>
+        )}
+
         {step.kind === 'confirm' && (
           <div className="space-y-3">
             <p className="text-sm text-gray-700">
-              Excel will read Tapestry data as <span className="font-medium">{step.email || 'you'}</span>. Formulas show only what this account can see.
+              Excel will read Tapestry data as <span className="font-medium">{step.email || 'you'}</span>
+              {step.client ? <> in <span className="font-medium">{step.client.name}</span></> : null}. Formulas show only what this account can see{step.client ? ' in this client' : ''}.
             </p>
+            {step.error && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800" role="alert">{step.error}</div>
+            )}
             <button
               type="button"
               onClick={() => { void connect(); }}
@@ -210,6 +301,16 @@ export function ExcelConnect() {
             >
               {working ? 'Connecting…' : 'Connect Excel'}
             </button>
+            {step.others.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setStep({ kind: 'client', email: step.email, clients: step.others })}
+                disabled={working}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
+              >
+                Choose a different client
+              </button>
+            )}
             <button
               type="button"
               onClick={() => { void switchAccount(); }}
@@ -222,7 +323,10 @@ export function ExcelConnect() {
         )}
 
         {step.kind === 'sent' && (
-          <p className="text-sm text-gray-700 text-center">Excel is connected as <span className="font-medium">{step.email}</span>. You can close this window.</p>
+          <p className="text-sm text-gray-700 text-center">
+            Excel is connected as <span className="font-medium">{step.email}</span>
+            {step.clientName ? <> in <span className="font-medium">{step.clientName}</span></> : null}. You can close this window.
+          </p>
         )}
       </div>
     </div>

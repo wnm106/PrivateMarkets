@@ -1,9 +1,12 @@
 /**
  * Reads a file into blocks of text. HTML and plain text are read here with no
- * outside service. A PDF needs a text layer; a scan has none and is refused.
+ * outside service. A PDF needs a text layer; a scan, a picture or a Word file
+ * has none this server can read, and is read by an outside reader when one is
+ * set up (see reading.ts).
  */
 
 import { extractPdfPages } from '../import-intake/pdf-text';
+import type { ReadingPage } from './reading';
 import type { Block, DocumentFormat, ReadDocument } from './types';
 
 export class UnreadableDocument extends Error {
@@ -327,6 +330,28 @@ export function readPdfPages(pages: string[]): ReadDocument {
   return assemble('pdf', drafts, pages.length, null);
 }
 
+/**
+ * Pages an outside reader read, as markdown, into blocks that keep their page. A heading mark is a
+ * heading, and a paragraph the page break cut in two is joined again, as for a PDF's own text.
+ */
+export function readMarkdownPages(pages: ReadingPage[], format: DocumentFormat = 'text'): ReadDocument {
+  const drafts: Array<Omit<Block, 'start' | 'end'>> = [];
+  let last = 0;
+  for (const page of pages) {
+    const before = drafts.length;
+    linesToDrafts(page.text.replace(/\r\n?/g, '\n').split('\n'), page.page, drafts, true);
+    const previous = before > 0 ? drafts[before - 1] : null;
+    const first = drafts[before];
+    // A heading, a table row or a list item starts where it stands; only running prose is joined across the break.
+    if (previous && first && previous.headingLevel === null && first.headingLevel === null && !endsSentence(previous.text) && !PARAGRAPH_OPENERS.test(first.text) && !/^[|>]/.test(first.text) && !/\|$/.test(previous.text)) {
+      previous.text = `${previous.text} ${first.text}`;
+      drafts.splice(before, 1);
+    }
+    last = Math.max(last, page.page);
+  }
+  return assemble(format, drafts, last || null, null);
+}
+
 // Windows-1252 code points for bytes 0x80 to 0x9F. Zero where the byte has no character.
 const CP1252_HIGH = [
   0x20ac, 0, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0, 0x017d, 0,
@@ -386,7 +411,7 @@ export function formatOfFile(fileName: string, mediaType: string | null | undefi
 export async function readDocument(fileName: string, mediaType: string | null | undefined, bytes: Uint8Array): Promise<ReadDocument> {
   const format = formatOfFile(fileName, mediaType, bytes);
   if (!format) {
-    throw new UnreadableDocument('This kind of file cannot be read for its text yet. Use a PDF with selectable text, an HTML file or a text file.');
+    throw new UnreadableDocument('This kind of file has no text this server can read itself. It needs an outside reader: set LLAMA_CLOUD_API_KEY on the worker, or use a PDF with selectable text, an HTML file or a text file.');
   }
   let document: ReadDocument;
   if (format === 'pdf') {
@@ -394,7 +419,7 @@ export async function readDocument(fileName: string, mediaType: string | null | 
     const pages = await extractPdfPages(new Uint8Array(bytes));
     document = readPdfPages(pages);
     if (document.body.replace(/\s/g, '').length < Math.max(200, pages.length * 40)) {
-      throw new UnreadableDocument('The PDF has no selectable text, so it looks like a scan. Scans are not read for their text yet.');
+      throw new UnreadableDocument('The PDF has no selectable text, so it looks like a scan. It needs an outside reader: set LLAMA_CLOUD_API_KEY on the worker.');
     }
   } else if (format === 'html') {
     document = readHtml(decodeBytes(bytes));

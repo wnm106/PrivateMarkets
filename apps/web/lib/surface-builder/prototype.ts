@@ -45,6 +45,8 @@ export interface PrototypeOutline {
     externalScripts: string[];
   };
   textLength: number;
+  /** The rendered views the outline was read from, when the prototype was captured. */
+  views?: string[];
 }
 
 const MAX_ITEMS = 120;
@@ -220,8 +222,10 @@ function fields(html: string, tabs: string[]): PrototypeField[] {
   }).slice(0, MAX_ITEMS);
 }
 
-function charts(html: string, tabs: string[]): PrototypeOutline['charts'] {
+function charts(html: string, source: string, tabs: string[]): PrototypeOutline['charts'] {
   const out: PrototypeOutline['charts'] = [];
+  // Elements come from the markup without scripts: a template string inside a
+  // script is code, not a chart on the page.
   for (const match of matchAll(html, /<(canvas|svg|div)\b([^>]*)>/i)) {
     const tag = match[2];
     const cls = `${classOf(tag)} ${(attr(tag, 'id') || '').toLowerCase()} ${(attr(tag, 'data-chart') || '').toLowerCase()}`;
@@ -231,7 +235,7 @@ function charts(html: string, tabs: string[]): PrototypeOutline['charts'] {
     out.push({ title: sectionAt(html, match.index, tabs), kind });
     if (out.length >= 30) break;
   }
-  if (/new\s+Chart\(|echarts|d3\.|Plotly|ApexCharts|Highcharts/.test(html) && out.length === 0) out.push({ kind: 'script chart' });
+  if (/new\s+Chart\(|echarts|d3\.|Plotly|ApexCharts|Highcharts/.test(source) && out.length === 0) out.push({ kind: 'script chart' });
   return out;
 }
 
@@ -258,7 +262,7 @@ export function readPrototype(html: string): PrototypeOutline {
     tabs,
     fields: fields(withoutScripts, tabs),
     tables: tables(withoutScripts, tabs),
-    charts: charts(source, tabs),
+    charts: charts(withoutScripts, source, tabs),
     actions,
     inputs: uniq(fields(withoutScripts, tabs).filter((field) => field.kind === 'input').map((field) => field.label), 60),
     signals: {
@@ -270,6 +274,67 @@ export function readPrototype(html: string): PrototypeOutline {
       externalScripts: uniq(scripts, 20),
     },
     textLength: textOf(withoutScripts).length,
+  };
+}
+
+/** One rendered state of the prototype: the navigation that reached it and its markup. */
+export interface RenderedView {
+  label: string;
+  html: string;
+}
+
+const VIEW_SEP = ' \u203a ';
+
+/**
+ * The outline of a prototype as it renders, not only as its source reads.
+ * A prototype that draws its screens with scripts has little in its markup;
+ * each captured view adds the tabs, tables, labels and actions it drew, placed
+ * under the view that showed them. Signals still come from the source, which
+ * holds every script and style.
+ */
+export function readPrototypeWithViews(html: string, views: RenderedView[]): PrototypeOutline {
+  const base = readPrototype(html);
+  if (views.length === 0) return base;
+  const read = views.map((view) => ({
+    view: view.label,
+    outline: readPrototype(`<html><head><title>${base.title}</title></head><body>${view.html}</body></html>`),
+  }));
+  const topViews = views.map((view) => view.label.split(VIEW_SEP)[0]).filter((label) => label && label !== 'Initial view');
+  const fieldKey = (field: PrototypeField) => `${field.kind}:${field.label.toLowerCase()}`;
+  const fieldsSeen = new Set(base.fields.map(fieldKey));
+  const mergedFields = [...base.fields];
+  const tablesSeen = new Set(base.tables.map((table) => table.columns.join('|').toLowerCase()));
+  const mergedTables = [...base.tables];
+  const mergedCharts = [...base.charts];
+  for (const { view, outline } of read) {
+    for (const field of outline.fields) {
+      const key = fieldKey(field);
+      if (fieldsSeen.has(key)) continue;
+      fieldsSeen.add(key);
+      mergedFields.push({ ...field, where: field.where || view });
+    }
+    for (const table of outline.tables) {
+      const key = table.columns.join('|').toLowerCase();
+      if (tablesSeen.has(key)) continue;
+      tablesSeen.add(key);
+      mergedTables.push({ ...table, title: table.title || view, where: view });
+    }
+    for (const chart of outline.charts) {
+      if (mergedCharts.length >= 40) break;
+      mergedCharts.push({ ...chart, title: chart.title ? `${view}: ${chart.title}` : view });
+    }
+  }
+  return {
+    ...base,
+    headings: uniq([...base.headings, ...read.flatMap((item) => item.outline.headings)], 80),
+    tabs: uniq([...topViews, ...base.tabs, ...read.flatMap((item) => item.outline.tabs)], 40),
+    fields: mergedFields.slice(0, MAX_ITEMS * 2),
+    tables: mergedTables.slice(0, 40),
+    charts: mergedCharts,
+    actions: uniq([...base.actions, ...read.flatMap((item) => item.outline.actions)], 80),
+    inputs: uniq([...base.inputs, ...read.flatMap((item) => item.outline.inputs)], 80),
+    views: views.map((view) => view.label),
+    textLength: Math.max(base.textLength, ...read.map((item) => item.outline.textLength)),
   };
 }
 

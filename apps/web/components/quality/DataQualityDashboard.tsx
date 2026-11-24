@@ -427,6 +427,19 @@ function qualityTabInfo(where: string) {
   } satisfies Record<string, Omit<TabPayload, 'data'>>;
 }
 
+/**
+ * The dashboard's tabs for a page that holds it on a tab the user has not opened. The
+ * dashboard reads its figures only once that tab is selected, so until then the page
+ * publishes these: each tab's name and purpose, and a note that it has not been read.
+ */
+export function unopenedQualityTabs(scope: { domainCode: string; entityId?: string }): Record<string, TabPayload> {
+  const info = qualityTabInfo(qualityScope(scope));
+  return Object.fromEntries(Object.entries(info).map(([key, tab]) => [key, {
+    ...tab,
+    data: { note: 'Not read yet. Data quality figures are read when the user opens the Data Quality tab. Ask them to open it; do not estimate these figures.' },
+  }]));
+}
+
 function qualityTabs(
   dashboard: Dashboard | null,
   stale: StaleReport | null,

@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import type { SurfaceHost } from '@tapestrai/surface-sdk';
+import type { SurfaceFocus, SurfaceHost } from '@tapestrai/surface-sdk';
 import { SurfaceHostProvider } from '@tapestrai/surface-sdk/react';
 import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { findSurface } from '@/lib/surface-registry';
 import { useSurfaceNav } from '@/lib/surface-nav';
 import { useTemporalStore } from '@/lib/store';
-import { usePublishTabs } from '@/lib/view-context';
+import { usePublishTabs, usePublishViewContext } from '@/lib/view-context';
 import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 
 interface SurfaceMountProps {
@@ -35,6 +35,21 @@ function useHostQueryParam(name: string): [string | null, (value: string | null)
     [name, pathname],
   );
   return [value, set];
+}
+
+/** The record a surface has open, as the assistant's view focus. */
+function useHostFocus(focus: SurfaceFocus | null) {
+  usePublishViewContext(focus ? {
+    activity: 'viewing',
+    kind: 'entity',
+    label: focus.entityName,
+    id: focus.entityId,
+    entityId: focus.entityId,
+    entityCode: focus.entityCode,
+    domainCode: focus.domainCode,
+    summary: focus.summary,
+    snapshot: focus.snapshot,
+  } : null);
 }
 
 /** Loads a registered surface and gives it the host API. The only bridge between platform and surface. */
@@ -78,6 +93,7 @@ export function SurfaceMount({ code, clientCode, permissions }: SurfaceMountProp
       href: (path) => path,
       useCrumbs: useSurfaceNav,
       usePublishTabs,
+      usePublishFocus: useHostFocus,
       inspectAttribute: (target) => openInspect(target),
     }),
     [clientCode, permissionKey, asOfDate, knowledgeDate, code, router, openInspect],

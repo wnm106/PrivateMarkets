@@ -1,0 +1,332 @@
+<style>
+.x-pipe { --p-muted: var(--ink-3); --p-serif: var(--font-ibm-plex-sans); --p-surface2: var(--bg-alt); --p-hover: var(--bg); --p-warn: var(--amber); --p-warn-soft: var(--badge-warn-bg); --p-on: #fff; --p-good: var(--green); }
+.x-pipe .page-header, .x-pipe .btn-primary, .x-pipe .btn-primary:hover { box-shadow: none; }
+.x-pipe .btn:disabled { opacity: .5; cursor: default; }
+.x-shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 14px; align-items: start; }
+.x-rail { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 0; position: sticky; top: 8px; }
+.x-rail h2 { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); padding: 0 12px 6px; }
+.x-ent { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 6px; align-items: center; width: 100%; border: 0; border-top: 1px solid var(--line); background: none; padding: 7px 12px; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.x-ent.m { padding-left: 24px; }
+.x-ent .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.x-ent.m .nm { font-weight: 500; }
+.x-ent .sub { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; font-size: 11.5px; color: var(--ink-3); }
+.x-ent .sub .pipe-trk { margin-left: auto; }
+.x-rail .btn { margin: 8px 12px 0; width: calc(100% - 24px); justify-content: center; }
+.x-pipe .da-title { flex: 0 0 330px; min-width: 0; }
+.x-pipe .da-holdbox { min-width: 220px; cursor: pointer; }
+.x-st-info { background: var(--badge-info-bg); color: var(--badge-info-fg); }
+.x-mut { color: var(--ink-3); font-weight: 400; }
+.x-pipe .pipe-mx { --t: 0; }
+.x-pipe .pipe-mx thead th, .x-pipe .pipe-mx tbody th { padding: 8px 11px; }
+.x-pipe .pipe-mx thead th:first-child { width: 190px; }
+.x-pipe .pipe-mx td { height: 1px; }
+.x-pipe .pipe-mx td.tc { background: var(--bg-alt); }
+.x-pipe .pipe-mx .sx { display: block; font-weight: 400; color: var(--ink-3); font-size: 12px; }
+.x-pipe .da-grid th.num, .x-pipe .da-grid td.num, .x-pipe .da-grid .da-st, .x-nw { white-space: nowrap; }
+.x-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--ink-3); }
+.x-tin { display: flex; justify-content: flex-end; align-items: center; gap: 4px; font-weight: 400; margin-top: 4px; }
+.x-tin input[type="text"] { font: inherit; width: 72px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); text-align: right; }
+.x-range { width: 100%; margin-top: 4px; accent-color: var(--accent-2); }
+.x-pipe .da-panel h4 .da-note { font-weight: 400; margin-left: 4px; }
+</style>
+
+<div class="da x-pipe">
+  <header class="page-header">
+    <div class="page-title-block">
+      <div><b>Target Manager</b> <span class="page-meta">· Fund-of-Funds &amp; Directs</span></div>
+      <div class="pipe-seg" role="group" aria-label="View">
+        <button aria-pressed="false">Assign targets</button>
+        <button aria-pressed="false">Overview</button>
+        <button aria-pressed="true">Pipeline</button>
+      </div>
+    </div>
+    <div class="page-actions">
+      <button class="btn btn-sm" title="Undo last change (Ctrl+Z)" disabled>Undo</button>
+      <button class="btn btn-sm" title="Copy all targets as CSV">Copy CSV</button>
+      <button class="btn btn-sm" title="Restore the example clients and targets">Reset example</button>
+    </div>
+  </header>
+
+  <div class="x-shell">
+    <nav class="x-rail" aria-label="Clients and mandates">
+      <h2>Clients &amp; mandates</h2>
+      <button class="x-ent"><span class="nm">Commonwealth Teachers’ Retirement</span><span class="cr-n">14</span><span class="da-st breach" title="5 compliance breaches">5</span><span class="sub"><span data-attr="FUND_TOTAL_COMMITMENTS">$2B</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">70 inv</span> <span class="da-st ok" title="2026 pacing velocity">1.04x</span><span class="pipe-trk" title="Strategy: 6 · Region: 4 · Structure: 4"><i class="on"></i><i class="on"></i><i class="on"></i></span></span></button>
+      <button class="x-ent m"><span class="nm">PE Primary Sleeve</span><span class="cr-n">17</span><span class="da-st breach" title="3 compliance breaches">3</span><span class="sub"><span data-attr="FUND_TOTAL_COMMITMENTS">$1.2B</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">30 inv</span> <span class="da-st ok" title="2026 pacing velocity">1.06x</span><span class="pipe-trk" title="Strategy: 9 · Region: 3 · Structure: 5"><i class="on"></i><i class="on"></i><i class="on"></i></span></span></button>
+      <button class="x-ent m"><span class="nm">Credit &amp; Real Assets Sleeve</span><span class="cr-n">9</span><span></span><span class="sub"><span data-attr="FUND_TOTAL_COMMITMENTS">$450M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">14 inv</span> <span class="da-st breach" title="2026 pacing velocity">0.77x</span><span class="pipe-trk" title="Strategy: 7 · Region: 2 · Structure: 0"><i class="on"></i><i class="on"></i><i></i></span></span></button>
+      <button class="x-ent m"><span class="nm">Co-Investment Sleeve</span><span class="cr-n">7</span><span class="da-st breach" title="2 compliance breaches">2</span><span class="sub"><span data-attr="FUND_TOTAL_COMMITMENTS">$400M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">24 inv</span> <span class="da-st ok" title="2026 pacing velocity">1.14x</span><span class="pipe-trk" title="Strategy: 4 · Region: 0 · Structure: 3"><i class="on"></i><i></i><i class="on"></i></span></span></button>
+      <button class="x-ent"><span class="nm">Halvorsen Family Office</span><span class="cr-n">3</span><span class="da-st breach" title="1 compliance breach">1</span><span class="sub"><span data-attr="FUND_TOTAL_COMMITMENTS">$450M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">40 inv</span> <span class="da-st ok" title="2026 pacing velocity">0.96x</span><span class="pipe-trk" title="Strategy: 0 · Region: 3 · Structure: 0"><i></i><i class="on"></i><i></i></span></span></button>
+      <button class="x-ent m"><span class="nm">Diversified Sleeve</span><span class="cr-n">4</span><span class="da-st breach" title="1 compliance breach">1</span><span class="sub"><span data-attr="FUND_TOTAL_COMMITMENTS">$450M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">40 inv</span> <span class="da-st ok" title="2026 pacing velocity">0.96x</span><span class="pipe-trk" title="Strategy: 4 · Region: 0 · Structure: 0"><i class="on"></i><i></i><i></i></span></span></button>
+      <button class="x-ent"><span class="nm">Northgate Mutual Insurance</span><span class="cr-n">2</span><span class="da-st breach" title="3 compliance breaches">3</span><span class="sub"><span data-attr="FUND_TOTAL_COMMITMENTS">$900M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">40 inv</span> <span class="da-st ok" title="2026 pacing velocity">1.11x</span><span class="pipe-trk" title="Strategy: 2 · Region: 0 · Structure: 0"><i class="on"></i><i></i><i></i></span></span></button>
+      <button class="x-ent m"><span class="nm">Private Credit Sleeve</span><span class="cr-n">10</span><span class="da-st breach" title="3 compliance breaches">3</span><span class="sub"><span data-attr="FUND_TOTAL_COMMITMENTS">$600M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">28 inv</span> <span class="da-st x-st-info" title="2026 pacing velocity">1.16x</span><span class="pipe-trk" title="Strategy: 8 · Region: 2 · Structure: 0"><i class="on"></i><i class="on"></i><i></i></span></span></button>
+      <button class="x-ent m"><span class="nm">Secondaries Sleeve</span><span class="cr-n">6</span><span></span><span class="sub"><span data-attr="FUND_TOTAL_COMMITMENTS">$200M</span> · <span data-attr="FUND_TARGET_INVESTMENT_COUNT">10 inv</span> <span class="da-st breach" title="2026 pacing velocity">0.85x</span><span class="pipe-trk" title="Strategy: 3 · Region: 0 · Structure: 3"><i class="on"></i><i></i><i class="on"></i></span></span></button>
+      <button class="btn btn-sm">+ Add mandate sleeve</button>
+    </nav>
+
+    <main>
+      <header class="da-ribbon">
+        <div class="da-title">
+          <span class="da-chip">Pipeline</span>
+          <h1>Deal pipeline</h1>
+          <p>Where every deal sits in its life cycle, across categories. Pick a cell to filter the list, then open a deal to allocate it across mandate sleeves.</p>
+        </div>
+        <div class="da-facts">
+          <div class="da-fact big"><span>Open deals</span><strong>13</strong></div>
+          <div class="da-fact"><span>Deal size</span><strong>$18.73B</strong></div>
+          <div class="da-fact"><span>Our target hold</span><strong>$810M</strong></div>
+          <div class="da-fact"><span>Proposed allocation</span><strong>$688M</strong></div>
+        </div>
+        <div class="da-holdbox" role="button" tabindex="0" title="Filter to deals needing attention">
+          <div class="da-holdtop"><span>Need attention</span><b>2</b></div>
+          <div class="da-bar"><i style="width:15.4%"></i></div>
+          <p>2 of 13 open deals</p>
+        </div>
+      </header>
+
+      <section class="da-sec">
+        <div class="pipe-board" style="margin-top:12px">
+          <table class="pipe-mx">
+            <thead><tr>
+              <th>Category<span class="sx">Our hold by stage</span></th>
+              <th>Sourcing<span class="sx">2 deals, $95M</span></th>
+              <th>Due diligence<span class="sx">4 deals, $250M</span></th>
+              <th>IC approved<span class="sx">3 deals, $150M</span></th>
+              <th>Allocation<span class="sx">3 deals, $255M</span></th>
+              <th>Closing<span class="sx">1 deal, $60M</span></th>
+              <th>Closed<span class="sx">0 deals, $0</span></th>
+              <th>All stages</th>
+            </tr></thead>
+            <tbody>
+              <tr>
+                <th>Primary<span class="sx">8 deals, $15.4B deal size</span></th>
+                <td><button class="cb" title="Filter the list to Primary · Sourcing"><span class="n">1</span><span class="d">$70M</span></button></td>
+                <td><button class="cb" title="Filter the list to Primary · Due diligence"><span class="n">4</span><span class="d">$250M</span></button></td>
+                <td><button class="cb" title="Filter the list to Primary · IC approved"><span class="n">1</span><span class="d">$40M</span></button></td>
+                <td><button class="cb" title="Filter the list to Primary · Allocation"><span class="at">1</span><span class="n">1</span><span class="d">$150M</span></button></td>
+                <td><button class="cb" title="Filter the list to Primary · Closing"><span class="at">1</span><span class="n">1</span><span class="d">$60M</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Primary · Closed"><span class="n">0</span><span class="d">none</span></button></td>
+                <td class="tc"><button class="cb" title="Filter the list to Primary · all stages"><span class="at">2</span><span class="n">8</span><span class="d">$570M</span></button></td>
+              </tr>
+              <tr>
+                <th>Secondary<span class="sx">2 deals, $2B deal size</span></th>
+                <td><button class="cb zero" title="Filter the list to Secondary · Sourcing"><span class="n">0</span><span class="d">none</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Secondary · Due diligence"><span class="n">0</span><span class="d">none</span></button></td>
+                <td><button class="cb" title="Filter the list to Secondary · IC approved"><span class="n">1</span><span class="d">$80M</span></button></td>
+                <td><button class="cb" title="Filter the list to Secondary · Allocation"><span class="n">1</span><span class="d">$60M</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Secondary · Closing"><span class="n">0</span><span class="d">none</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Secondary · Closed"><span class="n">0</span><span class="d">none</span></button></td>
+                <td class="tc"><button class="cb" title="Filter the list to Secondary · all stages"><span class="n">2</span><span class="d">$140M</span></button></td>
+              </tr>
+              <tr>
+                <th>Co-Investment<span class="sx">3 deals, $1.33B deal size</span></th>
+                <td><button class="cb" title="Filter the list to Co-Investment · Sourcing"><span class="n">1</span><span class="d">$25M</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Co-Investment · Due diligence"><span class="n">0</span><span class="d">none</span></button></td>
+                <td><button class="cb" title="Filter the list to Co-Investment · IC approved"><span class="n">1</span><span class="d">$30M</span></button></td>
+                <td><button class="cb" title="Filter the list to Co-Investment · Allocation"><span class="n">1</span><span class="d">$45M</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Co-Investment · Closing"><span class="n">0</span><span class="d">none</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Co-Investment · Closed"><span class="n">0</span><span class="d">none</span></button></td>
+                <td class="tc"><button class="cb" title="Filter the list to Co-Investment · all stages"><span class="n">3</span><span class="d">$100M</span></button></td>
+              </tr>
+              <tr>
+                <th>Separate Account<span class="sx">0 deals, $0 deal size</span></th>
+                <td><button class="cb zero" title="Filter the list to Separate Account · Sourcing"><span class="n">0</span><span class="d">none</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Separate Account · Due diligence"><span class="n">0</span><span class="d">none</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Separate Account · IC approved"><span class="n">0</span><span class="d">none</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Separate Account · Allocation"><span class="n">0</span><span class="d">none</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Separate Account · Closing"><span class="n">0</span><span class="d">none</span></button></td>
+                <td><button class="cb zero" title="Filter the list to Separate Account · Closed"><span class="n">0</span><span class="d">none</span></button></td>
+                <td class="tc"><button class="cb zero" title="Filter the list to Separate Account · all stages"><span class="n">0</span><span class="d">none</span></button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="pipe-tools">
+          <div class="l">
+            <input class="pipe-search" type="search" placeholder="Search deal, manager or sector" aria-label="Search deals">
+            <button class="pipe-chip" aria-pressed="false">Needs attention</button>
+          </div>
+          <div class="r">
+            <span class="lbl">Group by</span>
+            <div class="pipe-seg" role="group" aria-label="Group deals by">
+              <button aria-pressed="true">Category</button><button aria-pressed="false">Stage</button><button aria-pressed="false">None</button>
+            </div>
+          </div>
+        </div>
+        <p class="pipe-count">Showing 13 of 13 deals</p>
+
+        <div class="da-gridwrap">
+          <table class="da-grid">
+            <thead><tr><th>Deal</th><th>Stage</th><th class="num">Deal size</th><th class="num">Our hold</th><th>Allocated</th><th>Flags</th><th class="num">Close</th></tr></thead>
+            <tbody>
+              <tr class="par"><td colspan="7"><b>Primary</b> <span class="x-mut">8 deals · $570M our hold</span></td></tr>
+              <tr><td><div class="da-name"><span><b>Bluewater Specialty Finance Fund III</b> <span class="x-mut">Asset-backed specialty lending</span><small>Primary · Specialty Financing · North America</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span>Closing</span></td><td class="num">$1.5B</td><td class="num">$60M</td><td class="x-nw"><span class="pipe-prog"><i style="width:98%"></i></span>98%</td><td><span class="da-st near">$1.5M unallocated</span> <span class="da-st x-st-info">Closes in 13 days</span></td><td class="num">30 Nov 2026</td></tr>
+              <tr><td><div class="da-name"><span><b>Tidewater Direct Lending Fund VII</b> <span class="x-mut">Senior secured direct lending</span><small>Primary · Origination · Senior Debt · North America</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span>Allocation</span></td><td class="num">$2.8B</td><td class="num">$150M</td><td class="x-nw"><span class="pipe-prog"><i style="width:71%"></i></span>71%</td><td><span class="da-st near">$43.5M unallocated</span></td><td class="num">20 Dec 2026</td></tr>
+              <tr><td><div class="da-name"><span><b>Kestrel Ventures VI</b> <span class="x-mut">Seed and early-stage software</span><small>Primary · Venture Capital · Seed / Early Stage · North America</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span>IC approved</span></td><td class="num">$900M</td><td class="num">$40M</td><td class="x-nw"><span class="pipe-prog"><i style="width:100%"></i></span>100%</td><td></td><td class="num">10 Dec 2026</td></tr>
+              <tr><td><div class="da-name"><span><b>Ridgeline Capital Partners X</b> <span class="x-mut">Mid-market buyout fund</span><small>Primary · Buyout · Mid Cap · North America</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i></span>Due diligence</span></td><td class="num">$3.5B</td><td class="num">$120M</td><td class="x-nw"><span class="pipe-prog"><i style="width:56%"></i></span>56%</td><td><span class="da-st near">$52.5M unallocated</span></td><td class="num">15 Jan 2027</td></tr>
+              <tr><td><div class="da-name"><span><b>Highgate Growth Partners II</b> <span class="x-mut">Emerging-manager growth fund</span><small>Primary · Growth Equity · North America</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i></span>Due diligence</span></td><td class="num">$400M</td><td class="num">$45M</td><td class="x-nw"><span class="pipe-prog"><i style="width:100%"></i></span>100%</td><td></td><td class="num">20 Jan 2027</td></tr>
+              <tr><td><div class="da-name"><span><b>Sterling Oak Asia Partners IV</b> <span class="x-mut">Greater China mid-market buyout</span><small>Primary · Buyout · Mid Cap · APAC/ROW</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i></span>Due diligence</span></td><td class="num">$1.1B</td><td class="num">$35M</td><td class="x-nw"><span class="pipe-prog"><i style="width:100%"></i></span>100%</td><td></td><td class="num">28 Jan 2027</td></tr>
+              <tr><td><div class="da-name"><span><b>Alder Creek Real Estate Partners V</b> <span class="x-mut">European value-add real estate</span><small>Primary · Real Estate · Value Add · Western Europe</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i></span>Due diligence</span></td><td class="num">$1.2B</td><td class="num">$50M</td><td class="x-nw"><span class="pipe-prog"><i style="width:100%"></i></span>100%</td><td></td><td class="num">1 Feb 2027</td></tr>
+              <tr><td><div class="da-name"><span><b>Granite Peak Infrastructure Fund VI</b> <span class="x-mut">Core-plus energy transition</span><small>Primary · Infrastructure · Core Plus Infrastructure · Western Europe</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i></i><i></i><i></i><i></i><i></i></span>Sourcing</span></td><td class="num">$4B</td><td class="num">$70M</td><td class="x-nw"><span class="pipe-prog"><i style="width:100%"></i></span>100%</td><td></td><td class="num">30 Mar 2027</td></tr>
+              <tr class="par"><td colspan="7"><b>Secondary</b> <span class="x-mut">2 deals · $140M our hold</span></td></tr>
+              <tr><td><div class="da-name"><span><b>Harborview Continuation Vehicle III</b> <span class="x-mut">Single-asset continuation vehicle</span><small>Secondary · Buyout · North America</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span>Allocation</span></td><td class="num">$1.4B</td><td class="num">$60M</td><td class="x-nw"><span class="pipe-prog"><i style="width:100%"></i></span>100%</td><td></td><td class="num">18 Dec 2026</td></tr>
+              <tr><td><div class="da-name"><span><b>Summit Ridge LP Portfolio 2026</b> <span class="x-mut">Diversified buyout LP portfolio</span><small>Secondary · Buyout · North America</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span>IC approved</span></td><td class="num">$600M</td><td class="num">$80M</td><td class="x-nw"><span class="pipe-prog"><i style="width:82%"></i></span>82%</td><td><span class="da-st near">$14.5M unallocated</span></td><td class="num">22 Dec 2026</td></tr>
+              <tr class="par"><td colspan="7"><b>Co-Investment</b> <span class="x-mut">3 deals · $100M our hold</span></td></tr>
+              <tr class="sel"><td><div class="da-name"><span><b>Project Lantern</b> <span class="x-mut">Healthcare services platform</span><small>Co-Investment · Buyout · Mid Cap · North America</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span>Allocation</span></td><td class="num">$420M</td><td class="num">$45M</td><td class="x-nw"><span class="pipe-prog"><i style="width:100%"></i></span>100%</td><td><span class="da-st x-st-info">Closes in 18 days</span></td><td class="num">5 Dec 2026</td></tr>
+              <tr><td><div class="da-name"><span><b>Project Cobalt</b> <span class="x-mut">Midstream energy services</span><small>Co-Investment · Buyout · Large Cap · North America</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span>IC approved</span></td><td class="num">$650M</td><td class="num">$30M</td><td class="x-nw"><span class="pipe-prog"><i style="width:67%"></i></span>67%</td><td><span class="da-st near">$10M unallocated</span></td><td class="num">12 Dec 2026</td></tr>
+              <tr><td><div class="da-name"><span><b>Project Juniper</b> <span class="x-mut">Vertical software growth equity</span><small>Co-Investment · Growth Equity · Western Europe</small></span></div></td><td><span class="pipe-stg"><span class="pipe-trk" aria-hidden="true"><i class="on"></i><i></i><i></i><i></i><i></i><i></i></span>Sourcing</span></td><td class="num">$260M</td><td class="num">$25M</td><td class="x-nw"><span class="pipe-prog"><i style="width:100%"></i></span>100%</td><td></td><td class="num">15 Feb 2027</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="da-sec">
+        <div class="da-sechead">
+          <div>
+            <h2>Allocation grid · Project Lantern</h2>
+            <p>Each sleeve’s sharing ratio is its remaining profile allocation spread over the years left in its investment period, as a share of all eligible sleeves. Compliance caps each sleeve at the lowest capacity of the rules this deal would worsen, and the rest of each tranche goes to the other eligible sleeves.</p>
+            <div class="x-chips">
+              <span class="da-chip" title="Category">Co-Investment</span><span class="da-chip" title="Asset class">Private Equity</span><span class="da-chip" title="Strategy">Buyout</span><span class="da-chip" title="Sub-strategy">Mid Cap</span><span class="da-chip" title="Region">North America</span><span class="da-chip" title="Structure">Co-Investment</span><span class="da-chip" title="Sector">Health Care</span><span class="da-chip" title="Market">US</span><span class="da-chip" title="Manager">Westbrook</span>
+              <span>Close 5 Dec 2026 · Allocation</span>
+            </div>
+          </div>
+        </div>
+        <div class="da-toolbar">
+          <label><input type="checkbox" value="on"> Show sleeves without a target (4)</label>
+          <span style="margin-left:auto"></span>
+          <button class="btn btn-sm">Expand all</button>
+          <button class="btn btn-sm">Collapse all</button>
+          <button class="btn btn-sm" title="Clear overrides and exclusions">Reset allocation</button>
+          <button class="btn btn-sm" title="Clear overrides only">Clear adjustments</button>
+          <button class="btn btn-sm btn-primary">Commit allocation</button>
+        </div>
+
+        <div class="da-main">
+          <div class="da-gridwrap">
+            <table class="da-grid">
+              <thead><tr>
+                <th>Portfolio</th>
+                <th class="num" title="Program × strategy % × geography %, and what is already deployed in that profile">Profile allocation</th>
+                <th class="num" title="Remaining profile allocation ÷ years left in the investment period">Annual pace</th>
+                <th class="num" title="Annual pace ÷ the sum of all eligible sleeves">Sharing ratio</th>
+                <th>Compliance capacity</th>
+                <th class="num da-tcol">Common equity
+                  <div class="x-tin"><input type="text" value="35.00" aria-label="Common equity hold in $M" data-editable="true"> <small>of 300.00</small></div>
+                  <input class="x-range" type="range" min="0" max="300" step="0.5" value="35" aria-label="Common equity hold slider" data-editable="true">
+                </th>
+                <th class="num da-tcol">Preferred equity
+                  <div class="x-tin"><input type="text" value="10.00" aria-label="Preferred equity hold in $M" data-editable="true"> <small>of 120.00</small></div>
+                  <input class="x-range" type="range" min="0" max="120" step="0.5" value="10" aria-label="Preferred equity hold slider" data-editable="true">
+                </th>
+                <th class="num">Total allocation</th>
+              </tr></thead>
+              <tbody>
+                <tr class="par">
+                  <td><div class="da-name"><button class="da-caret" aria-expanded="true" aria-label="Collapse Commonwealth Teachers’ Retirement">▾</button><span><b>Commonwealth Teachers’ Retirement</b><small>1 sleeve</small></span></div></td>
+                  <td class="num">156.00<small>99.65 deployed</small></td>
+                  <td class="num">34.78<small>56.35 remaining</small></td>
+                  <td class="num"><b>62.1%</b></td>
+                  <td></td>
+                  <td class="num"><b>21.74</b><small>62.1% of tranche</small></td>
+                  <td class="num"><b>3.26</b><small>32.6% of tranche</small></td>
+                  <td class="num"><b>25.00</b><small>55.6% of hold</small></td>
+                </tr>
+                <tr class="sub sel">
+                  <td><div class="da-name"><span><b>Co-Investment Sleeve</b><small>Co-Investment › Private Equity › Buyout</small></span></div></td>
+                  <td class="num">156.00<small>60% × 65% · 99.65 deployed</small></td>
+                  <td class="num">34.78<small>56.35 over 1.62 yrs</small></td>
+                  <td class="num"><span class="da-share"><i style="width:62.1%"></i></span><b>62.1%</b></td>
+                  <td><b>25.00</b><small title="Asset Concentration (amount limit): $25M per asset less $0 already held">Asset Concentration (amount limit) <span class="cr-rule">Limit</span></small></td>
+                  <td class="num act"><input value="21.74" aria-label="Co-Investment Sleeve Common equity allocation in $M" data-editable="true"><small>62.1% of tranche</small></td>
+                  <td class="num act"><input value="3.26" aria-label="Co-Investment Sleeve Preferred equity allocation in $M" data-editable="true"><small class="fs-warn">Capped</small></td>
+                  <td class="num"><b>25.00</b><small>55.6% of hold</small></td>
+                </tr>
+                <tr class="par">
+                  <td><div class="da-name"><button class="da-caret" aria-expanded="true" aria-label="Collapse Halvorsen Family Office">▾</button><span><b>Halvorsen Family Office</b><small>1 sleeve</small></span></div></td>
+                  <td class="num">45.00<small>0.00 deployed</small></td>
+                  <td class="num">21.23<small>45.00 remaining</small></td>
+                  <td class="num"><b>37.9%</b></td>
+                  <td></td>
+                  <td class="num"><b>13.26</b><small>37.9% of tranche</small></td>
+                  <td class="num"><b>6.74</b><small>67.4% of tranche</small></td>
+                  <td class="num"><b>20.00</b><small>44.4% of hold</small></td>
+                </tr>
+                <tr class="sub">
+                  <td><div class="da-name"><span><b>Diversified Sleeve</b><small>Co-Investment</small></span></div></td>
+                  <td class="num">45.00<small>20% × 50% · 0.00 deployed</small></td>
+                  <td class="num">21.23<small>45.00 over 2.12 yrs</small></td>
+                  <td class="num"><span class="da-share"><i style="width:37.9%"></i></span><b>37.9%</b></td>
+                  <td><b>22.50</b><small title="Asset Concentration (% limit): 5% of $450M less $0 already in Project Lantern">Asset Concentration (% limit) <span class="cr-rule">Limit</span></small></td>
+                  <td class="num act"><input value="13.26" aria-label="Diversified Sleeve Common equity allocation in $M" data-editable="true"><small>37.9% of tranche</small></td>
+                  <td class="num act"><input value="6.74" aria-label="Diversified Sleeve Preferred equity allocation in $M" data-editable="true"><small>67.4% of tranche</small></td>
+                  <td class="num"><b>20.00</b><small>44.4% of hold</small></td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr><td colspan="5">Allocated</td><td class="num">35.00</td><td class="num">10.00</td><td class="num">45.00</td></tr>
+                <tr><td colspan="5">Target hold</td><td class="num">35.00</td><td class="num">10.00</td><td class="num">45.00</td></tr>
+                <tr><td colspan="5">Unallocated</td><td class="num">0.00</td><td class="num">0.00</td><td class="num">0.00</td></tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <aside class="da-panel">
+            <div class="da-ph">
+              <div class="da-phrow">
+                <div><small>Portfolio</small><h3>Co-Investment Sleeve</h3><small>Commonwealth Teachers’ Retirement</small></div>
+                <button class="btn btn-sm" data-attr="FUND_IS_ALLOCATION_ELIGIBLE" data-editable="true">Exclude entirely</button>
+              </div>
+              <div class="da-big">$25.00M</div>
+              <p class="da-note">55.6% of our hold, 6% of the deal</p>
+            </div>
+            <section>
+              <h4>Tranche allocations <span class="da-note">Amount · vs pro-rata</span></h4>
+              <table class="da-mini">
+                <tbody>
+                  <tr><td><b>Common equity</b><small>At its sharing ratio</small></td><td class="num">21.74</td><td class="num">+0.00</td></tr>
+                  <tr><td><b>Preferred equity</b><small>Capped by Asset Concentration (amount limit)</small></td><td class="num">3.26</td><td class="num dn">−2.95</td></tr>
+                </tbody>
+              </table>
+            </section>
+            <section>
+              <h4>Sharing ratio <span class="da-note">From the allocation workbook</span></h4>
+              <table class="da-mini">
+                <tbody>
+                  <tr><td>Total fund size</td><td class="num" data-attr="FUND_TOTAL_COMMITMENTS" data-editable="true">400.00</td></tr>
+                  <tr><td>Strategy %</td><td class="num"><span data-attr="FUND_TARGET_MATRIX" data-editable="true">60%</span><small>Co-Investment › Private Equity › Buyout</small></td></tr>
+                  <tr><td>Geography %</td><td class="num"><span data-attr="FUND_TARGET_MATRIX" data-editable="true">65%</span><small>North America · client macro target</small></td></tr>
+                  <tr><td>Profile allocation</td><td class="num">156.00</td></tr>
+                  <tr><td>Total deployed</td><td class="num">99.65<small>6 commitments</small></td></tr>
+                  <tr><td>Remaining deployment</td><td class="num">56.35</td></tr>
+                  <tr><td>Fund start / end</td><td class="num"><span data-attr="INCEPTION_DATE">2023-07-01</span> → <span data-attr="FUND_INVESTMENT_PERIOD_END" data-editable="true">2028-07-01</span></td></tr>
+                  <tr><td>Fund duration</td><td class="num">5.01 yrs</td></tr>
+                  <tr><td>Remaining duration</td><td class="num">1.62 yrs</td></tr>
+                  <tr><td>Average annual deployment</td><td class="num">34.78</td></tr>
+                  <tr><td>Exclude</td><td class="num" data-attr="FUND_IS_ALLOCATION_ELIGIBLE" data-editable="true">—</td></tr>
+                  <tr><td>Sharing ratio</td><td class="num"><b>62.1%</b><small>34.78 ÷ 56.01</small></td></tr>
+                </tbody>
+              </table>
+            </section>
+            <section>
+              <h4>Compliance, pro forma <span class="da-note">3 rules affected</span></h4>
+              <div class="da-rule">
+                <div class="da-ruleline"><b><span class="da-rulename">Asset Concentration (amount limit)</span></b><span class="da-st near">At limit</span></div>
+                <p>$25M per asset less $0 already held · capacity 25.00 <span class="cr-rule">Limit</span></p>
+                <div class="da-gauge bind"><i style="width:100%"></i></div>
+              </div>
+              <div class="da-rule">
+                <div class="da-ruleline"><b><span class="da-rulename">Investment Size</span></b><span class="da-st ok">Within limit</span></div>
+                <p>Single commitment below $30M · capacity 30.00 <span class="cr-rule">Limit</span></p>
+                <div class="da-gauge"><i style="width:83%"></i></div>
+              </div>
+              <div class="da-rule">
+                <div class="da-ruleline"><b><span class="da-rulename">Industry Concentration</span></b><span class="da-st ok">Within limit</span></div>
+                <p>30% of $400M less $11.5M already in Health Care · capacity 108.50 <span class="cr-rule">Limit</span></p>
+                <div class="da-gauge"><i style="width:30%"></i></div>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>

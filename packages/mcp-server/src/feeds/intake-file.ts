@@ -6,6 +6,7 @@ import { refineLocations } from './locate';
 import { extractTablesWithLlamaParse, llamaParseConfigured, profileDocument, type DocumentProfile } from './llama-parse';
 import { parseFlexibleTable, parseJsonRecords, parseWorkbook, type NamedTable } from './parse-table';
 import type { ParsedTable } from './types';
+import type { DocumentReading } from '@tapestrai/graphql/src/lib/document-content/reading';
 
 export interface IntakeTable {
   id: string;
@@ -19,6 +20,8 @@ export interface FileIntake {
   tables: IntakeTable[];
   /** How a document was assessed and which reader it was sent to. */
   profile?: DocumentProfile;
+  /** Every page's words, when an outside reader read the file. Kept so the file can be indexed whole without being sent out again. */
+  reading?: DocumentReading | null;
 }
 
 const DOCUMENT_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp', '.docx', '.doc'];
@@ -154,6 +157,7 @@ async function intakeDocument(fileName: string, mediaType: string, bytes: Buffer
             table,
           })),
           profile,
+          reading: extracted.reading,
         };
       }
       notes.push(extracted.note);

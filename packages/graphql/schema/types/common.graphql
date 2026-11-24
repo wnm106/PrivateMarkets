@@ -144,7 +144,12 @@ type AttributeDefinition {
   displaySpanColumns: Int
   displaySpanRows: Int
   isEditable: Boolean!
+  # False when the catalog hides the field, or the client this session is working in does.
   isVisible: Boolean!
+  # The catalog's own flag, whatever a client hides. Edit screens write this one.
+  catalogIsVisible: Boolean!
+  # True when the client this session is working in hides the field.
+  hiddenForClient: Boolean!
   
   # Reference list link
   referenceListCode: String

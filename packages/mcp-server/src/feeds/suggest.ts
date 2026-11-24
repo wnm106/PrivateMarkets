@@ -24,11 +24,15 @@ export interface AttributeChoice {
   referenceListCode: string | null;
   /** Other words for this field, such as "Ending NAV" for NAV. */
   aliasLabels?: string[];
+  /** True when the client this load is for hides the field. It can still be loaded. */
+  hiddenForClient?: boolean;
 }
 
 export interface MappingAliases {
   domains: DomainAlias[];
   names: EntityNameAlias[];
+  /** Entity type code to the name the client gives it. */
+  labels?: Record<string, string>;
 }
 
 export interface DistinctValue {
@@ -72,6 +76,8 @@ export interface MappingTarget {
   parentDomainCode: string | null;
   dataType: string | null;
   referenceListCode: string | null;
+  /** True when the client this load is for hides the field. It can still be loaded. */
+  hiddenForClient?: boolean;
 }
 
 const LOAD_DOMAINS = ['ISSUER', 'FUND', 'SECURITY', 'POSITION', 'DEAL', 'CASH_FLOW'];
@@ -350,9 +356,14 @@ function detectHeaderIdentities(
   rows: Record<string, string>[],
   domainCodes: Set<string>,
   domainAliases: readonly DomainAlias[] = [],
+  attributes: readonly AttributeChoice[] = [],
+  allHeaders: string[] = headers,
 ): Map<string, string> {
   const found = new Map<string, string>();
   const taken = new Set<string>();
+  const support = domainSupport(allHeaders, rows, attributes);
+  /** Other columns of the file that fit this record type's fields. The column being judged does not count. */
+  const supportFor = (domain: string, column: string) => [...(support.get(domain) || [])].filter((other) => other !== column).length;
   for (const column of headers.filter(Boolean)) {
     const words = tokens(column);
     if (words.length === 0 || words.some((word) => ['name', 'id', 'code', 'number', 'no'].includes(word))) continue;
@@ -371,11 +382,43 @@ function detectHeaderIdentities(
       const codes = [...new Set(aliasHits.map((alias) => alias.domainCode))];
       domain = codes.length === 1 ? codes[0] : null;
     }
+    // A header that shares a word with a record type is only a hint. The rest of the file has to agree. "Statement"
+    // names a NAV statement, but a file whose other columns are revenue, cost and profit describes a statement
+    // period, so the record type the other columns fit wins.
+    const known = [...domainCodes].map((code) => ({ code, support: supportFor(code, column) }));
+    const strongest = known.reduce((best, item) => (item.support > best.support ? item : best), { code: '', support: 0 });
+    if (strongest.support >= 2 && (!domain || supportFor(domain, column) === 0)) {
+      const partial = known.filter((item) => {
+        const parts = tokens(item.code.replace(/_/g, ' '));
+        return item.support >= 2 && words.every((word) => parts.includes(word));
+      }).sort((a, b) => b.support - a.support);
+      // Only a record type that shares the header's word and has the file's support replaces the first match.
+      if (partial.length > 0 && (partial.length === 1 || partial[0].support > partial[1].support)) domain = partial[0].code;
+    }
     if (!domain || taken.has(domain)) continue;
     taken.add(domain);
     found.set(column, domain);
   }
   return found;
+}
+
+/** For each record type, the columns whose header and values fit one of its fields. */
+function domainSupport(headers: string[], rows: Record<string, string>[], attributes: readonly AttributeChoice[]): Map<string, Set<string>> {
+  const support = new Map<string, Set<string>>();
+  for (const column of headers.filter(Boolean)) {
+    const values = valuesFor(rows, column);
+    if (values.length === 0) continue;
+    for (const attribute of attributes) {
+      if (!attribute.domainCode) continue;
+      if (sampleFit(values, attribute.dataType) < FIT_REJECT) continue;
+      const ignore = new Set(tokens(attribute.domainCode.replace(/_/g, ' ')));
+      if (scoreAttribute(column, attribute, attribute.domainCode, ignore) < 0.6) continue;
+      const set = support.get(attribute.domainCode) || new Set<string>();
+      set.add(column);
+      support.set(attribute.domainCode, set);
+    }
+  }
+  return support;
 }
 
 function parentsOf(domainCode: string): string[] {
@@ -517,6 +560,8 @@ export function suggestAssignments(
     rows,
     domainCodes,
     aliases.domains,
+    attributes,
+    headers,
   );
   const identified = new Set<string>([...headerIdentities.values(), ...hints.filter((hint) => hint.role === 'identity' && hint.domainCode).map((hint) => hint.domainCode as string)]);
   const namedDomains = new Set<string>();
@@ -719,8 +764,10 @@ export function mappingTargets(attributes: AttributeChoice[], domains: string[],
   ];
   const active = domains.length > 0 ? domains : LOAD_DOMAINS;
   const domainList = [...new Set([...LOAD_DOMAINS.filter((code) => active.includes(code)), ...active])];
+  // A type goes by the name the client gives it, where it has one.
+  const nameOf = (code: string) => aliases.labels?.[code] || domainLabel(code);
   for (const domainCode of domainList) {
-    const label = domainLabel(domainCode);
+    const label = nameOf(domainCode);
     targets.push({
       key: `identity:${domainCode}`,
       group: label,
@@ -760,8 +807,8 @@ export function mappingTargets(attributes: AttributeChoice[], domains: string[],
   for (const link of IDENTITY_LINKS) {
     targets.push({
       key: `parent:${link.child}:${link.parent}`,
-      group: domainLabel(link.child),
-      label: `${domainLabel(link.child)} · Parent ${domainLabel(link.parent).toLowerCase()}`,
+      group: nameOf(link.child),
+      label: `${nameOf(link.child)} · Parent ${nameOf(link.parent).toLowerCase()}`,
       role: 'parent',
       domainCode: link.child,
       attributeCode: null,
@@ -776,14 +823,15 @@ export function mappingTargets(attributes: AttributeChoice[], domains: string[],
     for (const domainCode of domainsForAttribute) {
       targets.push({
         key: `attribute:${domainCode}:${attribute.attributeCode}`,
-        group: domainLabel(domainCode),
-        label: `${domainLabel(domainCode)} · ${attribute.attributeName}`,
+        group: nameOf(domainCode),
+        label: `${nameOf(domainCode)} · ${attribute.attributeName}`,
         role: 'attribute',
         domainCode,
         attributeCode: attribute.attributeCode,
         parentDomainCode: null,
         dataType: attribute.dataType,
         referenceListCode: attribute.referenceListCode,
+        ...(attribute.hiddenForClient ? { hiddenForClient: true } : {}),
       });
     }
   }

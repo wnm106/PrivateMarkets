@@ -17,6 +17,10 @@
  *    as a db line in direct-reads.txt (direct-reads.sql). That list only
  *    shrinks; npm run guard refuses new lines.
  *
+ * 4. No record exists without a parent its entity type requires
+ *    (required-parents.sql). The application refuses to create one; this
+ *    catches a migration or a seed, which write rows directly.
+ *
  * An entry in any list that no longer matches fails the check, so no list can
  * go stale.
  */
@@ -87,6 +91,20 @@ async function directReads(db: Client, problems: string[]) {
   return found.size;
 }
 
+async function requiredParents(db: Client, problems: string[]) {
+  const found = (await db.query<{ domain_code: string; entity_code: string; relationship_code: string; required_domain_code: string }>(read('required-parents.sql'))).rows;
+  // One line per entity type and missing parent, with a few codes, so 100 rows read as one problem.
+  const groups = new Map<string, string[]>();
+  for (const row of found) {
+    const key = `${row.domain_code} without ${row.required_domain_code} (${row.relationship_code})`;
+    groups.set(key, [...(groups.get(key) || []), row.entity_code]);
+  }
+  for (const [key, codes] of groups) {
+    problems.push(`${codes.length} ${key}: ${codes.slice(0, 5).join(', ')}${codes.length > 5 ? ', ...' : ''}. Link each to its parent in the migration or seed that creates it`);
+  }
+  return found.length;
+}
+
 async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('Set DATABASE_URL to a database built from supabase/migrations.');
@@ -95,7 +113,7 @@ async function main() {
   const problems: string[] = [];
   let counts: number[];
   try {
-    counts = [await hardcodes(db, problems), await provisional(db, problems), await directReads(db, problems)];
+    counts = [await hardcodes(db, problems), await provisional(db, problems), await directReads(db, problems), await requiredParents(db, problems)];
   } finally {
     await db.end();
   }
@@ -104,7 +122,7 @@ async function main() {
     for (const problem of problems) console.error(`  ${problem}`);
     process.exit(2);
   }
-  console.log(`Guardrails (database): no function names a rule, client or entity by code (${counts[0]} allowed); provisional rows are read only by the ${counts[1]} listed reader(s); ${counts[2]} direct read(s) left to move onto the shared readers.`);
+  console.log(`Guardrails (database): no function names a rule, client or entity by code (${counts[0]} allowed); provisional rows are read only by the ${counts[1]} listed reader(s); ${counts[2]} direct read(s) left to move onto the shared readers; no record is missing a parent its entity type requires.`);
 }
 
 main().catch((error) => { console.error(error); process.exit(1); });

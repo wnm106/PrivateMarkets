@@ -31,7 +31,10 @@ type Query {
   domainTypes: [DomainTypeRecord!]!
   domainGroups: [DomainGroup!]!
   domainRecordCounts: [DomainRecordCount!]!
-  attributeRegister(domainCode: String): [AttributeDefinition!]!
+  """
+  Attributes, optionally for one entity type. With attributeCodes, only those attributes.
+  """
+  attributeRegister(domainCode: String, attributeCodes: [String!]): [AttributeDefinition!]!
   attributeSections(domainCode: String!): [AttributeSection!]!
   domainTemplates(domainCode: String): [Template!]!
   calcDefinitions: [CalcDefinition!]!

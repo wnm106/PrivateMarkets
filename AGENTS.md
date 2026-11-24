@@ -10,6 +10,15 @@ This is required for every surface, existing and new. Read `docs/SURFACE_TABS.md
 - A tab that has not loaded publishes `data: null`. Build tab data from the same variables the tab draws, with the user's As Of and Knowledge dates applied.
 - Do not finish a surface change until each tab is published and the checklist in `docs/SURFACE_TABS.md` is met. If you cannot meet it, say which tab is missing and why. Do not skip it silently.
 
+## Surfaces: every value answers right-click, and done is measured
+
+This is required for every surface, existing and new. Read "What every value and every screen must do" in `surfaces/README.md` before you build or change a surface, and follow it.
+
+- Every value on every tab answers right-click: a value from an attribute opens its sources, and a figure worked out from others opens how it is worked out. That includes each cell of a grid, editable inputs, rails and side lists. One link under a table is not a binding.
+- Nothing is clipped, cut off or below 12px, an empty row is not a row of empty boxes, and the surface has one stylesheet with each class defined once.
+- When you build from a Surface Builder brief, ask the questions it lists before you build, use its attribute codes, and keep a "Left out or changed" list. Do not drop a control or a binding quietly.
+- Do not report a surface as done from reading your code. Open it in the browser, run the acceptance script on every tab at 1440x900 and 1920x1080, and hand back the results. If a line fails, say which and why.
+
 ## Guardrails: one engine for every client
 
 Read `docs/GUARDRAILS.md` before changing a database function, a migration, compliance or capacity code, or a surface.

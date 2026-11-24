@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { formatAttributeDisplay, type AttributeDisplay } from '@/lib/attribute-display';
-import { peekAttributeDisplay, useAttributeDisplay } from '@/components/forms/AttributeValueInput';
+import { peekAttributeDisplay, useAttributeDisplay, useAttributesLoaded } from '@/components/forms/AttributeValueInput';
 import { decompileCalcExpression } from '@/lib/calc-expression';
 import { domainHref } from '@/lib/domain-routes';
 import { graphqlQuery } from '@/lib/graphql';
@@ -150,6 +150,8 @@ export function CalcBreakdownPanel({
     });
     return () => { cancelled = true; };
   }, [entityId, attributeCode, asOfDate, knowledgeDate, refreshKey]);
+  // The inputs' formats, so each value reads as its attribute shows it.
+  useAttributesLoaded((breakdown?.components || []).map((component) => component.attributeCode));
 
   if (loading) return <div className="calc-break-note">Loading the values used in this calculation…</div>;
   if (error) return <div className="calc-break-note">{error}</div>;

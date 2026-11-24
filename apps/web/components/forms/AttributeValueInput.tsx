@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
-import { ATTRIBUTE_REGISTER_QUERY, REFERENCE_LIST_DETAIL_QUERY, graphqlQuery } from '@/lib/graphql';
+import { graphqlQuery } from '@/lib/graphql';
 import { attributeDisplayKind, editorFieldValue, editorInputMode, editorInputType, referenceTarget, type AttributeDisplay } from '@/lib/attribute-display';
 import { EntityReferencePicker } from '@/components/forms/EntityReferencePicker';
 import { useRecordValues } from '@/components/forms/RecordValues';
@@ -14,6 +14,8 @@ export interface ListOption extends TreeOption {
 }
 
 interface AttributeMeta extends AttributeDisplay {
+  /** The attribute's own name, as people know it. */
+  name: string | null;
   listCode: string | null;
   listValues: string[];
   listLevel: number | null;
@@ -27,20 +29,152 @@ interface Catalog {
   byListValue: Map<string, Map<string, ListOption>>;
 }
 
-let catalogPromise: Promise<Catalog> | null = null;
-let catalogCache: Catalog | null = null;
+/**
+ * What this page has read of the register: only the attributes a screen has asked for, the
+ * fields that control them, and the lists those use. A record of twenty fields reads twenty
+ * attributes and their few lists, not the whole register.
+ */
+const catalogCache: Catalog = { byAttribute: new Map(), byList: new Map(), byListValue: new Map() };
+/** Codes the register was asked for and does not hold. */
+const absent = new Set<string>();
+const fetched = new Map<string, Promise<void>>();
+const listLoads = new Map<string, Promise<void>>();
+let queue: { codes: Set<string>; done: Promise<void> } | null = null;
 
-function loadCatalog() {
-  if (!catalogPromise) {
-    catalogPromise = fetchCatalog().then((catalog) => {
-      catalogCache = catalog;
-      return catalog;
-    }).catch((error) => {
-      catalogPromise = null;
-      throw error;
+const ATTRIBUTE_CATALOG_QUERY = `
+  query AttributeCatalog($attributeCodes: [String!]) {
+    attributeRegister(attributeCodes: $attributeCodes) {
+      attributeCode
+      attributeName
+      referenceListCode
+      listValues
+      dataType
+      displayFormat
+      numericPrecision
+      unitOfMeasure
+      referenceDomainCode
+      referenceListLevel
+      controllingAttributeCode
+    }
+  }
+`;
+
+const LIST_VALUES_QUERY = `
+  query ListValues($listCode: String) {
+    referenceList(listCode: $listCode) {
+      values { valueCode valueLabel isActive displayOrder parentValueCode level }
+    }
+  }
+`;
+
+async function readAttributes(codes: string[]) {
+  const result = await graphqlQuery<{
+    attributeRegister: Array<{
+      attributeCode: string;
+      attributeName: string | null;
+      referenceListCode: string | null;
+      listValues: string[] | null;
+      dataType: string | null;
+      displayFormat: string | null;
+      numericPrecision: number | null;
+      unitOfMeasure: string | null;
+      referenceDomainCode: string | null;
+      referenceListLevel: number | null;
+      controllingAttributeCode: string | null;
+    }>;
+  }>(ATTRIBUTE_CATALOG_QUERY, { attributeCodes: codes }, 'network-only');
+  if (result.error || !result.data) throw new Error(result.error?.message || 'Could not read the attributes.');
+  for (const attribute of result.data.attributeRegister || []) {
+    catalogCache.byAttribute.set(attribute.attributeCode, {
+      name: attribute.attributeName || null,
+      listCode: attribute.referenceListCode || null,
+      listValues: (attribute.listValues || []).map(String).filter(Boolean),
+      dataType: attribute.dataType,
+      displayFormat: attribute.displayFormat,
+      numericPrecision: attribute.numericPrecision,
+      unitOfMeasure: attribute.unitOfMeasure,
+      referenceDomainCode: attribute.referenceDomainCode,
+      listLevel: attribute.referenceListLevel ?? null,
+      controllingCode: attribute.controllingAttributeCode || null,
     });
   }
-  return catalogPromise;
+  for (const code of codes) if (!catalogCache.byAttribute.has(code)) absent.add(code);
+}
+
+/** One attribute's register row. Codes asked for in the same moment go in one request. */
+function fetchAttribute(code: string): Promise<void> {
+  const known = fetched.get(code);
+  if (known) return known;
+  if (!queue) {
+    const codes = new Set<string>();
+    const done = new Promise<void>((resolve) => setTimeout(resolve, 0)).then(() => {
+      queue = null;
+      return readAttributes([...codes]);
+    });
+    queue = { codes, done };
+  }
+  queue.codes.add(code);
+  const load = queue.done;
+  fetched.set(code, load);
+  // A failed read is asked again next time.
+  load.catch(() => fetched.delete(code));
+  return load;
+}
+
+function loadList(listCode: string): Promise<void> {
+  const known = listLoads.get(listCode);
+  if (known) return known;
+  const load = graphqlQuery<{
+    referenceList: { values: Array<{ valueCode: string; valueLabel: string; isActive: boolean; displayOrder: number; parentValueCode?: string | null; level?: number | null }> } | null;
+  }>(LIST_VALUES_QUERY, { listCode }, 'network-only').then((result) => {
+    if (result.error) {
+      listLoads.delete(listCode);
+      return;
+    }
+    const options = (result.data?.referenceList?.values || [])
+      .filter((item) => item.isActive)
+      .sort((a, b) => a.displayOrder - b.displayOrder || a.valueLabel.localeCompare(b.valueLabel))
+      .map((item) => ({
+        value: item.valueCode,
+        displayLabel: item.valueLabel || item.valueCode,
+        label: item.valueLabel && item.valueLabel !== item.valueCode ? `${item.valueLabel} (${item.valueCode})` : item.valueCode,
+        parent: item.parentValueCode ?? null,
+        level: item.level ?? null,
+      }));
+    catalogCache.byList.set(listCode, options);
+    catalogCache.byListValue.set(listCode, new Map(options.map((option) => [option.value, option])));
+  });
+  listLoads.set(listCode, load);
+  return load;
+}
+
+/** An attribute, its list, and the chain of fields that control it. */
+async function loadAttribute(code: string, seen = new Set<string>()): Promise<void> {
+  if (seen.has(code)) return;
+  seen.add(code);
+  await fetchAttribute(code);
+  const meta = catalogCache.byAttribute.get(code);
+  if (!meta) return;
+  await Promise.all([
+    meta.listCode ? loadList(meta.listCode) : null,
+    meta.controllingCode ? loadAttribute(meta.controllingCode, seen) : null,
+  ]);
+}
+
+function loadCatalog(code: string): Promise<Catalog> {
+  return loadAttribute(code).then(() => catalogCache);
+}
+
+/** Whether the attribute's register row has been read. */
+function attributeRead(code: string) {
+  return catalogCache.byAttribute.has(code) || absent.has(code);
+}
+
+/** Whether the attribute's choices have been read: its row, and its list when it has one. */
+function choicesRead(code: string) {
+  if (!attributeRead(code)) return false;
+  const listCode = catalogCache.byAttribute.get(code)?.listCode;
+  return !listCode || catalogCache.byList.has(listCode);
 }
 
 function displayFrom(row: AttributeMeta | undefined): AttributeDisplay {
@@ -56,62 +190,8 @@ function displayFrom(row: AttributeMeta | undefined): AttributeDisplay {
 
 export function peekAttributeDisplay(attributeCode: string | null | undefined): AttributeDisplay | null {
   if (!attributeCode) return {};
-  if (!catalogCache) return null;
+  if (!attributeRead(attributeCode)) return null;
   return displayFrom(catalogCache.byAttribute.get(attributeCode));
-}
-
-async function fetchCatalog(): Promise<Catalog> {
-  const attributes = await graphqlQuery<{
-    attributeRegister: Array<{
-      attributeCode: string;
-      referenceListCode: string | null;
-      listValues: string[] | null;
-      dataType: string | null;
-      displayFormat: string | null;
-      numericPrecision: number | null;
-      unitOfMeasure: string | null;
-      referenceDomainCode: string | null;
-      referenceListLevel: number | null;
-      controllingAttributeCode: string | null;
-    }>;
-  }>(ATTRIBUTE_REGISTER_QUERY, {}, 'network-only');
-  const byAttribute = new Map<string, AttributeMeta>();
-  const listCodes = new Set<string>();
-  for (const attribute of attributes.data?.attributeRegister || []) {
-    const listCode = attribute.referenceListCode || null;
-    byAttribute.set(attribute.attributeCode, {
-      listCode,
-      listValues: (attribute.listValues || []).map(String).filter(Boolean),
-      dataType: attribute.dataType,
-      displayFormat: attribute.displayFormat,
-      numericPrecision: attribute.numericPrecision,
-      unitOfMeasure: attribute.unitOfMeasure,
-      referenceDomainCode: attribute.referenceDomainCode,
-      listLevel: attribute.referenceListLevel ?? null,
-      controllingCode: attribute.controllingAttributeCode || null,
-    });
-    if (listCode) listCodes.add(listCode);
-  }
-
-  const lists = await Promise.all([...listCodes].map(async (listCode) => {
-    const result = await graphqlQuery<{
-      referenceList: { values: Array<{ valueCode: string; valueLabel: string; isActive: boolean; displayOrder: number; parentValueCode?: string | null; level?: number | null }> } | null;
-    }>(REFERENCE_LIST_DETAIL_QUERY, { listCode }, 'network-only').catch(() => null);
-    const options = (result?.data?.referenceList?.values || [])
-      .filter((item) => item.isActive)
-      .sort((a, b) => a.displayOrder - b.displayOrder || a.valueLabel.localeCompare(b.valueLabel))
-      .map((item) => ({
-        value: item.valueCode,
-        displayLabel: item.valueLabel || item.valueCode,
-        label: item.valueLabel && item.valueLabel !== item.valueCode ? `${item.valueLabel} (${item.valueCode})` : item.valueCode,
-        parent: item.parentValueCode ?? null,
-        level: item.level ?? null,
-      }));
-    return [listCode, options] as const;
-  }));
-
-  const byListValue = new Map(lists.map(([listCode, options]) => [listCode, new Map(options.map((option) => [option.value, option]))] as const));
-  return { byAttribute, byList: new Map(lists), byListValue };
 }
 
 function optionsFor(catalog: Catalog, attributeCode: string): ListOption[] {
@@ -123,9 +203,26 @@ function optionsFor(catalog: Catalog, attributeCode: string): ListOption[] {
   return (meta?.listValues || []).map((value) => ({ value, label: value, displayLabel: value }));
 }
 
+/** An attribute shown by its own name, where a code would otherwise be shown. `fallback` shows until the register has loaded, and for a code it does not hold. */
+export function AttributeName({ code, fallback }: { code: string; fallback: string }) {
+  const [name, setName] = useState<string | null>(() => catalogCache.byAttribute.get(code)?.name || null);
+  useEffect(() => {
+    let cancelled = false;
+    loadCatalog(code).then((catalog) => {
+      if (!cancelled) setName(catalog.byAttribute.get(code)?.name || null);
+    }).catch(() => {
+      // The fallback stays.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [code]);
+  return <>{name || fallback}</>;
+}
+
 export function peekAttributeListOptions(attributeCode: string | null | undefined): ListOption[] | null {
   if (!attributeCode) return [];
-  if (!catalogCache) return null;
+  if (!choicesRead(attributeCode)) return null;
   return optionsFor(catalogCache, attributeCode);
 }
 
@@ -146,7 +243,7 @@ export function useAttributeListOptions(attributeCode: string | null | undefined
     const cached = peekAttributeListOptions(attributeCode);
     if (cached) setOptions(cached);
     let cancelled = false;
-    loadCatalog().then((catalog) => {
+    loadCatalog(attributeCode).then((catalog) => {
       if (cancelled) return;
       setOptions(optionsFor(catalog, attributeCode));
     }).catch(() => {
@@ -160,6 +257,26 @@ export function useAttributeListOptions(attributeCode: string | null | undefined
   return options;
 }
 
+/**
+ * Reads these attributes for a screen that formats them with the peek functions. The
+ * returned count goes up as they arrive, so the screen draws again with their formats.
+ */
+export function useAttributesLoaded(attributeCodes: Array<string | null | undefined>) {
+  const key = [...new Set(attributeCodes.filter((code): code is string => Boolean(code)))].sort().join(',');
+  const [loaded, setLoaded] = useState(0);
+  useEffect(() => {
+    if (!key) return;
+    let cancelled = false;
+    Promise.all(key.split(',').map((code) => loadAttribute(code).catch(() => undefined))).then(() => {
+      if (!cancelled) setLoaded((count) => count + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+  return loaded;
+}
+
 export function useAttributeDisplay(attributeCode: string | null | undefined) {
   const [meta, setMeta] = useState<AttributeDisplay | null>(() => peekAttributeDisplay(attributeCode));
 
@@ -171,7 +288,7 @@ export function useAttributeDisplay(attributeCode: string | null | undefined) {
     const cached = peekAttributeDisplay(attributeCode);
     if (cached) setMeta(cached);
     let cancelled = false;
-    loadCatalog().then((catalog) => {
+    loadCatalog(attributeCode).then((catalog) => {
       if (cancelled) return;
       setMeta(displayFrom(catalog.byAttribute.get(attributeCode)));
     }).catch(() => {
@@ -220,7 +337,7 @@ export function useAttributeTree(attributeCode: string | null | undefined): Attr
     }
     setTree(treeFrom(catalogCache, attributeCode));
     let cancelled = false;
-    loadCatalog().then((catalog) => {
+    loadCatalog(attributeCode).then((catalog) => {
       if (!cancelled) setTree(treeFrom(catalog, attributeCode));
     }).catch(() => {
       if (!cancelled) setTree(NO_TREE);

@@ -350,7 +350,7 @@ export function validateGraph(graph: WorkflowGraph, toolNames?: ReadonlySet<stri
       } else {
         const args = node.config.args && typeof node.config.args === 'object' ? (node.config.args as Record<string, unknown>) : {};
         for (const arg of screen.args) {
-          if (!String(args[arg.key] ?? '').trim()) problems.push({ nodeId: node.id, message: `"${screen.label}" needs ${arg.label.toLowerCase()}. ${arg.help}` });
+          if (!arg.optional && !String(args[arg.key] ?? '').trim()) problems.push({ nodeId: node.id, message: `"${screen.label}" needs ${arg.label.toLowerCase()}. ${arg.help}` });
         }
       }
     }

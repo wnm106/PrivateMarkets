@@ -144,6 +144,27 @@ describe('the run page', () => {
     assert.deepEqual(overview.openStages, [{ title: 'Understand the file', screen: 'intake.understand', instructions: null, yours: true, whyNot: null, cameBack: null }]);
     assert.equal((runTabs(intake).overview.data as { checklist: unknown }).checklist, null);
 
+    // The steps are published as the page lists them: the system's with what each did, the decisions by number.
+    const told = runTabs(intake, { checklist, stages, forms: [] }).overview.data as { steps: { summary: string; items: Array<{ step: string; by: string; state: string; decision?: number; onlyOnSomeChoices?: boolean }> }; stillOpen: { items: unknown[] } };
+    assert.equal(told.steps.summary, '1 of 5 steps done by the system and the agent, 4 still to run');
+    assert.deepEqual(told.steps.items.slice(0, 3).map((entry) => [entry.step, entry.by, entry.state, entry.decision ?? null]), [
+      ['Index for search', 'system', 'done', null],
+      ['Understand the file', 'person', 'waiting', 1],
+      ['Map the file', 'person', 'ahead', 2],
+    ]);
+    assert.equal(told.steps.items.find((entry) => entry.step === 'Promote to live records')?.onlyOnSomeChoices, true);
+    assert.deepEqual(told.stillOpen.items, []);
+    assert.equal((runTabs(intake).overview.data as { steps: unknown }).steps, null);
+
+    // Each step carries what opening it on the page shows: what it is, and what it ran with or is set up with.
+    const opened = told.steps.items as unknown as Array<Record<string, unknown>>;
+    const indexed = opened.find((entry) => entry.step === 'Index for search')!;
+    assert.equal(typeof indexed.whatItIs, 'string');
+    assert.equal(typeof indexed.tool, 'string');
+    // It recorded no call in this run's history, so what it was asked is its design.
+    assert.ok(indexed.setUpWith && !indexed.askedWith);
+    assert.ok(opened.every((entry) => typeof entry.whatItIs === 'string'));
+
     const finished = runChecklist({ graph: WORKFLOW_TEMPLATES.find((template) => template.code === 'DATA_QUALITY_BRIEF')!.graph, status: 'SUCCEEDED', currentNode: null, steps: [], records: [] });
     assert.equal(runNextStep(run({ status: 'SUCCEEDED', reviews: [] }), finished).headline, 'Finished. It needed no decisions.');
   });

@@ -178,7 +178,12 @@ type AttributeDefinition {
   displaySpanColumns: Int
   displaySpanRows: Int
   isEditable: Boolean!
+  # False when the catalog hides the field, or the client this session is working in does.
   isVisible: Boolean!
+  # The catalog's own flag, whatever a client hides. Edit screens write this one.
+  catalogIsVisible: Boolean!
+  # True when the client this session is working in hides the field.
+  hiddenForClient: Boolean!
   
   # Aggregation and precision
   aggregationType: String
@@ -1289,6 +1294,25 @@ type ComplianceProformaLine {
   approved: Boolean!
 }
 
+type ComplianceSnapshotLine {
+  ruleCode: String!
+  ruleName: String!
+  groupByValue: String
+  limitDirection: ComplianceLimitDirection
+  numeratorValue: Float
+  denominatorValue: Float
+  computedValue: Float
+  softLimitValue: Float
+  hardLimitValue: Float
+  status: ComplianceResultStatus
+  resultUnit: String
+}
+
+type ComplianceSnapshot {
+  lines: [ComplianceSnapshotLine!]!
+  errors: [MutationError!]!
+}
+
 type ComplianceProformaScore {
   approved: Boolean!
   lines: [ComplianceProformaLine!]!
@@ -2043,7 +2067,10 @@ type CreateDomainGroupResult {
 type DomainTypeRecord {
   id: ID!
   domainCode: String!
+  # What the client this session is working in calls the type; the catalog's name otherwise.
   domainName: String!
+  # The catalog's own name. Edit screens write this one.
+  catalogName: String!
   description: String
   isActive: Boolean!
   createdAt: DateTime!
@@ -2058,6 +2085,51 @@ type DomainTypeRecord {
   ownedAttributeCount: Int!
   sharedAttributeCount: Int!
   templateCount: Int!
+}
+
+# One field of an entity type, as the client settings screen lists it.
+type ClientCatalogField {
+  attributeId: ID!
+  attributeCode: String!
+  attributeName: String!
+  displaySection: String!
+  isRequired: Boolean!
+  isDerived: Boolean!
+  # False when the catalog hides the field for every client.
+  catalogIsVisible: Boolean!
+  # True when this client hides it.
+  hidden: Boolean!
+  # Records of this type holding a value today. Null when it could not be counted.
+  recordsWithValue: Int
+}
+
+# What one client calls an entity type, and which of its fields it hides.
+# The client is the one the session is working in: the client being simulated,
+# or the person's only client. clientId is null when there is no single client.
+# Another word for an entity type. A shared one is read by every client;
+# the client's own wins over a shared alias that uses the same words.
+type ClientTypeAlias {
+  id: ID!
+  label: String!
+  shared: Boolean!
+}
+
+type ClientCatalogSettings {
+  clientId: ID
+  clientName: String
+  canEdit: Boolean!
+  domainCode: String!
+  catalogName: String!
+  displayName: String
+  recordCount: Int
+  aliases: [ClientTypeAlias!]!
+  fields: [ClientCatalogField!]!
+}
+
+type ClientCatalogResult {
+  success: Boolean!
+  errors: [MutationError!]!
+  settings: ClientCatalogSettings
 }
 
 # Active-record count for one entity type. Counted from master entities,
@@ -3495,9 +3567,14 @@ type Query {
   
   # Metadata queries
   domainTypes: [DomainTypeRecord!]!
+  # What the client this session is working in calls an entity type, and the fields it hides.
+  clientCatalogSettings(domainCode: String!): ClientCatalogSettings!
   domainGroups: [DomainGroup!]!
   domainRecordCounts: [DomainRecordCount!]!
-  attributeRegister(domainCode: String): [AttributeDefinition!]!
+  """
+  Attributes, optionally for one entity type. With attributeCodes, only those attributes.
+  """
+  attributeRegister(domainCode: String, attributeCodes: [String!]): [AttributeDefinition!]!
   attributeSections(domainCode: String!): [AttributeSection!]!
   domainTemplates(domainCode: String): [Template!]!
   previewStatementTemplate(input: PreviewStatementTemplateInput!): PreviewStatementTemplateResult!
@@ -3522,6 +3599,8 @@ type Query {
   certification(processCode: String!, subjectEntityId: ID!, periodEnd: Date): Certification
   """Every certification of a record, reopened ones included, newest first."""
   certificationHistory(subjectEntityId: ID!, processCode: String): [Certification!]!
+  """One borrower's quarter: statement lines by quarter, how the key lines moved, each covenant with its limit, our calculation and the borrower's certificate, and what is open."""
+  borrowerFinancials(borrowerId: ID!, periodEnd: Date, asOfDate: Date, knowledgeDate: DateTime): JSON!
   """Positional cash flows matched to the fund's bank transactions, with the tie-out."""
   cashRec(fundId: ID!, periodEnd: Date, asOfDate: Date, knowledgeDate: DateTime): JSON!
   """Job types the worker can run."""
@@ -3711,6 +3790,15 @@ type Query {
     sourceScope: String
     ruleCodes: [String!]
   ): ComplianceProformaScore!
+  # The booked book of one fund, scored on every rule it is enrolled in, as of a date.
+  # The same evaluator the pro forma uses, with no buys or sells. One line per rule and group.
+  complianceSnapshot(
+    anchorEntityId: ID!
+    asOfDate: Date!
+    knowledgeDate: DateTime
+    sourceScope: String
+    ruleCodes: [String!]
+  ): ComplianceSnapshot!
   # Largest additional par of one security. legs are the rest of the package.
   investmentCapacity(
     anchorEntityId: ID!
@@ -3722,6 +3810,9 @@ type Query {
     ruleCodes: [String!]
     limitKind: String
     legs: [ComplianceProformaLegInput!]
+    # Attributes the probed buy carries, and attributes that take the probed par as their value.
+    probeAttributes: JSON
+    probeParAttributes: [String!]
   ): ComplianceCapacity!
 
   # Reference List queries
@@ -3790,6 +3881,14 @@ type Mutation {
   createDomainType(input: CreateDomainTypeInput!): CreateDomainTypeResult!
   createDomainGroup(input: CreateDomainGroupInput!): CreateDomainGroupResult!
   updateDomainType(input: UpdateDomainTypeInput!): UpdateDomainTypeResult!
+  # Set what the session's client calls an entity type. A blank name clears it.
+  setClientEntityTypeName(domainCode: String!, displayName: String): ClientCatalogResult!
+  # Hide or show fields for the session's client. A required field cannot be hidden.
+  setClientFieldsHidden(domainCode: String!, attributeIds: [ID!]!, hidden: Boolean!): ClientCatalogResult!
+  # Add a word the session's client uses for an entity type. Import mapping and search match on it.
+  addClientEntityTypeAlias(domainCode: String!, label: String!): ClientCatalogResult!
+  # Remove one of the session client's own words. A shared alias is not touched.
+  removeClientEntityTypeAlias(domainCode: String!, aliasId: ID!): ClientCatalogResult!
   deleteDomainType(id: ID!): DeleteDomainTypeResult!
   createAttribute(input: CreateAttributeInput!): CreateAttributeResult!
   updateAttributeDefinition(input: UpdateAttributeDefinitionInput!): UpdateAttributeDefinitionResult!

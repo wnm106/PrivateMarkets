@@ -5,6 +5,7 @@ import { basename, extname, resolve } from 'node:path';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { DOCUMENT_BUCKET, embedConfigFromEnv, processDocument, searchDocuments } from '@tapestrai/graphql/src/lib/document-content';
 import { refinerFromEnv } from './document-refiner';
+import { outsideReaderFromEnv } from './documents';
 
 /**
  * Documents from the command line, without a running worker.
@@ -53,6 +54,7 @@ async function runUntilDone(supabase: SupabaseClient, documentId: string, reread
     const result = await processDocument(supabase, documentId, {
       embed,
       refiner,
+      reader: outsideReaderFromEnv(process.env),
       reread: again,
       budgetMs: 10 * 60 * 1000,
       sleep: (ms) => {

@@ -23,18 +23,21 @@ The rule the engine keeps: **an agent proposes, a person approves, a fixed step 
 | Approvals, delivery | `supabase/migrations/20261117040000_workflow_review_approvals.sql`, `20261117050000_notification_delivery.sql`, `packages/worker/src/notify.ts` | More than one approval, handing an overdue review on, and sending notices by email and Slack |
 | Stages | `supabase/migrations/20261119120000_workflow_stages.sql`, `packages/graphql/src/lib/workflow-screens.ts`, `apps/web/components/workflows/stages` | A step that shows one screen and waits, and the screens it can show |
 | Checklist | `packages/graphql/src/lib/workflow-checklist.ts`, `apps/web/components/workflows/RunChecklist.tsx` | Every decision a run needs, numbered in order, and the screen for the open one |
+| Step by step | `packages/graphql/src/lib/workflow-story.ts`, `packages/graphql/src/lib/workflow-step-detail.ts`, `apps/web/components/workflows/RunChecklist.tsx`, `apps/web/components/workflows/StepPane.tsx` | What each step of a run did, in a line and a few figures, what a step shows when it is opened, and what the run leaves open |
 | Tasks | `packages/graphql/src/lib/workflow-tasks.ts`, `apps/web/lib/tasks.ts`, `apps/web/components/layout/TaskCenter.tsx` | The decisions waiting on you, counted once, in the top bar, the inbox, the sidebar and the tab |
 | Forms, split runs, outbound | `supabase/migrations/20261117070000_workflow_forms_and_outbound.sql`, `packages/worker/src/workflow/outbound.ts`, `apps/web/app/portal` | Ask for information, the portal, one run per record, Call a connection, Send a message |
 | Analytics | `supabase/migrations/20261117080000_workflow_analytics.sql`, `apps/web/app/workflows/analytics` | How each workflow is doing |
 | Triggers | `supabase/migrations/20261117030000_workflow_triggers.sql`, `apps/web/components/workflows/WorkflowTriggers.tsx` | Starting a workflow when a feed event arrives or a data quality scan finds new failures |
 | Tables and functions | `supabase/migrations/20261116120000_workflows.sql` | `ops.workflows`, `workflow_versions`, `workflow_runs`, `workflow_steps`, `workflow_events`, `workflow_reviews`, reached only through the `workflow_*` functions |
 | Record filters | `packages/graphql/src/lib/workflow-filters.ts`, `packages/mcp-server/src/tools/selection-tools.ts` | The filters a run is started with, and the step that turns them into the records it works on |
+| Blocks | `packages/graphql/src/lib/workflow-blocks.ts` | Steps that belong together, added to a workflow as one: the file import |
 | Graph rules | `packages/graphql/src/lib/workflow-graph.ts` | Step types, what makes a graph sound, which step follows which, `{{placeholders}}` |
 | Proposals | `packages/graphql/src/lib/workflow-proposal.ts` | What an agent proposes, the required-field check, a reviewer's decision |
 | Templates | `packages/graphql/src/lib/workflow-templates.ts` | Starting points offered by New workflow |
 | Engine | `packages/worker/src/workflow/engine.ts` | Walks a run through its graph, one recorded step at a time |
 | Agent step | `packages/worker/src/workflow/agent.ts`, `claude.ts`, `gemini.ts` | The model loop and the two providers |
 | Tools | `packages/worker/src/workflow/tools.ts` | The chat assistant's tools, run as a person |
+| Borrower tools | `packages/mcp-server/src/tools/borrower-tools.ts`, `packages/graphql/src/lib/borrower-financials.ts`, `borrower-financials-store.ts` | Reading a borrower's statements, trends, covenants and certificate values, and recording a certificate value and the quarter's review notes |
 | Reconciliation tools | `packages/mcp-server/src/tools/rec-tools.ts`, `packages/graphql/src/lib/rec-digest.ts`, `rec-actions.ts` | Reading a fund's NAV, position, and cash reconciliation, and recording decisions, cash pairs, adjustments, and notes |
 | Filed report tools | `packages/mcp-server/src/tools/nav-report-tools.ts`, `packages/mcp-server/src/feeds/nav-report.ts`, `packages/graphql/src/lib/nav-breaks.ts` | Reading a stored 10-Q or annual report onto a fund's NAV statement, loading it, and summarizing the breaks. See [NAV_REPORTS.md](NAV_REPORTS.md) |
 | Pack tables | `packages/mcp-server/src/feeds/pack-tables.ts` | Reading every table of a stored file, trying a mapping without writing, and loading one table |
@@ -50,6 +53,8 @@ Workflows run on the job worker. See [JOBS.md](JOBS.md) for running it. On top o
 | `SUPABASE_ANON_KEY` | Any step that runs a tool | |
 | A workflow service account for the client | Any step that runs a tool | See [who a step runs as](#who-a-step-runs-as) |
 | `ANTHROPIC_API_KEY` | Agent steps on Claude | |
+| `LLAMA_CLOUD_API_KEY` | Reading a scan, a picture or a Word file in a file step | See [Reading a whole file](#reading-a-whole-file) |
+| `VOYAGE_API_KEY` | Searching a file's words by meaning | Without it `search_documents` finds by words only. See [DOCUMENTS.md](DOCUMENTS.md) |
 | `GEMINI_API_KEY` | Agent steps set to Gemini | |
 | `WORKFLOW_AGENT_MODEL` | Optional | Default `claude-opus-5-5` |
 | `WORKFLOW_AGENT_EFFORT` | Optional | `low`, `medium`, `high` (default), `xhigh`, `max` |
@@ -130,6 +135,7 @@ The templates, all built this way:
 | Data quality brief | Briefs on open exceptions | No |
 | NAV review | Names the checks and lines to look at before sign-off | No |
 | NAV reconciliation | Takes a fund's filed report (a 10-Q, a 10-K) from a stored file to a summary of the breaks. It finds the fund from the report, loads it, reconciles and keeps the summary as notes on its own; a person is asked only to check a report it holds and to decide breaks. A `REPORT` trigger starts it when a report arrives. The summary covers the whole NAV pack ([NAV_PACK.md](NAV_PACK.md)). See [NAV_REPORTS.md](NAV_REPORTS.md) | Loads the report unless it is held; keeps the summary as notes; decisions after review |
+| Borrower financials | Takes a borrower's quarterly statements through the file import block, tests the covenants against the borrower's certificate, and writes the quarter's review notes. Needs records chosen. See [Borrower financials](#borrower-financials) | After review |
 | Cash tie-out | Says what ties to the bank and what does not | No |
 | Closing readiness | Says whether each deal can close and what is open | No |
 | Overcollateralization test, Single-name check | Score one compliance rule and explain the result | Stores the rule's results |
@@ -176,7 +182,9 @@ The step can limit which changes may be proposed ("Changes it can propose").
 | Cash reconciliation (`rec.cash`) | One fund's bank lines beside its book cash flows for a period, the lines the agent points at, and whether the two sides tie |
 | NAV reconciliation (`rec.nav`) | One fund's reported and proposed NAV, and the review items the agent points at, with the administrator's figure, ours, the NAV effect and what is decided |
 
-Fund reconciliation's reconciling step may show both. A view's component is in `apps/web/components/workflows/review-sections/RecSections.tsx`, under the same code.
+| Borrower financials (`fin.borrower`) | One borrower's quarter: each covenant with its limit, our calculation, the certificate and whether the two agree, and how the key lines moved, with the covenants and lines the agent points at marked |
+
+Fund reconciliation's reconciling step may show the two reconciliation views, and Borrower financials' reviewing step the borrower view. A reconciliation view's component is in `apps/web/components/workflows/review-sections/RecSections.tsx`, and the borrower view's in `FinSections.tsx`.
 
 **Required fields are checked by the engine, not left to the agent.** When a change creates a record, the engine reads what that record's template requires. Each required attribute the agent did not supply becomes a question on the change, marked "required for this type of record".
 
@@ -221,6 +229,30 @@ They are applied in that order. If the first fails, the second is not attempted.
 - The agent is told to add sparingly, and never to fit one odd record.
 
 The agent needs `get_attribute_list_values` among its tools to read a list, and `add_attribute_list_value` among the changes it can propose to add to one. The check itself runs either way.
+
+## Reading a whole file
+
+A workflow reads a file with the standard file loader, the one Load data uses (`packages/mcp-server/src/feeds/intake-file.ts`). It is not limited to spreadsheets:
+
+| File | Read by |
+|---|---|
+| CSV, Excel, JSON | The table parsers, on the server |
+| A short PDF with selectable text | The built-in reader, on the server |
+| A filed report (a 10-Q, a 10-K) | The report reader, on the server, statement by statement |
+| A scan, a picture of a page, a Word file, a long or table-heavy PDF | LlamaParse, when `LLAMA_CLOUD_API_KEY` is set |
+
+A table is not the whole file. The figure a covenant turns on is often explained in a footnote: an add-back taken, cash netted, a quarter restated. So a file's words are kept as well as its tables, and an agent can read them:
+
+| Tool | Gives |
+|---|---|
+| `get_position_file_tables` | The tables of a stored file, to map and load |
+| `get_position_file_text` | Every page's words: paragraphs, tables, the notes under them and the footnotes. `find` returns only the passages that hold the words given, with their page. A PDF's own text is read on the server; a scan, a picture or a Word file is given as LlamaParse read it |
+| `search_documents`, `get_document_section` | The same words found by meaning, once the file is kept as a document. Pass the file's `documentId` to search that file alone |
+| `create_position_file_import` | Stores a file of any of the kinds above. A document is kept as a searchable document at once |
+
+**Every file a workflow loads is kept as a searchable document.** `load_position_file_table` and `load_nav_report` index the file they load, and File intake indexes its file as its first step. A document is indexed as the file itself, every page of it; a spreadsheet as a rendering of its tables. Each chunk is embedded by the worker (`document.process`), so search by meaning follows a little after the load; `get_position_file_text` needs neither the worker nor the embedding service. How a file is read, kept and searched is in [DOCUMENTS.md](DOCUMENTS.md).
+
+The agents that read files (Map the packs, Reconcile and write notes, Explain the breaks, Review trends and covenants) have these tools and are told to read the notes before relying on a figure that carries a footnote mark or a label such as adjusted, pro forma, restated or unaudited, and to quote the file's own words with the page.
 
 ## Fund reconciliation
 
@@ -304,6 +336,71 @@ To run it on a schedule, queue `workflow.start` after the feed's poll:
 { "workflowCode": "FUND_RECONCILIATION", "input": { "filters": { "entityCodes": ["HSCF2"] } } }
 ```
 
+## Borrower financials
+
+The Borrower financials template takes a borrower's quarterly financial statements from a received file to review notes. The run starts with the file, and the issuer is found from it. The file goes through the standard import, the covenants are tested, the borrower's certificate is set beside our calculation, and the quarter is written up.
+
+Start it with the quarter, and hand it the file. It needs no records chosen:
+
+```json
+{ "periodEnd": "2026-09-30" }
+```
+
+Leave `periodEnd` blank for the latest quarter that has ended. A run takes one file, so start one run for each borrower.
+
+**The issuer comes from the file.** `find_file_record` searches every value in the file that could be a name among the client's stored issuers, by code, name and alias, and scores each (an exact code is 1.0, an exact name 0.97, a known alias 0.94, a name apart from a suffix such as Inc or LLC 0.92). The file names an issuer when a value matches at 0.88 or more and no other issuer matches as well. Lesser matches are listed as candidates and are never used on their own. When no issuer is named surely, or two fit equally, the run asks a person on the Choose the record screen, which lists the candidates and searches all issuers. A person's choice is checked against the client's issuers before the run goes on.
+
+| Step | Kind | What it does |
+|---|---|---|
+| Receive the file, Index for search | [File import](#the-file-import-block) | The statements are handed to the run or uploaded, and indexed for search |
+| Find the issuer in the file | Fixed | `find_file_record`: searches the file's values among the stored issuers |
+| Did the file name one issuer? | Fixed | Goes on when it did, and asks a person when it did not |
+| Choose the issuer | Human | The Choose the record screen. Only when the file did not name one surely |
+| Issuer | Fixed | Settles the issuer, the one the file named or the one the person chose. Later steps read it as `steps.select.entityIds` |
+| Financials on file | Fixed | Reads the issuer's statements, covenants and certificate values as they stand, before anything is loaded |
+| Any statements or deals on file? | Fixed | Ends the run if the issuer holds no record with statements or deals |
+| Understand the file … Promote to live records | [File import](#the-file-import-block) | The rest of the import: confirmed, mapped, staged, checked and promoted. Each decision is on the loader's own screen |
+| Recalculate the covenants | Fixed | Stores every covenant on the borrower's deals again from the lines now on file |
+| Financials and covenants now | Fixed | Reads each borrower again |
+| Review trends and covenants | Agent | Says how the lines moved and whether each covenant holds, reads the compliance certificate from the stored files and proposes each certified value, says why a certificate differs from our calculation, and writes the quarter's notes |
+| Review the quarter | Human | Approve each certificate value, approve or edit the notes, and any correction the agent proposed |
+| Keep the review | Fixed | Keeps what was approved |
+| Where each borrower stands now | Fixed | Reads each borrower a last time. This is the run's result |
+
+**No agent maps or loads the file.** A person does, on the mapping screen, with the file beside it. The agent's work starts once the lines are live: it reads, compares and writes.
+
+Saying there is no file ends the run, because nothing says which issuer to review. Stopping the import part way (at the file, at the mapping, or by discarding the staged batch) ends the run: nothing is reviewed against a load nobody approved.
+
+The compliance certificate is read as a document, not loaded as a table. Upload it in Load data or on the Receive a file screen so it is stored; the reviewing agent finds it among the stored files, reads the figures and their footnotes, and proposes each certified value for a person to approve.
+
+### What the tools read and change
+
+The tools are in `packages/mcp-server/src/tools/borrower-tools.ts`. They read through `packages/graphql/src/lib/borrower-financials-store.ts`, and the figures are lined up by `borrower-financials.ts`, which calculates nothing the platform calculates elsewhere: the lines come from the statement book (the attribute formulas), and a covenant's value, limit and status come from the covenant test ([COVENANTS.md](COVENANTS.md)).
+
+| Tool | Reads or changes |
+|---|---|
+| `get_borrower_financials` | For each borrower and one quarter: the statement lines for the last quarters, each key line's move on the quarter and on the year with the sharp moves marked, every covenant on its deals tested under the deal's own definition (limit, calculated value, numerator and denominator, the definition's lines with what each read and counted after its cap, status, cushion, history), the certificate value and whether it agrees, the house definition's value, and what is open with who has it |
+| `recalculate_borrower_covenants` | Stores each covenant again (`recalculate_covenant`). It changes no statement line, limit or definition |
+| `record_borrower_covenant_value` | Files what the compliance certificate says a covenant was at a quarter end under the Borrower Compliance Certificate source. That source ranks behind the calculation, so the calculation stays the golden value and the two are compared |
+| `save_borrower_review` | Keeps the notes on the quarter's statement (`STATEMENT_REVIEW_NOTES`), with a one-line outcome the platform reads from the figures when they are saved (`STATEMENT_REVIEW_OUTCOME`) |
+
+Statement lines are loaded by the file import block, like any other file. A line that looks wrong is corrected with `submit_manual_override` only when a second source on file shows the right value.
+
+**A certificate agrees** when it is within 2% of our calculation (`CERTIFICATE_TOLERANCE`). **A line moves sharply** at 15% on the year or 10% on the quarter for an amount, 3 points for a margin, and half a turn for a multiple (`NOTABLE`). A key line that repeats another (ending cash and cash) is read once.
+
+**No workflow waives a covenant, cures one, or sends anything to a borrower.** The agents are told to say what a person has to decide. A covenant past its limit is listed under what is open, for the deal team.
+
+### In the review
+
+The agent can put a borrower's quarter in front of the reviewer (`fin.borrower`): five figures, each covenant with its limit, our calculation, the certificate, the difference, the cushion and where it stands, then how the lines moved. A covenant the certificate and our calculation put on different sides of the limit says so in red.
+
+### Setting up
+
+- Apply `supabase/migrations/20261123150000_statement_review_notes.sql`. Without it everything runs except keeping the notes, which fails and says so.
+- Publish the template for the client: `npx tsx scripts/publish-file-intake.mts <client code> BORROWER_FINANCIALS`.
+- Restart the worker after pulling this change, so it has the tools and the Receive a file screen.
+- To try it, `docs/samples/borrower-financials` holds a made-up package for the Halyard Systems sample borrower, and says what to expect from it.
+
 ## Reviewing
 
 A run that reaches a Human review step waits, for as long as it takes. On `/workflows`, a review you can decide shows under "Waiting for you", soonest due first. The ones waiting for someone else are one click below it, each saying why it is not yours.
@@ -366,7 +463,9 @@ Underneath, a notice is an `ops.activity_events` row with `recipients` set, in `
 
 ### Deciding
 
-The review shows the agent's own summary, the views it asked you to look at, then every proposed change with the agent's confidence beside it.
+The review is laid out in the order a person decides. First what to do now, named by the change that is next. Then the first lines of the agent's own summary, with the rest a click away. Then where things stand: each view the agent asked you to look at, as a few figures. Then every proposed change.
+
+A person who cannot decide the review reads the same page without the call to act and without the buttons. The run's banner says once who it is waiting on and why.
 
 **Each kind of change has its own screen.** The changes are grouped by the tool they run (`apps/web/lib/review-sections.ts`), and the groups are decided in order, each a part of the review on the run's checklist:
 
@@ -374,11 +473,13 @@ The review shows the agent's own summary, the views it asked you to look at, the
 |---|---|---|
 | Cash pairs | `approve_cash_match` | The bank transaction beside the book flows it settled, the difference and the dates. Change the flows to correct the pair |
 | Cash adjustments | `post_cash_adjustment` | Book less bank before and after, with the side, amount and reason to edit |
-| Reconciliation decisions | `record_rec_decision` | The review item with the administrator's figure, ours, the difference and the NAV effect, any decision already on the close, and Accept, Adjust or Query with the note. Adjust and Query need a note |
-| Other changes | Any other tool | The general table |
-| Reconciliation notes | `save_reconciliation_notes` | The notes to edit and preview, beside the notes kept now. A change you rejected for the same fund is named, so the notes can be made to match |
+| Reconciliation decisions | `record_rec_decision` | The review item by name, with the administrator's figure, ours, the difference and the NAV effect, and how big the difference is as a share of the figure and of the NAV. Then what the agent recommends, why, and what it checked. Then Accept, Adjust or Query, each saying what it does, with the agent's pick marked. The note is one line until it is opened. Adjust and Query need a note, and a note the agent wrote for another choice has to be rewritten first. The buttons say what they record: "Confirm: accept", "Leave it undecided" |
+| Other changes | Any other tool | The general table. When a record has several changes, its rows sit under the record's name, said once. A column that would say the same on every row is left out |
+| Certificate values | `record_borrower_covenant_value` | The covenant by name, with its limit, our calculation, the certificate's figure and the difference, and which side of the limit each falls. The figure and where it is in the certificate can be edited |
+| Reconciliation notes | `save_reconciliation_notes` | The notes folded to their first paragraph, with the sections they cover, to read in full, edit, or compare with the notes kept now. A change you rejected for the same fund is named, so the notes can be made to match |
+| Review notes | `save_borrower_review` | The quarter's notes, folded and edited the same way as reconciliation notes, beside the notes kept now |
 
-The rec sections read the fund's reconciliation with the same queries as the reconciliation page, at your As Of and Knowledge dates. A review of only other changes keeps the one table. Every change can still open to its full settings and evidence, and a required question opens it.
+The rec sections read the fund's reconciliation with the same queries as the reconciliation page, at your As Of and Knowledge dates. A review of only other changes keeps the one table. Each rec card shows the agent's reasons and the first three things it checked; **See the exact change** opens the tool call it will run, and a required question opens it. A review item a card decides is not repeated in the view above it.
 
 - **Approve the confident ones together** with one button.
 - **Walk through the rest.** Each opens to show exactly what will happen, why, what it is based on, and its questions. Answer, or take the agent's suggestion, then approve or reject and move to the next.
@@ -415,10 +516,16 @@ Later steps read what the person left as `{{steps.<step>.result.<key>}}`, and ea
 
 | Screen | Shows | Outcomes | Before the run goes on |
 |---|---|---|---|
+| Receive a file (`load.receive`) | What the run expects, the files stored in Load data with those naming the run's records first and where each stands (not loaded yet, loaded on a date, failed), an upload control, and the chosen file as it is | `received`, `none` | Received: the file is still stored |
+| Choose the record a file is about (`intake.record`) | A stored file beside the records of one type it resembles, best first, with how surely each was found, and a search of all records of the type | `chosen`, `none` | Chosen: the record is a stored record of the type |
 | Understand a file (`intake.understand`) | A stored file beside what was found in it: the kind of file, its tables, the records it holds, the record it is about, and whether it is indexed for search | `confirmed`, `abandoned` | Confirmed: the selected table has rows |
 | Map a file (`load.map`) | A stored file beside where each column goes, the as-of date, and a dry run | `confirmed`, `abandoned` | Confirmed: the file has an as-of date and a column that identifies each record |
 | Check staged values (`load.quality`) | A staged batch with its data quality checks, and corrections | `approved`, `discarded` | Approved: the batch is still staged, and no critical check fails because of it unless a reason was given. Approving needs `load.promote` |
 | Check a filed report (`nav.report`) | A stored 10-Q or annual report the run held: why it was held, the fund to choose when the report names none on file, and how it maps onto the fund's NAV statement: each line at both dates and the report lines behind it, the lines left out and why, the schedule of investments, the report's own checks, and a trial load | `confirmed`, `abandoned` | Confirmed: the report has a fund and maps onto the NAV statement at its period end |
+
+A value a screen can work without is marked optional (`optional` on the screen's value), and a step may leave it blank: Receive a file needs what the run expects, and takes the run's records when the workflow selects any.
+
+A stage that was left with a file shows that file again whenever its decision is opened on the run's page, so the file a run worked on can be looked at from the run at any time.
 
 **The engine checks, not the page.** When a person leaves a stage, the engine asks a read-only tool whether what the screen requires is true. If it is not, the stage is handed back to the person with the reason, and the run waits on it again. So a stage cannot be passed by calling the API directly.
 
@@ -438,14 +545,14 @@ A PDF or a picture is drawn as its page, with a box where the reader found the v
 
 ### The checklist
 
-Every run opens as a checklist of the decisions it needs from people. A review, a form and a stage are each one decision. They are numbered in the order the run reaches them and ticked off as they are done, and the screen for the open one is beneath the list. The system's own steps are not on the list; while one runs, the page says what it is doing and follows along. The design, every step and the history are on Details.
+Every run opens as a list of its steps with the decisions it needs from people numbered on it. A review, a form and a stage are each one decision. They are numbered in the order the run reaches them and ticked off as they are done, and the screen for the open one sits beside the list. The system's and the agent's own steps are on the same list, each with what it did (see [Step by step](#step-by-step)); **Decisions only** hides them. The design, every step's raw result and the history are on Details.
 
 | On the list | Means |
 |---|---|
 | A number | A decision the run reaches whatever is chosen. "2 of 4 decisions done" counts these |
 | A tick | Decided, with how and by whom: "Approved by Ada", "Confirmed by Ada" |
 | A dash | Passed with nothing to decide, such as a review the agent proposed nothing for |
-| Your move | Open, and yours. It is opened beneath the list |
+| Your move | Open, and yours. It is opened beside the list |
 | Waiting on … | Open, and someone else's, with the reason it is not yours |
 | A dashed circle, no number | Comes only on some choices: it sits on one way out of a decision not yet made. It is not counted in the total, and takes a number once the choice puts it on the path |
 
@@ -457,20 +564,84 @@ A review walks its changes one at a time, flagged ones first, and a change comes
 
 The checklist is published to the assistant on the run's Overview tab, with each decision's number, state and parts, and the open stages and forms.
 
-### File intake
+### Step by step
 
-The File intake template runs on one stored file, given as `importInstanceId`. It is the one template that works on a file and not on records chosen by filters.
+A person asked to decide something needs to see what the decision rests on. So the run's page lists every step on the run's path, in order, with what it did:
+
+| On a step | Means |
+|---|---|
+| A line | What the step did, in one sentence: "Loaded the report onto the fund at 2026-06-30. Nothing needed a person first." |
+| Figures | The few numbers that matter, coloured when they are good or need a look: "The report's own checks: 200 of 200 tie", "Values: nothing changed, all 2,468 were already on file" |
+| Agent | The step was a model's. Its line is the first sentence of its own summary, with what it read and how much it proposed |
+| A time | How long the step took |
+| An amber line | The step failed and was retried before it finished, with the reason |
+| Still to run | The run has not reached it. "Only on some choices" when it sits on one way out of a decision not yet made |
+
+The line and figures are read from what the step stored when it finished, in `packages/graphql/src/lib/workflow-story.ts`. Each tool the templates run has its own wording there (`TOOL_TOLD`). A tool with none is read by a general rule: a sentence its result carries (`headline`, `note`, `message`), or how many rows it returned. **When you add a tool a workflow runs as a step, add its wording**, and prefer a result that carries a `headline` a person can read. Steps that only route the run (Start, End, Split, Join) are left out.
+
+**What is open, and who has it.** A step can find things the run does not settle: a figure not on file, an input someone has to chase. When a step's result lists them (`entries`, each with a `title`, an `action` and an `owner`), the page shows the latest such list under the decision: the item, why it is open, the next step, who has it, and where it stands. An item a change in the run's open review decides is marked "Decided in this run"; one the step calls blocking is marked as holding up the close. NAV reconciliation's "Review the NAV" and "Where the NAV stands now" report this way.
+
+The steps are one list, and **every step opens in place, under its own line**. The decision the run waits on is open to start with, showing its screen right there, so nobody scrolls past the list to act. The steps already done before it are folded into one line ("3 steps done before this decision") that unfolds, which keeps the open decision near the top of the page; fewer than three are simply listed. A closed step is one line: its name, what it did cut short, how long it took. "Decisions only" hides the system's and the agent's steps.
+
+What a run found open is shown where it belongs, and nowhere else: under a review whose changes decide some of it, inside the step that found it once that step is opened, and under the list when the run is over.
+
+The steps and the open items are published to the assistant on the Overview tab as `steps` and `stillOpen`, built by the same function the page draws from.
+
+#### Opening a step
+
+Every step in the list opens, whether or not it needs a person. A step that has nothing to decide still has to be checkable: the line on the list is a claim, and opening the step is how a person tests it. `stepDetail` in `packages/graphql/src/lib/workflow-step-detail.ts` builds what is shown, from the step's stored result and the run's history, so it works for runs already recorded.
+
+| Section | Shows | For |
+|---|---|---|
+| What this step is | The kind of step in a sentence, the tool it runs, and whether it only reads or may change data | Every step |
+| What it was asked | The settings the tool ran with, as recorded when it ran. For a step that has not run: its design, with each `{{placeholder}}` in words ("what “Select records” returned as entity ids") | Fixed steps |
+| What it tested | The condition as a sentence, and the way out it took | Conditions |
+| What it read | Each read the agent made, in order: the tool in words, what it asked for, and whether it worked | Agent steps |
+| What it proposed | Each change, marked confident or flagged for a close look | Agent steps |
+| Its write-up | The agent's full summary | Agent steps |
+| The changes it made | Each approved change, made or not, with the reason when it was not | Apply steps |
+| What it returned | The result as plain values, named groups of values, and each list as a table of its first rows with a count. Never raw JSON. Record ids are left out | Fixed steps |
+| As it happened | The step's entries in the run's history, and for an agent how many model calls it made and about what they cost | Every step that ran |
+
+A decision the run has reached opens its own screen. One it has not reached opens as a step and says what it will ask and of whom. Any number of steps can be open at once. Closing the line of an open decision hides its screen without discarding it: choices made on a review and not yet applied are kept.
+
+Each step's opened detail is published to the assistant with the step, on the Overview tab: `whatItIs`, `askedWith` or `setUpWith`, `read`, `proposed`, `changesMade` and `returned`.
+
+A change that carries a list of records, such as a file load's column mappings, shows the list as a table in the review. Column mappings read as the column in the file, where it goes (the attribute by its own name) and how it is read, with the columns left out named underneath.
+
+### The file import block
+
+**A workflow that takes a file uses the file import block. It does not map or load a file any other way.** The block is the standard import as a run of ordinary steps, so a workflow gets every part of it (the loader that reads any format, the searchable document, the mapping screen with the file beside it, saved maps, staging, the data quality checks, promotion) and the run's page shows each part as its own step.
+
+`fileImportBlock` in `packages/graphql/src/lib/workflow-blocks.ts` builds it. In the editor, **Add a block, File import** adds it to the right of the selected step, already connected inside, with its ends left open for you to connect.
 
 | Step | Kind | What it does |
 |---|---|---|
+| Receive the file | Human | The Receive a file screen: choose a stored file or upload one, look at it, hand it to the run. Left out when the run was started on a file |
 | Index for search | Fixed | `index_position_file_import`: keeps the file as a searchable document. A file that cannot be indexed is noted and the run goes on |
 | Understand the file | Human | The person confirms what the file is, which table to load, and the record it is about. The document is filed under that type and linked to that record |
 | Map the file | Human | The mapping screen. Confirming saves the mapping and the date on the file |
 | Stage the values | Fixed | `stage_position_file_import`: keeps what a load would do as a batch. Nothing is live |
-| Was it staged? | Fixed | Ends the run when nothing could be staged |
+| Was it staged? | Fixed | Leaves the block when nothing could be staged |
 | Check the values | Human | The quality screen. Correct, then approve or discard |
 | Promote to live records | Fixed | `promote_load_batch`, with the reason when a critical failure was approved |
 | Discard the batch | Fixed | `discard_load_batch`, when the person discarded it |
+
+The block has three kinds of open end, and the workflow says where each goes (`blockExits`):
+
+| Open end | Leaves from | Usually goes to |
+|---|---|---|
+| Loaded | Promote to live records | The steps that use the new values |
+| No file | Receive the file, when the person says there is none | The same steps, working on what is on file, or End |
+| Stopped | Understand the file and Map the file when stopped, Was it staged? when nothing staged, Discard the batch | End |
+
+Later steps read the file as `{{steps.<receive step>.result.importInstanceId}}` and its name as `…result.fileName`. A workflow can hold more than one import: the editor gives each block's steps their own ids (`import_file`, `import2_file`).
+
+A block is not a new kind of step, so the engine, the checklist and the step list need nothing new for it. Each of its four screens is a numbered decision, and each fixed step opens to show what it did. Until the person has handed over a file, the decisions that follow are marked as coming only on some choices, because saying there is no file skips them.
+
+### File intake
+
+The File intake template is the file import block on one stored file, given as `importInstanceId`. It works on a file and not on records chosen by filters, so it has no Receive the file step. Every open end of the block goes to End.
 
 Start it from Load data: **Guided intake** uploads a file and opens the run, and **Guided run** on a stored file's row does the same for a file already there. Both need the template published for the client under the code `FILE_INTAKE`. Staging, the checks and promote are described in [STAGING.md](STAGING.md).
 
@@ -587,6 +758,11 @@ Add an entry to `WORKFLOW_TEMPLATES` in `packages/graphql/src/lib/workflow-templ
 - Choosing how you are told: a digest, quiet hours, or browser notifications.
 - Screens for more kinds of change. Reconciliation changes have their own; a proposed new field, list value, alias or template is still decided in the general table.
 - Performance review. There is no read tool for returns or attribution, so no view or section for them.
+- A card for a statement load in a borrower review. The mapping is decided in the general table, as it is for an administrator pack.
+- Linking a file's document to the record a workflow loaded it for. File intake's Understand screen does; the other workflows leave the document unlinked, so an agent searches it by its `documentId`.
+- A trigger that starts Borrower financials when a borrower's package arrives.
+- Fund reconciliation still has an agent map its packs and propose each load (`load_position_file_table`). It has not been moved onto the file import block. A pack is several files and several tables, and the block takes one file and one table a run.
+- A file import that takes several files in one run. Today it is one file a run, and a second file needs a second block or a second run.
 - The checklist on the home page and in the hub. It is on the run's page.
 - Steps on parallel paths running at the same moment. Paths do not wait on one another, but the worker runs one step at a time.
 - A deal setup template. The engine supports it.

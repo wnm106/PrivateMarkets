@@ -34,6 +34,18 @@ describe('the sign-in message', () => {
     expect(parseExcelSessionMessage(excelSessionMessage(session()))).toEqual(session());
   });
 
+  it('carries the client the sign-in chose, for the pane to show', () => {
+    const chosen = parseExcelSessionMessage(excelSessionMessage(session({ clientName: 'Acme Capital' })));
+    expect(chosen?.clientName).toBe('Acme Capital');
+    expect(parseExcelSessionMessage(excelSessionMessage(session({ clientName: '  ' })))).toEqual(session());
+
+    const auth = new ExcelAuth(browserStore(undefined));
+    auth.accept(session());
+    expect(auth.clientName()).toBeNull();
+    auth.accept(session({ clientName: 'Acme Capital' }));
+    expect(auth.clientName()).toBe('Acme Capital');
+  });
+
   it('ignores other messages and refuses a non-https project', () => {
     expect(parseExcelSessionMessage('hello')).toBeNull();
     expect(parseExcelSessionMessage(JSON.stringify({ type: 'other', version: 1, session: session() }))).toBeNull();

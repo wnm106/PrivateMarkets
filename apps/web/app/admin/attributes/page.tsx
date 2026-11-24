@@ -27,6 +27,7 @@ const UPDATE_ATTRIBUTE_DEFINITION_MUTATION = gql`
         displayGroup
         isEditable
         isVisible
+        catalogIsVisible
         aggregationType
         weightAttributeCode
         numericPrecision
@@ -55,6 +56,7 @@ interface Attribute {
   displayGroup: number;
   isEditable: boolean;
   isVisible: boolean;
+  catalogIsVisible?: boolean;
   aggregationType: string;
   weightAttributeCode: string | null;
   numericPrecision: number | null;
@@ -130,7 +132,8 @@ export default function AdminAttributesPage() {
       displaySection: attr.displaySection || 'General',
       displayGroup: attr.displayGroup || 0,
       isEditable: attr.isEditable,
-      isVisible: attr.isVisible,
+      // The catalog's flag: isVisible is also false when the client being worked in hides the field.
+      isVisible: attr.catalogIsVisible ?? attr.isVisible,
       aggregationType: attr.aggregationType || 'NONE',
       weightAttributeCode: attr.weightAttributeCode || '',
       numericPrecision: attr.numericPrecision,

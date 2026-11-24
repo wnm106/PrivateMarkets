@@ -1,36 +1,9 @@
 import { config } from 'dotenv';
 import { resolve } from 'path';
 config({ path: resolve(__dirname, '../../../.env') });
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ListResourcesRequestSchema,
-  ReadResourceRequestSchema,
-  ListPromptsRequestSchema,
-  GetPromptRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
 import { createClient } from '@supabase/supabase-js';
-import { registerDomainTools } from './tools/domain-tools';
-import { registerLineageTools } from './tools/lineage-tools';
-import { registerDocumentTools } from './tools/document-tools';
-import { registerOverrideTools } from './tools/override-tools';
-import { registerDQTools } from './tools/dq-tools';
-import { registerDQRuleTools } from './tools/dq-rule-tools';
-import { registerWorkflowTools } from './tools/workflow-tools';
-import { registerImportMapTools } from './tools/import-map-tools';
-import { registerPositionFileTools } from './tools/position-file-tools';
-import { registerSpecialistTools } from './tools/specialist-tools';
-import { registerComplianceTools } from './tools/compliance-tools';
-import { registerReportingTools } from './tools/reporting-tools';
-import { registerQueryTools } from './tools/query-data';
-import { registerNarrativeTools } from './tools/narrative-tools';
-import { registerExternalIdTools } from './tools/external-id-tools';
-import { SERVER_INSTRUCTIONS } from './lib/narrative-guide';
-import { ToolRegistry } from './lib/tool-registry';
-import { listResources, readResource } from './resources';
-import { PROMPTS, getPromptMessages } from './prompts';
+import { createTapestraiServer } from './create-server';
 
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || '';
@@ -97,118 +70,12 @@ function explainToolError(message: string): string {
   return message;
 }
 
-const server = new Server(
-  {
-    name: 'tapestrai-mcp',
-    version: '0.1.0',
-  },
-  {
-    capabilities: {
-      tools: {},
-      resources: {},
-      prompts: {},
-    },
-    // Sent to every client on connect: how to answer a large analytical request from these tools.
-    instructions: SERVER_INSTRUCTIONS,
-  }
-);
-
-// The registry holds no client. Each call below passes the configured user's client.
-const toolRegistry = new ToolRegistry();
-
-// Register all tool categories
-registerDomainTools(toolRegistry);
-registerLineageTools(toolRegistry);
-registerDocumentTools(toolRegistry);
-registerOverrideTools(toolRegistry);
-registerDQTools(toolRegistry);
-registerDQRuleTools(toolRegistry);
-registerWorkflowTools(toolRegistry);
-registerImportMapTools(toolRegistry);
-registerPositionFileTools(toolRegistry);
-registerSpecialistTools(toolRegistry);
-registerComplianceTools(toolRegistry);
-registerReportingTools(toolRegistry);
-registerQueryTools(toolRegistry);
-registerNarrativeTools(toolRegistry);
-registerExternalIdTools(toolRegistry);
-
-// Handle tool listing
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  const tools = toolRegistry.listTools();
-  return { tools };
-});
-
-// Handle tool calls
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-
-  if (!supabase) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Error: this MCP server has no database identity configured. Set SUPABASE_ANON_KEY and '
-            + 'TAPESTRAI_MCP_ACCESS_TOKEN (a Supabase user access token) so tool calls can run as a user.',
-        },
-      ],
-      isError: true,
-    };
-  }
-
-  try {
-    const result = await toolRegistry.executeTool(name, args || {}, supabase);
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(result, null, 2),
-        },
-      ],
-    };
-  } catch (error: any) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Error: ${explainToolError(error?.message || String(error))}`,
-        },
-      ],
-      isError: true,
-    };
-  }
-});
-
-// Handle resource listing
-server.setRequestHandler(ListResourcesRequestSchema, async () => {
-  return { resources: await listResources(supabase) };
-});
-
-// Handle resource reading
-server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-  const { uri } = request.params;
-  const result = await readResource(uri, supabase);
-  return {
-    contents: [
-      {
-        uri,
-        mimeType: result.mimeType,
-        text: result.text,
-      },
-    ],
-  };
-});
-
-// Handle prompt listing
-server.setRequestHandler(ListPromptsRequestSchema, async () => {
-  return { prompts: PROMPTS };
-});
-
-// Handle prompt retrieval
-server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-  const messages = getPromptMessages(name, args || {});
-  return { messages };
+// The tools, resources and prompts are built in create-server.ts, shared with the HTTP endpoint.
+const server = createTapestraiServer({
+  client: supabase,
+  noClientMessage: 'Error: this MCP server has no database identity configured. Set SUPABASE_ANON_KEY and '
+    + 'TAPESTRAI_MCP_ACCESS_TOKEN (a Supabase user access token) so tool calls can run as a user.',
+  explainError: explainToolError,
 });
 
 // Start the server

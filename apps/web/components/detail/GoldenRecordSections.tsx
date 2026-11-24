@@ -7,7 +7,7 @@ import { type SourceKey } from '@/lib/data';
 import { useTemporalStore } from '@/lib/store';
 import { ATTRIBUTE_SECTIONS_QUERY, INTERSECTION_TYPES_QUERY, RELATIONSHIP_TYPES_QUERY, graphqlQuery } from '@/lib/graphql';
 import { EntityReports } from '@/components/reporting/EntityReports';
-import { DataQualityDashboard } from '@/components/quality/DataQualityDashboard';
+import { DataQualityDashboard, unopenedQualityTabs } from '@/components/quality/DataQualityDashboard';
 import { RelationshipEntityGrids } from './RelationshipEntityGrids';
 import { RecordTemplateChoices } from './RecordTemplateChoices';
 import { RecordDocuments } from '@/components/documents/RecordDocuments';
@@ -59,6 +59,8 @@ export interface LineageData {
 interface GoldenRecordSectionsProps {
   entity: EntityData;
   templateAttributes?: TemplateAttribute[];
+  /** Section order from the record's template. When set, it replaces the entity type's section order. */
+  templateSections?: AttributeSectionOrder[] | null;
   lineageData?: LineageData[];
   onAddAttribute?: (attributeCode: string, value: string, source: SourceKey) => void;
   onSourceChange?: (attributeCode: string, newSource: SourceKey) => void;
@@ -96,6 +98,7 @@ const DERIVED_ATTRIBUTE_QUERY = `
 export function GoldenRecordSections({
   entity,
   templateAttributes = [],
+  templateSections = null,
   lineageData = [],
   onAddAttribute,
   onSourceChange,
@@ -130,7 +133,8 @@ export function GoldenRecordSections({
   if (sectionState.domainCode !== domainCode) {
     setSectionState({ domainCode, sections: domainCode ? null : [] });
   }
-  const sections = sectionState.domainCode === domainCode ? sectionState.sections : null;
+  const domainSections = sectionState.domainCode === domainCode ? sectionState.sections : null;
+  const sections = templateSections || domainSections;
 
   useEffect(() => {
     const domainCode = entity.domainCode;
@@ -274,9 +278,11 @@ export function GoldenRecordSections({
     : null;
   const relationshipCount = shown ? shown.parents.length + shown.children.length : null;
 
-  // The assistant sees every tab of the record, not only the open one. Timeline, documents,
-  // dashboards and data quality are mounted hidden below and publish themselves.
-  const warmed = useWarmTabs(['timeline', 'documents', 'aliases', 'dashboards', 'quality', 'access'], tab);
+  // The assistant sees every tab of the record, not only the open one. Timeline, documents
+  // and dashboards are mounted hidden below and publish themselves. Data quality is read
+  // only when the user opens its tab; until then its tabs are published with a note saying so.
+  const warmed = useWarmTabs(['timeline', 'documents', 'aliases', 'dashboards', 'access'], tab);
+  usePublishTabs(warmed.has('quality') ? {} : unopenedQualityTabs({ domainCode: entity.domainCode, entityId: entity.id }));
   const shownIds = shown ? new Set([...shown.parents, ...shown.children].map((ref) => ref.entityId)) : null;
   const publishedAttributes = listedAttributes.map((attribute) => {
     const lineage = lineageMap.get(attribute.attributeCode);

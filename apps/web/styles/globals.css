@@ -8904,6 +8904,40 @@ a.xp-admin-row:hover { background: var(--bg); }
   }
 }
 
+/* A run's page: its steps in one list. Each step opens in place, under its own line. */
+.run-work {
+  display: grid;
+  gap: 14px;
+  margin: 4px 0 20px;
+  align-items: start;
+}
+
+.run-work > * {
+  min-width: 0;
+}
+
+/* Every step in the list opens. The arrow shows on the step under the pointer, the keyboard or already open. */
+.run-step:hover,
+.run-step:focus-visible {
+  background: var(--bg-alt, #f8fafc) !important;
+}
+
+.run-step:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.run-step .run-step-open {
+  opacity: 0.35;
+}
+
+.run-step:hover .run-step-open,
+.run-step:focus-visible .run-step-open,
+.run-step[aria-expanded='true'] .run-step-open {
+  opacity: 1;
+  color: var(--accent);
+}
+
 /* Inside a guided run the review is one part of a longer page, so it takes its own height and the page scrolls. */
 .load-review-guided {
   display: block;
@@ -12234,17 +12268,46 @@ details.rb-step[open] { overflow: visible; }
 .sb-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 .sb-chips button { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; color: var(--ink-2); }
 .sb-chips button.on { border-color: var(--accent-2); color: var(--ink); font-weight: 600; }
+/* The capture frame lays the prototype out at desktop size, shown at half scale so it stays on screen (an off-screen frame may be paused). */
+.sb-capture { border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
+.sb-capture-frame { width: 720px; max-width: 100%; height: 450px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; background: #fff; }
+.sb-capture-frame iframe { width: 1440px; height: 900px; border: 0; transform: scale(0.5); transform-origin: 0 0; }
+.sb-shot { display: block; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; margin: 4px 0 12px; }
+.sb-compare-tabs { margin: 8px 0 12px; }
+.sb-frame.sb-full { height: calc(100vh - 160px); min-height: 640px; }
+.sb-shot.sb-full { width: 100%; max-width: none; }
+.sb-options { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.sb-options .sb-check { margin-right: 0; }
+.sb-options input[type="text"] { max-width: 480px; }
 @media (max-width: 900px) {
   .sb-grid, .sb-two { grid-template-columns: 1fr; }
   .sb-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sb-result-head { flex-direction: column; }
 }
-.sb-saved { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
-.sb-saved label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-3); min-width: 280px; flex: 0 1 420px; }
-.sb-saved select { font: inherit; font-size: 13px; color: var(--ink); padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); }
-.sb-saved-state { font-size: 12px; color: var(--ink-4); padding-bottom: 8px; margin-right: auto; }
-.sb-saved-state b { color: var(--badge-warn-fg); font-weight: 600; }
-.sb-saved .sb-html-tools { padding-bottom: 2px; }
+/* Surface Builder layout: saved surfaces in a tree on the left, one tab row on the right. */
+.sb-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .sb-layout { grid-template-columns: 1fr; } }
+.sb-main { min-width: 0; }
+.sb-main .sb-tabs { margin-top: 12px; }
+.sb-tabs button:disabled { color: var(--ink-4); cursor: default; }
+.sb-unsaved { color: var(--badge-warn-fg); font-weight: 600; }
+.sb-tree { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 10px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow: auto; }
+.sb-tree-head { display: flex; justify-content: space-between; align-items: center; padding: 0 6px 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); }
+.sb-tree ul { list-style: none; margin: 0; padding: 0; }
+.sb-tree ul ul { margin: 2px 0 4px 12px; padding-left: 8px; border-left: 1px solid var(--line); }
+.sb-tree-row { display: block; width: 100%; text-align: left; border: 0; border-left: 3px solid transparent; background: none; padding: 6px 8px; border-radius: 0 6px 6px 0; font: inherit; font-size: 13px; color: var(--ink); cursor: pointer; overflow-wrap: anywhere; }
+button.sb-tree-row:hover { background: var(--bg-alt); }
+.sb-tree-row.on { background: var(--bg-alt); border-left-color: var(--accent-2); font-weight: 600; }
+.sb-tree-group.holds { font-weight: 600; }
+.sb-tree ul ul .sb-tree-row { font-size: 12px; color: var(--ink-2); }
+.sb-tree ul ul .sb-tree-row.on { color: var(--ink); }
+.sb-tree-meta { display: block; font-size: 11px; font-weight: 400; color: var(--ink-4); margin-top: 1px; }
+.sb-tree-caret { display: inline-block; width: 14px; color: var(--ink-3); }
+.sb-tree-count { float: right; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.sb-tree-empty { font-size: 12px; color: var(--ink-4); padding: 6px 8px; }
+/* Details tab: the editable fields read bold. */
+.sb-inputs .sb-grid label > span, .sb-inputs .sb-html-head > span:first-child { font-weight: 600; color: var(--ink); }
+.sb-main .sb-inputs { border: 0; padding: 0; margin: 0; background: none; }
 .sb-notice { background: var(--badge-ok-bg); color: #166534; padding: 10px 14px; margin: 12px 0 0; font-size: 13px; border-radius: 8px; }
 /* The editor: entities, their attributes, and the view's columns, side by side. */
 .entity-views-panes {

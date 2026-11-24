@@ -5,7 +5,9 @@
 
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
+  aliasLabelsByAttribute,
   classifyHeader,
+  loadAliasWords,
   type AttributeAlias,
   type DomainAlias,
   type EntityNameAlias,
@@ -54,16 +56,19 @@ export async function recommendFieldMappings(
     existingMappings?: FieldMapping[];
   }
 ): Promise<MappingRecommendation> {
+  // The words of the client this session is working in, read once for the fields,
+  // the record names and the entity types.
+  const words = await loadAliasWords(supabase);
+
   // Fetch target attribute metadata
   const targetAttributes = await fetchTargetAttributes(
     targetDomainCode,
     options?.templateCode,
-    supabase
+    supabase,
+    aliasLabelsByAttribute(words),
   );
-  const [nameAliases, domainAliases] = await Promise.all([
-    loadNameAliases(supabase, targetDomainCode),
-    loadDomainAliases(supabase),
-  ]);
+  const nameAliases = words.nameAliases.filter((alias) => alias.domainCode === targetDomainCode);
+  const domainAliases = words.domainAliases;
 
   // Fetch identifier definitions for this domain
   const identifiers = await fetchIdentifierDefinitions(targetDomainCode, supabase);
@@ -163,7 +168,8 @@ export async function recommendFieldMappings(
 async function fetchTargetAttributes(
   domainCode: string,
   templateCode: string | undefined,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  aliasLabels: Map<string, string[]>,
 ): Promise<AttributeMetadata[]> {
   let query = supabase
     .from('attribute_register')
@@ -199,8 +205,6 @@ async function fetchTargetAttributes(
 
   if (error) throw error;
 
-  const aliasLabels = await loadAliasLabels(supabase, (data || []).map((attr: any) => attr.id));
-
   return (data || []).map((attr: any) => ({
     attributeCode: attr.attribute_code,
     attributeName: attr.attribute_name,
@@ -210,51 +214,6 @@ async function fetchTargetAttributes(
     referenceDomainCode: attr.reference_domain_code,
     listValues: attr.list_values,
     aliasLabels: aliasLabels.get(attr.id) || [],
-  }));
-}
-
-async function loadAliasLabels(supabase: SupabaseClient, attributeIds: string[]): Promise<Map<string, string[]>> {
-  const labels = new Map<string, string[]>();
-  const ids = attributeIds.filter(Boolean);
-  if (ids.length === 0) return labels;
-  const { data, error } = await supabase
-    .from('attribute_aliases')
-    .select('attribute_id, alias_label, is_active')
-    .eq('is_active', true)
-    .in('attribute_id', ids);
-  if (error) throw new Error(error.message);
-  for (const alias of data || []) {
-    const list = labels.get(alias.attribute_id) || [];
-    list.push(alias.alias_label);
-    labels.set(alias.attribute_id, list);
-  }
-  return labels;
-}
-
-async function loadNameAliases(supabase: SupabaseClient, domainCode: string): Promise<EntityNameAlias[]> {
-  const { data, error } = await supabase
-    .from('entity_name_aliases')
-    .select('domain_code, alias_label, alias_code, is_active')
-    .eq('is_active', true)
-    .eq('domain_code', domainCode);
-  if (error) throw new Error(error.message);
-  return (data || []).map((row: { domain_code: string; alias_label: string; alias_code: string }) => ({
-    domainCode: row.domain_code,
-    aliasLabel: row.alias_label,
-    aliasCode: row.alias_code,
-  }));
-}
-
-async function loadDomainAliases(supabase: SupabaseClient): Promise<DomainAlias[]> {
-  const { data, error } = await supabase
-    .from('domain_aliases')
-    .select('domain_code, alias_label, alias_code, is_active')
-    .eq('is_active', true);
-  if (error) throw new Error(error.message);
-  return (data || []).map((row: { domain_code: string; alias_label: string; alias_code: string }) => ({
-    domainCode: row.domain_code,
-    aliasLabel: row.alias_label,
-    aliasCode: row.alias_code,
   }));
 }
 

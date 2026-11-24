@@ -39,6 +39,8 @@ Never publish `{}` while loading: the assistant would see no tabs at all. Publis
 
 If a section renders live content that cannot be derived without opening it, such as an embedded dashboard, publish its label, purpose and a `note` saying its figures are read when the tab is open. Say so in the tab's `data`; do not publish an empty tab.
 
+**A tab that is costly to load waits until the user opens it.** The Data Quality tab on an entity list and on a record is the case: its figures are read only when that tab is selected. Leave such a tab out of the `useWarmTabs` keys, so it mounts when it becomes the open tab and stays mounted after that. Until then the surface still publishes it, with its label, purpose and a `note` in `data` saying the figures are read when the tab is opened. See `unopenedQualityTabs` in `components/quality/DataQualityDashboard.tsx`, used by `EntityHome` and `GoldenRecordSections`. Do this only for a tab whose load is heavy enough to slow the open tab; every other tab warms.
+
 ## Components mounted on a hidden tab
 
 A tab kept mounted but hidden must not take over the page. Do these:

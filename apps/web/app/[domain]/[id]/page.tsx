@@ -15,6 +15,28 @@ import { entityViewFocus, usePublishViewContext } from '@/lib/view-context';
 import { RECORD_EXPERIENCES_QUERY, type RecordExperience } from '@/lib/experience';
 import { RunWorkflowButton } from '@/components/workflows/RunWorkflowButton';
 import type { EntityData, ConflictData, SourceContributionData, ActivityData } from '@/components/detail/types';
+import type { AttributeSectionOrder } from '@/lib/attribute-layout';
+import { recordTemplateLayout, type RecordTemplate } from '@/lib/record-template-layout';
+
+const RECORD_TEMPLATE_QUERY = `
+  query RecordTemplate($entityIds: [ID!]!, $asOfDate: Date, $domainCode: String) {
+    effectiveTemplates(entityIds: $entityIds, asOfDate: $asOfDate) {
+      entityId
+      templateCode
+    }
+    domainTemplates(domainCode: $domainCode) {
+      templateCode
+      sections { sectionCode sectionName displayOrder }
+      attributes {
+        isRequired
+        displayOrder
+        displayLabel
+        sectionName
+        attribute { attributeCode }
+      }
+    }
+  }
+`;
 
 export default function DynamicEntityDetailPage() {
   const params = useParams();
@@ -28,6 +50,7 @@ export default function DynamicEntityDetailPage() {
   const [lineageData, setLineageData] = useState<LineageData[]>([]);
   const [lineageLoaded, setLineageLoaded] = useState(false);
   const [templateAttributes, setTemplateAttributes] = useState<TemplateAttribute[]>([]);
+  const [templateSections, setTemplateSections] = useState<AttributeSectionOrder[] | null>(null);
   const asOfDate = useTemporalStore(state => state.asOfDate);
   const knowledgeDate = useTemporalStore(state => state.knowledgeDate);
 
@@ -138,13 +161,33 @@ export default function DynamicEntityDetailPage() {
         } else if (data?.entity) {
           setEntity(data.entity);
 
-          if (data.entity.id) {
-            const lineageResult = await graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
-              FIELD_LINEAGE_QUERY,
-              { entityId: data.entity.id, asOfDate, knowledgeDate },
-              'network-only',
-            );
-            if (stale) return;
+          // Lineage, activity, the type's attributes and the record's template each need only
+          // the record's id and type, so they are read side by side, not one after another.
+          const entityDomainCode = data.entity.domainCode;
+          const [lineageResult, , attrResult, templateResult] = await Promise.all([
+            data.entity.id
+              ? graphqlQuery<{ fieldLineage: LineageData[] }, { entityId: string; asOfDate: string; knowledgeDate: string }>(
+                FIELD_LINEAGE_QUERY,
+                { entityId: data.entity.id, asOfDate, knowledgeDate },
+                'network-only',
+              )
+              : null,
+            data.entity.id ? loadActivity(data.entity.id) : null,
+            graphqlQuery<
+              { attributeRegister: Array<{ attributeCode: string; attributeName: string; dataType: string; isRequired: boolean; displaySection: string; displayGroup: number; displaySpanColumns?: number | null; displaySpanRows?: number | null; isVisible: boolean; isDerived?: boolean; derivationFormula?: string | null; isEditable?: boolean }> },
+              { domainCode: string }
+            >(
+              ATTRIBUTE_REGISTER_QUERY,
+              { domainCode: entityDomainCode }
+            ),
+            // The record's own template lays out the view when it defines sections.
+            graphqlQuery<
+              { effectiveTemplates: Array<{ entityId: string; templateCode: string | null }>; domainTemplates: RecordTemplate[] },
+              { entityIds: string[]; asOfDate: string; domainCode: string }
+            >(RECORD_TEMPLATE_QUERY, { entityIds: [data.entity.id], asOfDate, domainCode: entityDomainCode }, 'network-only').catch(() => null),
+          ]);
+          if (stale) return;
+          if (lineageResult) {
             if (lineageResult.error || !lineageResult.data?.fieldLineage) {
               setLineageData([]);
               setLineageLoaded(false);
@@ -152,19 +195,7 @@ export default function DynamicEntityDetailPage() {
               setLineageData(lineageResult.data.fieldLineage);
               setLineageLoaded(true);
             }
-            await loadActivity(data.entity.id);
-            if (stale) return;
           }
-
-          const entityDomainCode = data.entity.domainCode;
-          const attrResult = await graphqlQuery<
-            { attributeRegister: Array<{ attributeCode: string; attributeName: string; dataType: string; isRequired: boolean; displaySection: string; displayGroup: number; displaySpanColumns?: number | null; displaySpanRows?: number | null; isVisible: boolean; isDerived?: boolean; derivationFormula?: string | null; isEditable?: boolean }> },
-            { domainCode: string }
-          >(
-            ATTRIBUTE_REGISTER_QUERY,
-            { domainCode: entityDomainCode }
-          );
-          if (stale) return;
           if (attrResult.data?.attributeRegister) {
             const mappedAttributes: TemplateAttribute[] = attrResult.data.attributeRegister
               .filter((a) => a.isVisible !== false)
@@ -181,7 +212,20 @@ export default function DynamicEntityDetailPage() {
                 derivationFormula: a.derivationFormula,
                 isEditable: a.isEditable !== false,
               }));
-            setTemplateAttributes(mappedAttributes);
+            const templateCode = (templateResult?.data?.effectiveTemplates || [])
+              .find((row) => row.entityId === data.entity.id)?.templateCode || null;
+            const template = templateCode
+              ? (templateResult?.data?.domainTemplates || []).find((row) => row.templateCode === templateCode)
+              : null;
+            const stored = Object.entries(data.entity.attributes || {})
+              .filter(([, raw]: [string, unknown]) => {
+                const value = raw && typeof raw === 'object' && 'value' in raw ? (raw as { value: unknown }).value : raw;
+                return value !== null && value !== undefined && value !== '';
+              })
+              .map(([code]) => code);
+            const layout = recordTemplateLayout(mappedAttributes, template, stored);
+            setTemplateAttributes(layout ? layout.fields : mappedAttributes);
+            setTemplateSections(layout ? layout.sections : null);
           }
         } else {
           setError('Entity not found');
@@ -479,6 +523,7 @@ export default function DynamicEntityDetailPage() {
       <GoldenRecordSections
         entity={entity}
         templateAttributes={templateAttributes}
+        templateSections={templateSections}
         lineageData={lineageData}
         onAddAttribute={handleAddAttribute}
         onSourceChange={handleSourceChange}

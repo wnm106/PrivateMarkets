@@ -99,7 +99,7 @@ export function ImpersonationBanner() {
           <select
             value={selected}
             onChange={(e) => setSelected(e.target.value)}
-            style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, border: 'none' }}
+            style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, border: 'none', background: '#fff', color: '#111' }}
           >
             <option value="">Select a client to simulate…</option>
             {clients.map((c) => (

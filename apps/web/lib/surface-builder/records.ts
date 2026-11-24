@@ -4,7 +4,7 @@
  */
 import type { SurfaceBlueprint, SurfaceRequest } from './blueprint';
 
-export const MAX_PROTOTYPE_HTML = 400_000;
+export const MAX_PROTOTYPE_HTML = 1_000_000;
 /** A stored blueprint is capped so one save cannot hold an unbounded document. */
 export const MAX_BLUEPRINT_JSON = 2_000_000;
 

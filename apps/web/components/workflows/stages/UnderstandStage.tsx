@@ -92,6 +92,22 @@ export function UnderstandStage({ stage, busy, onComplete, onProgress }: StageSc
     }
   }
 
+  /** Read the stored file again and rebuild its column mapping, then look at what was found anew. */
+  async function readAgain() {
+    setWorking(true);
+    setError(null);
+    try {
+      await json(`/api/feeds/position-file/${fileId}/refresh`, {});
+      setEntityId('');
+      setRevision((value) => value + 1);
+      open(await json<FileUnderstanding>(`/api/feeds/position-file/${fileId}/understanding`));
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setWorking(false);
+    }
+  }
+
   async function confirm() {
     if (!found) return;
     setWorking(true);
@@ -130,6 +146,11 @@ export function UnderstandStage({ stage, busy, onComplete, onProgress }: StageSc
   return (
     <div style={{ display: 'grid', gap: 12 }}>
       {error && <div role="alert" style={{ color: 'var(--red)' }}>{error}</div>}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button type="button" className="btn" disabled={busy || working} onClick={() => { void readAgain(); }} title="Read the file again and rebuild its column mapping. Your load history is kept.">
+          {working ? 'Reading…' : 'Read the file again'}
+        </button>
+      </div>
       <div className="stage-split stage-split-file-first">
         <div className="stage-source">
           <SourcePane instanceId={fileId} fileName={found.fileName} target={pointing} revision={revision} height="min(70vh, 600px)" />
@@ -182,6 +203,11 @@ export function UnderstandStage({ stage, busy, onComplete, onProgress }: StageSc
             <div style={card}>
               <span style={label}>Who it is about</span>
               <span style={{ fontSize: 14 }}>The file names <b>{found.subject.name || found.subject.code}</b>.</span>
+              {found.subjectBasis && (
+                <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+                  Found by searching the “{found.subjectBasis.column}” value, {found.subjectBasis.value}: {found.subjectBasis.how}. {Math.round(found.subjectBasis.confidence * 100)}% sure.
+                </span>
+              )}
               {found.matches.length === 0 ? (
                 <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>No stored {found.subject.domainCode.toLowerCase()} has this name or code, so loading will create one.</span>
               ) : (
@@ -189,7 +215,7 @@ export function UnderstandStage({ stage, busy, onComplete, onProgress }: StageSc
                   <span>Link the document to</span>
                   <select aria-label="Record this file is about" value={entityId} disabled={disabled || !found.document} onChange={(event) => setEntityId(event.target.value)}>
                     <option value="">No stored record</option>
-                    {found.matches.map((match) => <option key={match.id} value={match.id}>{match.name} ({match.code})</option>)}
+                    {found.matches.map((match) => <option key={match.id} value={match.id}>{match.name} ({match.code}){match.domainCode ? `, ${match.domainCode.toLowerCase().replace(/_/g, ' ')}` : ''}{match.confidence != null ? `, ${Math.round(match.confidence * 100)}%` : ''}</option>)}
                   </select>
                 </label>
               )}

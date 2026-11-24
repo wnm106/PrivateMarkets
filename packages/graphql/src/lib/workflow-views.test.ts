@@ -45,6 +45,7 @@ describe('views an agent shows its reviewer', () => {
   it('are offered to the reconciliation agent of Fund reconciliation', () => {
     const graph = WORKFLOW_TEMPLATES.find((template) => template.code === 'FUND_RECONCILIATION')!.graph;
     const reconcile = graph.nodes.find((node) => node.id === 'reconcile')!;
-    expect(reconcile.config.showable).toEqual(REVIEW_VIEWS.map((view) => view.code));
+    // Every reconciliation view, and no view of another kind of work.
+    expect(reconcile.config.showable).toEqual(REVIEW_VIEWS.map((view) => view.code).filter((code) => code.startsWith('rec.')));
   });
 });

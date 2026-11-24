@@ -12,6 +12,13 @@ SELECT tests.owner();
 CREATE TABLE tests.rel_links (name text PRIMARY KEY, id uuid NOT NULL, parent uuid NOT NULL, child uuid NOT NULL);
 GRANT SELECT ON tests.rel_links TO authenticated, anon;
 
+-- A link from a client-A record to a client-B record cannot be made through
+-- the table: the same-client trigger refuses it for every role. The read
+-- policy must still hide such a link if one ever exists, so the trigger is off
+-- for these rows only. It is back on before any check runs, and the write
+-- checks below rely on it.
+ALTER TABLE entity_instances.entity_relationships DISABLE TRIGGER entity_relationships_client;
+
 WITH made AS (
     INSERT INTO entity_instances.entity_relationships
         (parent_entity_id, child_entity_id, relationship_type, relationship_code, valid_from)
@@ -28,6 +35,8 @@ SELECT CASE
          ELSE 'B1_B2'
        END, id, parent_entity_id, child_entity_id
 FROM made;
+
+ALTER TABLE entity_instances.entity_relationships ENABLE TRIGGER entity_relationships_client;
 
 -- The policy and the per-record rule must agree for whoever is signed in.
 CREATE OR REPLACE FUNCTION tests.rel_parity(p_label text) RETURNS void
@@ -80,20 +89,22 @@ SELECT tests.rel_parity('Staff: policy matches has_entity_access');
 -- ---------------------------------------------------------------- writes keep their check
 SELECT tests.login('a0000000-0000-0000-0000-00000000000a');
 SELECT tests.expect_error('A analyst (read only) cannot add a link between A records',
-    $INSERT INTO entity_instances.entity_relationships (parent_entity_id, child_entity_id, relationship_type, relationship_code, valid_from)
-      VALUES ('aaaaaaaa-0000-0000-0000-0000000000f2', 'aaaaaaaa-0000-0000-0000-0000000000f1', 'TEST_LINK', 'TEST_LINK', DATE '2020-01-01')$);
-SELECT tests.expect_rows('A analyst deletes no link',
-    $DELETE FROM entity_instances.entity_relationships r USING tests.rel_links l WHERE r.id = l.id RETURNING 1$, 0);
+    $$INSERT INTO entity_instances.entity_relationships (parent_entity_id, child_entity_id, relationship_type, relationship_code, valid_from)
+      VALUES ('aaaaaaaa-0000-0000-0000-0000000000f2', 'aaaaaaaa-0000-0000-0000-0000000000f1', 'TEST_LINK', 'TEST_LINK', DATE '2020-01-01')$$);
+-- Signed-in users have no DELETE on the table at all (bitemporal_integrity), so the
+-- statement is refused; reaching zero rows would also be a pass.
+SELECT tests.expect_denied('A analyst deletes no link',
+    $$DELETE FROM entity_instances.entity_relationships r USING tests.rel_links l WHERE r.id = l.id RETURNING 1$$);
 
 SELECT tests.login('a0000000-0000-0000-0000-00000000000b');
 SELECT tests.expect_error('A steward cannot add a link to a client-B record',
-    $INSERT INTO entity_instances.entity_relationships (parent_entity_id, child_entity_id, relationship_type, relationship_code, valid_from)
-      VALUES ('aaaaaaaa-0000-0000-0000-0000000000f2', 'bbbbbbbb-0000-0000-0000-0000000000f2', 'TEST_LINK', 'TEST_LINK', DATE '2020-01-01')$);
+    $$INSERT INTO entity_instances.entity_relationships (parent_entity_id, child_entity_id, relationship_type, relationship_code, valid_from)
+      VALUES ('aaaaaaaa-0000-0000-0000-0000000000f2', 'bbbbbbbb-0000-0000-0000-0000000000f2', 'TEST_LINK', 'TEST_LINK', DATE '2020-01-01')$$);
 SELECT tests.expect_ok('A steward adds a link between A records',
-    $INSERT INTO entity_instances.entity_relationships (parent_entity_id, child_entity_id, relationship_type, relationship_code, valid_from)
-      VALUES ('aaaaaaaa-0000-0000-0000-0000000000f2', 'aaaaaaaa-0000-0000-0000-0000000000f1', 'TEST_LINK', 'TEST_LINK', DATE '2020-01-02')$);
+    $$INSERT INTO entity_instances.entity_relationships (parent_entity_id, child_entity_id, relationship_type, relationship_code, valid_from)
+      VALUES ('aaaaaaaa-0000-0000-0000-0000000000f2', 'aaaaaaaa-0000-0000-0000-0000000000f1', 'TEST_LINK', 'TEST_LINK', DATE '2020-01-02')$$);
 SELECT tests.expect_rows('A steward changes no link that reaches a client-B record',
-    $UPDATE entity_instances.entity_relationships r SET metadata = '{"x":1}' FROM tests.rel_links l WHERE r.id = l.id AND l.name = 'A1_B1' RETURNING 1$, 0);
+    $$UPDATE entity_instances.entity_relationships r SET metadata = '{"x":1}' FROM tests.rel_links l WHERE r.id = l.id AND l.name = 'A1_B1' RETURNING 1$$, 0);
 
 SELECT tests.anon();
 SELECT tests.expect_denied('anon reads no link',

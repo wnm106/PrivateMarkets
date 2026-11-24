@@ -317,7 +317,7 @@ export class ComplianceEngine {
             security_id: options.securityId ?? null,
             security_code: options.securityCode ?? null,
             par,
-            attributes: null,
+            attributes: probeAttributesFor(options, par),
         });
         const shared = {
             anchorEntityId: options.anchorEntityId,
@@ -450,6 +450,26 @@ export interface InvestmentCapacityOptions {
     /** Buys and sells already in the package. Capacity is additional par of the security on top of these. */
     legs?: ProformaLegInput[] | null;
     probePar?: number | null;
+    /** Attributes the probed buy carries, as a leg's attributes do. For rules that read them, such as a group. */
+    probeAttributes?: Record<string, unknown> | null;
+    /** Attributes that take the probed par as their value, for rules that measure an amount other than funded par. */
+    probeParAttributes?: string[] | null;
+}
+
+/** The attributes of one probed buy: the fixed ones, then each par attribute set to the probed par. */
+export function probeAttributesFor(
+    options: Pick<InvestmentCapacityOptions, 'probeAttributes' | 'probeParAttributes'>,
+    par: number,
+): Record<string, string> | null {
+    const attributes: Record<string, string> = {};
+    for (const [code, value] of Object.entries(options.probeAttributes ?? {})) {
+        if (value == null) continue;
+        attributes[code] = typeof value === 'string' ? value : String(value);
+    }
+    for (const code of options.probeParAttributes ?? []) {
+        if (code) attributes[code] = String(par);
+    }
+    return Object.keys(attributes).length ? attributes : null;
 }
 
 export interface ProformaLine {

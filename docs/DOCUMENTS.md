@@ -8,6 +8,7 @@ Load data turns a file into values. Documents keeps the words: an agreement is r
 |---|---|---|
 | Tables and functions | `supabase/migrations/20261118150000_document_content.sql` and the four that follow it | The `docs` schema, reached only through the `document_*` functions, and the private `documents` storage bucket |
 | Reader, chunker, templates, embedding | `packages/graphql/src/lib/document-content` | Pure code with tests: file to text, headings, chunks; template drawing and matching; the Voyage client; the pipeline |
+| Outside reader | `packages/mcp-server/src/feeds/llama-parse.ts`, `packages/graphql/src/lib/document-content/reading.ts` | LlamaParse, for a file with no text this server can read; the reading of every page it returns, and where a reading is kept |
 | Job | `packages/worker/src/documents.ts` | `document.process` |
 | Describer | `packages/worker/src/document-refiner.ts` | Claude, writing a description and topics for tables and lists |
 | Command line | `packages/worker/src/documents-cli.ts` | Add, process and search without a running worker |
@@ -18,7 +19,7 @@ Load data turns a file into values. Documents keeps the words: an agreement is r
 ## What happens to a file
 
 1. **Stored.** The file goes to `documents/<client id>/<document id>/<file name>`. A document is identified by its content: the same file for the same client is held once.
-2. **Read.** HTML, text and PDFs with a text layer are read on the worker, with no outside service. Scans and Word files are refused with a reason. The reader produces the body (the whole text), the headings, and the chunks.
+2. **Read.** HTML, text and PDFs with a text layer are read on the worker, with no outside service. A scan, a picture of a page or a Word file has no text the worker can read itself, so it is read by the outside reader (see The outside reader below), and refused with a reason when none is set up. Either way the reader produces the body (the whole text: paragraphs, tables, the notes under them and the footnotes), the headings, and the chunks.
 3. **Tagged.** Each heading is placed on a section of the type's published template.
 4. **Refined.** A passage that is mostly names and numbers gets a one-sentence description and topics from a model. Only those passages are sent, and only when `ANTHROPIC_API_KEY` is set. See Refinement below.
 5. **Embedded.** Each chunk gets a vector. The whole text is sent to the embedding service here, and only when `VOYAGE_API_KEY` is set. Without it the document is still searchable by words.
@@ -31,6 +32,24 @@ npm run documents --workspace @tapestrai/worker -- process <document id>
 npm run documents --workspace @tapestrai/worker -- pending
 npm run documents --workspace @tapestrai/worker -- search "what are the financial covenants"
 ```
+
+## The outside reader
+
+LlamaParse reads what a text layer cannot: a scan, a photographed page, a Word file. It is the same reader Load data sends a document to for its tables, and one call returns both:
+
+- **The tables**, which Load data maps and loads.
+- **The reading**: every page as markdown, with its paragraphs, its tables as rows of words, the notes under a table and the footnotes at the foot of the page.
+
+The reader returns a page's header and footer apart from its body. A line that runs along most pages (the document's name, "Page 3 of 90") is page furniture and is left out. A footer that differs from page to page is a footnote or a note, and is kept with its page. The reading is read into blocks that keep their page, so a passage found in it is cited by page like any other.
+
+A reading is kept once for each client and file content, at `documents/<client id>/readings/<sha-256 of the file>.json`. A file read when it was loaded is not sent out again when it is indexed, and a document read once is not sent again when it is read again.
+
+| Setting | Meaning |
+|---|---|
+| `LLAMA_CLOUD_API_KEY` | Turns the outside reader on. Needed by the worker (to read a document) and by the web app (to read an upload in Load data). Without it a scan, a picture or a Word file is refused, with the reason on the document |
+| `LLAMA_PARSE_TIER` | Default `cost_effective` |
+
+The file leaves for LlamaParse here, and only here: a PDF with selectable text, an HTML file and a text file never do.
 
 ## Headings and chunks
 
@@ -147,8 +166,10 @@ Links are per document, not per passage: every passage counts as being about all
 
 A file loaded through Load data can be kept as a document too, so it is searchable and shows on a record's Documents tab. The File intake workflow does this as its first step (`index_position_file_import`, in `packages/mcp-server/src/feeds/import-document.ts`):
 
-- A PDF with a text layer, an HTML file or a text file is indexed as it is.
-- Anything else (a spreadsheet, a CSV, a scan or Word file read by an outside reader) is indexed as a text rendering of the tables read from it: a heading per table, then its rows, or for a statement each label with its value. A very long table is cut at 3,000 rows.
+- A document is indexed as the file itself, so every page is read and not only its tables. A PDF with a text layer, an HTML file or a text file is read on the worker. A scan, a picture or a Word file is indexed as the outside reader read it, from the reading kept when the file was loaded.
+- A spreadsheet, a CSV or a JSON file is indexed as a text rendering of the tables read from it: a heading per table, then its rows, or for a statement each label with its value. A very long table is cut at 3,000 rows. So is a scan when no outside reader is set up.
+
+A file is indexed when a workflow loads it (`load_position_file_table`, `load_nav_report`), when it is stored by a workflow step (`create_position_file_import`, for a document), and by the File intake workflow's first step. `get_position_file_text` gives the same words a page at a time, or the passages that hold what is asked for, before the file is indexed and without the embedding service.
 
 The document is filed as a Financial statement, a NAV statement or a Data file, tagged `source:load-data`, and kept on the file (`import_instances.document_id`). The same content is held once: a second file with the same content uses the document already there. A file that cannot be indexed still loads; the reason is kept on the file.
 
@@ -158,7 +179,8 @@ Any member of a client can read and search that client's documents. `document.ma
 
 ## Not built yet
 
-- Scans and Word files. They need LlamaParse or Azure, as Load data uses, and a decision on sending document text there.
+- Searching a page by how it looks. A chunk's vector is made from its words, so a chart, a diagram or a stamp with no caption is not found. That needs page images and an embedding model that reads them, and a second vector on each page.
+- Azure Document Intelligence as the outside reader for a document's words. It is the fallback for tables in Load data only.
 - Highlighting a passage on the page image of a PDF. The locator keeps the page; the screen shows the text.
 - Tying a value loaded from a document to the chunk it came from.
 - Feeds do not deliver documents; they are added by hand, from the command line, or by the File intake workflow from a file in Load data.
