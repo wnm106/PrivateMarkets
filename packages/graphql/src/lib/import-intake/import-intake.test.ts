@@ -185,6 +185,23 @@ describe('statements', () => {
     expect(target(doc, 'Ending NAV')?.attributeCode).toBe('NAV');
     expect(column(doc, 'Cash')).toBe('20');
   });
+
+  it('keeps a table with a column for each statement line as a table, one record a row', () => {
+    // A borrower's lines by quarter: the heading names the lines, and each row is a quarter. Read as a
+    // statement it would keep one label and one figure and lose the rest.
+    const headers = ['Statement', 'Borrower', 'Period end', 'Revenue', 'Cost of revenue', 'Gross profit', 'EBITDA', 'Interest expense', 'Cash and equivalents', 'Term loan'];
+    const quarter = ['STMT-202609', 'Halyard Systems', '2026-09-30', '37313043.72', '11417791.38', '25895252.34', '10550034.86', '3905332.41', '53519091.12', '155400000.00'];
+    const doc = interpretText('halyard-q3-2026-statements.csv', [headers.join(','), quarter.join(',')].join(String.fromCharCode(10)), 'csv');
+    expect(doc.kind).toBe('TABULAR');
+    expect(doc.headers).toEqual(headers);
+    expect(doc.rows).toHaveLength(1);
+    expect(doc.rows[0]).toMatchObject({ Statement: 'STMT-202609', Revenue: '37313043.72', 'Term loan': '155400000.00' });
+
+    // Two quarters read the same way.
+    const two = interpretText('lines.csv', [headers.join(','), quarter.join(','), quarter.join(',').replace('202609', '202606').replace('2026-09-30', '2026-06-30')].join(String.fromCharCode(10)), 'csv');
+    expect(two.kind).toBe('TABULAR');
+    expect(two.rows).toHaveLength(2);
+  });
 });
 
 describe('pdf text', () => {

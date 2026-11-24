@@ -346,8 +346,8 @@ export default function DocumentsPage() {
           <div style={{ fontWeight: 600 }}>Add a document</div>
           <label style={field}>
             <span style={fieldLabel}>File</span>
-            <input type="file" accept=".pdf,.html,.htm,.txt,.md" onChange={(event) => setDraft({ ...draft, file: event.target.files?.[0] || null })} />
-            <span style={hint}>A PDF with selectable text, an HTML file or a text file, up to 50 MB. Word files and scans are not read yet.</span>
+            <input type="file" accept=".pdf,.html,.htm,.txt,.md,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.docx,.doc" onChange={(event) => setDraft({ ...draft, file: event.target.files?.[0] || null })} />
+            <span style={hint}>A PDF, an HTML file or a text file, up to 50 MB. A scan, a picture of a page or a Word file is read by the outside reader when one is set up.</span>
           </label>
           <div style={formRow}>
             <label style={field}>

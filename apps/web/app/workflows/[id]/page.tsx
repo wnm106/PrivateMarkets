@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { addFileImport } from '@tapestrai/graphql/src/lib/workflow-blocks';
 import { NODE_TYPES, validateGraph, type NodeType, type WorkflowEdge, type WorkflowGraph, type WorkflowNode } from '@tapestrai/graphql/src/lib/workflow-graph';
 import { EdgeInspector, NodeInspector } from '@/components/workflows/NodeInspector';
 import { StartRunDialog } from '@/components/workflows/StartRunDialog';
@@ -121,6 +122,15 @@ export default function WorkflowEditorPage() {
     };
     change({ ...graph, nodes: [...graph.nodes, node] });
     setSelection({ kind: 'node', id: nodeId });
+  };
+
+  /** Adds the steps of a file import as one, to the right of the selected step. Its open ends are left to connect. */
+  const addImport = () => {
+    const anchor = (selection?.kind === 'node' && graph.nodes.find((node) => node.id === selection.id)) || [...graph.nodes].sort((a, b) => b.position.x - a.position.x)[0];
+    const added = addFileImport(graph, { x: (anchor?.position.x ?? 0) + 250, y: (anchor?.position.y ?? 100) + (anchor ? 140 : 0) });
+    change(added.graph);
+    setSelection({ kind: 'node', id: added.entry });
+    setNotice('File import added: nine steps, already connected to each other. Connect a step into “Receive the file”, then connect its open ends: “Promote to live records” for when the file is loaded, and each way it is not.');
   };
 
   const save = async (): Promise<number | null> => {
@@ -294,6 +304,17 @@ export default function WorkflowEditorPage() {
                       {def.label}
                     </button>
                   ))}
+                  <span aria-hidden style={{ width: 1, alignSelf: 'stretch', background: 'var(--line-strong)' }} />
+                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-3)' }}>Add a block</span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    title="The standard way a file becomes live records, as nine connected steps: a person hands the run its file or uploads it, it is indexed for search, they confirm what it is and where each column goes, the values are staged and checked against the data quality rules, and the batch is promoted or discarded."
+                    onClick={addImport}
+                    style={{ borderLeft: `4px solid ${KIND_STYLE.human.color}` }}
+                  >
+                    File import
+                  </button>
                   <span style={{ fontSize: 11, color: 'var(--ink-4)' }}>Drag from a step&apos;s right edge to connect it. Select and press Delete to remove.</span>
                 </div>
               )}

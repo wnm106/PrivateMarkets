@@ -67,6 +67,23 @@ export interface SurfaceHost {
    * unconditionally. A surface with tabs must call it. See docs/SURFACE_TABS.md.
    */
   usePublishTabs(tabs: Record<string, SurfaceTabPayload | null>): void;
+  /**
+   * Tell the assistant which record the surface has open, so "this fund" means the one on
+   * screen. A hook: call it unconditionally, with null when no record is open.
+   */
+  usePublishFocus(focus: SurfaceFocus | null): void;
+}
+
+/** The record a surface has open. */
+export interface SurfaceFocus {
+  entityId: string;
+  entityName: string;
+  entityCode?: string;
+  domainCode: string;
+  /** One line on what the record is, e.g. "Mandate sleeve of Commonwealth Teachers". */
+  summary?: string;
+  /** The headline figures on screen for it, as the surface shows them. */
+  snapshot?: Record<string, unknown>;
 }
 
 /** What one tab tells the assistant. Pass the figures as the tab derives them, not raw records. */

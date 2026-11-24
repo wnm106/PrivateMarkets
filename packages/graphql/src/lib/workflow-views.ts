@@ -42,6 +42,8 @@ export interface ProposalView {
 
 const FUND: ViewArg = { key: 'fundId', label: 'Fund', help: 'The fund: its record id or its fund code.', required: true };
 const PERIOD: ViewArg = { key: 'periodEnd', label: 'Period end', help: 'YYYY-MM-DD. Leave out for the period now closing.', required: false };
+const BORROWER: ViewArg = { key: 'entityId', label: 'Borrower', help: "The borrower's record id.", required: true };
+const QUARTER: ViewArg = { key: 'periodEnd', label: 'Quarter end', help: 'YYYY-MM-DD. Leave out for the latest quarter that has ended.', required: false };
 
 export const REVIEW_VIEWS: readonly ReviewViewSpec[] = [
   {
@@ -57,6 +59,13 @@ export const REVIEW_VIEWS: readonly ReviewViewSpec[] = [
     description: "One fund's close for a period: the reported and proposed NAV, and each review item (fees, valuations, drift) with the administrator's figure, ours, the NAV effect and its decision.",
     args: [FUND, PERIOD],
     focus: 'Review item ids, from get_nav_reconciliation: "fee", "perf", "int", "pos:<position id>", or a drift id.',
+  },
+  {
+    code: 'fin.borrower',
+    label: 'Borrower financials',
+    description: "One borrower's quarter: how its key statement lines moved on the quarter and on the year, and every covenant on its deals with the limit, our calculation, the borrower's certificate and whether the two agree.",
+    args: [BORROWER, QUARTER],
+    focus: 'Covenant ids (covenantId) and statement line codes, from get_borrower_financials.',
   },
 ];
 

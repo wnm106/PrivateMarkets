@@ -1,0 +1,268 @@
+<style>
+.x-shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 14px; align-items: start; }
+.x-rail { position: sticky; top: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 0 8px; }
+.x-rail h2 { font-size: 11px; font-weight: 600; color: var(--ink-3); padding: 4px 12px 6px; }
+.x-ent { display: block; width: 100%; text-align: left; font: inherit; color: inherit; background: none; border: 0; border-top: 1px solid var(--line); border-left: 3px solid transparent; padding: 7px 12px 7px 9px; cursor: pointer; }
+.x-ent.m { padding-left: 21px; }
+.x-ent[aria-current="true"] { background: var(--accent-light); border-left-color: var(--accent-2); }
+.x-top, .x-sub { display: flex; align-items: center; gap: 6px; }
+.x-nm { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.x-sub { margin-top: 3px; font-size: 11.5px; color: var(--ink-3); }
+.x-sub .da-track { margin: 0 0 0 auto; }
+.x-sub .da-track i { width: 14px; }
+.x-add { width: calc(100% - 24px); margin: 8px 12px 0; justify-content: center; }
+.da-ribbon .x-ribtitle { flex: 1 0 100%; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 10px 16px; padding: 12px 16px; border-right: 0; border-bottom: 1px solid var(--line); }
+.x-ribtitle h1 { margin: 2px 0 0; }
+.x-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-3); }
+.x-facts7 { grid-template-columns: repeat(7, minmax(118px, 1fr)); }
+.x-facts7 .da-fact { border-bottom: 0; padding: 10px 14px; }
+.x-facts7 .da-fact:last-child { border-right: 0; }
+.x-facts7 .fs-track { height: 8px; margin: 5px 0 3px; }
+.x-tabs button { flex: none; white-space: nowrap; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; }
+.x-tabs button small { font-size: 11px; font-weight: 400; color: var(--ink-3); }
+.x-tabs .cr-n, .x-tabs .da-st { margin-left: 6px; }
+.x-tabsep { flex: none; width: 1px; margin: 8px 6px; background: var(--line); }
+.x-sel { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: inherit; }
+.x-hint { margin-left: auto; font-size: 12px; color: var(--ink-3); }
+.da-grid.x-hgrid { min-width: 0; }
+.da-grid.x-hgrid th, .da-grid.x-hgrid td { white-space: nowrap; padding: 6px 8px; }
+.x-hgrid tr.x-gh td { background: var(--bg-alt); font-weight: 600; }
+.da-grid tr.x-gh small { display: inline; margin-left: 10px; }
+.x-tag { font: inherit; font-size: 12px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.x-tag.na { border-style: dashed; background: none; color: var(--ink-4); cursor: default; }
+.x-flag { font-family: inherit; border: 1px solid transparent; cursor: pointer; }
+.x-flag.x-soft { background: var(--surface); border-color: var(--red); color: var(--red); }
+.x-targets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 10px; }
+.x-grp { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+.x-grphead { display: flex; justify-content: space-between; align-items: baseline; width: 100%; padding: 0; border: 0; background: none; font: inherit; font-weight: 600; color: var(--ink); cursor: pointer; }
+.x-grphead small, .x-path { font-size: 11px; font-weight: 400; color: var(--ink-3); }
+.x-path { margin: 2px 0 4px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.x-srow { display: block; width: 100%; padding: 5px 0; border: 0; border-bottom: 1px solid var(--line); background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.x-srow:last-child { border-bottom: 0; }
+.x-l { display: flex; justify-content: space-between; gap: 8px; }
+.x-l b { font-weight: 600; }
+.x-v { font-size: 12px; color: var(--ink-3); white-space: nowrap; text-align: right; }
+.x-v em { font-style: normal; font-weight: 600; color: var(--ink); }
+.x-rg { display: block; font-size: 11px; color: var(--ink-4); }
+.x-srow.ctx b { font-weight: 500; color: var(--ink-3); }
+.x-d2 { padding-left: 12px; } .x-d3 { padding-left: 24px; } .x-d4 { padding-left: 36px; }
+.x-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; border: 1px solid transparent; }
+.x-dot.in { background: var(--green); } .x-dot.under { background: var(--accent-2); } .x-dot.over { background: var(--amber); }
+.x-dot.above { background: var(--red); } .x-dot.below { background: var(--surface); border-color: var(--red); }
+.x-leg { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 11.5px; color: var(--ink-3); }
+@media (max-width: 1000px) { .x-targets { grid-template-columns: 1fr; } .x-shell { grid-template-columns: 1fr; } .x-rail { position: static; } }
+</style>
+
+<div class="da">
+
+  <header class="page-header">
+    <div class="page-title-block">
+      <b>Target Manager</b><span class="page-meta">· Fund-of-Funds &amp; Directs</span>
+      <div class="cr-seg" role="group" aria-label="View">
+        <button class="on" aria-pressed="true">Assign targets</button>
+        <button aria-pressed="false">Overview</button>
+        <button aria-pressed="false">Pipeline</button>
+      </div>
+    </div>
+    <div class="page-actions">
+      <button class="btn btn-sm" title="Undo last change (Ctrl+Z)" disabled>Undo</button>
+      <button class="btn btn-sm" title="Copy all targets as CSV">Copy CSV</button>
+      <button class="btn btn-sm" title="Restore the example clients and targets">Reset example</button>
+    </div>
+  </header>
+
+  <div class="x-shell">
+
+    <nav class="x-rail" aria-label="Clients and mandates">
+      <h2>Clients &amp; mandates</h2>
+      <button class="x-ent" data-ent="ctr" aria-current="false">
+        <span class="x-top"><span class="x-nm">Commonwealth Teachers’ Retirement</span><i class="cr-n">14</i><span class="da-st breach" title="5 compliance breaches">5</span></span>
+        <span class="x-sub">$2B · 70 inv <span class="da-st ok" title="2026 pacing velocity">1.04x</span><span class="da-track" title="Strategy: 6 · Region: 4 · Structure: 4"><i class="on"></i><i class="on"></i><i class="on"></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="ctr-pe" aria-current="true">
+        <span class="x-top"><span class="x-nm">PE Primary Sleeve</span><i class="cr-n">17</i><span class="da-st breach" title="3 compliance breaches">3</span></span>
+        <span class="x-sub">$1.2B · 30 inv <span class="da-st ok" title="2026 pacing velocity">1.06x</span><span class="da-track" title="Strategy: 9 · Region: 3 · Structure: 5"><i class="on"></i><i class="on"></i><i class="on"></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="ctr-cra" aria-current="false">
+        <span class="x-top"><span class="x-nm">Credit &amp; Real Assets Sleeve</span><i class="cr-n">9</i></span>
+        <span class="x-sub">$450M · 14 inv <span class="da-st breach" title="2026 pacing velocity">0.77x</span><span class="da-track" title="Strategy: 7 · Region: 2 · Structure: 0"><i class="on"></i><i class="on"></i><i></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="ctr-co" aria-current="false">
+        <span class="x-top"><span class="x-nm">Co-Investment Sleeve</span><i class="cr-n">7</i><span class="da-st breach" title="2 compliance breaches">2</span></span>
+        <span class="x-sub">$400M · 24 inv <span class="da-st ok" title="2026 pacing velocity">1.14x</span><span class="da-track" title="Strategy: 4 · Region: 0 · Structure: 3"><i class="on"></i><i></i><i class="on"></i></span></span>
+      </button>
+      <button class="x-ent" data-ent="hfo" aria-current="false">
+        <span class="x-top"><span class="x-nm">Halvorsen Family Office</span><i class="cr-n">3</i><span class="da-st breach" title="1 compliance breach">1</span></span>
+        <span class="x-sub">$450M · 40 inv <span class="da-st ok" title="2026 pacing velocity">0.96x</span><span class="da-track" title="Strategy: 0 · Region: 3 · Structure: 0"><i></i><i class="on"></i><i></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="hfo-div" aria-current="false">
+        <span class="x-top"><span class="x-nm">Diversified Sleeve</span><i class="cr-n">4</i><span class="da-st breach" title="1 compliance breach">1</span></span>
+        <span class="x-sub">$450M · 40 inv <span class="da-st ok" title="2026 pacing velocity">0.96x</span><span class="da-track" title="Strategy: 4 · Region: 0 · Structure: 0"><i class="on"></i><i></i><i></i></span></span>
+      </button>
+      <button class="x-ent" data-ent="nmi" aria-current="false">
+        <span class="x-top"><span class="x-nm">Northgate Mutual Insurance</span><i class="cr-n">2</i><span class="da-st breach" title="3 compliance breaches">3</span></span>
+        <span class="x-sub">$900M · 40 inv <span class="da-st ok" title="2026 pacing velocity">1.11x</span><span class="da-track" title="Strategy: 2 · Region: 0 · Structure: 0"><i class="on"></i><i></i><i></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="nmi-pc" aria-current="false">
+        <span class="x-top"><span class="x-nm">Private Credit Sleeve</span><i class="cr-n">10</i><span class="da-st breach" title="3 compliance breaches">3</span></span>
+        <span class="x-sub">$600M · 28 inv <span class="da-chip" title="2026 pacing velocity">1.16x</span><span class="da-track" title="Strategy: 8 · Region: 2 · Structure: 0"><i class="on"></i><i class="on"></i><i></i></span></span>
+      </button>
+      <button class="x-ent m" data-ent="nmi-sec" aria-current="false">
+        <span class="x-top"><span class="x-nm">Secondaries Sleeve</span><i class="cr-n">6</i></span>
+        <span class="x-sub">$200M · 10 inv <span class="da-st breach" title="2026 pacing velocity">0.85x</span><span class="da-track" title="Strategy: 3 · Region: 0 · Structure: 3"><i class="on"></i><i></i><i class="on"></i></span></span>
+      </button>
+      <button class="btn btn-sm x-add">+ Add mandate sleeve</button>
+    </nav>
+
+    <main>
+      <div class="crumbs"><a class="crumb-link" href="#">Commonwealth Teachers’ Retirement</a><span class="sep">›</span><span class="crumb-current">Mandate sleeve</span></div>
+
+      <header class="da-ribbon cr-facts" role="group" aria-label="Deployment and pacing">
+        <div class="da-title x-ribtitle">
+          <div>
+            <span class="da-chip">Mandate sleeve</span>
+            <h1>PE Primary Sleeve</h1>
+          </div>
+          <div class="x-acts">
+            <span>% basis</span>
+            <div class="cr-seg" role="group" aria-label="Percent basis" data-attr="FUND_TARGET_PERCENT_BASIS" data-editable="true">
+              <button aria-pressed="false" title="Percent targets are a share of the total program">Program</button>
+              <button class="on" aria-pressed="true" title="Percent targets are a share of the level above">Parent level</button>
+            </div>
+            <button class="btn btn-sm">Copy targets from…</button>
+          </div>
+        </div>
+        <div class="da-facts x-facts7">
+          <div class="da-fact"><span>Program</span><strong data-attr="FUND_TOTAL_COMMITMENTS" data-editable="true">$1.2B</strong><small>74% committed · since <span data-attr="INCEPTION_DATE">Apr 2022</span></small></div>
+          <div class="da-fact"><span>Investments</span><strong>22 <small>/ <span data-attr="FUND_TARGET_INVESTMENT_COUNT" data-editable="true">30</span></small></strong><small>made vs target</small></div>
+          <div class="da-fact"><span>2026 deployment vs target</span><strong>$167M <small>/ <span data-attr="FUND_ANNUAL_DEPLOYMENT_TARGET" data-editable="true">$180M</span></small></strong>
+            <div class="fs-track" title="Bar: deployed against the 2026 target. Marker: where pacing says you should be by 17 Nov 2026"><i style="width:93%"></i><b style="left:87.7%"></b></div>
+            <small>93% of annual · $157.8M expected to date</small></div>
+          <div class="da-fact"><span>Pacing velocity</span><strong class="up">1.06x <span class="da-st ok">On pace</span></strong><small>YTD vs time-weighted target</small></div>
+          <div class="da-fact"><span>Since inception</span><strong class="up" title="On pace">1.07x</strong><small>$893.9M vs $833.4M</small></div>
+          <div class="da-fact"><span>Compliance</span><strong class="dn"><a href="#compliance" data-tab="compliance" title="Open the compliance tab">3 breaches</a></strong><small>13 rules · 1 watch · 2 pending · 2 soft</small></div>
+          <div class="da-fact"><span>Run-rate (LTM)</span><strong>$193.5M<small>/yr</small></strong><small>$306.1M left · ≈1.6 yrs at this pace</small></div>
+        </div>
+      </header>
+
+      <div class="da-tabs x-tabs" role="tablist">
+        <button role="tab" aria-selected="false" data-tab="strategy"><span>Strategy<i class="cr-n">9</i></span><small>Category › Asset Class › Strategy › Sub-Strategy</small></button>
+        <button role="tab" aria-selected="false" data-tab="region"><span>Region<i class="cr-n">3</i></span><small>Region › Asset Class</small></button>
+        <button role="tab" aria-selected="false" data-tab="structure"><span>Structure<i class="cr-n">5</i></span><small>Category › Structure Type › Detail</small></button>
+        <span class="x-tabsep" aria-hidden="true"></span>
+        <button role="tab" aria-selected="false" data-tab="pacing"><span>Pacing</span><small>Annual deployment by year</small></button>
+        <button class="on" role="tab" aria-selected="true" data-tab="holdings"><span>Commitments<i class="cr-n">22</i></span><small>Original commitments and attributes</small></button>
+        <button role="tab" aria-selected="false" data-tab="compliance"><span>Compliance<span class="da-st breach">3 breaches</span></span><small>Rules, limits and results</small></button>
+      </div>
+
+      <section class="da-sec">
+        <div class="da-toolbar">
+          <input class="pipe-search" type="search" placeholder="Search name or any attribute" aria-label="Search commitments">
+          <div class="cr-seg" role="group" aria-label="Columns">
+            <button class="on" aria-pressed="true">Target tags</button>
+            <button aria-pressed="false">Security master</button>
+          </div>
+          <label for="hYear">Year</label>
+          <select class="x-sel" id="hYear"><option value="all" selected>All years</option><option>2026</option><option>2025</option><option>2024</option><option>2023</option><option>2022</option></select>
+          <label for="hGroup">Group by</label>
+          <select class="x-sel" id="hGroup">
+            <option value="none">No grouping</option><option value="year" selected>Investment year</option><option value="category">Category</option><option value="assetClass">Asset Class</option><option value="strategy">Strategy</option><option value="subStrategy">Sub-Strategy</option><option value="region">Region</option><option value="structureType">Structure Type</option><option value="structureDetail">Structure Detail</option><option value="investmentType">Investment Type</option><option value="manager">Manager / GP Firm</option><option value="market">Market Classification</option><option value="country">Single-Country Focus</option><option value="sector">Primary Industry Sector</option><option value="currency">Commitment Currency</option><option value="relationship">HL Relationship</option>
+          </select>
+          <button class="btn btn-sm">Copy commitments CSV</button>
+          <span class="x-hint">22 original commitments · $893.9M committed · select a tag to open that target level</span>
+        </div>
+
+        <div class="da-main solo">
+          <div class="da-gridwrap">
+            <table class="da-grid x-hgrid">
+              <thead><tr>
+                <th aria-sort="none">Commitment</th><th class="num" aria-sort="descending">Commit date ↓</th><th class="num" aria-sort="none">Commitment</th><th aria-sort="none">Category</th><th aria-sort="none">Asset Class</th><th aria-sort="none">Strategy</th><th aria-sort="none">Sub-Strategy</th><th aria-sort="none">Region</th><th aria-sort="none">Structure Type</th><th aria-sort="none">Detail</th><th aria-sort="none" title="Rules on the mandate that flag this commitment">Compliance</th>
+              </tr></thead>
+              <tbody>
+                <tr class="x-gh"><td colspan="11">Investment year: 2026<small>4 commitments · $167M · 19% of shown · target $180M (93%)</small></td></tr>
+                <tr data-hid="h20" tabindex="0"><td><b>Harborview Capital Partners IX</b></td><td class="num">2026-11-03</td><td class="num">$37M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap">Mid Cap</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st near x-flag" data-tab="compliance" title="Watch: Remaining Allocation&#10;Pending: No Contractual Restrictions&#10;Pending: Manual Rule 2 - Investment Strategy">3 flags</button></td></tr>
+                <tr data-hid="h19" tabindex="0"><td><b>Bluewater Capital Partners VII</b></td><td class="num">2026-07-30</td><td class="num">$53.5M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Large Cap">Large Cap</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st near x-flag" data-tab="compliance" title="Watch: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h21" tabindex="0"><td><b>Copperline Ventures VIII</b></td><td class="num">2026-04-10</td><td class="num">$32M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Venture Capital">Venture Capital</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Venture Capital › Seed / Early Stage">Seed / Early Stage</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st near x-flag" data-tab="compliance" title="Watch: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h22" tabindex="0"><td><b>Fairhaven Capital Partners II</b></td><td class="num">2026-01-29</td><td class="num">$44.5M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Large Cap">Large Cap</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st near x-flag" data-tab="compliance" title="Watch: Remaining Allocation">1 flag</button></td></tr>
+
+                <tr class="x-gh"><td colspan="11">Investment year: 2025<small>5 commitments · $204.9M · 23% of shown · target $180M (114%)</small></td></tr>
+                <tr data-hid="h14" tabindex="0"><td><b>Brightpine Capital Partners IV</b></td><td class="num">2025-11-30</td><td class="num">$26.5M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap">Mid Cap</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Fund-of-Funds">Fund-of-Funds</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h17" tabindex="0"><td><b>Saltmarsh Growth Partners VII</b></td><td class="num">2025-10-14</td><td class="num">$59.5M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Growth Equity">Growth Equity</button></td><td><span class="x-tag na">n/a</span></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st breach x-flag" data-tab="compliance" title="Watch: Asset Concentration (% limit)&#10;Breach: Percent of Total Fund Size (% limit)&#10;Soft breach: Remaining Allocation">3 flags</button></td></tr>
+                <tr data-hid="h18" tabindex="0"><td><b>Alder Creek Ventures IV</b></td><td class="num">2025-07-19</td><td class="num">$38.9M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Venture Capital">Venture Capital</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Venture Capital › Late Stage">Late Stage</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h15" tabindex="0"><td><b>Quarry Lane Capital Partners II</b></td><td class="num">2025-05-20</td><td class="num">$55M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap">Mid Cap</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st breach x-flag" data-tab="compliance" title="Watch: Asset Concentration (% limit)&#10;Breach: Percent of Total Fund Size (% limit)&#10;Soft breach: Remaining Allocation">3 flags</button></td></tr>
+                <tr data-hid="h16" tabindex="0"><td><b>Ridgeline Continuation Vehicle V</b></td><td class="num">2025-03-05</td><td class="num">$25M</td><td><button class="x-tag" data-jump="strategy|Secondary">Secondary</button></td><td><button class="x-tag" data-jump="strategy|Secondary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Secondary › Private Equity › Buyout">Buyout</button></td><td><span class="x-tag na">n/a</span></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Secondary › GP Led">GP Led</button></td><td><button class="x-tag" data-jump="structure|Secondary › GP Led › Single Asset">Single Asset</button></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+
+                <tr class="x-gh"><td colspan="11">Investment year: 2024<small>4 commitments · $173.5M · 19% of shown · target $180M (96%)</small></td></tr>
+                <tr data-hid="h10" tabindex="0"><td><b>Sterling Oak Capital Partners II</b></td><td class="num">2024-12-30</td><td class="num">$42.5M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap">Mid Cap</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st near x-flag" data-tab="compliance" title="Watch: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h12" tabindex="0"><td><b>Saltmarsh Capital Partners III</b></td><td class="num">2024-09-14</td><td class="num">$33M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap">Mid Cap</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st near x-flag" data-tab="compliance" title="Watch: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h11" tabindex="0"><td><b>Quarry Lane Capital Partners VII</b></td><td class="num">2024-06-26</td><td class="num">$53.5M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Small Cap">Small Cap</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st near x-flag" data-tab="compliance" title="Watch: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h13" tabindex="0"><td><b>Bramblewood Capital Partners VI</b></td><td class="num">2024-02-12</td><td class="num">$44.5M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap">Mid Cap</button></td><td><button class="x-tag" data-jump="region|Western Europe">Western Europe</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st near x-flag" data-tab="compliance" title="Watch: Remaining Allocation">1 flag</button></td></tr>
+
+                <tr class="x-gh"><td colspan="11">Investment year: 2023<small>5 commitments · $190.5M · 21% of shown · target $180M (106%)</small></td></tr>
+                <tr data-hid="h9" tabindex="0"><td><b>Granite Peak Capital Partners VII</b></td><td class="num">2023-12-04</td><td class="num">$25M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap">Mid Cap</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h5" tabindex="0"><td><b>Northlake Growth Partners III</b></td><td class="num">2023-10-10</td><td class="num">$45M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Growth Equity">Growth Equity</button></td><td><span class="x-tag na">n/a</span></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h6" tabindex="0"><td><b>Bramblewood Capital Partners IV</b></td><td class="num">2023-05-05</td><td class="num">$45.5M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap">Mid Cap</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h7" tabindex="0"><td><b>Tidewater Continuation Vehicle III</b></td><td class="num">2023-04-02</td><td class="num">$32.5M</td><td><button class="x-tag" data-jump="strategy|Secondary">Secondary</button></td><td><button class="x-tag" data-jump="strategy|Secondary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Secondary › Private Equity › Buyout">Buyout</button></td><td><span class="x-tag na">n/a</span></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Secondary › GP Led">GP Led</button></td><td><button class="x-tag" data-jump="structure|Secondary › GP Led › Single Asset">Single Asset</button></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h8" tabindex="0"><td><b>Tidewater Capital Partners VIII</b></td><td class="num">2023-03-31</td><td class="num">$42.5M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Small Cap">Small Cap</button></td><td><button class="x-tag" data-jump="region|APAC/ROW">APAC/ROW</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+
+                <tr class="x-gh"><td colspan="11">Investment year: 2022<small>4 commitments · $158M · 18% of shown · target $135.6M (116%)</small></td></tr>
+                <tr data-hid="h4" tabindex="0"><td><b>Harborview Capital Partners III</b></td><td class="num">2022-11-08</td><td class="num">$33.5M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap">Mid Cap</button></td><td><button class="x-tag" data-jump="region|Western Europe">Western Europe</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h2" tabindex="0"><td><b>Harborview Ventures II</b></td><td class="num">2022-07-23</td><td class="num">$46M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Venture Capital">Venture Capital</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Venture Capital › Seed / Early Stage">Seed / Early Stage</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h1" tabindex="0"><td><b>Kestrel Capital Partners VII</b></td><td class="num">2022-05-24</td><td class="num">$25M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap">Mid Cap</button></td><td><button class="x-tag" data-jump="region|APAC/ROW">APAC/ROW</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+                <tr data-hid="h3" tabindex="0"><td><b>Copperline Capital Partners IV</b></td><td class="num">2022-04-06</td><td class="num">$53.5M</td><td><button class="x-tag" data-jump="strategy|Primary">Primary</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity">Private Equity</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout">Buyout</button></td><td><button class="x-tag" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap">Mid Cap</button></td><td><button class="x-tag" data-jump="region|North America">North America</button></td><td><button class="x-tag" data-jump="structure|Primary › Traditional Primary">Traditional Primary</button></td><td><span class="x-tag na">n/a</span></td><td><button class="da-st x-flag x-soft" data-tab="compliance" title="Soft breach: Remaining Allocation">1 flag</button></td></tr>
+              </tbody>
+              <tfoot><tr><td colspan="2">Total shown</td><td class="num"><b>$893.9M</b></td><td colspan="8">22 commitments</td></tr></tfoot>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="da-sec" aria-label="Assigned targets" data-attr="FUND_TARGET_MATRIX" data-editable="true">
+        <div class="da-sechead"><h2>Assigned targets</h2></div>
+        <div class="x-targets">
+          <div class="x-grp">
+            <button class="x-grphead" data-tab="strategy" title="Open the Strategy targets"><span>Strategy</span><small>9 targets</small></button>
+            <div class="x-path">Category › Asset Class › Strategy › Sub-Strategy</div>
+            <button class="x-srow" data-jump="strategy|Primary"><span class="x-l"><b><i class="x-dot in" title="In range · under target"></i>Primary</b><span class="x-v"><em>$900M</em> ≈75% <em>22#</em></span></span><span class="x-rg">range $800M–$1B · 18–26#</span></button>
+            <button class="x-srow x-d2" data-jump="strategy|Primary › Private Equity"><span class="x-l"><b><i class="x-dot under" title="93% of target"></i>Private Equity</b><span class="x-v">≈$900M <em>100%</em></span></span></button>
+            <button class="x-srow x-d3" data-jump="strategy|Primary › Private Equity › Buyout"><span class="x-l"><b><i class="x-dot above" title="Above max"></i>Buyout</b><span class="x-v">≈$540M <em>60%</em> <em>9#</em></span></span><span class="x-rg">range 7–11# · 50%–70%</span></button>
+            <button class="x-srow x-d4" data-jump="strategy|Primary › Private Equity › Buyout › Small Cap"><span class="x-l"><b><i class="x-dot under" title="71% of target"></i>Small Cap</b><span class="x-v">≈$135M <em>25%</em></span></span></button>
+            <button class="x-srow x-d4" data-jump="strategy|Primary › Private Equity › Buyout › Mid Cap"><span class="x-l"><b><i class="x-dot above" title="Above max"></i>Mid Cap</b><span class="x-v">≈$243M <em>45%</em></span></span><span class="x-rg">range 35%–55%</span></button>
+            <button class="x-srow x-d4" data-jump="strategy|Primary › Private Equity › Buyout › Large Cap"><span class="x-l"><b><i class="x-dot under" title="91% of target"></i>Large Cap</b><span class="x-v">≈$108M <em>20%</em></span></span></button>
+            <button class="x-srow x-d3" data-jump="strategy|Primary › Private Equity › Growth Equity"><span class="x-l"><b><i class="x-dot under" title="67% of target"></i>Growth Equity</b><span class="x-v">≈$135M <em>15%</em> <em>3#</em></span></span><span class="x-rg">range 10%–20%</span></button>
+            <button class="x-srow x-d3" data-jump="strategy|Primary › Private Equity › Venture Capital"><span class="x-l"><b><i class="x-dot under" title="75% of target"></i>Venture Capital</b><span class="x-v">≈$180M <em>20%</em> <em>4#</em></span></span><span class="x-rg">range 10%–25%</span></button>
+            <button class="x-srow" data-jump="strategy|Secondary"><span class="x-l"><b><i class="x-dot below" title="Below min"></i>Secondary</b><span class="x-v"><em>$300M</em> ≈25% <em>8#</em></span></span><span class="x-rg">range $200M–…</span></button>
+          </div>
+
+          <div class="x-grp">
+            <button class="x-grphead" data-tab="region" title="Open the Region targets"><span>Region</span><small>3 targets</small></button>
+            <div class="x-path">Region › Asset Class</div>
+            <button class="x-srow" data-jump="region|North America"><span class="x-l"><b><i class="x-dot above" title="Above max"></i>North America</b><span class="x-v">≈$840M <em>70%</em></span></span><span class="x-rg">range 60%–80%</span></button>
+            <button class="x-srow" data-jump="region|Western Europe"><span class="x-l"><b><i class="x-dot under" title="26% of target"></i>Western Europe</b><span class="x-v">≈$300M <em>25%</em></span></span></button>
+            <button class="x-srow" data-jump="region|APAC/ROW"><span class="x-l"><b><i class="x-dot in" title="In range · under target"></i>APAC/ROW</b><span class="x-v">≈$120M <em>10%</em></span></span><span class="x-rg">range …–15%</span></button>
+          </div>
+
+          <div class="x-grp">
+            <button class="x-grphead" data-tab="structure" title="Open the Structure targets"><span>Structure</span><small>5 targets</small></button>
+            <div class="x-path">Category › Structure Type › Detail</div>
+            <button class="x-srow ctx" data-jump="structure|Primary"><span class="x-l"><b>Primary</b><span class="x-v">no target</span></span></button>
+            <button class="x-srow x-d2" data-jump="structure|Primary › Traditional Primary"><span class="x-l"><b><i class="x-dot over" title="Over target"></i>Traditional Primary</b><span class="x-v"><em>85%</em></span></span></button>
+            <button class="x-srow x-d2" data-jump="structure|Primary › Fund-of-Funds"><span class="x-l"><b><i class="x-dot under" title="63% of target"></i>Fund-of-Funds</b><span class="x-v"><em>5%</em></span></span></button>
+            <button class="x-srow ctx" data-jump="structure|Secondary"><span class="x-l"><b>Secondary</b><span class="x-v">no target</span></span></button>
+            <button class="x-srow x-d2" data-jump="structure|Secondary › GP Led"><span class="x-l"><b><i class="x-dot under" title="48% of target"></i>GP Led</b><span class="x-v"><em>$120M</em></span></span></button>
+            <button class="x-srow x-d3" data-jump="structure|Secondary › GP Led › Single Asset"><span class="x-l"><b><i class="x-dot under" title="72% of target"></i>Single Asset</b><span class="x-v"><em>$80M</em> ≈66.7%</span></span></button>
+            <button class="x-srow x-d3" data-jump="structure|Secondary › GP Led › Multi Asset"><span class="x-l"><b><i class="x-dot under" title="0% of target"></i>Multi Asset</b><span class="x-v"><em>$60M</em> ≈50%</span></span></button>
+          </div>
+
+          <div class="x-leg">
+            <div><span class="da-st ok">$ 100%</span> next level adds up</div>
+            <div><span class="da-st near">$ 85%</span> next level is under</div>
+            <div><span class="da-st breach">$ 105%</span> next level is over</div>
+            <div>Dots show the worst band status on the row: <i class="x-dot in"></i>in range <i class="x-dot below"></i>below min <i class="x-dot above"></i>above max <i class="x-dot under"></i>building to target.</div>
+            <div>Values with ≈ are implied from the other measure. Muted rows have no target of their own but hold targets below.</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>

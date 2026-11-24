@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as engineModule from './compliance-engine';
-import { ComplianceEngine } from './compliance-engine';
+import { ComplianceEngine, probeAttributesFor } from './compliance-engine';
 import { complianceResolvers } from '../resolvers/compliance';
 import { fakeSupabase } from '../testing/fake-supabase';
 
@@ -57,5 +57,16 @@ describe('compliance engine client scope', () => {
     const result = await complianceResolvers.Mutation.evaluateComplianceRule(undefined, { input: { ruleCode: 'X' } }, context(anonymous.client, null));
     expect(result.errors[0].message).toBe('Not authenticated');
     expect(anonymous.calls).toHaveLength(0);
+  });
+});
+
+describe('probeAttributesFor', () => {
+  it('gives the probed buy its fixed attributes and the probed par', () => {
+    expect(probeAttributesFor({ probeAttributes: { YEAR: '2026 Allocation', SIZE: 5, SKIP: null }, probeParAttributes: ['AMOUNT'] }, 2_500_000))
+      .toEqual({ YEAR: '2026 Allocation', SIZE: '5', AMOUNT: '2500000' });
+  });
+
+  it('leaves a plain probe without attributes', () => {
+    expect(probeAttributesFor({}, 1_000_000)).toBeNull();
   });
 });

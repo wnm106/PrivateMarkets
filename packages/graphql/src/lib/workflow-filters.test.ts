@@ -33,6 +33,8 @@ describe('templates and the records they run on', () => {
   const real = WORKFLOW_TEMPLATES.filter((template) => template.code !== 'BLANK');
   // A run of these works on one stored file, not on records chosen by filters.
   const onAFile = new Set(['FILE_INTAKE']);
+  // The issuer is found from the file, so the run starts with the file and not with a selection.
+  const findsItsRecordsInTheFile = new Set(['BORROWER_FINANCIALS']);
 
   it('start a template that works on a file with that file, and with no filters', () => {
     for (const template of real.filter((candidate) => onAFile.has(candidate.code))) {
@@ -43,7 +45,7 @@ describe('templates and the records they run on', () => {
   });
 
   it('start every template by selecting records from the run\'s filters', () => {
-    for (const template of real.filter((candidate) => !onAFile.has(candidate.code))) {
+    for (const template of real.filter((candidate) => !onAFile.has(candidate.code) && !findsItsRecordsInTheFile.has(candidate.code))) {
       const first = nextNode(template.graph, 'start', null);
       expect(first).toMatchObject({ id: 'select', type: 'tool', config: { tool: 'find_records' } });
       expect(template.inputExample.filters).toEqual(FILTERS_EXAMPLE);

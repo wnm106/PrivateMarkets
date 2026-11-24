@@ -52,6 +52,10 @@ The rule editor shows the anchor filters and the limit attribute as fixed parts 
 
 The covenant Test tab publishes the test as it shows it (value, level, status, certificate, house standard, each line and the quarter-end history) through `covenantTabPayload` in `apps/web/lib/covenant-tab.ts`. The record page keeps that tab mounted while it is closed, so the assistant can answer about it from any tab. The deal's Servicing tab publishes each covenant's calculated, certificate and house values.
 
+## The workflow
+
+The Borrower financials workflow ([WORKFLOWS.md](WORKFLOWS.md#borrower-financials)) takes a borrower's quarterly statements through the standard file import, stores the covenants again, and sets each test beside the certificate. Its tools read `deal_covenant_tests` and `covenant_test` and calculate nothing themselves. `record_borrower_covenant_value` writes a certificate reading on `COVENANT_CURRENT` under the `BORROWER_CERTIFICATE` source, the same place the Test tab reads it from.
+
 ## Functions
 
 - `public.covenant_test(covenant, as_of, history)`: one covenant, line by line, with quarter-end history.

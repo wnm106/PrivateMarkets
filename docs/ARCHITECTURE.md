@@ -75,6 +75,8 @@ domain_aliases            -- Other words for an entity type (Borrower = ISSUER)
 entity_name_aliases       -- Words for a record's name (Project name = borrower name)
 attribute_register        -- Attribute definitions with types and validation
 attribute_aliases         -- Other words for a field (Ending NAV = NAV)
+client_domain_settings    -- What one client calls an entity type (ISSUER = Borrower for that client)
+client_attribute_settings -- A shared field one client hides
 domain_templates          -- Template configurations per domain
 template_attribute_assignments  -- Which attributes belong to templates
 reference_lists           -- Enumerated values

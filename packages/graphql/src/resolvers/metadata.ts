@@ -3,23 +3,32 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { Context } from '../context';
 import { withClientNames } from './schema-scope';
 import { ok } from '../lib/db-result';
+import { ID_BATCH } from '../lib/read-batches';
 
 export const metadataResolvers = {
   Query: {
     /**
      * Get all attributes, optionally filtered by domain
      */
-    attributeRegister: async (_: any, args: { domainCode?: string; includeDerived?: boolean }, context: Context) => {
+    attributeRegister: async (_: any, args: { domainCode?: string; attributeCodes?: string[] | null; includeDerived?: boolean }, context: Context) => {
       const { supabase } = context;
-      console.log('[attributeRegister] Called with args:', args);
-      
+
+      // Named attributes: read only those, for a screen that knows which fields it shows.
+      if (args.attributeCodes) {
+        return withClientNames(context, (await attributesByCode(supabase, args.attributeCodes)).map(mapAttributeDefinition));
+      }
+
+      // One entity type: read that type's attributes, not every type's.
+      if (args.domainCode) {
+        const rows = await domainCatalogRows(supabase, args.domainCode);
+        if (rows) return withClientNames(context, rows.map(mapAttributeDefinition));
+      }
+
       // Use RPC function to bypass PostgREST schema cache for aggregation fields
       const { data, error } = await supabase
-        .rpc('get_attributes_with_aggregation', { 
+        .rpc('get_attributes_with_aggregation', {
           p_domain_code: null // Get all attributes, we'll filter in the resolver
         });
-
-      console.log('[attributeRegister] RPC result:', { dataLength: data?.length, error: error?.message });
 
       if (error) {
         console.error('[attributeRegister] RPC error:', error);
@@ -79,9 +88,7 @@ export const metadataResolvers = {
 
       // RPC returns JSONB array, parse it
       const allAttributes = Array.isArray(data) ? data : (data ? JSON.parse(data as any) : []);
-      
-      console.log('[attributeRegister] Parsed attributes count:', allAttributes.length);
-      
+
       // The catalog RPC omits calculated attributes. Merge them back so a visible
       // value such as position market value still appears on the entity.
       let filtered = await withDerivedAttributes(supabase, allAttributes);
@@ -89,55 +96,11 @@ export const metadataResolvers = {
       // An attribute belongs to one entity type. Template assignments can
       // still place another entity's attribute on this screen.
       if (args.domainCode) {
-        console.log('[attributeRegister] Filtering by domainCode:', args.domainCode);
-        
-        // Get all templates for this domain
-        const { data: domainTemplates, error: templatesError } = await supabase
-          .from('domain_templates')
-          .select('id')
-          .eq('domain_code', args.domainCode);
-        
-        console.log('[attributeRegister] Templates query result:', { 
-          templateCount: domainTemplates?.length, 
-          error: templatesError?.message 
-        });
-        
-        const templateIds = (domainTemplates || []).map((t: any) => t.id);
-        
-        // Get all attribute assignments for these templates
-        let assignedAttributeIds = new Set<string>();
-        if (templateIds.length > 0) {
-          const { data: assignments, error: assignmentsError } = await supabase
-            .from('template_attribute_assignments')
-            .select('attribute_id')
-            .in('template_id', templateIds);
-          
-          console.log('[attributeRegister] Assignments query result:', { 
-            assignmentCount: assignments?.length, 
-            error: assignmentsError?.message 
-          });
-          
-          assignedAttributeIds = new Set(
-            (assignments || []).map((a: any) => a.attribute_id)
-          );
-        }
-        
-        console.log('[attributeRegister] Assigned attribute IDs:', Array.from(assignedAttributeIds));
-        console.log('[attributeRegister] Before filtering, attributes count:', filtered.length);
-        
-        filtered = filtered.filter((attr: any) => {
-          const matches = attr.domain_code === args.domainCode ||
-            assignedAttributeIds.has(attr.id);
-          if (matches) {
-            console.log('[attributeRegister] Attribute matches:', attr.attribute_code, 'domain_code:', attr.domain_code);
-          }
-          return matches;
-        });
-        
-        console.log('[attributeRegister] After filtering, attributes count:', filtered.length);
+        const assignedAttributeIds = await templateAssignedAttributeIds(supabase, args.domainCode);
+        filtered = filtered.filter((attr: any) =>
+          attr.domain_code === args.domainCode || assignedAttributeIds.has(attr.id));
       }
 
-      console.log('[attributeRegister] Returning filtered count:', filtered.length);
       const withChains = await attachPrecedenceMetadata(supabase, filtered);
       return withClientNames(context, withChains.map(mapAttributeDefinition));
     },
@@ -497,8 +460,10 @@ export const metadataResolvers = {
                                        input.weightAttributeCode !== undefined || 
                                        input.numericPrecision !== undefined;
 
-        // Update non-aggregation fields using regular Supabase client
+        // Update non-aggregation fields on the catalog table. The public view's is_visible
+        // is what the session's client sees, and cannot be written.
         const { data, error } = await supabase
+          .schema('metadata_register')
           .from('attribute_register')
           .update(updateData)
           .eq('id', input.id)
@@ -900,6 +865,78 @@ export async function ensureAttributeSection(
 }
 
 /** Calculated attributes are omitted by get_attributes_with_aggregation. */
+/** The attributes that the templates of one entity type assign, whichever type owns them. */
+async function templateAssignedAttributeIds(supabase: SupabaseClient, domainCode: string): Promise<Set<string>> {
+  const { data: templates } = await supabase
+    .from('domain_templates')
+    .select('id')
+    .eq('domain_code', domainCode);
+  const templateIds = (templates || []).map((template: any) => template.id);
+  if (templateIds.length === 0) return new Set();
+  const { data: assignments } = await supabase
+    .from('template_attribute_assignments')
+    .select('attribute_id')
+    .in('template_id', templateIds);
+  return new Set((assignments || []).map((assignment: any) => assignment.attribute_id));
+}
+
+/**
+ * The catalog rows for one entity type: its own attributes, plus any attribute of another
+ * type that one of its templates assigns. These are the rows, in the order, that reading
+ * the whole catalog and filtering it gives. Every list and record page asks for this, so it
+ * reads one type's attributes and runs its reads side by side.
+ *
+ * Returns null when it cannot be sure of that result (the catalog RPC failed, or the rows
+ * do not line up). The caller then reads the whole catalog.
+ */
+async function domainCatalogRows(supabase: SupabaseClient, domainCode: string): Promise<any[] | null> {
+  if (!/^[A-Za-z0-9_]+$/.test(domainCode)) return null;
+
+  const [catalog, derived, assignedIds, metadata] = await Promise.all([
+    supabase.rpc('get_attributes_with_aggregation', { p_domain_code: domainCode }),
+    supabase.from('attribute_register').select('*').eq('is_derived', true),
+    templateAssignedAttributeIds(supabase, domainCode),
+    supabase.from('attribute_register').select('id, metadata').eq('domain_code', domainCode),
+  ]);
+  if (catalog.error || metadata.error) return null;
+  const own: any[] = Array.isArray(catalog.data) ? catalog.data : (catalog.data ? JSON.parse(catalog.data as any) : []);
+  const ownById = new Map(own.map((row) => [row.id, row]));
+  const metadataById = new Map((metadata.data || []).map((row: any) => [row.id, row.metadata]));
+
+  let rows = own;
+  const outside = [...assignedIds].filter((id) => !ownById.has(id));
+  if (outside.length > 0) {
+    // Another type's attributes, assigned by a template. Read them with this type's own in
+    // catalog order, and give them the columns the catalog RPC returns.
+    if (own.length === 0) return null;
+    const columns = Object.keys(own[0]);
+    const { data: ordered, error } = await supabase
+      .from('attribute_register')
+      .select('*')
+      .or(`domain_code.eq.${domainCode},id.in.(${outside.join(',')})`)
+      .order('attribute_code');
+    if (error || !ordered) return null;
+    const seen = new Set(ordered.map((row: any) => row.id));
+    if (own.some((row) => !seen.has(row.id))) return null;
+    rows = ordered.map((row: any) => {
+      const mine = ownById.get(row.id);
+      if (mine) return mine;
+      metadataById.set(row.id, row.metadata);
+      return Object.fromEntries(columns.map((column) => [column, row[column]]));
+    });
+  }
+
+  // A calculated attribute the catalog did not return is added after the rest.
+  const listed = new Set(rows.map((row) => row.id));
+  const missedDerived = (derived.error ? [] : derived.data || []).filter((row: any) =>
+    !listed.has(row.id) && row.domain_code === domainCode);
+
+  return [
+    ...rows.map((row) => ({ ...row, metadata: metadataById.get(row.id) || {} })),
+    ...missedDerived.map((row: any) => (row.metadata == null ? { ...row, metadata: {} } : row)),
+  ];
+}
+
 async function withDerivedAttributes(supabase: SupabaseClient, rows: any[]): Promise<any[]> {
   const { data, error } = await supabase
     .from('attribute_register')
@@ -948,6 +985,9 @@ function mapAttributeDefinition(row: any) {
     displaySpanRows: boundedSpan(row.display_span_rows, 3) ?? 1,
     isEditable: row.is_editable !== false,
     isVisible: row.is_visible !== false,
+    // The catalog's own flag, and whether the session's client hides the field.
+    catalogIsVisible: (row.catalog_is_visible ?? row.is_visible) !== false,
+    hiddenForClient: row.hidden_for_client === true,
     // Reference list link
     referenceListCode: row.reference_list_code || null,
     referenceListLevel: row.reference_list_level ?? null,
@@ -968,14 +1008,30 @@ function precedenceChainFromRow(row: any): string[] {
   return raw.filter((code: unknown) => typeof code === 'string' && code.length > 0 && code !== 'MANUAL');
 }
 
+/** The register rows for these attribute codes, in code order. Codes go in the request's address, so they are read in batches. */
+async function attributesByCode(supabase: SupabaseClient, codes: string[]): Promise<any[]> {
+  const unique = [...new Set(codes.map((code) => String(code || '').trim()).filter(Boolean))];
+  const batches: string[][] = [];
+  for (let index = 0; index < unique.length; index += ID_BATCH) batches.push(unique.slice(index, index + ID_BATCH));
+  const read = await Promise.all(batches.map(async (batch) => ok(await supabase
+    .from('attribute_register')
+    .select('*')
+    .in('attribute_code', batch)).data || []));
+  return read.flat().sort((a: any, b: any) => String(a.attribute_code).localeCompare(String(b.attribute_code)));
+}
+
 async function attachPrecedenceMetadata(supabase: SupabaseClient, rows: any[]): Promise<any[]> {
-  const missing = rows.filter((row) => row?.id && row.metadata == null);
+  const missing = [...new Set(rows.filter((row) => row?.id && row.metadata == null).map((row) => String(row.id)))];
   if (missing.length === 0) return rows;
-  const { data } = ok(await supabase
+  // Each id goes in the request's address. The whole register in one request is too long
+  // for the server and is refused, so the ids are read in batches.
+  const batches: string[][] = [];
+  for (let index = 0; index < missing.length; index += ID_BATCH) batches.push(missing.slice(index, index + ID_BATCH));
+  const read = await Promise.all(batches.map(async (batch) => ok(await supabase
     .from('attribute_register')
     .select('id, metadata')
-    .in('id', missing.map((row) => row.id)));
-  const byId = new Map((data || []).map((row: any) => [row.id, row.metadata]));
+    .in('id', batch)).data || []));
+  const byId = new Map(read.flat().map((row: any) => [row.id, row.metadata]));
   return rows.map((row) => (
     row.metadata == null ? { ...row, metadata: byId.get(row.id) || {} } : row
   ));

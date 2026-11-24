@@ -144,7 +144,7 @@ The fund needs a close calendar (`FUND_CLOSE_FREQUENCY`, `FUND_CLOSE_LAG_DAYS`) 
 
 ### Turning it on for a client
 
-1. Publish the workflow: `SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node --experimental-strip-types scripts/publish-file-intake.mts <client code> NAV_RECONCILIATION`. Running it again publishes the template's latest version.
+1. Publish the workflow: `SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... npx tsx scripts/publish-file-intake.mts <client code> NAV_RECONCILIATION`. Running it again publishes the template's latest version.
 2. On the workflow's page, under **Start automatically**, add a trigger with source "A filed report arrives". Leave the names blank to take every report: a report whose fund is not on file waits for a person to choose it.
 3. Give each fund its close calendar and terms (above), dated from the fund's start so the reconciliation reads them at every period end.
 4. Keep a job worker running (`docs/JOBS.md`). The "Explain the breaks" agent step needs `ANTHROPIC_API_KEY` where the worker runs. Without it, the step fails after the load, the reconciliation and the notes are done, and Retry on the run page continues from it once the key is set.

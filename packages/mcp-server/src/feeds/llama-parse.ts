@@ -1,4 +1,5 @@
 import { extractPdfPages } from '@tapestrai/graphql/src/lib/import-intake';
+import type { DocumentReading, ReadingPage } from '@tapestrai/graphql/src/lib/document-content/reading';
 import type { CellLocation, PageSize, ParsedTable } from './types';
 
 /**
@@ -6,6 +7,10 @@ import type { CellLocation, PageSize, ParsedTable } from './types';
  * cannot: scans, photographed pages, Word files, and PDFs with dense or
  * multi-page tables. It is an outside service, so a document is sent there only
  * when its profile calls for it and the key is configured.
+ *
+ * One call returns two things. The tables are what Load data maps. The reading is
+ * every page's words (paragraphs, tables, notes and footnotes), which is what
+ * Documents indexes, so nothing on the page is lost to search.
  */
 
 const BASE_URL = 'https://api.cloud.llamaindex.ai';
@@ -199,6 +204,109 @@ export function tablesFromParse(result: any): { tables: ParsedTable[]; pages: nu
 }
 
 // ---------------------------------------------------------------------------
+// Result to a reading: every page's words
+
+interface ParseTextPage {
+  page_number?: number;
+  success?: boolean;
+  markdown?: string;
+  header?: string;
+  footer?: string;
+}
+
+/** A header or footer with its numbers taken out, so "Page 3 of 90" and "Page 4 of 90" are the same line. */
+function furnitureKey(text: string): string {
+  return text.toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').trim();
+}
+
+/** The words of an item and of anything inside it, for a page the reader gave no markdown for. */
+function itemText(item: any): string {
+  if (!item || typeof item !== 'object') return '';
+  const own = typeof item.md === 'string' && item.md.trim() ? item.md : typeof item.value === 'string' ? item.value : '';
+  if (own.trim()) return own.trim();
+  return (Array.isArray(item.items) ? item.items : []).map(itemText).filter(Boolean).join('\n\n');
+}
+
+/** A table cell's words, with its tags and line breaks taken out. */
+function cellWords(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\|/g, '/')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** An HTML table as markdown rows, one line a row, so a row reads as words and not as tags. */
+function htmlTableToMarkdown(html: string): string {
+  const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)]
+    .map((row) => [...row[1].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((cell) => cellWords(cell[1])))
+    .filter((cells) => cells.length > 0);
+  if (rows.length === 0) return cellWords(html);
+  const width = Math.max(...rows.map((cells) => cells.length));
+  const line = (cells: string[]) => `| ${Array.from({ length: width }, (_, index) => cells[index] || '').join(' | ')} |`;
+  return ['', line(rows[0]), `| ${Array.from({ length: width }, () => '---').join(' | ')} |`, ...rows.slice(1).map(line), ''].join('\n');
+}
+
+/**
+ * A page's markdown as the document reader reads best: a table as rows of words, a heading without
+ * the bold marks the reader wraps it in, and no rule lines, which only separate the footnotes.
+ */
+export function tidyPageMarkdown(markdown: string): string {
+  return markdown
+    .replace(/<table[\s\S]*?<\/table>/gi, htmlTableToMarkdown)
+    .replace(/^(#{1,6})\s+\*\*(.+?)\*\*\s*$/gm, '$1 $2')
+    .replace(/^\s*[-*_]{3,}\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Every page of a parse result as markdown: the paragraphs, the tables, and what sits at the foot of
+ * the page. The reader returns a page's header and footer apart from its body. A line that runs along
+ * most pages (the document's name, a page number) is page furniture and is left out. A footer that
+ * differs from page to page is a footnote or a note to a table, and is kept with its page.
+ */
+export function readingFromParse(result: any): ReadingPage[] {
+  const textPages: ParseTextPage[] = Array.isArray(result?.markdown?.pages) ? result.markdown.pages : [];
+  const itemPages: { page_number?: number; items?: unknown[] }[] = Array.isArray(result?.items?.pages) ? result.items.pages : [];
+  const numbers = [...new Set([...textPages, ...itemPages].map((page, index) => Math.trunc(Number(page?.page_number)) || index + 1))].sort((a, b) => a - b);
+  const textOf = new Map(textPages.map((page, index) => [Math.trunc(Number(page?.page_number)) || index + 1, page]));
+  const itemsOf = new Map(itemPages.map((page, index) => [Math.trunc(Number(page?.page_number)) || index + 1, page]));
+
+  const seen = new Map<string, number>();
+  for (const page of textPages) {
+    for (const line of [page?.header, page?.footer]) {
+      const key = typeof line === 'string' ? furnitureKey(line) : '';
+      if (key) seen.set(key, (seen.get(key) || 0) + 1);
+    }
+  }
+  const running = (line: string) => numbers.length >= 3 && (seen.get(furnitureKey(line)) || 0) >= Math.ceil(numbers.length * 0.6);
+
+  const pages: ReadingPage[] = [];
+  for (const number of numbers) {
+    const page = textOf.get(number);
+    let body = page && page.success !== false && typeof page.markdown === 'string' ? page.markdown.trim() : '';
+    // A page the reader gave no markdown for is put together from its items, in reading order.
+    if (!body) body = (itemsOf.get(number)?.items || []).filter((item: any) => item?.type !== 'header' && item?.type !== 'footer').map(itemText).filter(Boolean).join('\n\n');
+    body = tidyPageMarkdown(body);
+    const edge = (line: unknown) => {
+      const text = typeof line === 'string' ? line.trim() : '';
+      return text && !running(text) && !body.includes(text) ? text : '';
+    };
+    const text = [edge(page?.header), body, edge(page?.footer)].filter(Boolean).join('\n\n').trim();
+    if (text) pages.push({ page: number, text });
+  }
+  return pages;
+}
+
+// ---------------------------------------------------------------------------
 // API client
 
 export interface LlamaParseOptions {
@@ -208,13 +316,8 @@ export interface LlamaParseOptions {
   timeoutMs?: number;
 }
 
-/** Upload a document, wait for the parse job, and return its tables. */
-export async function extractTablesWithLlamaParse(
-  fileName: string,
-  mediaType: string,
-  bytes: Buffer,
-  options: LlamaParseOptions = {},
-): Promise<{ tables: ParsedTable[]; pages: number[]; note: string }> {
+/** Upload a document, wait for the parse job, and return the whole result: each page's items and its markdown. */
+async function parseWithLlama(fileName: string, mediaType: string, bytes: Uint8Array, options: LlamaParseOptions = {}): Promise<any> {
   const env = options.env || process.env;
   if (!llamaParseConfigured(env)) throw new LlamaParseUnavailable();
   const fetchImpl = options.fetchImpl || fetch;
@@ -237,20 +340,36 @@ export async function extractTablesWithLlamaParse(
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, pollMs));
-    const poll = await fetchImpl(`${BASE_URL}/api/v2/parse/${encodeURIComponent(jobId)}?expand=items`, { headers });
+    const poll = await fetchImpl(`${BASE_URL}/api/v2/parse/${encodeURIComponent(jobId)}?expand=items,markdown`, { headers });
     if (!poll.ok) throw new Error(`LlamaParse could not report on the job (${poll.status})`);
     const body = await poll.json();
     const status = body?.job?.status;
-    if (status === 'COMPLETED') {
-      const { tables, pages } = tablesFromParse(body);
-      const note = tables.length
-        ? `LlamaParse found ${tables.length} table${tables.length === 1 ? '' : 's'}.`
-        : 'LlamaParse read the file but did not find a table.';
-      return { tables, pages, note };
-    }
+    if (status === 'COMPLETED') return body;
     if (status === 'FAILED' || status === 'CANCELLED') {
       throw new Error(body?.job?.error_message || `LlamaParse ${String(status).toLowerCase()} the job`);
     }
   }
   throw new Error('LlamaParse did not finish in time. Try the file again, or upload a CSV or Excel extract.');
+}
+
+/** Read a document for Load data: its tables, and the reading of every page, from one call. */
+export async function extractTablesWithLlamaParse(
+  fileName: string,
+  mediaType: string,
+  bytes: Buffer,
+  options: LlamaParseOptions = {},
+): Promise<{ tables: ParsedTable[]; pages: number[]; note: string; reading: DocumentReading | null }> {
+  const body = await parseWithLlama(fileName, mediaType, bytes, options);
+  const { tables, pages } = tablesFromParse(body);
+  const read = readingFromParse(body);
+  const note = tables.length
+    ? `LlamaParse found ${tables.length} table${tables.length === 1 ? '' : 's'}.`
+    : 'LlamaParse read the file but did not find a table.';
+  return { tables, pages, note, reading: read.length > 0 ? { reader: 'llamaparse', pages: read } : null };
+}
+
+/** Read a document for its words alone: every page as markdown. Null when the reader found none. */
+export async function readWithLlamaParse(fileName: string, mediaType: string | null, bytes: Uint8Array, options: LlamaParseOptions = {}): Promise<DocumentReading | null> {
+  const read = readingFromParse(await parseWithLlama(fileName, mediaType || 'application/octet-stream', bytes, options));
+  return read.length > 0 ? { reader: 'llamaparse', pages: read } : null;
 }

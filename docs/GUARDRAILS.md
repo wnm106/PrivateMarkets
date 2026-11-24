@@ -30,6 +30,15 @@ checked by a machine, so they hold no matter who or what writes the change.
      `entity_matches_conditions`; the editor's preview through
      `compliance.preview_population`. A result's contributors and their
      amounts come from `compliance.result_contributor_values`.
+   - Whether a record may exist without a parent is decided by
+     `packages/graphql/src/lib/required-parents.ts`. A relationship type marked
+     `is_required` means a record of its first entity type must be linked to a
+     record of its second; `required_unless_attribute_code` names a boolean
+     attribute that lifts it. The create API, the import framework, the feed
+     loader and the assistant's create tool all call it before they write. A
+     migration or a seed writes rows directly, so `npm run guard:db` runs
+     `scripts/guard/required-parents.sql` and fails on a record with no
+     required parent.
    - `golden_master.preference_decision` picks the golden source. The value
      triggers store it; `golden_master.explain_golden_source` explains it.
    - The deal page's capacity tones breach exactly where the evaluator does

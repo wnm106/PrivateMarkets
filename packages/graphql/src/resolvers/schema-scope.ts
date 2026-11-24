@@ -25,6 +25,8 @@ async function readCallerClients(context: Context): Promise<CallerClients | null
       .select('client_id')
       .eq('admin_user_id', userId)
       .is('ended_at', null)
+      // A support session that has run out no longer scopes anything (tenancy.active_impersonation_client_id).
+      .gt('expires_at', new Date().toISOString())
       .order('started_at', { ascending: false })
       .limit(1)
       .maybeSingle(),

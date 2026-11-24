@@ -68,13 +68,14 @@ type Row = Record<string, any>;
 const PAGE = 1000;
 
 /** Every row of a table, a page at a time: the API caps one response at 1,000 rows. */
-async function rows(supabase: SupabaseClient, table: string, gaps: string[], limit = 5000): Promise<Row[]> {
+async function rows(supabase: SupabaseClient, table: string, gaps: string[], limit = 5000, schema?: string): Promise<Row[]> {
   const out: Row[] = [];
+  const source = schema ? supabase.schema(schema) : supabase;
   for (let from = 0; from < limit; from += PAGE) {
     // Order by id so pages do not overlap or skip rows.
-    const { data, error } = await supabase.from(table).select('*').order('id').range(from, Math.min(from + PAGE, limit) - 1);
+    const { data, error } = await source.from(table).select('*').order('id').range(from, Math.min(from + PAGE, limit) - 1);
     if (error) {
-      gaps.push(`${table} could not be read: ${error.message}`);
+      gaps.push(`${schema ? `${schema}.` : ''}${table} could not be read: ${error.message}`);
       break;
     }
     out.push(...((data || []) as Row[]));
@@ -86,12 +87,14 @@ async function rows(supabase: SupabaseClient, table: string, gaps: string[], lim
 
 export async function loadPlatformCatalog(supabase: SupabaseClient): Promise<PlatformCatalog> {
   const gaps: string[] = [];
-  const [domains, attributes, relationships, surfaces, experiences] = await Promise.all([
+  const [domains, attributes, relationships, surfaces, experiences, rules, lists] = await Promise.all([
     rows(supabase, 'domain_types', gaps),
     rows(supabase, 'attribute_register', gaps, 10000),
     rows(supabase, 'relationship_types', gaps),
     rows(supabase, 'surface_definitions', gaps),
     rows(supabase, 'record_experiences', gaps),
+    rows(supabase, 'rules', gaps, 2000, 'compliance'),
+    rows(supabase, 'reference_lists', gaps, 2000, 'metadata_register'),
   ]);
 
   let tools: CatalogTool[] = [];
@@ -128,6 +131,18 @@ export async function loadPlatformCatalog(supabase: SupabaseClient): Promise<Pla
       ...experiences.filter((row) => row.is_active !== false).map((row) => ({ code: row.experience_code, name: row.experience_name || row.experience_code, domainCode: row.anchor_domain_code ?? null, description: row.description ?? null, kind: 'experience' as const })),
       ...SURFACES.map((entry) => ({ code: entry.manifest.code, name: entry.manifest.title || entry.manifest.code, domainCode: entry.manifest.domains?.[0] ?? null, description: entry.manifest.description ?? null, kind: 'sdk' as const })),
     ],
+    complianceRules: rules
+      .filter((row) => row.rule_code && row.is_active !== false)
+      .map((row) => ({
+        code: row.rule_code,
+        name: row.rule_name || row.rule_code,
+        category: row.rule_category ?? null,
+        anchorDomainCode: row.anchor_domain_code ?? null,
+        metadataKeys: row.metadata && typeof row.metadata === 'object' ? Object.keys(row.metadata).slice(0, 20) : [],
+      })),
+    referenceLists: lists
+      .filter((row) => row.list_code && row.is_active !== false)
+      .map((row) => ({ code: row.list_code, name: row.list_name || row.list_code, domainCode: row.domain_code ?? null })),
     gaps,
   };
 }

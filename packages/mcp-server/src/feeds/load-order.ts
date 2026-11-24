@@ -1,6 +1,8 @@
 import type { FeedDomainSpec } from './types';
 
 export interface RelationshipTypeRow {
+  /** A boolean attribute that lifts the requirement when true (a library covenant has no deal). */
+  required_unless_attribute_code?: string | null;
   relationship_code: string;
   parent_domain_code: string;
   child_domain_code: string;

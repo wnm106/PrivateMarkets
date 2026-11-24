@@ -1,4 +1,5 @@
 import type { Context } from '../context';
+import { loadBorrowerFinancials } from '../lib/borrower-financials-store';
 import { mapCovenantChoice, mapCovenantTest } from '../lib/covenant-test';
 
 /**
@@ -36,6 +37,12 @@ export const covenantResolvers = {
       if (error) throw failure(error, 'The deal\'s covenants could not be read.');
       return (Array.isArray(data) ? data : []).filter(Boolean).map((row) => mapCovenantTest(row as Row));
     },
+
+    borrowerFinancials: async (
+      _: unknown,
+      args: { borrowerId: string; periodEnd?: string | null; asOfDate?: string | null; knowledgeDate?: string | null },
+      context: Context,
+    ) => (await loadBorrowerFinancials(context.supabase, args.borrowerId, args.periodEnd, args.asOfDate, args.knowledgeDate)).financials,
 
     covenantLibrary: async (_: unknown, args: { asOfDate?: string | null }, context: Context) => {
       const { data, error } = await context.supabase.rpc('covenant_library', { p_as_of: args.asOfDate || null });

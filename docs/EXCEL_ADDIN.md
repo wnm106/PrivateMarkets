@@ -1,6 +1,6 @@
 # Excel add-in: `=TAP`
 
-`=TAP(attribute, record, [as_of])` puts one attribute of one Tapestry record into a cell, as of a date. Each person signs in with their own Tapestry account, and a formula shows only what that account can see.
+`=TAP(attribute, record, [as_of])` puts one attribute of one Tapestry record into a cell, as of a date. Each person signs in with their own Tapestry account, and a formula shows only what that account can see. A person who belongs to more than one client picks one when they sign in, and Excel works in that client only ([One client per sign-in](#one-client-per-sign-in)).
 
 ```
 =TAP("NAV", "FUND-1")
@@ -24,6 +24,7 @@ The pane also brings whole tables into the workbook: the records of one entity t
 | Separate Excel session store | `apps/web/lib/session-store.ts`, `apps/web/lib/supabase-browser.ts`, `apps/web/app/auth/callback/route.ts` |
 | Sign-in form and authenticator step shared with `/login` | `apps/web/components/auth/SignInForm.tsx`, `apps/web/components/auth/MfaStep.tsx` |
 | The session message between the page and the add-in | `packages/graphql/src/lib/excel-session.ts` |
+| The client a sign-in works in | `supabase/migrations/20261123160000_session_client.sql` (`tenancy.session_clients`, `choose_session_client`, `session_client_choices`) |
 | `tapValues` and `searchAttributes` queries | `packages/graphql/src/resolvers/excel.ts`, `packages/graphql/src/lib/tap.ts`, `packages/graphql/src/lib/attribute-search.ts` |
 | Exact matching for a cell's references | `supabase/migrations/20261121150100_excel_tap_matches.sql` |
 | Manual entries from Excel: preview and save | `packages/graphql/src/lib/tap-override.ts`, `tapOverridePreview` and `submitTapOverrides` in `resolvers/excel.ts` |
@@ -58,7 +59,7 @@ Matching ignores case and the spaces around the words. It is otherwise exact: a 
 
 When a reference matches more than one thing:
 
-1. A record code always means that record.
+1. A record code always means that record. Codes are unique within a client, and Excel works in one client, so a code names one record.
 2. Then a pair whose entity type carries the attribute wins. Two records called "Apex", a fund and an issuer, give `NAV` from the fund.
 3. Then the closer attribute match (code, alias, name), then the closer record match (code, name, alias).
 4. A tie is ambiguous. The cell shows `#N/A` and lists the codes to use.
@@ -93,10 +94,25 @@ Every person signs in with their own account. There is no shared key.
 1. The pane opens `/excel/connect` in an Office dialog.
 2. The page signs the person in with the same form as `/login`: email discovery, then password or the single sign-on their organization requires. The access-token hook applies the organization's sign-in rules as it does for the app.
 3. The page checks `tenancy.current_sign_in_decision`, as middleware does for the app. A refused method ends there. When the organization requires an authenticator, the page runs the step-up before going on.
-4. The person confirms "Connect Excel". The page sends the session to the add-in with Office's `messageParent`, which Office delivers only to an add-in page on the same origin. The add-in also checks the origin and the message's shape.
-5. The page forgets the session (removes its cookies without revoking it). From then on the add-in is its only holder.
+4. A person who belongs to more than one client chooses the client Excel will work in ([One client per sign-in](#one-client-per-sign-in)).
+5. The person confirms "Connect Excel". The page records the client against the session, then sends the session to the add-in with Office's `messageParent`, which Office delivers only to an add-in page on the same origin. The add-in also checks the origin and the message's shape.
+6. The page forgets the session (removes its cookies without revoking it). From then on the add-in is its only holder.
 
 The add-in calls `/api/graphql` with `Authorization: Bearer <token>` and never sends cookies. The route builds its Supabase client from that token, so Row Level Security decides what each person sees, exactly as in the app.
+
+### One client per sign-in
+
+The client is chosen at sign-in and applies to everything Excel does. A formula, a table definition and a request never name a client.
+
+- **Choosing.** The sign-in page lists the person's clients (`tenancy.session_client_choices`: active memberships in active clients whose sign-in rule the session meets). With one client there is nothing to choose. With several, the person picks one before "Connect Excel".
+- **Where the choice is kept.** In the database, in `tenancy.session_clients`, against the session id that every token of that sign-in carries. A token refresh keeps the session id, so the choice lasts as long as the sign-in. The add-in holds only the client's name, to show it in the pane.
+- **What applies it.** `tenancy.client_session_ok`, the one check of whether a session may act in a client. `current_client_ids` and `has_permission` both read it, so row security narrows every read and write: `=TAP`, the builder's searches, synced tables and manual entries.
+- **Once per sign-in.** `tenancy.choose_session_client` refuses a second, different choice. To work in another client, sign out in the pane and sign in again.
+- **All open workbooks follow it.** They share one Excel session, so they all read the same client. A workbook built in one client and opened while signed in to another reads the other client's records wherever the codes match. The pane says which client Excel is signed in to.
+- **The app in a browser is not narrowed.** It is a different session, with no choice recorded, and works in all the person's clients as before.
+- **Staff in support mode** see the client they have open, as in the app. Support mode is per person, not per session.
+
+A session that chose a client reads nothing if the person later leaves that client. They sign in again to choose another.
 
 ### Why Excel gets its own session
 
@@ -188,7 +204,7 @@ A synced table is an ordinary Excel table that Tapestry fills: the records of on
 - **In place.** The rows the table has are overwritten, extra rows are deleted and missing rows are added. Cells below the table move up or down with it, as with any Excel table; cells beside it stay.
 - **Tapestry's columns only.** Put your own columns and formulas beside the table, not inside it. If the table gains or loses a column in Excel, a refresh stops and says so rather than writing into it.
 - **At most 50,000 rows.** Rows are read 2,000 at a time and written 1,000 at a time. When more records match, the first page says so, nothing more is read, the table is left as it is, and it says to narrow the filters. A new table checks for room once the first page says how many rows match.
-- **Each person's own records.** Rows are read by `gridQuery` under the signed-in person's token, so row security applies exactly as in the app. A workbook passed to someone else refreshes to what that person can see.
+- **Each person's own records.** Rows are read by `gridQuery` under the signed-in person's token, so row security applies exactly as in the app. A workbook passed to someone else refreshes to what that person can see, in the client they signed in to.
 
 ### Auto-refresh
 
@@ -213,7 +229,7 @@ In the workbook, as an add-in setting (`tapestry.tables` in `Office.context.docu
 
 ## Deploying
 
-1. Apply `20261121150100_excel_tap_matches.sql` to the hosted project before the web app that calls it is deployed (docs/MIGRATIONS.md). It only adds two functions.
+1. Apply `20261121150100_excel_tap_matches.sql` and `20261123160000_session_client.sql` to the hosted project before the web app that calls them is deployed (docs/MIGRATIONS.md). The first only adds two functions. The second adds the session's client and replaces `tenancy.client_session_ok`: compare the live function with the copy in the file first. Until it is applied, the Excel sign-in page stops at "Your clients could not be read".
 2. Deploy the web app as usual. `apps/web`'s `prebuild` builds the add-in into `public/excel/addin/`, so every deploy serves the matching add-in. The manifest's URLs come from:
    - `EXCEL_ADDIN_ORIGIN`, else `NEXT_PUBLIC_APP_URL`, else `https://localhost:3000`. It must be https.
    - `EXCEL_ADDIN_ID`, the add-in's GUID. Give staging its own so both can be installed. Production uses the default in `scripts/build.mjs`.
@@ -248,6 +264,9 @@ EXCEL_ADDIN_ORIGIN=https://localhost:3000 npm run dev -- --experimental-https
 - **Knowledge date on tables.** `gridQuery` takes one; the Tables panel does not offer it yet. Tables read current knowledge.
 - **Writing from a synced table.** Its cells are values, not TAP formulas, so **Override selected cells** does not read them. Change records on the record screen or with TAP cells.
 - **Reordering columns.** A table whose columns are edited in an order that is not "keep these, add those at the end" is rebuilt at the same corner, which breaks formulas that refer to it. The pane only makes the in-place shape.
+- **Switching client without signing in again.** The client belongs to the sign-in. The pane has no switch.
+- **Two clients side by side.** Every open workbook reads the one client Excel is signed in to.
+- **A warning when a workbook was built in another client.** The workbook does not record which client it was last used with.
 - **1904 dates.** A workbook on the 1904 date system passes date cells four years off. Use `"YYYY-MM-DD"` text there.
 - **Microsoft single sign-on inside Office.** Sign-in uses the dialog. Office's own SSO (`getAccessToken`) could skip it for organizations on Microsoft Entra ID.
 - **Step-up on bearer reads.** Excel saves check `current_sign_in_decision`. Reads through `/api/graphql` do not, for any bearer client. The connect page will not hand over a session that still owes an authenticator step, and refreshing keeps the session's level.

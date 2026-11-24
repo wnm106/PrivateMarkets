@@ -1,7 +1,7 @@
 /**
  * Publishes the demo briefs on Bill McMahon's client and starts one run of each.
  *
- *   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node --experimental-strip-types scripts/publish-bill-demo-workflows.mts
+ *   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... npx tsx scripts/publish-bill-demo-workflows.mts
  *
  * A second run skips a brief that already has a queued, running, waiting, or
  * succeeded run, so this can be repeated without stacking work.

@@ -11,6 +11,7 @@ import { validateIdentifierMappings, validateIdentifierValues, IdentifierValidat
 import { generateImportPlan, validateImportPlan, planToBatches, ImportPlan, ImportBatch } from './relationship-analyzer';
 import { writeGoldenValue } from '../golden-write';
 import { ok } from '../db-result';
+import { RequiredParentError, loadRequiredParentRules, requiredParentMessage, unmetRequiredParents } from '../required-parents';
 
 export interface ImportMap {
   id?: string;
@@ -367,6 +368,8 @@ async function importDomainRecords(
   for (let i = 0; i < records.length; i += batchSize) {
     const batch = records.slice(i, i + batchSize);
 
+    // The parents this entity type must have. A row that cannot be linked to one is not created.
+    const requiredParents = await loadRequiredParentRules(supabase, domainCode);
     for (const record of batch) {
       try {
         // Map source fields to target attributes
@@ -397,6 +400,14 @@ async function importDomainRecords(
           await saveEntityAliases(supabase, existing.id, identity.aliases);
           recordsUpdated++;
         } else {
+          // Find the row's parents before anything is written, so a row with no required
+          // parent is refused instead of leaving a record with nothing above it.
+          const parents = await resolveRecordParents(record, relationshipMappings || [], supabase);
+          const unmet = unmetRequiredParents(requiredParents, parents.map((parent) => parent.domainCode), identity.attributes);
+          if (unmet.length) {
+            throw new RequiredParentError(`${entityCode} was not created. ${requiredParentMessage(domainCode, unmet)} Map a column to it, and load it first.`, unmet);
+          }
+
           // Create new entity
           const { data: entity, error: entityError } = await supabase
             .from('master_entities')
@@ -416,9 +427,7 @@ async function importDomainRecords(
           await saveEntityAliases(supabase, entity.id, identity.aliases);
 
           // Insert relationships if defined
-          if (relationshipMappings && relationshipMappings.length > 0) {
-            await insertEntityRelationships(entity.id, record, relationshipMappings, supabase);
-          }
+          await insertEntityRelationships(entity.id, parents, supabase);
 
           recordsCreated++;
         }
@@ -624,12 +633,19 @@ export async function updateEntityAttributes(
 /**
  * Insert entity relationships
  */
-async function insertEntityRelationships(
-  entityId: string,
+interface ResolvedParent {
+  id: string;
+  domainCode: string;
+  relationshipCode: string;
+}
+
+/** The parent records a row names and that exist, one per relationship mapping. */
+async function resolveRecordParents(
   record: Record<string, any>,
   relationshipMappings: RelationshipMapping[],
   supabase: SupabaseClient
-): Promise<void> {
+): Promise<ResolvedParent[]> {
+  const parents: ResolvedParent[] = [];
   for (const relMapping of relationshipMappings) {
     const parentKeyValue = record[relMapping.parentKeyField];
     if (!parentKeyValue) continue;
@@ -642,17 +658,26 @@ async function insertEntityRelationships(
       .eq('entity_code', `${relMapping.parentDomainCode}-${String(parentKeyValue).toUpperCase()}`)
       .maybeSingle());
 
-    if (parentEntity) {
-      const { error: relationshipError } = await supabase.from('entity_relationships').insert({
-        parent_entity_id: parentEntity.id,
-        child_entity_id: entityId,
-        relationship_type: relMapping.relationshipCode,
-        relationship_code: relMapping.relationshipCode,
-        is_primary: true,
-        valid_from: new Date().toISOString().split('T')[0],
-      });
-      if (relationshipError) throw relationshipError;
-    }
+    if (parentEntity) parents.push({ id: parentEntity.id, domainCode: relMapping.parentDomainCode, relationshipCode: relMapping.relationshipCode });
+  }
+  return parents;
+}
+
+async function insertEntityRelationships(
+  entityId: string,
+  parents: ResolvedParent[],
+  supabase: SupabaseClient
+): Promise<void> {
+  for (const parent of parents) {
+    const { error: relationshipError } = await supabase.from('entity_relationships').insert({
+      parent_entity_id: parent.id,
+      child_entity_id: entityId,
+      relationship_type: parent.relationshipCode,
+      relationship_code: parent.relationshipCode,
+      is_primary: true,
+      valid_from: new Date().toISOString().split('T')[0],
+    });
+    if (relationshipError) throw relationshipError;
   }
 }
 

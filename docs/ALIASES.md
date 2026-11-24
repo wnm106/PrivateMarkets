@@ -53,3 +53,48 @@ Chat uses the same lists:
 - `list_domain_types` includes each type's aliases.
 - `search_entities` matches a record's name and its stored aliases. A hit on the alias says which name matched.
 - `get_template_metadata` includes each field's alias labels.
+
+## Per client
+
+The lists above are shared by every client. A client can add to them, and two more settings belong to one client. None of this changes a code or a stored value.
+
+| Setting | Table | What changes |
+|---|---|---|
+| What the client calls an entity type | `metadata_register.client_domain_settings` | The type's name wherever it is shown: menus, search, record pages, the assistant. `ISSUER` can be Borrower for one client and Company for another. |
+| A shared field the client hides | `metadata_register.client_attribute_settings` | The field leaves that client's record pages, forms, column lists and the Excel add-in. Its values stay stored, and calculations, compliance and saved views still read them. A field every record must have cannot be hidden. |
+| A word the client uses for an entity type | `metadata_register.domain_aliases` with a `client_id` | Import mapping, chat search and the Excel formula builder read it for that client only. It wins over a shared alias with the same words, so Portfolio can mean a fund for everyone and an account for one client. |
+
+All three are set on an entity type's admin page, on the **For this client** tab, by someone who may edit that client's entities. The tab counts the records holding a value in each field today, and can hide every shown field that has none.
+
+### A client's words
+
+`entity_name_aliases` and `attribute_aliases` take a `client_id` the same way: NULL is a shared alias, and a client's own row is read by that client only. An alias code is unique among the shared aliases and again inside each client.
+
+`metadata_register.alias_words(client)` is the one place that puts the words together for a client, in the order they win:
+
+1. The client's own aliases, and the name it gives an entity type.
+2. The catalog name of a type the client renamed, unless the client uses that word for something else.
+3. The shared aliases, except one whose words the client uses itself.
+
+"<name> name" is the record name of a type for each name and alias the client gives it, so naming `ISSUER` Borrower makes "Borrower name" the issuer's name with no second entry. A word cannot be what the client already calls another type.
+
+A signed-in request calls `public.session_alias_words()`, which uses the session's client. Server code that loads a file for a client calls `alias_words` with that client. Both go through `loadAliasWords` in `packages/graphql/src/lib/semantic-aliases.ts`; no other code reads the three lists to match on. The answer also carries the client's names for entity types and the fields it hides, so import mapping lists a type under the client's name and marks a hidden field "hidden for this client". A hidden field can still be loaded.
+
+### Whose settings a session reads
+
+`tenancy.presentation_client_id()` is the one place that decides. It is the client staff are simulating, the client a sign-in chose, or the person's only client. Staff who are not simulating a client, and a session in several clients, get none: they read the catalog's own names and every field.
+
+The public views apply it, so no reader has to:
+
+- `public.domain_types.domain_name` is the client's name where it has one. `catalog_domain_name` is the catalog's.
+- `public.attribute_register.is_visible` is false for a field the client hides. `catalog_is_visible` is the catalog's own flag, and `hidden_for_client` says the client hid it.
+
+Those two columns cannot be written through the views. Code that changes the catalog's name or visible flag writes `metadata_register.domain_types` or `metadata_register.attribute_register`. An edit screen reads `catalogName` and `catalogIsVisible`, so it never saves one client's setting into the catalog.
+
+Server code that runs with the service role has no session client. When it knows which client a job is for, it calls `metadata_register.client_domain_labels(client)` and `metadata_register.client_hidden_attribute_ids(client)`.
+
+### Not built yet
+
+- The tab edits a client's words for an entity type. A client's own record-name and field aliases can be stored and are read, but have no screen yet.
+- The import screens name an entity type with `domainLabel` in a few places outside the target list (a heading, a fallback label). Those still show the built-in label, not the client's name.
+- A surface or narrative that spells an entity type's name in its own text does not follow a client's name.

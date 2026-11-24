@@ -1,23 +1,20 @@
 import { fetchEntitySearchHits } from '@tapestrai/graphql/src/lib/entity-search';
 import { fetchAttributeSearch } from '@tapestrai/graphql/src/lib/attribute-search';
+import { aliasLabelsByAttribute as labelsByAttribute, loadAliasWords } from '@tapestrai/graphql/src/lib/semantic-aliases';
+import { assertRequiredParents, domainsOfRecords } from '@tapestrai/graphql/src/lib/required-parents';
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
 
+/** The other words for these fields, as the client this session is working in uses them. */
 async function aliasLabelsByAttribute(supabase: { from: (table: string) => any }, attributeIds: string[]): Promise<Map<string, string[]>> {
-  const labels = new Map<string, string[]>();
-  if (attributeIds.length === 0) return labels;
-  const { data, error } = await supabase
-    .from('attribute_aliases')
-    .select('attribute_id, alias_label, is_active')
-    .eq('is_active', true)
-    .in('attribute_id', attributeIds);
-  if (error) return labels;
-  for (const alias of data || []) {
-    const list = labels.get(alias.attribute_id) || [];
-    list.push(alias.alias_label);
-    labels.set(alias.attribute_id, list);
+  if (attributeIds.length === 0) return new Map();
+  try {
+    const wanted = new Set(attributeIds);
+    const all = labelsByAttribute(await loadAliasWords(supabase));
+    return new Map([...all].filter(([attributeId]) => wanted.has(attributeId)));
+  } catch {
+    return new Map();
   }
-  return labels;
 }
 
 const getAttributeMetadata: ToolDefinition = {
@@ -256,10 +253,29 @@ const createEntity: ToolDefinition = {
       templateCode: { type: 'string', description: 'Optional template code' },
       description: { type: 'string', description: 'Optional description' },
       attributes: { type: 'object', description: 'Attribute values as key-value pairs' },
+      parents: {
+        type: 'array',
+        description: 'The records this one belongs to, linked as it is created. Required when the entity type needs a parent, for example a Security needs its Issuer: find the parent with search_entities and pass its id. relationshipCode is optional; the type that connects the two entity types is used.',
+        items: {
+          type: 'object',
+          properties: {
+            entityId: { type: 'string', description: 'Id of the existing parent record' },
+            relationshipCode: { type: 'string', description: 'Optional relationship code from get_relationship_types' },
+          },
+          required: ['entityId'],
+        },
+      },
     },
     required: ['entityCode', 'entityName', 'domainCode'],
   },
   execute: async (args, supabase) => {
+    // A record whose entity type needs a parent is refused without one, before anything is
+    // written (required-parents.ts). The parents given here are linked in this same call.
+    const parents: Array<{ entityId: string; relationshipCode?: string }> = Array.isArray(args.parents)
+      ? args.parents.filter((parent: { entityId?: unknown }) => typeof parent?.entityId === 'string' && parent.entityId)
+      : [];
+    await assertRequiredParents(supabase, { domainCode: args.domainCode, attributes: args.attributes, linkedEntityIds: parents.map((parent) => parent.entityId) });
+
     // Get template_id if templateCode provided
     let templateId = null;
     if (args.templateCode) {
@@ -312,6 +328,38 @@ const createEntity: ToolDefinition = {
             precedence_rank: attr.default_precedence_rank,
           });
         }
+      }
+    }
+
+    // Link the parents. Each link is stored the way its relationship type declares its two ends.
+    if (parents.length) {
+      const parentDomains = await domainsOfRecords(supabase, parents.map((parent) => parent.entityId));
+      const { data: types, error: typesError } = await supabase
+        .schema('metadata_register')
+        .from('relationship_types')
+        .select('relationship_code, relationship_name, parent_domain_code, child_domain_code, is_required')
+        .eq('is_active', true);
+      if (typesError) throw typesError;
+      const own = String(args.domainCode).toUpperCase();
+      for (const parent of parents) {
+        const other = (parentDomains.get(parent.entityId) || '').toUpperCase();
+        if (!other) throw new Error(`The record was created, but parent ${parent.entityId} was not found, so it was not linked.`);
+        const connecting = (types || []).filter((type: any) =>
+          (type.parent_domain_code === own && type.child_domain_code === other) || (type.parent_domain_code === other && type.child_domain_code === own));
+        const type = (parent.relationshipCode && connecting.find((row: any) => row.relationship_code === parent.relationshipCode))
+          || connecting.find((row: any) => row.is_required)
+          || connecting[0];
+        if (!type) throw new Error(`The record was created, but no relationship type connects ${own} and ${other}, so it was not linked.`);
+        const newIsParent = type.parent_domain_code === own;
+        const { error: linkError } = await supabase.from('entity_relationships').insert({
+          parent_entity_id: newIsParent ? entity.id : parent.entityId,
+          child_entity_id: newIsParent ? parent.entityId : entity.id,
+          relationship_type: type.relationship_name || type.relationship_code,
+          relationship_code: type.relationship_code,
+          is_primary: true,
+          valid_from: new Date().toISOString().split('T')[0],
+        });
+        if (linkError) throw linkError;
       }
     }
 
@@ -804,7 +852,9 @@ const createDomainType: ToolDefinition = {
     required: ['domainCode', 'domainName'],
   },
   execute: async (args, supabase) => {
+    // The catalog table: the public view's name is what the session's client calls the type.
     const { data, error } = await supabase
+      .schema('metadata_register')
       .from('domain_types')
       .insert({ domain_code: args.domainCode, domain_name: args.domainName, description: args.description })
       .select().single();
@@ -933,16 +983,18 @@ const listDomainTypes: ToolDefinition = {
   category: 'domain-read',
   inputSchema: { type: 'object', properties: {} },
   execute: async (_args, supabase) => {
-    const [{ data, error }, aliases] = await Promise.all([
+    // domain_name is what the client this session is working in calls the type, and the
+    // aliases are that client's words first, then the shared ones.
+    const [{ data, error }, words] = await Promise.all([
       supabase.from('domain_types').select('domain_code, domain_name, description, is_active').order('domain_code'),
-      supabase.from('domain_aliases').select('domain_code, alias_label, alias_code').eq('is_active', true),
+      loadAliasWords(supabase).catch(() => null),
     ]);
     if (error) throw error;
     const byDomain = new Map<string, { alias_label: string; alias_code: string }[]>();
-    for (const alias of aliases.error ? [] : (aliases.data || [])) {
-      const list = byDomain.get(alias.domain_code) || [];
-      list.push({ alias_label: alias.alias_label, alias_code: alias.alias_code });
-      byDomain.set(alias.domain_code, list);
+    for (const alias of words?.domainAliases || []) {
+      const list = byDomain.get(alias.domainCode) || [];
+      list.push({ alias_label: alias.aliasLabel, alias_code: alias.aliasCode });
+      byDomain.set(alias.domainCode, list);
     }
     const domains = (data || []).map((domain: { domain_code: string }) => ({
       ...domain,

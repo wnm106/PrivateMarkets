@@ -10,6 +10,7 @@ import { resolveEntityClientId, resolveSchemaClientId, withClientNames } from '.
 import { OPEN_SYSTEM_TO, writeGoldenValue } from '../lib/golden-write';
 import { ok } from '../lib/db-result';
 import { groupBy, loaderFor } from '../lib/request-loaders';
+import { assertRequiredParents } from '../lib/required-parents';
 
 function normalizePrecedenceChain(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -31,6 +32,26 @@ type CatalogCounts = {
 };
 
 const catalogCountCache = new WeakMap<object, Promise<CatalogCounts>>();
+const catalogNameCache = new WeakMap<object, Promise<Map<string, string>>>();
+
+/**
+ * The catalog's own name for every entity type, read once per request from the
+ * catalog table. The public view's name is what the session's client calls the type.
+ */
+function catalogNames(context: Context): Promise<Map<string, string>> {
+  const cached = catalogNameCache.get(context);
+  if (cached) return cached;
+  const pending = (async () => {
+    const { data, error } = await context.supabase
+      .schema('metadata_register')
+      .from('domain_types')
+      .select('domain_code, domain_name');
+    if (error) throw error;
+    return new Map((data || []).map((row: { domain_code: string; domain_name: string }) => [row.domain_code, row.domain_name]));
+  })();
+  catalogNameCache.set(context, pending);
+  return pending;
+}
 
 const GROUP_COLORS = ['#2563eb', '#7c3aed', '#059669', '#c2410c', '#be185d', '#0369a1', '#b45309', '#0f766e'];
 
@@ -660,6 +681,17 @@ export const entityResolvers = {
         }
         
         const clientId = await resolveEntityClientId(context, input.clientId);
+
+        // A record whose entity type needs a parent (a Security its Issuer) is refused without
+        // one, before anything is written. The web form asks for it; this is every other caller.
+        await assertRequiredParents(context.supabase, {
+          domainCode: input.domainCode,
+          attributes: input.attributes,
+          linkedEntityIds: [
+            ...(input.parentRelationships || []).map((rel: { parentEntityId: string }) => rel.parentEntityId),
+            ...(input.childRelationships || []).map((rel: { childEntityId: string }) => rel.childEntityId),
+          ],
+        });
 
         // Insert into master_entities
         const { data: entity, error: entityError } = await context.supabase
@@ -1519,7 +1551,9 @@ export const entityResolvers = {
         const parentCode = input.parentDomainCode || null;
         await assertParentPlacement(context.supabase, input.domainCode, parentCode, groupId);
         const displayOrder = await nextDisplayOrder(context.supabase, groupId);
+        // The catalog table: the public view's name is what the session's client calls the type.
         const { data, error } = await context.supabase
+          .schema('metadata_register')
           .from('domain_types')
           .insert({
             domain_code: input.domainCode,
@@ -1585,6 +1619,7 @@ export const entityResolvers = {
         }
 
         const { data, error } = await context.supabase
+          .schema('metadata_register')
           .from('domain_types')
           .update(updateData)
           .eq('id', input.id)
@@ -1892,6 +1927,10 @@ export const entityResolvers = {
   },
 
   DomainTypeRecord: {
+    catalogName: async (parent: { domainCode: string; domainName: string }, _: unknown, context: Context) => {
+      const names = await catalogNames(context);
+      return names.get(parent.domainCode) ?? parent.domainName;
+    },
     ownedAttributeCount: async (parent: { domainCode: string }, _: unknown, context: Context) => {
       const counts = await catalogCounts(context);
       return Number(counts.owned[parent.domainCode] || 0);

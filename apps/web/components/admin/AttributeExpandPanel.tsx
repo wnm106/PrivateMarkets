@@ -40,6 +40,9 @@ export interface ExpandableAttribute {
   isDerived?: boolean;
   isEditable?: boolean;
   isVisible?: boolean;
+  /** The catalog's own flag; isVisible is also false when the client being worked in hides the field. */
+  catalogIsVisible?: boolean;
+  hiddenForClient?: boolean;
   aggregationType?: string;
   weightAttributeCode?: string;
   numericPrecision?: number;
@@ -106,7 +109,8 @@ export function AttributeExpandPanel({
     displaySpanColumns: initialSpan.columns,
     displaySpanRows: initialSpan.rows,
     isEditable: attribute.isEditable ?? true,
-    isVisible: attribute.isVisible ?? true,
+    // The catalog's flag. isVisible is also false when the client being worked in hides the field.
+    isVisible: attribute.catalogIsVisible ?? attribute.isVisible ?? true,
     aggregationType: attribute.aggregationType || 'NONE',
     weightAttributeCode: attribute.weightAttributeCode || '',
     numericPrecision: attribute.numericPrecision,
@@ -394,6 +398,9 @@ export function AttributeExpandPanel({
         <label><input type="checkbox" checked={form.isMultiValued} onChange={(e) => setForm({ ...form, isMultiValued: e.target.checked })} /> Multi-valued</label>
         <label><input type="checkbox" checked={form.isEditable} onChange={(e) => setForm({ ...form, isEditable: e.target.checked })} /> Editable</label>
         <label><input type="checkbox" checked={form.isVisible} onChange={(e) => setForm({ ...form, isVisible: e.target.checked })} /> Visible</label>
+        {attribute.hiddenForClient && (
+          <span style={{ fontSize: '12px', color: 'var(--ink-3)' }}>Hidden for the client you are working in (For this client tab)</span>
+        )}
       </div>
       {form.aggregationType === 'WEIGHTED_AVG' && (
         <label className="span-2">

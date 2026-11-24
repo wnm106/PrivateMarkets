@@ -15,6 +15,8 @@ export interface StageArg {
   key: string;
   label: string;
   help: string;
+  /** The screen works without it. A step may leave it blank. */
+  optional?: boolean;
 }
 
 export interface StageExit {
@@ -50,6 +52,28 @@ function text(value: unknown): string {
 
 export const STAGE_SCREENS: readonly StageScreen[] = [
   {
+    code: 'load.receive',
+    label: 'Receive a file',
+    description: 'Asks a person for the file a run needs. They choose one already stored in Load data or upload it there and then, see it as it is, and hand it to the run. An upload goes through the standard loader: it is read into tables whatever its format, and kept. The steps after it read the file as {{steps.this.result.importInstanceId}}.',
+    outcomes: ['received', 'none'],
+    permissions: {},
+    args: [
+      { key: 'expecting', label: 'What the run expects', help: 'Told to the person in a line: "The quarterly financial statements each borrower sent".' },
+      { key: 'about', label: 'Records the file is about', help: 'Usually {{steps.select.records}}. Stored files whose name mentions one are listed first.', optional: true },
+    ],
+    exit: {
+      outcomes: ['received'],
+      tool: 'get_position_file_import',
+      args: (_stageArgs, result) => ({ instanceId: text(result.importInstanceId) }),
+      problem: (output, result) => {
+        if (!text(result.importInstanceId)) return 'Choose the file to hand to this run, or say there is none.';
+        const file = record(output);
+        if (!text(file.id)) return 'That file is no longer stored. Choose another, or upload it again.';
+        return null;
+      },
+    },
+  },
+  {
     code: 'intake.understand',
     label: 'Understand a file',
     description: 'Shows a stored file beside what was found in it: what kind of file it is, its tables, the records it holds, and the stored record it is about. The person confirms before any column is mapped.',
@@ -64,6 +88,26 @@ export const STAGE_SCREENS: readonly StageScreen[] = [
         const file = record(output);
         if (!(Number(file.rowCount) > 0)) return 'Nothing was read from the table that is selected. Choose a table that has rows, or stop this run.';
         return null;
+      },
+    },
+  },
+  {
+    code: 'intake.record',
+    label: 'Choose the record a file is about',
+    description: 'Asks a person which stored record a file is about, when the file did not name one surely enough: an issuer for a borrower\'s statements, say. It lists the records the file resembles, best first, and lets the person search for another. The step after it reads the choice as {{steps.this.result.entityId}}.',
+    outcomes: ['chosen', 'none'],
+    permissions: {},
+    args: [
+      { key: 'importInstanceId', label: 'Stored file', help: 'The file to look at, usually the one the run received.' },
+      { key: 'recordType', label: 'Type of record', help: 'The type of record to choose, such as ISSUER.' },
+    ],
+    exit: {
+      outcomes: ['chosen'],
+      tool: 'find_file_record',
+      args: (stageArgs, result) => ({ instanceId: text(stageArgs.importInstanceId), recordType: text(stageArgs.recordType), entityId: text(result.entityId) }),
+      problem: (output, result) => {
+        if (!text(result.entityId)) return 'Choose the record this file is about, or stop this run.';
+        return record(output).identified === true ? null : 'That is not a stored record of this type. Choose another.';
       },
     },
   },

@@ -500,7 +500,13 @@ function statementScore(rows: string[][]): number {
     const cells = row.filter(Boolean);
     return cells.length >= 2 && cells.length <= 6 && !isNumeric(cells[0]) && cells.slice(1).some(isNumeric);
   }).length;
-  const lexicon = filled.reduce((sum, row) => sum + (NAV_CUES.test(row.join(' ')) || FINANCIAL_CUES.test(row.join(' ')) ? 1 : 0), 0);
+  // A statement names its line in one cell: "Revenue", then figures. A row that names statement lines in several
+  // cells is the heading of a table with a column for each line and a record on every row below, such as one
+  // row a quarter. It is not a statement's line, and does not make the sheet a statement.
+  const lexicon = filled.reduce((sum, row) => {
+    const naming = row.filter((cell) => cell && (NAV_CUES.test(cell) || FINANCIAL_CUES.test(cell))).length;
+    return sum + (naming === 1 ? 1 : 0);
+  }, 0);
   let score = 0;
   if (narrow / filled.length >= 0.55) score += 2;
   // Rows of a label and a number are what any table of companies and amounts looks like. They count toward a

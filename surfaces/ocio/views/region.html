@@ -1,0 +1,277 @@
+<style>
+.x-top{box-shadow:none}
+.x-shell{display:grid;grid-template-columns:216px minmax(0,1fr) 280px;gap:12px;align-items:start;margin-top:10px}
+.x-shell a.crumb-link{text-decoration:none}
+.x-rail{background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.x-ent{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 6px;width:100%;padding:7px 10px;border:0;border-bottom:1px solid var(--line);background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
+.x-ent.m{padding-left:22px}
+.x-ent[aria-current="true"]{background:var(--accent-light);box-shadow:inset 3px 0 0 var(--accent-2)}
+.x-ent b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.x-ent .x-r{display:flex;gap:4px;align-items:center}
+.x-ent small{grid-column:1/-1;display:flex;gap:6px;align-items:center;color:var(--ink-3);font-size:11.5px}
+.x-ent .da-track{margin:0 0 0 auto}.x-ent .da-track i{width:12px}.x-ent .da-track i.on{background:var(--accent-2)}
+.x-rail .btn{margin:10px;width:calc(100% - 20px);justify-content:center}
+.x-rib .da-title{flex:1 1 100%;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--line);padding:12px 16px}
+.x-rib .da-facts{grid-template-columns:repeat(4,minmax(0,1fr))}
+.x-rib .da-fact{padding:9px 14px}
+.x-rib .da-fact.wide{grid-column:span 2}
+.x-rib .da-fact:nth-child(3),.x-rib .da-fact:nth-child(7){border-right:0}
+.x-rib .da-fact:nth-child(n+4){border-bottom:0}
+.x-rib .da-fact strong{white-space:nowrap}
+.x-rib .da-fact strong .da-st{margin-left:4px;vertical-align:2px}
+.x-acts{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-3)}
+.x-rib .fs-track{height:6px;margin:4px 0 2px}
+.x-tabs button{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;max-width:190px}
+.x-tabs button small{font-size:11px;font-weight:400;color:var(--ink-3)}
+.x-tl{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.x-tabsep{flex:none;width:1px;background:var(--line);margin:8px 6px}
+.x-grid{min-width:0;font-size:12.5px}
+.x-grid th,.x-grid td{padding:6px 8px}
+.x-grid .da-name b{white-space:nowrap}
+.x-grid .da-caret{margin-right:0}
+.x-grid td.num,.x-grid th.num{white-space:nowrap}
+.x-m{width:172px;min-width:172px}
+.x-trio{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
+.x-trio i{font-style:normal;font-size:11px;font-weight:400;color:var(--ink-3);text-align:right}
+.x-trio input{width:100%;min-width:0;font:inherit;font-size:12px;padding:2px 4px;border:1px solid var(--line);border-radius:4px;background:var(--surface);color:var(--ink-3);text-align:right}
+.x-trio input.tgt{color:var(--ink);font-weight:600}
+.x-trio input:disabled{background:var(--bg-alt)}
+.x-band{display:grid;grid-template-columns:1fr 50px;gap:6px;align-items:center;margin-top:5px}
+.x-trk{position:relative;height:6px;border-radius:3px;background:var(--bg-alt)}
+.x-trk i{position:absolute;top:0;bottom:0;border-radius:3px}
+.x-trk i.rng{background:var(--line)}
+.x-trk i.fill{left:0;top:1px;bottom:1px;background:var(--ink-4)}
+.x-trk i.tg{width:2px;top:-3px;bottom:-3px;margin-left:-1px;border-radius:0;background:var(--ink)}
+.x-av{font-size:11.5px;text-align:right;color:var(--ink-2);white-space:nowrap}
+.x-av.nil{color:var(--ink-4)}
+.x-band.in .fill{background:var(--green)}.x-band.in .x-av{color:var(--green)}
+.x-band.under .fill{background:var(--accent-2)}
+.x-band.below .fill{background:var(--amber)}.x-band.below .x-av{color:var(--amber)}
+.x-band.above .fill{background:var(--red)}.x-band.above .x-av{color:var(--red)}
+.da-grid tbody tr.x-has td:first-child{box-shadow:inset 3px 0 0 var(--accent-2)}
+.x-gh{display:flex;justify-content:space-between;align-items:baseline;width:100%;padding:0;border:0;background:none;font:inherit;color:inherit;cursor:pointer}
+.x-gh span{font-size:14px;font-weight:600}.x-gh small{font-size:11.5px;color:var(--ink-3)}
+.x-gh.on span{color:var(--accent-2)}
+.x-side .da-mini{font-size:12.5px;margin-top:6px}
+.x-side .da-mini td:last-child{text-align:right;white-space:nowrap}
+.x-d2 td:first-child{padding-left:12px}.x-d3 td:first-child{padding-left:24px}.x-d4 td:first-child{padding-left:36px}
+.x-ctx td{color:var(--ink-3)}
+.x-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px;background:var(--ink-4)}
+.x-dot.in{background:var(--green)}.x-dot.under{background:var(--accent-2)}.x-dot.below{background:var(--amber)}.x-dot.above{background:var(--red)}.x-dot.over{background:var(--gold)}
+.x-legend{display:grid;gap:6px;font-size:12px;color:var(--ink-3)}
+@media (max-width:1100px){.x-shell{grid-template-columns:1fr}.x-rib .da-facts{grid-template-columns:repeat(2,1fr)}.x-rib .da-fact.wide{grid-column:auto}}
+</style>
+
+<div class="da">
+  <header class="page-header x-top">
+    <div class="page-title-block">
+      <div><div class="page-title">Target Manager</div><div class="page-meta">Fund-of-Funds &amp; Directs</div></div>
+      <div class="cr-seg" role="group" aria-label="View">
+        <button class="on" aria-pressed="true">Assign targets</button>
+        <button aria-pressed="false">Overview</button>
+        <button aria-pressed="false">Pipeline</button>
+      </div>
+    </div>
+    <div class="page-actions">
+      <button class="btn btn-sm" title="Undo last change (Ctrl+Z)" disabled>Undo</button>
+      <button class="btn btn-sm" title="Copy all targets as CSV">Copy CSV</button>
+      <button class="btn btn-sm" title="Restore the example clients and targets">Reset example</button>
+    </div>
+  </header>
+
+  <div class="x-shell">
+    <!-- Clients & mandates rail -->
+    <nav class="x-rail" aria-label="Clients and mandates">
+      <div class="cr-phead"><h2>Clients &amp; mandates</h2></div>
+      <button class="x-ent" aria-current="false"><b>Commonwealth Teachers’ Retirement</b><span class="x-r"><i class="cr-n">14</i><span class="da-st breach" title="5 compliance breaches">5</span></span><small>$2B · 70 inv <span class="da-st ok" title="2026 pacing velocity">1.04x</span><span class="da-track" title="Strategy: 6 · Region: 4 · Structure: 4"><i class="on"></i><i class="on"></i><i class="on"></i></span></small></button>
+      <button class="x-ent m" aria-current="true"><b>PE Primary Sleeve</b><span class="x-r"><i class="cr-n">17</i><span class="da-st breach" title="3 compliance breaches">3</span></span><small>$1.2B · 30 inv <span class="da-st ok" title="2026 pacing velocity">1.06x</span><span class="da-track" title="Strategy: 9 · Region: 3 · Structure: 5"><i class="on"></i><i class="on"></i><i class="on"></i></span></small></button>
+      <button class="x-ent m" aria-current="false"><b>Credit &amp; Real Assets Sleeve</b><span class="x-r"><i class="cr-n">9</i></span><small>$450M · 14 inv <span class="da-st breach" title="2026 pacing velocity">0.77x</span><span class="da-track" title="Strategy: 7 · Region: 2 · Structure: 0"><i class="on"></i><i class="on"></i><i></i></span></small></button>
+      <button class="x-ent m" aria-current="false"><b>Co-Investment Sleeve</b><span class="x-r"><i class="cr-n">7</i><span class="da-st breach" title="2 compliance breaches">2</span></span><small>$400M · 24 inv <span class="da-st ok" title="2026 pacing velocity">1.14x</span><span class="da-track" title="Strategy: 4 · Region: 0 · Structure: 3"><i class="on"></i><i></i><i class="on"></i></span></small></button>
+      <button class="x-ent" aria-current="false"><b>Halvorsen Family Office</b><span class="x-r"><i class="cr-n">3</i><span class="da-st breach" title="1 compliance breach">1</span></span><small>$450M · 40 inv <span class="da-st ok" title="2026 pacing velocity">0.96x</span><span class="da-track" title="Strategy: 0 · Region: 3 · Structure: 0"><i></i><i class="on"></i><i></i></span></small></button>
+      <button class="x-ent m" aria-current="false"><b>Diversified Sleeve</b><span class="x-r"><i class="cr-n">4</i><span class="da-st breach" title="1 compliance breach">1</span></span><small>$450M · 40 inv <span class="da-st ok" title="2026 pacing velocity">0.96x</span><span class="da-track" title="Strategy: 4 · Region: 0 · Structure: 0"><i class="on"></i><i></i><i></i></span></small></button>
+      <button class="x-ent" aria-current="false"><b>Northgate Mutual Insurance</b><span class="x-r"><i class="cr-n">2</i><span class="da-st breach" title="3 compliance breaches">3</span></span><small>$900M · 40 inv <span class="da-st ok" title="2026 pacing velocity">1.11x</span><span class="da-track" title="Strategy: 2 · Region: 0 · Structure: 0"><i class="on"></i><i></i><i></i></span></small></button>
+      <button class="x-ent m" aria-current="false"><b>Private Credit Sleeve</b><span class="x-r"><i class="cr-n">10</i><span class="da-st breach" title="3 compliance breaches">3</span></span><small>$600M · 28 inv <span class="da-chip" title="2026 pacing velocity">1.16x</span><span class="da-track" title="Strategy: 8 · Region: 2 · Structure: 0"><i class="on"></i><i class="on"></i><i></i></span></small></button>
+      <button class="x-ent m" aria-current="false"><b>Secondaries Sleeve</b><span class="x-r"><i class="cr-n">6</i></span><small>$200M · 10 inv <span class="da-st breach" title="2026 pacing velocity">0.85x</span><span class="da-track" title="Strategy: 3 · Region: 0 · Structure: 3"><i class="on"></i><i></i><i class="on"></i></span></small></button>
+      <button class="btn btn-sm">+ Add mandate sleeve</button>
+    </nav>
+
+    <!-- Main -->
+    <main>
+      <div class="crumbs"><a class="crumb-link" href="#">Commonwealth Teachers’ Retirement</a><span class="sep">›</span><span class="crumb-current">Mandate sleeve</span></div>
+
+      <header class="da-ribbon x-rib" role="group" aria-label="Deployment and pacing">
+        <div class="da-title">
+          <div><span class="da-chip">Mandate sleeve</span><h1>PE Primary Sleeve</h1></div>
+          <div class="x-acts">
+            <span>% basis</span>
+            <div class="cr-seg" role="group" aria-label="Percent basis" data-editable="true">
+              <button aria-pressed="false" title="Percent targets are a share of the total program">Program</button>
+              <button class="on" aria-pressed="true" title="Percent targets are a share of the level above">Parent level</button>
+            </div>
+            <button class="btn btn-sm">Copy targets from…</button>
+          </div>
+        </div>
+        <div class="da-facts">
+          <div class="da-fact big"><span>Program</span><strong>$1.2B</strong><small>74% committed · since Apr 2022</small></div>
+          <div class="da-fact"><span>Investments</span><strong>22 <small style="display:inline">/ 30</small></strong><small>made vs target</small></div>
+          <div class="da-fact wide"><span>2026 deployment vs target</span><strong>$167M <small style="display:inline">/ $180M</small></strong>
+            <div class="fs-track" title="Bar: deployed against the 2026 target. Marker: where pacing says you should be by 17 Nov 2026"><i style="width:92.8%"></i><b style="left:87.7%"></b></div>
+            <small>93% of annual · $157.8M expected to date</small></div>
+          <div class="da-fact"><span>Pacing velocity</span><strong class="up">1.06x<span class="da-st ok">On pace</span></strong><small>YTD vs time-weighted target</small></div>
+          <div class="da-fact"><span>Since inception</span><strong class="up" title="On pace">1.07x</strong><small>$893.9M vs $833.4M</small></div>
+          <div class="da-fact"><span>Compliance</span><a href="#" title="Open the compliance tab"><strong class="dn">3 breaches</strong></a><small>13 rules · 1 watch · 2 pending · 2 soft</small></div>
+          <div class="da-fact"><span>Run-rate (LTM)</span><strong>$193.5M<small style="display:inline">/yr</small></strong><small>$306.1M left · ≈1.6 yrs at this pace</small></div>
+        </div>
+      </header>
+
+      <div class="da-tabs x-tabs" role="tablist">
+        <button role="tab" aria-selected="false"><span class="x-tl">Strategy <i class="cr-n">9</i></span><small>Category › Asset Class › Strategy › Sub-Strategy</small></button>
+        <button role="tab" aria-selected="true" class="on"><span class="x-tl">Region <i class="cr-n">3</i></span><small>Region › Asset Class</small></button>
+        <button role="tab" aria-selected="false"><span class="x-tl">Structure <i class="cr-n">5</i></span><small>Category › Structure Type › Detail</small></button>
+        <span class="x-tabsep" aria-hidden="true"></span>
+        <button role="tab" aria-selected="false"><span class="x-tl">Pacing</span><small>Annual deployment by year</small></button>
+        <button role="tab" aria-selected="false"><span class="x-tl">Commitments <i class="cr-n">22</i></span><small>Original commitments and attributes</small></button>
+        <button role="tab" aria-selected="false"><span class="x-tl">Compliance <span class="da-st breach">3 breaches</span></span><small>Rules, limits and results</small></button>
+      </div>
+
+      <section class="da-sec">
+        <div class="da-toolbar" style="margin-top:0">
+          <input class="pipe-search" type="search" placeholder="Find a level, e.g. Mid Cap" aria-label="Find a level">
+          <label><input type="checkbox"> Assigned only</label>
+          <button class="btn btn-sm">Expand all</button>
+          <button class="btn btn-sm">Collapse</button>
+          <span class="da-note">$ in millions unless you type K or B · Tab across min / target / max · Enter moves down · % of parent level</span>
+        </div>
+
+        <div class="da-gridwrap" style="margin-top:10px">
+          <table class="da-grid x-grid">
+            <thead><tr>
+              <th>Region › Asset Class</th>
+              <th class="x-m" title="Minimum, target and maximum. The bar shows commitments against the band (shaded) and target (tick).">$ Dollars<div class="x-trio"><i>Min</i><i>Target</i><i>Max</i></div></th>
+              <th class="x-m" title="Minimum, target and maximum. The bar shows commitments against the band (shaded) and target (tick)."># Investments<div class="x-trio"><i>Min</i><i>Target</i><i>Max</i></div></th>
+              <th class="x-m" title="Minimum, target and maximum. The bar shows commitments against the band (shaded) and target (tick). Actual % is the share of commitments at the level above.">% Percent<div class="x-trio"><i>Min</i><i>Target</i><i>Max</i></div></th>
+              <th class="num" title="Sum of the next level's targets compared with this row">Children Σ</th>
+              <th class="num" title="This client’s macro target for the same level">Client target</th>
+              <th></th>
+            </tr></thead>
+            <tbody>
+              <tr class="par">
+                <td><div class="da-name"><button class="da-caret" aria-expanded="true" aria-label="Collapse Total program">▾</button><span class="cr-type other">ALL</span><b>Total program</b></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" aria-label="Total program Dollars min" data-editable="true"><input class="tgt" value="$1.2B" placeholder="—" aria-label="Total program Dollars target" data-editable="true"><input class="mm" placeholder="max" aria-label="Total program Dollars max" data-editable="true"></div>
+                  <div class="x-band under" title="Actual $893.9M · target $1.2B · 74% of target"><span class="x-trk"><i class="fill" style="width:62.1%"></i><i class="tg" style="left:83.3%"></i></span><span class="x-av">$893.9M</span></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" value="25" placeholder="min" aria-label="Total program Investments min" data-editable="true"><input class="tgt" value="30" placeholder="—" aria-label="Total program Investments target" data-editable="true"><input class="mm" value="35" placeholder="max" aria-label="Total program Investments max" data-editable="true"></div>
+                  <div class="x-band below" title="Actual 22 · target 30 · range 25 to 35 · Below min"><span class="x-trk"><i class="rng" style="left:59.5%;width:23.8%"></i><i class="fill" style="width:52.4%"></i><i class="tg" style="left:71.4%"></i></span><span class="x-av">22</span></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" disabled aria-label="Total program Percent min"><input class="tgt" value="100%" placeholder="—" disabled aria-label="Total program Percent target"><input class="mm" placeholder="max" disabled aria-label="Total program Percent max"></div>
+                  <div class="x-band"><span></span><span class="x-av nil">of program</span></div></td>
+                <td class="num"><span class="da-st breach" title="Children total $1.26B against $1.2B at this level (3 of 4 children targeted)">$ 105%</span></td>
+                <td class="num">$2B · 70#</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td><div class="da-name"><button class="da-caret" aria-expanded="false" aria-label="Expand Global">▸</button><span class="cr-type other">RGN</span><b>Global</b></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" aria-label="Global Dollars min" data-editable="true"><input class="tgt" placeholder="—" aria-label="Global Dollars target" data-editable="true"><input class="mm" placeholder="max" aria-label="Global Dollars max" data-editable="true"></div>
+                  <div class="x-band"><span class="x-trk"></span><span class="x-av nil">·</span></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" aria-label="Global Investments min" data-editable="true"><input class="tgt" placeholder="—" aria-label="Global Investments target" data-editable="true"><input class="mm" placeholder="max" aria-label="Global Investments max" data-editable="true"></div>
+                  <div class="x-band"><span class="x-trk"></span><span class="x-av nil">·</span></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" aria-label="Global Percent min" data-editable="true"><input class="tgt" placeholder="—" aria-label="Global Percent target" data-editable="true"><input class="mm" placeholder="max" aria-label="Global Percent max" data-editable="true"></div>
+                  <div class="x-band"><span class="x-trk"></span><span class="x-av nil">·</span></div></td>
+                <td class="num"></td>
+                <td class="num">·</td>
+                <td></td>
+              </tr>
+              <tr class="x-has">
+                <td><div class="da-name"><button class="da-caret" aria-expanded="false" aria-label="Expand North America">▸</button><span class="cr-type other">RGN</span><b>North America</b></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="≈720M" aria-label="North America Dollars min" data-editable="true"><input class="tgt" placeholder="≈840M" aria-label="North America Dollars target" data-editable="true"><input class="mm" placeholder="≈960M" aria-label="North America Dollars max" data-editable="true"></div>
+                  <div class="x-band in" title="Actual $748.4M · target $840M · range $720M to $960M · In range · under target"><span class="x-trk"><i class="rng" style="left:62.5%;width:20.8%"></i><i class="fill" style="width:65%"></i><i class="tg" style="left:72.9%"></i></span><span class="x-av">$748.4M</span></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" aria-label="North America Investments min" data-editable="true"><input class="tgt" placeholder="—" aria-label="North America Investments target" data-editable="true"><input class="mm" placeholder="max" aria-label="North America Investments max" data-editable="true"></div>
+                  <div class="x-band none" title="Actual 18 · No target"><span class="x-trk"><i class="fill" style="width:83.3%"></i></span><span class="x-av">18</span></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" value="60%" placeholder="min" aria-label="North America Percent min" data-editable="true"><input class="tgt" value="70%" placeholder="—" aria-label="North America Percent target" data-editable="true"><input class="mm" value="80%" placeholder="max" aria-label="North America Percent max" data-editable="true"></div>
+                  <div class="x-band above" title="Actual 83.7% of committed · target 70% · range 60% to 80% · Above max"><span class="x-trk"><i class="rng" style="left:60%;width:20%"></i><i class="fill" style="width:83.7%"></i><i class="tg" style="left:70%"></i></span><span class="x-av">83.7%</span></div></td>
+                <td class="num"></td>
+                <td class="num">$1.3B · 65%</td>
+                <td><button class="btn btn-sm" title="Clear targets on this row" aria-label="Clear North America targets">×</button></td>
+              </tr>
+              <tr class="x-has">
+                <td><div class="da-name"><button class="da-caret" aria-expanded="false" aria-label="Expand Western Europe">▸</button><span class="cr-type other">RGN</span><b>Western Europe</b></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" aria-label="Western Europe Dollars min" data-editable="true"><input class="tgt" placeholder="≈300M" aria-label="Western Europe Dollars target" data-editable="true"><input class="mm" placeholder="max" aria-label="Western Europe Dollars max" data-editable="true"></div>
+                  <div class="x-band under" title="Actual $78M · target $300M · 26% of target"><span class="x-trk"><i class="fill" style="width:21.7%"></i><i class="tg" style="left:83.3%"></i></span><span class="x-av">$78M</span></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" aria-label="Western Europe Investments min" data-editable="true"><input class="tgt" placeholder="—" aria-label="Western Europe Investments target" data-editable="true"><input class="mm" placeholder="max" aria-label="Western Europe Investments max" data-editable="true"></div>
+                  <div class="x-band none" title="Actual 2 · No target"><span class="x-trk"><i class="fill" style="width:83.3%"></i></span><span class="x-av">2</span></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" aria-label="Western Europe Percent min" data-editable="true"><input class="tgt" value="25%" placeholder="—" aria-label="Western Europe Percent target" data-editable="true"><input class="mm" placeholder="max" aria-label="Western Europe Percent max" data-editable="true"></div>
+                  <div class="x-band under" title="Actual 8.7% of committed · target 25% · 35% of target"><span class="x-trk"><i class="fill" style="width:29%"></i><i class="tg" style="left:83.3%"></i></span><span class="x-av">8.7%</span></div></td>
+                <td class="num"></td>
+                <td class="num">$500M · 25%</td>
+                <td><button class="btn btn-sm" title="Clear targets on this row" aria-label="Clear Western Europe targets">×</button></td>
+              </tr>
+              <tr class="x-has">
+                <td><div class="da-name"><button class="da-caret" aria-expanded="false" aria-label="Expand APAC/ROW">▸</button><span class="cr-type other">RGN</span><b>APAC/ROW</b></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" aria-label="APAC/ROW Dollars min" data-editable="true"><input class="tgt" placeholder="≈120M" aria-label="APAC/ROW Dollars target" data-editable="true"><input class="mm" placeholder="≈180M" aria-label="APAC/ROW Dollars max" data-editable="true"></div>
+                  <div class="x-band in" title="Actual $67.5M · target $120M · range … to $180M · In range · under target"><span class="x-trk"><i class="rng" style="left:0;width:83.3%"></i><i class="fill" style="width:31.3%"></i><i class="tg" style="left:55.6%"></i></span><span class="x-av">$67.5M</span></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" aria-label="APAC/ROW Investments min" data-editable="true"><input class="tgt" placeholder="—" aria-label="APAC/ROW Investments target" data-editable="true"><input class="mm" placeholder="max" aria-label="APAC/ROW Investments max" data-editable="true"></div>
+                  <div class="x-band none" title="Actual 2 · No target"><span class="x-trk"><i class="fill" style="width:83.3%"></i></span><span class="x-av">2</span></div></td>
+                <td class="x-m"><div class="x-trio"><input class="mm" placeholder="min" aria-label="APAC/ROW Percent min" data-editable="true"><input class="tgt" value="10%" placeholder="—" aria-label="APAC/ROW Percent target" data-editable="true"><input class="mm" value="15%" placeholder="max" aria-label="APAC/ROW Percent max" data-editable="true"></div>
+                  <div class="x-band in" title="Actual 7.6% of committed · target 10% · range … to 15% · In range · under target"><span class="x-trk"><i class="rng" style="left:0;width:83.3%"></i><i class="fill" style="width:42.2%"></i><i class="tg" style="left:55.6%"></i></span><span class="x-av">7.6%</span></div></td>
+                <td class="num"></td>
+                <td class="num">$200M · 10%</td>
+                <td><button class="btn btn-sm" title="Clear targets on this row" aria-label="Clear APAC/ROW targets">×</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- Assigned targets side panel -->
+    <aside class="da-panel x-side" aria-label="Assigned targets">
+      <div class="da-ph"><h3>Assigned targets</h3></div>
+
+      <section>
+        <button class="x-gh" title="Open the Strategy targets"><span>Strategy</span><small>9 targets</small></button>
+        <p class="da-note">Category › Asset Class › Strategy › Sub-Strategy</p>
+        <table class="da-mini"><tbody>
+          <tr class="link"><td><i class="x-dot in" title="In range · under target"></i><b>Primary</b><small>range $800M–$1B · 18–26#</small></td><td><b>$900M</b> ≈75% <b>22#</b></td></tr>
+          <tr class="link x-d2"><td><i class="x-dot under" title="93% of target"></i>Private Equity</td><td>≈$900M <b>100%</b></td></tr>
+          <tr class="link x-d3"><td><i class="x-dot above" title="Above max"></i>Buyout<small>range 7–11# · 50%–70%</small></td><td>≈$540M <b>60%</b> <b>9#</b></td></tr>
+          <tr class="link x-d4"><td><i class="x-dot under" title="71% of target"></i>Small Cap</td><td>≈$135M <b>25%</b></td></tr>
+          <tr class="link x-d4"><td><i class="x-dot above" title="Above max"></i>Mid Cap<small>range 35%–55%</small></td><td>≈$243M <b>45%</b></td></tr>
+          <tr class="link x-d4"><td><i class="x-dot under" title="91% of target"></i>Large Cap</td><td>≈$108M <b>20%</b></td></tr>
+          <tr class="link x-d3"><td><i class="x-dot under" title="67% of target"></i>Growth Equity<small>range 10%–20%</small></td><td>≈$135M <b>15%</b> <b>3#</b></td></tr>
+          <tr class="link x-d3"><td><i class="x-dot under" title="75% of target"></i>Venture Capital<small>range 10%–25%</small></td><td>≈$180M <b>20%</b> <b>4#</b></td></tr>
+          <tr class="link"><td><i class="x-dot below" title="Below min"></i><b>Secondary</b><small>range $200M–…</small></td><td><b>$300M</b> ≈25% <b>8#</b></td></tr>
+        </tbody></table>
+      </section>
+
+      <section>
+        <button class="x-gh on" title="Open the Region targets"><span>Region</span><small>3 targets</small></button>
+        <p class="da-note">Region › Asset Class</p>
+        <table class="da-mini"><tbody>
+          <tr class="link"><td><i class="x-dot above" title="Above max"></i><b>North America</b><small>range 60%–80%</small></td><td>≈$840M <b>70%</b></td></tr>
+          <tr class="link"><td><i class="x-dot under" title="26% of target"></i><b>Western Europe</b></td><td>≈$300M <b>25%</b></td></tr>
+          <tr class="link"><td><i class="x-dot in" title="In range · under target"></i><b>APAC/ROW</b><small>range …–15%</small></td><td>≈$120M <b>10%</b></td></tr>
+        </tbody></table>
+      </section>
+
+      <section>
+        <button class="x-gh" title="Open the Structure targets"><span>Structure</span><small>5 targets</small></button>
+        <p class="da-note">Category › Structure Type › Detail</p>
+        <table class="da-mini"><tbody>
+          <tr class="link x-ctx"><td><b>Primary</b></td><td><small>no target</small></td></tr>
+          <tr class="link x-d2"><td><i class="x-dot over" title="Over target"></i>Traditional Primary</td><td><b>85%</b></td></tr>
+          <tr class="link x-d2"><td><i class="x-dot under" title="63% of target"></i>Fund-of-Funds</td><td><b>5%</b></td></tr>
+          <tr class="link x-ctx"><td><b>Secondary</b></td><td><small>no target</small></td></tr>
+          <tr class="link x-d2"><td><i class="x-dot under" title="48% of target"></i>GP Led</td><td><b>$120M</b></td></tr>
+          <tr class="link x-d3"><td><i class="x-dot under" title="72% of target"></i>Single Asset</td><td><b>$80M</b> ≈66.7%</td></tr>
+          <tr class="link x-d3"><td><i class="x-dot under" title="0% of target"></i>Multi Asset</td><td><b>$60M</b> ≈50%</td></tr>
+        </tbody></table>
+      </section>
+
+      <section class="x-legend">
+        <div><span class="da-st ok">$ 100%</span> next level adds up</div>
+        <div><span class="da-st near">$ 85%</span> next level is under</div>
+        <div><span class="da-st breach">$ 105%</span> next level is over</div>
+        <div>Dots show the worst band status on the row: <i class="x-dot in"></i>in range <i class="x-dot below"></i>below min <i class="x-dot above"></i>above max <i class="x-dot under"></i>building to target.</div>
+        <div>Values with ≈ are implied from the other measure. Muted rows have no target of their own but hold targets below.</div>
+      </section>
+    </aside>
+  </div>
+</div>

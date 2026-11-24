@@ -37,6 +37,7 @@ import { covenantResolvers } from './covenants';
 import { excelResolvers } from './excel';
 import { viewResolvers } from './views';
 import { certificationResolvers } from './certification';
+import { clientCatalogResolvers } from './client-catalog';
 
 export const resolvers = {
   Query: {
@@ -90,6 +91,7 @@ export const resolvers = {
     ...excelResolvers.Query,
     ...viewResolvers.Query,
     ...certificationResolvers.Query,
+    ...clientCatalogResolvers.Query,
   },
   
   Certification: certificationResolvers.Certification,
@@ -138,6 +140,7 @@ export const resolvers = {
     ...excelResolvers.Mutation,
     ...viewResolvers.Mutation,
     ...certificationResolvers.Mutation,
+    ...clientCatalogResolvers.Mutation,
   },
   
   Subscription: {},

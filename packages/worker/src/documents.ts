@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { embedConfigFromEnv, processDocument } from '@tapestrai/graphql/src/lib/document-content';
+import { embedConfigFromEnv, processDocument, type OutsideReader } from '@tapestrai/graphql/src/lib/document-content';
+import { llamaParseConfigured, readWithLlamaParse } from '@tapestrai/mcp-server/src/feeds/llama-parse';
 import { refinerFromEnv } from './document-refiner';
 import { JobError, type JobContext, type JobHandler } from './worker';
 
@@ -20,9 +21,19 @@ function whileHeld(supabase: SupabaseClient, job?: JobContext): SupabaseClient {
 }
 
 /**
+ * The reader for a file this worker cannot read itself: a scan, a picture, a Word file. LlamaParse,
+ * when LLAMA_CLOUD_API_KEY is set, and null when it is not. The file leaves for that service here.
+ */
+export function outsideReaderFromEnv(env: Record<string, string | undefined> = process.env): OutsideReader | null {
+  if (!llamaParseConfigured(env as NodeJS.ProcessEnv)) return null;
+  // A long agreement takes minutes to read, so the reader is given longer here than when a person is waiting on an upload.
+  return (fileName, mediaType, bytes) => readWithLlamaParse(fileName, mediaType, bytes, { env: env as NodeJS.ProcessEnv, timeoutMs: 10 * 60 * 1000 });
+}
+
+/**
  * Reads one document into chunks and embeds them. See docs/DOCUMENTS.md.
  *
- * A file that cannot be read (a scan, a format with no reader) fails the run at
+ * A file that cannot be read (a scan with no reader set up, a format no reader takes) fails the run at
  * once: another attempt would read the same file. A run the embedding service
  * slowed down is tried again later and carries on from the chunks already done.
  */
@@ -43,6 +54,8 @@ export function documentProcessHandler(supabase: SupabaseClient, env: Record<str
       embed: embedConfigFromEnv(env),
       // Tables and lists are described by the model when ANTHROPIC_API_KEY is set, and left as they are when it is not.
       refiner: refinerFromEnv(env, { clientId: run.clientId, userId: run.requestedBy, signal: job?.signal }),
+      // A scan, a picture or a Word file is read by LlamaParse when LLAMA_CLOUD_API_KEY is set, and refused when it is not.
+      reader: outsideReaderFromEnv(env),
       budgetMs: 5 * 60 * 1000,
     });
     if (result.status === 'FAILED') throw new JobError(result.message || 'The document could not be read.');

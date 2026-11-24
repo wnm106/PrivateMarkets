@@ -25,7 +25,7 @@ import {
 } from '../feeds/import-instances';
 import { getImportTables, loadImportTable, previewImportTable } from '../feeds/pack-tables';
 import { userIdOf } from '../agent/harness';
-import { indexImportFile, understandImportFile } from '../feeds/import-document';
+import { fileKind, identifyFileRecord, indexImportFile, readImportText, understandImportFile } from '../feeds/import-document';
 import {
   discardBatch,
   editStagedValue,
@@ -96,7 +96,7 @@ const listPositionFileTargetsTool: ToolDefinition = {
   },
   execute: async (args, supabase) => {
     const catalog = await listMappingCatalog(await sessionClientId(supabase));
-    const all = mappingTargets(catalog.attributes, catalog.domains, { domains: catalog.domainAliases, names: catalog.nameAliases });
+    const all = mappingTargets(catalog.attributes, catalog.domains, { domains: catalog.domainAliases, names: catalog.nameAliases, labels: catalog.domainLabels });
     const domains = new Set((Array.isArray(args.domainCodes) ? args.domainCodes : []).map((code: unknown) => String(code).trim().toUpperCase()).filter(Boolean));
     const search = String(args.search || '').trim().toLowerCase();
     const targets = all.filter((target) => {
@@ -111,14 +111,15 @@ const listPositionFileTargetsTool: ToolDefinition = {
 const createPositionFileImportTool: ToolDefinition = {
   name: 'create_position_file_import',
   effect: 'stage',
-  description: 'Store a CSV or Excel position file. Returns a suggested mapping for each column, using only targets from list_position_file_mapping_targets. Does not load records. Call process_position_file_import after the mapping is accepted.',
+  description:
+    'Store a file with the standard file loader, the one Load data uses. It takes a CSV, an Excel workbook, JSON, a PDF, a scan or a picture of a page, a Word file or a web page. A document is read for its tables by the reader that suits it: a short PDF with selectable text here, and a scan, a picture, a Word file or a long or table-heavy PDF by LlamaParse. A document is also kept as a searchable document, every page of it with its notes and footnotes (documentId in the result), so search_documents and get_position_file_text can read what the tables leave out. Returns a suggested mapping for each column, using only targets from list_position_file_mapping_targets. Does not load records.',
   category: 'import',
   inputSchema: {
     type: 'object',
     properties: {
-      fileName: { type: 'string', description: 'File name ending in .csv, .xlsx, or .xls' },
-      contentBase64: { type: 'string', description: 'Base64-encoded file bytes. Use this for Excel files.' },
-      csvText: { type: 'string', description: 'Raw CSV text. Used when contentBase64 is omitted.' },
+      fileName: { type: 'string', description: 'The file name with its extension: .csv, .xlsx, .xls, .json, .pdf, .png, .jpg, .tif, .docx, .doc, .html or .txt. The extension decides how the file is read.' },
+      contentBase64: { type: 'string', description: 'Base64-encoded file bytes. Use this for anything that is not plain text.' },
+      csvText: { type: 'string', description: 'The text of a CSV, JSON, HTML or text file. Used when contentBase64 is omitted.' },
     },
     required: ['fileName'],
   },
@@ -128,14 +129,68 @@ const createPositionFileImportTool: ToolDefinition = {
       ? Buffer.from(String(args.contentBase64), 'base64')
       : Buffer.from(String(args.csvText), 'utf8');
     const fileName = String(args.fileName);
-    const mediaType = fileName.toLowerCase().endsWith('.csv')
-      ? 'text/csv'
-      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const mediaType = mediaTypeOf(fileName);
+    if (!mediaType) throw new Error('Give the file name with its extension: .csv, .xlsx, .xls, .json, .pdf, .png, .jpg, .tif, .docx, .doc, .html or .txt.');
     const clientId = await requireLoadWrite(supabase);
-    return withSupabaseCaller(supabase, clientId, { feature: 'feed-intake', activity: 'feed.import', metadata: { fileName } }, () =>
+    const stored = await withSupabaseCaller(supabase, clientId, { feature: 'feed-intake', activity: 'feed.import', metadata: { fileName } }, () =>
       createImportInstance(fileName, mediaType, bytes, clientId),
     );
+    // A document's words are part of what was received, so it is kept whole. A table is indexed when a workflow asks.
+    if (fileKind(fileName, mediaType, bytes) === 'table') return stored;
+    const document = await indexImportFile(String((stored as { id: string }).id), clientId);
+    return { ...stored, document: { indexed: document.indexed, documentId: document.documentId, note: document.note } };
   },
+};
+
+const MEDIA_TYPES: Record<string, string> = {
+  csv: 'text/csv',
+  tsv: 'text/tab-separated-values',
+  txt: 'text/plain',
+  json: 'application/json',
+  html: 'text/html',
+  htm: 'text/html',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  pdf: 'application/pdf',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  bmp: 'image/bmp',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword',
+};
+
+/** The media type the standard loader is given for a file, by its extension. Null for one it does not take. */
+export function mediaTypeOf(fileName: string): string | null {
+  const extension = /\.([A-Za-z0-9]+)$/.exec(fileName.trim())?.[1]?.toLowerCase() || '';
+  return MEDIA_TYPES[extension] || null;
+}
+
+const getPositionFileTextTool: ToolDefinition = {
+  name: 'get_position_file_text',
+  description:
+    "The words of one stored file, a page at a time: every paragraph, table, note and footnote, not only the tables get_position_file_tables shows. Use it for what a table leaves out: the footnote a figure points at, the basis of preparation, an add-back or a restatement explained in a note, the text of a compliance certificate. A PDF with selectable text is read here. A scan, a picture or a Word file is given as LlamaParse read it. find returns only the passages that hold every word given, with their page, which is the quick way to a footnote (find: \"restated\", or \"(3)\"). Without find, pages come in order from fromPage until the text fills maxChars; nextPage says where to carry on. Quote the file's own words, with the page.",
+  category: 'import',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      instanceId: { type: 'string', description: 'The stored file, from list_position_file_imports.' },
+      find: { type: 'string', description: 'Words to look for. Only passages holding all of them are returned.' },
+      fromPage: { type: 'number', description: 'The first page to read. Default 1.' },
+      toPage: { type: 'number', description: 'The last page to read. Leave out for as far as the text fits.' },
+      maxChars: { type: 'number', description: 'The most text to return. Default 30,000 characters, at most 120,000.' },
+    },
+    required: ['instanceId'],
+  },
+  execute: async (args, supabase) =>
+    readImportText(String(args.instanceId), await sessionClientId(supabase), {
+      find: args.find ? String(args.find) : null,
+      fromPage: Number(args.fromPage) || null,
+      toPage: Number(args.toPage) || null,
+      maxChars: Number(args.maxChars) || null,
+    }),
 };
 
 const getPositionFileImportTool: ToolDefinition = {
@@ -233,11 +288,17 @@ const previewPositionFileLoadTool: ToolDefinition = {
 
 const loadPositionFileTableTool: ToolDefinition = {
   name: 'load_position_file_table',
-  description: 'Load one table of a stored file: select the table, save its mapping, its as-of date and its source, and load its records. The mapping is saved for the next file with the same columns. Use the mapping that preview_position_file_load showed loading cleanly. One call per table. Loading the same table again updates the records it loaded before.',
+  description: 'Load one table of a stored file: select the table, save its mapping, its as-of date and its source, and load its records. The mapping is saved for the next file with the same columns. Use the mapping that preview_position_file_load showed loading cleanly. One call per table. Loading the same table again updates the records it loaded before. The file is also kept as a searchable document if it is not one already, so what was loaded can be traced to the page it came from and its notes and footnotes can be searched.',
   category: 'import',
   inputSchema: { type: 'object', properties: tableLoadProperties, required: ['instanceId', 'columnMappings', 'asOfDate'] },
   // Writes live records without a staged review, so it needs what promoting a batch needs.
-  execute: async (args, supabase) => loadImportTable(String(args.instanceId), await requireLoadPromote(supabase), args, undefined, { actorId: await userIdOf(supabase) }),
+  execute: async (args, supabase) => {
+    const clientId = await requireLoadPromote(supabase);
+    const loaded = await loadImportTable(String(args.instanceId), clientId, args, undefined, { actorId: await userIdOf(supabase) });
+    // Never fails the load: a file that cannot be indexed still loaded, and the note says why it was not.
+    const document = await indexImportFile(String(args.instanceId), clientId).catch(() => null);
+    return document ? { ...loaded, document: { indexed: document.indexed, documentId: document.documentId, note: document.note } } : loaded;
+  },
 };
 
 const stageImportTool: ToolDefinition = {
@@ -369,7 +430,7 @@ const discardLoadBatchTool: ToolDefinition = {
 const indexImportTool: ToolDefinition = {
   name: 'index_position_file_import',
   effect: 'stage',
-  description: 'Keep a stored file as a searchable document: the file itself when its text can be read, otherwise a text rendering of the tables read from it. The document is paired with the file. Does not load records. A file that cannot be indexed is reported with the reason and does not fail the step. Calling it again returns the document already made.',
+  description: 'Keep a stored file as a searchable document. A document (a PDF, a scan, a picture, a Word file, a web page) is kept as the file itself, every page of it with its notes and footnotes; a page with no text of its own is read by LlamaParse. A spreadsheet or a delimited file is kept as a text rendering of its tables. The document is paired with the file. Does not load records. A file that cannot be indexed is reported with the reason and does not fail the step. Calling it again returns the document already made.',
   category: 'import',
   inputSchema: {
     type: 'object',
@@ -390,8 +451,26 @@ const understandImportTool: ToolDefinition = {
   execute: async (args, supabase) => understandImportFile(String(args.instanceId), await sessionClientId(supabase)),
 };
 
+const identifyRecordTool: ToolDefinition = {
+  name: 'find_file_record',
+  description: 'Which stored records of one type a stored file names, such as the issuer a borrower\'s statements are about. Every value that could be a name is searched among the client\'s records of that type by code, name and alias. Returns identified, entityIds (the same shape the Select records step gives), the records with how surely each was found, and candidates that resemble a value but not surely enough. A value that two records name equally well is not guessed. Pass entityId to settle on a record a person chose. Reads only.',
+  category: 'import',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      instanceId: { type: 'string', description: 'The stored file.' },
+      recordType: { type: 'string', description: 'The type of record to find, such as ISSUER.' },
+      entityId: { type: 'string', description: 'A record a person chose. It is checked and used as it is.' },
+    },
+    required: ['instanceId', 'recordType'],
+  },
+  execute: async (args, supabase) => identifyFileRecord(String(args.instanceId), await sessionClientId(supabase), String(args.recordType), args.entityId ? String(args.entityId) : null),
+};
+
 export function registerPositionFileTools(registry: ToolRegistry): void {
+  registry.registerTool(identifyRecordTool);
   registry.registerTool(indexImportTool);
+  registry.registerTool(getPositionFileTextTool);
   registry.registerTool(understandImportTool);
   registry.registerTool(stageImportTool);
   registry.registerTool(listLoadBatchesTool);

@@ -375,7 +375,10 @@ type CreateDomainGroupResult {
 type DomainTypeRecord {
   id: ID!
   domainCode: String!
+  # What the client this session is working in calls the type; the catalog's name otherwise.
   domainName: String!
+  # The catalog's own name. Edit screens write this one.
+  catalogName: String!
   description: String
   isActive: Boolean!
   createdAt: DateTime!

@@ -300,6 +300,8 @@ export const ATTRIBUTE_REGISTER_QUERY = `
       displaySpanRows
       isEditable
       isVisible
+      catalogIsVisible
+      hiddenForClient
       isDerived
       derivationFormula
       isTimeVarying
@@ -798,6 +800,7 @@ export const DOMAIN_CATALOG_QUERY = `
       id
       domainCode
       domainName
+      catalogName
       description
       isActive
       clientId
@@ -2574,6 +2577,81 @@ export const CLIENT_MODULE_CATALOG_QUERY = `
       surfaceCodes
       workflowCodes
       toolHrefs
+    }
+  }
+`;
+
+const CLIENT_CATALOG_SETTINGS_FIELDS = `
+  clientId
+  clientName
+  canEdit
+  domainCode
+  catalogName
+  displayName
+  recordCount
+  aliases {
+    id
+    label
+    shared
+  }
+  fields {
+    attributeId
+    attributeCode
+    attributeName
+    displaySection
+    isRequired
+    isDerived
+    catalogIsVisible
+    hidden
+    recordsWithValue
+  }
+`;
+
+// What the client this session is working in calls an entity type, and the fields it hides.
+export const CLIENT_CATALOG_SETTINGS_QUERY = `
+  query ClientCatalogSettings($domainCode: String!) {
+    clientCatalogSettings(domainCode: $domainCode) {
+      ${CLIENT_CATALOG_SETTINGS_FIELDS}
+    }
+  }
+`;
+
+export const SET_CLIENT_ENTITY_TYPE_NAME_MUTATION = `
+  mutation SetClientEntityTypeName($domainCode: String!, $displayName: String) {
+    setClientEntityTypeName(domainCode: $domainCode, displayName: $displayName) {
+      success
+      errors { field message code }
+      settings { ${CLIENT_CATALOG_SETTINGS_FIELDS} }
+    }
+  }
+`;
+
+export const SET_CLIENT_FIELDS_HIDDEN_MUTATION = `
+  mutation SetClientFieldsHidden($domainCode: String!, $attributeIds: [ID!]!, $hidden: Boolean!) {
+    setClientFieldsHidden(domainCode: $domainCode, attributeIds: $attributeIds, hidden: $hidden) {
+      success
+      errors { field message code }
+      settings { ${CLIENT_CATALOG_SETTINGS_FIELDS} }
+    }
+  }
+`;
+
+export const ADD_CLIENT_ENTITY_TYPE_ALIAS_MUTATION = `
+  mutation AddClientEntityTypeAlias($domainCode: String!, $label: String!) {
+    addClientEntityTypeAlias(domainCode: $domainCode, label: $label) {
+      success
+      errors { field message code }
+      settings { ${CLIENT_CATALOG_SETTINGS_FIELDS} }
+    }
+  }
+`;
+
+export const REMOVE_CLIENT_ENTITY_TYPE_ALIAS_MUTATION = `
+  mutation RemoveClientEntityTypeAlias($domainCode: String!, $aliasId: ID!) {
+    removeClientEntityTypeAlias(domainCode: $domainCode, aliasId: $aliasId) {
+      success
+      errors { field message code }
+      settings { ${CLIENT_CATALOG_SETTINGS_FIELDS} }
     }
   }
 `;

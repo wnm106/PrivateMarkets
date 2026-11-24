@@ -2,8 +2,13 @@ import { type SupabaseClient } from '@supabase/supabase-js';
 import { runAsFeedClient } from '../agent/harness';
 import { assertLocalSupabase, executeParsedFeed, localSupabase, type LoadRecorder } from './feed-loader';
 import { applyCellEdits, dropBatch, finishDirectBatch, openDirectBatch, writeJournal, type CellEdit, type JournalEntry } from './load-batch-store';
+import { matchColumnsToStoredRecords } from './entity-values';
+import { storedRecordLookup } from './import-document';
 import { reviewColumns, type ReviewContext } from './semantic-review';
 import { intakeFile, readReportTables, type IntakeTable } from './intake-file';
+import { allRows } from './paged';
+import { saveReading, sha256Hex, type DocumentReading } from '@tapestrai/graphql/src/lib/document-content/reading';
+import { aliasLabelsByAttribute, loadAliasWords } from '@tapestrai/graphql/src/lib/semantic-aliases';
 import { ensureSource, materialize } from './load-sessions';
 import { profileDocument, formatOf, type DocumentProfile } from './llama-parse';
 import { parseWorkbook } from './parse-table';
@@ -29,6 +34,7 @@ import {
   describeOrphans,
   feedMapFromAssignments,
   orphanColumns,
+  promoteNamesToIdentity,
   suggestAssignments,
   suggestTransform,
   type AttributeChoice,
@@ -124,34 +130,33 @@ function useClient(client?: SupabaseClient): SupabaseClient {
   return db;
 }
 
-/** The shared catalog plus this client's own additions. Another client's fields and record types stay out. */
+/**
+ * The shared catalog plus this client's own additions. Another client's fields and record types stay out.
+ * The words are this client's: its aliases and the names it gives entity types win over the shared aliases.
+ */
 async function attributeCatalog(client: SupabaseClient, clientId: string): Promise<{
   attributes: AttributeChoice[];
   domains: string[];
   domainAliases: { domainCode: string; aliasLabel: string; aliasCode: string }[];
   nameAliases: { domainCode: string; aliasLabel: string; aliasCode: string }[];
+  /** Entity type code to the name this client gives it. */
+  domainLabels: Record<string, string>;
 }> {
   const register = client.schema('metadata_register');
-  const [attributes, domains, domainAliases, nameAliases, attributeAliases] = await Promise.all([
-    visibleToClient(register.from('attribute_register').select('id, attribute_code, attribute_name, data_type, domain_code, reference_list_code'), clientId).order('attribute_name'),
+  const [attributes, domains, words] = await Promise.all([
+    // Every attribute, not the first thousand by name: a column can only be mapped to a target that is listed.
+    allRows<Record<string, any>>((from, to) =>
+      visibleToClient(register.from('attribute_register').select('id, attribute_code, attribute_name, data_type, domain_code, reference_list_code'), clientId)
+        .order('attribute_name')
+        .order('id')
+        .range(from, to)),
     visibleToClient(register.from('domain_types').select('domain_code').eq('is_active', true), clientId).order('domain_code'),
-    register.from('domain_aliases').select('domain_code, alias_label, alias_code').eq('is_active', true),
-    register.from('entity_name_aliases').select('domain_code, alias_label, alias_code').eq('is_active', true),
-    register.from('attribute_aliases').select('attribute_id, alias_label').eq('is_active', true),
+    loadAliasWords(client, { clientId }),
   ]);
-  const failure = attributes.error || domains.error || domainAliases.error || nameAliases.error || attributeAliases.error;
+  const failure = attributes.error || domains.error;
   if (failure) throw new Error(failure.message);
-  const labels = new Map<string, string[]>();
-  for (const row of attributeAliases.data || []) {
-    const list = labels.get(row.attribute_id) || [];
-    list.push(row.alias_label);
-    labels.set(row.attribute_id, list);
-  }
-  const mapAlias = (row: { domain_code: string; alias_label: string; alias_code: string }) => ({
-    domainCode: row.domain_code,
-    aliasLabel: row.alias_label,
-    aliasCode: row.alias_code,
-  });
+  const labels = aliasLabelsByAttribute(words);
+  const hidden = new Set(words.hiddenAttributeIds);
   return {
     attributes: (attributes.data || []).map((row: any) => ({
       attributeCode: row.attribute_code,
@@ -160,10 +165,12 @@ async function attributeCatalog(client: SupabaseClient, clientId: string): Promi
       domainCode: row.domain_code,
       referenceListCode: row.reference_list_code,
       aliasLabels: labels.get(row.id) || [],
+      ...(hidden.has(row.id) ? { hiddenForClient: true } : {}),
     })),
     domains: (domains.data || []).map((row: any) => row.domain_code),
-    domainAliases: (domainAliases.data || []).map(mapAlias),
-    nameAliases: (nameAliases.data || []).map(mapAlias),
+    domainAliases: words.domainAliases,
+    nameAliases: words.nameAliases,
+    domainLabels: words.labels,
   };
 }
 
@@ -273,6 +280,8 @@ async function columnsForTable(client: SupabaseClient, clientId: string, headers
   const stored = await findStoredMap(client, clientId, headerSignature(headers));
   let suggested = suggestAssignments(headers, rows, catalog.attributes, hints, { domains: catalog.domainAliases, names: catalog.nameAliases });
   if (stored) suggested = overlayStoredMap(suggested, stored.template, stored.name);
+  // A column whose values are the names of stored records is the name of that record type, whatever it is called.
+  suggested = promoteNamesToIdentity(await matchColumnsToStoredRecords(suggested, rows, storedRecordLookup(client, clientId)).catch(() => suggested));
   const reviewed = await reviewColumns(suggested, catalog.attributes, catalog.domains, { ...context, rowCount: rows.length });
   const columnMappings = applyListSuggestions(reviewed, catalog.attributes, lists);
   const identity: LoadMapIdentity = stored
@@ -322,6 +331,9 @@ export async function createImportInstance(
     ...intakeColumns(upload),
   }).select('id').single();
   if (inserted.error || !inserted.data) throw new Error(inserted.error?.message || 'The file could not be stored');
+  // The tables are what gets mapped. The reading is every page's words, kept so the file is indexed whole
+  // (notes and footnotes included) without being sent to the reader a second time.
+  if (upload.reading) await saveReading(client, clientId, await sha256Hex(bytes), upload.reading);
   return getImportInstance(inserted.data.id, clientId, client);
 }
 
@@ -764,6 +776,8 @@ interface UploadTable {
   /** Every table in the file, when there is more than one or a document reader found them. */
   tables?: StoredImportTable[];
   tableId?: string;
+  /** Every page's words, when an outside reader read the file. Kept beside the file so it is indexed whole. */
+  reading?: DocumentReading | null;
 }
 
 const DOCUMENT_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp', '.docx', '.doc'];
@@ -850,7 +864,7 @@ async function readUpload(fileName: string, mediaType: string, bytes: Buffer, fo
     }
     const intake = await intakeFile(fileName, mediaType, bytes);
     if (intake.tables.length === 0) throw new Error(intake.note);
-    return uploadFromTables(intake.tables, { method: intake.method, note: intake.note, profile: intake.profile || profile });
+    return { ...uploadFromTables(intake.tables, { method: intake.method, note: intake.note, profile: intake.profile || profile }), reading: intake.reading || null };
   }
 
   if (forceInterpret || textual) {

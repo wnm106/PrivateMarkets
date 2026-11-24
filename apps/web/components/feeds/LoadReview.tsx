@@ -74,12 +74,15 @@ function needsDecision(assignment: ColumnAssignment) {
   return assignment.suggestion.confidence < 0.8;
 }
 
+/** Said after a field this client hides: the column still loads, but nobody will see the value on a record. */
+const HIDDEN_NOTE = ' (hidden for this client)';
+
 function fieldLabel(assignment: ColumnAssignment, targets: MappingTarget[], nameAsIdentity?: Set<string>) {
   if (assignment.role === 'identity' && assignment.domainCode && nameAsIdentity?.has(assignment.domainCode)) {
     return `${domainLabel(assignment.domainCode)} · Name`;
   }
   const known = targets.find((target) => target.key === targetKey(assignment));
-  if (known) return known.label;
+  if (known) return known.hiddenForClient ? `${known.label}${HIDDEN_NOTE}` : known.label;
   if (assignment.role === 'ignore') return 'Not loaded';
   if (assignment.role === 'as_of') return 'As-of date';
   if (assignment.role === 'source') return 'Source';
@@ -759,7 +762,7 @@ function optionLabel(target: MappingTarget, nameAsIdentity?: Set<string>) {
   if (target.role === 'identity' && target.domainCode && nameAsIdentity?.has(target.domainCode)) {
     return `${domainLabel(target.domainCode)} · Name`;
   }
-  return target.label;
+  return target.hiddenForClient ? `${target.label}${HIDDEN_NOTE}` : target.label;
 }
 
 function TargetSelect({

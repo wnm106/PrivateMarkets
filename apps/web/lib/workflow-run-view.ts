@@ -1,7 +1,10 @@
 import type { TabPayload } from '@/lib/view-context';
+import { settles } from '@tapestrai/graphql/src/lib/borrower-financials';
 import { reviewView } from '@tapestrai/graphql/src/lib/workflow-views';
 import { reviewSections } from '@/lib/review-sections';
 import { checklistSummary, progressText, type Checklist } from '@/lib/workflow-checklist';
+import { durationText, runStory, storySummary, type RunStory } from '@/lib/workflow-story';
+import { stepDetail, type StepDetail } from '@/lib/workflow-step-detail';
 import { assigneeText, statusOf, type EventView, type ReviewView, type RunDetail } from '@/lib/workflows';
 
 /**
@@ -130,9 +133,51 @@ export function newestFirst(events: readonly EventView[]): EventView[] {
 
 const ACTOR_LABEL: Record<EventView['actorType'], string> = { SYSTEM: 'System', AGENT: 'Agent', USER: 'Person' };
 
+/**
+ * Every step on a run's path with what it did, and what the run leaves open. The ids the changes in
+ * its open reviews decide are passed on, so an open item a waiting change settles is marked as such.
+ */
+export function runStoryOf(run: RunDetail | null, checklist?: Checklist | null): RunStory {
+  const deciding = (run?.reviews || [])
+    .filter((review) => review.status === 'OPEN')
+    .flatMap((review) => review.proposal?.items || [])
+    // A reconciliation decision names its review item. A borrower change settles the entry its tool and record name.
+    .map((item) => (typeof item.args.itemId === 'string' ? item.args.itemId : settles(item.tool, item.args)))
+    .filter((id): id is string => typeof id === 'string' && id !== '');
+  return runStory({ graph: run?.graph || null, status: run?.status || 'QUEUED', currentNode: run?.currentNode || null, steps: run?.steps || [], events: run?.events || [], checklist, deciding });
+}
+
+/**
+ * What opening a step on the page shows, cut down for the assistant: what the step was asked, what an
+ * agent read and proposed, the changes an apply step made, and the plain values of a fixed step's result.
+ */
+function openedStep(detail: StepDetail | null): Record<string, unknown> {
+  if (!detail) return {};
+  const reads = new Map<string, number>();
+  for (const read of detail.reads) reads.set(read.what, (reads.get(read.what) || 0) + 1);
+  const result = detail.result;
+  return {
+    whatItIs: detail.what,
+    ...(detail.tool ? { tool: detail.tool, changesData: detail.changesData } : {}),
+    ...(detail.asked.length > 0 ? { [detail.askedAsDesigned ? 'setUpWith' : 'askedWith']: Object.fromEntries(detail.asked.slice(0, 12).map((field) => [field.label, field.value])) } : {}),
+    ...(detail.outcome ? { wentTheWay: detail.outcome } : {}),
+    ...(detail.attempts > 1 ? { attempts: detail.attempts } : {}),
+    ...(detail.error ? { error: detail.error } : {}),
+    ...(detail.reads.length > 0 ? { read: [...reads.entries()].map(([what, times]) => (times > 1 ? `${what} (${times} times)` : what)), readsThatDidNotWork: detail.reads.filter((read) => !read.ok).length } : {}),
+    ...(detail.proposals.length > 0 ? { proposed: detail.proposals.slice(0, 20).map((proposal) => ({ change: proposal.summary, needsCloseLook: proposal.needsReview })) } : {}),
+    ...(detail.changes.length > 0 ? { changesMade: detail.changes.slice(0, 20).map((change) => ({ change: change.summary, made: change.ok, ...(change.error ? { whyNot: change.error } : {}) })) } : {}),
+    ...(result && (result.fields.length > 0 || result.lists.length > 0)
+      ? { returned: { ...Object.fromEntries(result.fields.slice(0, 12).map((field) => [field.label, field.value])), ...Object.fromEntries(result.lists.map((list) => [list.label, `${list.count} rows`])) } }
+      : {}),
+    ...(detail.usage ? { modelCalls: detail.usage.calls, ...(detail.usage.costUsd !== null ? { costUsd: detail.usage.costUsd } : {}) } : {}),
+  };
+}
+
 /** The decisions of a run, and the forms and stages behind them, once they have loaded. */
 export interface RunDecisionsView {
   checklist: Checklist;
+  /** The run's steps as the page lists them. Built here when the caller has not built it. */
+  story?: RunStory;
   stages: Array<{ nodeId: string; title: string; screen: string; instructions: string | null; status: string; canAct: boolean; blocker: string | null; returnedReason: string | null }>;
   forms: Array<{ nodeId: string; title: string; instructions: string | null; status: string; canAnswer: boolean; blocker: string | null; fields: unknown }>;
 }
@@ -140,11 +185,13 @@ export interface RunDecisionsView {
 /** Both tabs of the run page, as the assistant reads them. */
 export function runTabs(run: RunDetail | null, decisions?: RunDecisionsView | null): Record<string, TabPayload> {
   const nodeLabel = (id: string | null) => (id ? run?.graph?.nodes.find((node) => node.id === id)?.label || id : null);
+  const story = decisions ? decisions.story || runStoryOf(run, decisions.checklist) : null;
+  const opened = (nodeId: string) => (run && decisions ? openedStep(stepDetail({ graph: run.graph, status: run.status, currentNode: run.currentNode, steps: run.steps, events: run.events, checklist: decisions.checklist }, nodeId)) : {});
   return {
     overview: {
       label: 'Overview',
-      purpose: 'The checklist of decisions this run needs from people, in order, which one is open now, and the agent findings behind it.',
-      howToRead: 'checklist lists every point where a person decides something, numbered in the order the run reaches them. state is done, skipped (passed with nothing to decide), current (open and yours), waiting (open and someone else\'s), attention (failed) or ahead. An item with no number comes only on some choices and is not in the total. parts are the things to do inside the open decision, as its screen reports them. nextStep says what has to happen and who does it. A review lists the changes the agent proposed, in sections by kind (cash pairs, cash adjustments, reconciliation decisions, other changes, notes), decided in that order; agentShows are the views the agent asked the reviewer to look at, and why. Nothing is written to a record until a reviewer approves and applies them. "Needs a close look" means the agent was unsure or is missing a value. checklist is null while the forms and screens of the run load.',
+      purpose: 'What the run did step by step, the decisions it needs from people in order, which one is open now, the agent findings behind it, and what the run leaves open.',
+      howToRead: 'checklist lists every point where a person decides something, numbered in the order the run reaches them. state is done, skipped (passed with nothing to decide), current (open and yours), waiting (open and someone else\'s), attention (failed) or ahead. An item with no number comes only on some choices and is not in the total. parts are the things to do inside the open decision, as its screen reports them. nextStep says what has to happen and who does it. A review lists the changes the agent proposed, in sections by kind (cash pairs, cash adjustments, reconciliation decisions, other changes, notes), decided in that order; agentShows are the views the agent asked the reviewer to look at, and why. Nothing is written to a record until a reviewer approves and applies them. "Needs a close look" means the agent was unsure or is missing a value. steps lists every step on the run\'s path in order: by is the system, the agent or a person; did is what it did in one line and facts are its key figures; a step with a decision number is a person\'s and is the same decision as on the checklist; state ahead means not run yet, and onlyOnSomeChoices means the run may not reach it. trouble is a failure a retry got past. Every step in the list opens on the page to show the rest, and each step carries it here: whatItIs says what kind of step it is; askedWith is what it ran with, and setUpWith is its design when it has not run (a value in words such as what “Select records” returned is filled in when it runs); read is what an agent read, proposed what it proposed, changesMade what an apply step made of each approved change, and returned the plain values and the size of each list a fixed step got back. stillOpen is what the run found open and does not settle itself, each with the next step and who it sits with; decidedInThisRun means a change waiting in the open review decides it, and holdsUpTheClose that it blocks finishing. checklist, steps and stillOpen are null while the forms and screens of the run load.',
       data: run
         ? {
             workflow: run.workflowName,
@@ -167,6 +214,26 @@ export function runTabs(run: RunDetail | null, decisions?: RunDecisionsView | nu
                     ...(item.progress ? { progress: progressText(item.progress), parts: item.progress.parts?.map((part) => ({ part: part.label, done: part.done, note: part.note })) } : {}),
                   })),
                 }
+              : null,
+            steps: story
+              ? {
+                  summary: storySummary(story),
+                  items: story.steps.slice(0, 60).map((step) => ({
+                    step: step.label,
+                    by: step.kind === 'fixed' ? 'system' : step.kind === 'agent' ? 'agent' : 'person',
+                    state: step.state,
+                    ...(step.decision !== null ? { decision: step.decision } : {}),
+                    ...(step.did ? { did: step.did } : {}),
+                    ...(step.facts.length > 0 ? { facts: Object.fromEntries(step.facts.map((fact) => [fact.label, fact.value])) } : {}),
+                    ...(durationText(step.seconds) ? { took: durationText(step.seconds) } : {}),
+                    ...(step.trouble ? { trouble: step.trouble } : {}),
+                    ...(step.certain ? {} : { onlyOnSomeChoices: true }),
+                    ...opened(step.nodeId),
+                  })),
+                }
+              : null,
+            stillOpen: story
+              ? { foundBy: story.openFrom, items: story.open.slice(0, 40).map((item) => ({ item: item.title, why: item.why, nextStep: item.action, who: item.owner, holdsUpTheClose: item.blocking, decidedInThisRun: item.decidedHere })) }
               : null,
             openStages: decisions
               ? decisions.stages.filter((stage) => stage.status === 'OPEN').map((stage) => ({ title: stage.title, screen: stage.screen, instructions: stage.instructions, yours: stage.canAct, whyNot: stage.canAct ? null : stage.blocker, cameBack: stage.returnedReason }))

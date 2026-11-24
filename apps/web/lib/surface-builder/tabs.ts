@@ -3,9 +3,17 @@
  * same blueprint the tabs draw, so the screen and the assistant agree.
  */
 import type { TabPayload } from '@/lib/view-context';
-import type { SurfaceBlueprint } from './blueprint';
+import type { SurfaceBlueprint, SurfaceRequest } from './blueprint';
+
+/** What the Details tab shows: the request as it stands on screen. */
+export interface BuilderDetails extends Omit<SurfaceRequest, 'html'> {
+  prototypeKb: number;
+  saved: 'saved' | 'unsaved' | 'new';
+  revision?: number;
+}
 
 export const BUILDER_TABS = [
+  { key: 'details', label: 'Details' },
   { key: 'overview', label: 'Overview' },
   { key: 'entities', label: 'Entities & attributes' },
   { key: 'capabilities', label: 'Capabilities' },
@@ -23,10 +31,26 @@ function count<T>(items: T[], test: (item: T) => boolean): number {
   return items.reduce((sum, item) => sum + (test(item) ? 1 : 0), 0);
 }
 
-export function builderTabs(blueprint: SurfaceBlueprint | null): Record<BuilderTabKey, TabPayload> {
+export function builderTabs(blueprint: SurfaceBlueprint | null, details?: BuilderDetails | null): Record<BuilderTabKey, TabPayload> {
   const b = blueprint;
   const label = (key: BuilderTabKey) => BUILDER_TABS.find((tab) => tab.key === key)!.label;
+  const request = details ?? (b ? { ...b.request, prototypeKb: 0, saved: 'saved' as const } : null);
   return {
+    details: {
+      label: label('details'),
+      purpose: 'The request the person edits: surface name, anchor entity type, placement, purpose, audience and the prototype HTML.',
+      howToRead: 'Placement "sdk-surface" is a client surface in surfaces/<code>; "record-tab" is a tab on a record page. Saved "unsaved" means the screen differs from the stored revision.',
+      data: request ? {
+        name: request.name,
+        description: request.description,
+        anchoredOn: request.domainCode || null,
+        placement: request.placement || null,
+        audience: request.audience || null,
+        prototypeKb: request.prototypeKb,
+        saved: request.saved,
+        revision: request.revision,
+      } : null,
+    },
     overview: {
       label: label('overview'),
       purpose: 'What the prototype shows and how much of it the platform already covers.',
@@ -37,13 +61,16 @@ export function builderTabs(blueprint: SurfaceBlueprint | null): Record<BuilderT
         source: b.source,
         prototype: { title: b.outline.title, tabs: b.outline.tabs, tables: b.outline.tables.length, charts: b.outline.charts.length, actions: b.outline.actions.slice(0, 30) },
         tabsPlanned: b.tabs.map((tab) => tab.label),
+        model: b.model,
+        viewsCaptured: b.outline.views || [],
+        decisions: b.decisions.map((decision) => ({ question: decision.question, answer: decision.answer, source: decision.source })),
         openQuestions: b.openQuestions,
         warnings: b.warnings.slice(0, 20),
       } : null,
     },
     entities: {
       label: label('entities'),
-      purpose: 'Which existing attributes each prototype value maps to, and which attributes must be added.',
+      purpose: 'The entity model the surface needs (entity types, relationship types, taxonomies), which existing attributes each prototype value maps to, and which must be added.',
       howToRead: 'reuse = an existing attribute code; new = add as a seed record; derived = computed from other attributes; ui = a label with no data. Only reuse codes exist in the catalog today.',
       data: b ? {
         totals: {
@@ -56,15 +83,20 @@ export function builderTabs(blueprint: SurfaceBlueprint | null): Record<BuilderT
         newAttributes: b.newAttributes.slice(0, CAP).map((attribute) => ({ code: attribute.code, name: attribute.name, entityType: attribute.domainCode, type: attribute.dataType, reason: attribute.reason })),
         fields: b.fields.slice(0, CAP).map((field) => ({ label: field.label, tab: field.where, decision: field.decision, attribute: field.attributeCode, entityType: field.domainCode, editable: field.editable || undefined, note: field.note })),
         relationships: b.relationships,
+        entityTypes: b.entityTypes.slice(0, CAP).map((plan) => ({ code: plan.code, status: plan.status, identity: plan.identity, attributes: plan.attributes })),
+        relationshipTypes: b.relationshipTypes.slice(0, CAP).map((plan) => ({ code: plan.code, status: plan.status, from: plan.fromDomain, to: plan.toDomain })),
+        taxonomies: b.taxonomies.map((plan) => ({ name: plan.name, levels: plan.levels, storage: plan.storage })),
       } : null,
     },
     capabilities: {
       label: label('capabilities'),
-      purpose: 'The functional requirements the surface needs and whether a tool or query already meets each.',
+      purpose: 'The functional requirements the surface needs and whether a tool or query already meets each, how its rules map to the compliance engine, and where each calculation runs.',
       howToRead: 'exists = a registered tool or query does it; extend = one needs a change; new = it must be built.',
       data: b ? {
         totals: { exists: count(b.capabilities, (c) => c.status === 'exists'), extend: count(b.capabilities, (c) => c.status === 'extend'), new: count(b.capabilities, (c) => c.status === 'new') },
         capabilities: b.capabilities.slice(0, CAP).map((c) => ({ title: c.title, status: c.status, kind: c.kind, detail: c.detail, tools: c.tools })),
+        compliance: b.compliance.slice(0, CAP).map((plan) => ({ rule: plan.prototypeRule, mapsTo: plan.mapsTo, tables: plan.tables })),
+        computations: b.computations.slice(0, CAP).map((plan) => ({ name: plan.name, runsIn: plan.runsIn, status: plan.status })),
       } : null,
     },
     workflows: {

@@ -343,6 +343,7 @@ export function EntityAttributeTable({
   refreshKey = 0,
   emptyMessage,
   related = NO_RELATED,
+  relatedReady = true,
   onTotalChange,
   selectedId,
   onSelect,
@@ -351,6 +352,8 @@ export function EntityAttributeTable({
   publishAs,
   publishLabel,
 }: {
+  /** False while the caller is still working out `related`. The grid waits, so it loads once. */
+  relatedReady?: boolean;
   /** Publish the register to the assistant under this tab key. Set it when the grid is a tab. */
   publishAs?: string;
   publishLabel?: string;
@@ -532,7 +535,7 @@ export function EntityAttributeTable({
   }, [globalSearch, serverGridFilters, scopedIds]);
 
   const loadPage = useCallback(async () => {
-    if (!catalogReady) return;
+    if (!catalogReady || !relatedReady) return;
     if (scopedIds && scopedIds.length === 0) {
       setRows([]);
       setMatched(0);
@@ -618,7 +621,7 @@ export function EntityAttributeTable({
       : null);
     setError(null);
     setLoading(false);
-  }, [catalogReady, domainCode, asOfDate, attributeColumns, lookups, stableRelated, sort, filters, columns, globalSearch, onTotalChange, scopedIds]);
+  }, [catalogReady, relatedReady, domainCode, asOfDate, attributeColumns, lookups, stableRelated, sort, filters, columns, globalSearch, onTotalChange, scopedIds]);
 
   useEffect(() => { loadPage(); }, [loadPage, refreshKey]);
 

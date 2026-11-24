@@ -8,8 +8,10 @@ import { reviewView, type ProposalView } from '@tapestrai/graphql/src/lib/workfl
 import type { FundRec } from '@/lib/fund-rec';
 import { graphqlQuery } from '@/lib/graphql';
 import { markdownToHtml } from '@/lib/markdown';
-import { recKey, type RecKey, type ReviewSection } from '@/lib/review-sections';
+import { recKey, shareText, type RecKey, type ReviewSection } from '@/lib/review-sections';
 import { useTemporalStore } from '@/lib/store';
+import { summaryLead } from '@/lib/workflow-run-view';
+import { firstSentence } from '@/lib/workflow-story';
 
 /**
  * The screens for the reconciliation changes an agent proposes, and for the
@@ -130,38 +132,96 @@ function dataFor(data: Map<string, RecData | null>, item: ProposalItem): RecData
   return key ? data.get(key.key) : undefined;
 }
 
-/** The frame every reconciliation change is shown in: what it is, the agent's word, and the decision. */
-function ChangeCard({ item, decider, fund, children, blocked }: { item: ProposalItem; decider: Decider; fund: string; children: ReactNode; blocked?: string | null }) {
+/** The words on a card's two buttons, before and after each is pressed. */
+export interface CardWords {
+  approve: string;
+  approved: string;
+  reject: string;
+  rejected: string;
+}
+
+const APPROVE_WORDS: CardWords = { approve: 'Approve', approved: 'Approved', reject: 'Reject', rejected: 'Rejected' };
+
+/** How many of the agent's sources a card lists before the rest are a click away. */
+const EVIDENCE_SHOWN = 3;
+
+interface CardProps {
+  item: ProposalItem;
+  decider: Decider;
+  fund: string;
+  /** The facts the decision rests on: the figures, the two sides. */
+  children: ReactNode;
+  /** What the person sets before deciding. Shown after the agent's reasons. */
+  controls?: ReactNode;
+  blocked?: string | null;
+  /** A short name for what is being decided. The agent's own one-line summary when not given. */
+  title?: string;
+  /** What the agent is putting forward, in a few words: "The agent recommends: accept". */
+  agentLine?: string;
+  words?: CardWords;
+}
+
+/**
+ * The frame every reconciliation change is shown in, in the order a person
+ * decides it: what it is, the facts, what the agent recommends and what that
+ * rests on, the person's own setting, then the decision. Used for every kind
+ * of change that has its own card, the reconciliation's and any other.
+ */
+export function ChangeCard({ item, decider, fund, children, controls, blocked, title, agentLine, words = APPROVE_WORDS }: CardProps) {
+  const [allEvidence, setAllEvidence] = useState(false);
+  const [exact, setExact] = useState(false);
   const status = decider.status(item);
   const choice = decider.choice(item);
   const open = decider.expanded === item.id;
   const questions = decider.questions(item);
   const confidence = CONFIDENCE[item.confidence] || CONFIDENCE.MEDIUM;
+  const evidence = allEvidence ? item.evidence : item.evidence.slice(0, EVIDENCE_SHOWN);
   return (
-    <div ref={(element) => decider.register(item.id, element)} style={{ ...card, opacity: choice === 'REJECT' ? 0.7 : 1, boxShadow: open ? 'inset 3px 0 0 #c2410c' : undefined }}>
+    <div ref={(element) => decider.register(item.id, element)} style={{ ...card, opacity: choice === 'REJECT' ? 0.75 : 1, boxShadow: open ? 'inset 3px 0 0 #c2410c' : undefined }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-        <strong style={{ fontSize: 13.5 }}>{item.summary}</strong>
-        {chip(confidence.label, confidence.fg, confidence.bg)}
+        <strong style={{ fontSize: 14.5 }} title={title ? item.summary : undefined}>{title || item.summary}</strong>
         <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{fund}</span>
         <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 600, color: status.fg }}>{status.text}</span>
       </div>
       {children}
-      {item.rationale && <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}><b>Why:</b> {item.rationale}</div>}
-      {(open || questions > 0) && <div style={{ borderTop: '1px solid var(--line)', paddingTop: 10 }}>{decider.details(item)}</div>}
+      <div style={{ border: '1px solid #e9d5ff', background: '#faf5ff', borderRadius: 6, padding: '8px 10px', display: 'grid', gap: 4 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', fontSize: 13 }}>
+          <b style={{ color: '#6d28d9' }}>{agentLine || 'The agent proposes this change'}</b>
+          {chip(confidence.label, confidence.fg, confidence.bg)}
+        </div>
+        {item.rationale && <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 900 }}>{item.rationale}</div>}
+        {item.evidence.length > 0 && (
+          <div>
+            <div style={{ ...label, marginTop: 4 }}>What it checked</div>
+            <ul style={{ margin: '2px 0 0', paddingLeft: 18, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 900 }}>
+              {evidence.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+            {item.evidence.length > EVIDENCE_SHOWN && (
+              <button type="button" onClick={() => setAllEvidence(!allEvidence)} style={{ border: 'none', background: 'none', padding: 0, marginTop: 2, fontSize: 12, color: 'var(--entity-link)', cursor: 'pointer' }}>
+                {allEvidence ? 'Show fewer' : `Show ${item.evidence.length - EVIDENCE_SHOWN} more`}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      {controls}
+      {(exact || questions > 0) && <div style={{ borderTop: '1px solid var(--line)', paddingTop: 10 }}>{decider.details(item)}</div>}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {decider.canDecide && (
           <>
             <button type="button" className="btn btn-sm btn-primary" disabled={questions > 0 || Boolean(blocked)} aria-pressed={choice === 'APPROVE'} onClick={() => decider.decide(item, 'APPROVE')}>
-              {choice === 'APPROVE' ? 'Approved' : 'Approve'}
+              {choice === 'APPROVE' ? words.approved : words.approve}
             </button>
             <button type="button" className="btn btn-sm" aria-pressed={choice === 'REJECT'} onClick={() => decider.decide(item, 'REJECT')}>
-              {choice === 'REJECT' ? 'Rejected' : 'Reject'}
+              {choice === 'REJECT' ? words.rejected : words.reject}
             </button>
           </>
         )}
         {blocked && <span style={{ fontSize: 12, color: '#b45309' }}>{blocked}</span>}
-        <button type="button" onClick={() => decider.expand(open ? null : item.id)} style={{ marginLeft: 'auto', border: 'none', background: 'none', padding: 0, fontSize: 12, color: 'var(--entity-link)', cursor: 'pointer' }}>
-          {open ? 'Hide the settings' : 'Every setting and the evidence'}
+        <button type="button" aria-expanded={exact} onClick={() => setExact(!exact)} style={{ marginLeft: 'auto', border: 'none', background: 'none', padding: 0, fontSize: 12, color: 'var(--entity-link)', cursor: 'pointer' }}>
+          {exact ? 'Hide the exact change' : 'See the exact change'}
         </button>
       </div>
     </div>
@@ -329,59 +389,108 @@ function CashAdjustment({ item, data, decider }: { item: ProposalItem; data: Rec
 
 const DECISION_WORD: Record<string, string> = { ACCEPT: "Accept the administrator's figure", ADJUST: 'Adjust to our figure', QUERY: 'Query the administrator' };
 
+/** What each choice does, said under the option so nobody has to guess. */
+const DECISION_EFFECT: Record<string, string> = {
+  ACCEPT: "The administrator's figure stands. The NAV is not changed.",
+  ADJUST: 'Our figure is put forward. The proposed NAV moves by the NAV effect.',
+  QUERY: 'The item stays open and the question below goes to the administrator.',
+};
+const DECISION_VERB: Record<string, string> = { ACCEPT: 'accept', ADJUST: 'adjust', QUERY: 'query' };
+
 function RecDecision({ item, data, decider }: { item: ProposalItem; data: RecData | null | undefined; decider: Decider }) {
+  const [noteOpen, setNoteOpen] = useState(false);
   const itemId = String(item.args.itemId || '');
   const found = data?.rec?.items.find((entry) => entry.id === itemId) || null;
+  const proposed = String(item.args.decision || '').toUpperCase();
   const decision = String(decider.current(item, 'decision') || '').toUpperCase();
   const note = String(decider.current(item, 'note') || '');
   const needsNote = (decision === 'ADJUST' || decision === 'QUERY') && !note.trim();
+  // A note the agent wrote for one decision does not fit another, so it is put in front of the person to rewrite.
+  const noteIsStale = decision !== proposed && note === String(item.args.note || '') && note.trim() !== '';
+  const showNote = noteOpen || needsNote || noteIsStale;
+  const difference = found ? found.admin - found.ours : 0;
+  const ofFigure = found && found.unit !== 'POINTS' ? shareText(difference, found.admin) : null;
+  const ofNav = found && data?.rec?.navReported ? shareText(found.effect, data.rec.navReported) : null;
+  const verb = DECISION_VERB[decision] || 'decide';
   return (
-    <ChangeCard item={item} decider={decider} fund={fundLine(data, item)} blocked={needsNote ? `${decision === 'QUERY' ? 'A query' : 'An adjustment'} needs a note.` : null}>
+    <ChangeCard
+      item={item}
+      decider={decider}
+      fund={fundLine(data, item)}
+      title={found?.title}
+      agentLine={`The agent recommends: ${(DECISION_WORD[proposed] || proposed).toLowerCase()}`}
+      words={{ approve: `Confirm: ${verb}`, approved: `Confirmed: ${verb}`, reject: 'Leave it undecided', rejected: 'Left undecided' }}
+      blocked={needsNote ? `${decision === 'QUERY' ? 'A query' : 'An adjustment'} needs a note.` : noteIsStale ? 'Rewrite the note for your decision first.' : null}
+      controls={
+        <div style={{ display: 'grid', gap: 6 }}>
+          <span style={label}>Your decision</span>
+          <div role="radiogroup" aria-label="Decision" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 6 }}>
+            {(['ACCEPT', 'ADJUST', 'QUERY'] as const).map((option) => {
+              const on = decision === option;
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  disabled={!decider.canDecide}
+                  onClick={() => decider.edit(item, 'decision', option)}
+                  style={{ textAlign: 'left', padding: '8px 10px', borderRadius: 6, cursor: decider.canDecide ? 'pointer' : 'default', font: 'inherit', background: on ? '#f0f9ff' : '#fff', border: `1.5px solid ${on ? 'var(--accent)' : 'var(--line-strong)'}` }}
+                >
+                  <span style={{ display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap', fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>
+                    <span aria-hidden style={{ color: on ? 'var(--accent)' : 'var(--ink-4)' }}>{on ? '●' : '○'}</span>
+                    {DECISION_WORD[option]}
+                    {option === proposed && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#6d28d9', background: '#f3e8ff', padding: '0 6px', borderRadius: 999 }}>Agent’s pick</span>}
+                  </span>
+                  <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{DECISION_EFFECT[option]}</span>
+                </button>
+              );
+            })}
+          </div>
+          {showNote ? (
+            <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+              <span style={label}>{decision === 'QUERY' ? 'The question for the administrator' : 'Note, kept on the file'}</span>
+              {noteIsStale && <span style={{ color: '#b45309' }}>The agent wrote this note for “{(DECISION_WORD[proposed] || proposed).toLowerCase()}”. Rewrite it for your decision.</span>}
+              <textarea className="text-input" rows={5} value={note} disabled={!decider.canDecide} onChange={(event) => decider.edit(item, 'note', event.target.value)} />
+            </label>
+          ) : (
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>
+              <span style={label}>Note, kept on the file</span>{' '}
+              {note.trim() ? firstSentence(note, 240) : 'None.'}{' '}
+              <button type="button" onClick={() => setNoteOpen(true)} style={{ border: 'none', background: 'none', padding: 0, fontSize: 12, fontWeight: 600, color: 'var(--entity-link)', cursor: 'pointer' }}>
+                {decider.canDecide ? 'Read and edit the note' : 'Read the whole note'}
+              </button>
+            </div>
+          )}
+        </div>
+      }
+    >
       <Loading data={data} />
       {data?.rec && !found && <div style={{ fontSize: 12, color: 'var(--red)' }}>The close has no review item “{itemId}” for this period.</div>}
       {found && (
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>{found.title}</div>
-          <table style={{ borderCollapse: 'collapse', marginTop: 4 }}>
+          <table style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr><th style={{ ...cell, ...label }}>Administrator</th><th style={{ ...cell, ...label }}>Ours</th><th style={{ ...cell, ...label }}>Difference</th><th style={{ ...cell, ...label }}>NAV effect</th></tr>
             </thead>
             <tbody>
               <tr>
-                <td style={num}>{figure(found.admin, found.unit)}</td>
-                <td style={num}>{figure(found.ours, found.unit)}</td>
-                <td style={num}>{figure(found.admin - found.ours, found.unit)}</td>
-                <td style={num}>{dollars(found.effect)}</td>
+                <td style={{ ...num, fontSize: 14, fontWeight: 600 }}>{figure(found.admin, found.unit)}</td>
+                <td style={{ ...num, fontSize: 14, fontWeight: 600 }}>{figure(found.ours, found.unit)}</td>
+                <td style={{ ...num, fontSize: 14, fontWeight: 600, color: Math.abs(difference) < 0.005 ? '#166534' : '#b45309' }}>{figure(difference, found.unit)}</td>
+                <td style={{ ...num, fontSize: 14, fontWeight: 600 }}>{dollars(found.effect)}</td>
               </tr>
             </tbody>
           </table>
-          {found.why && <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 4 }}>{found.why}</div>}
-          {found.decision && <div style={{ fontSize: 12, color: '#b45309', marginTop: 4 }}>Already decided on the close: {DECISION_WORD[found.decision] || found.decision}. Approving replaces it.</div>}
+          {(ofFigure || ofNav) && (
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 6 }}>
+              <b>How big it is:</b> {[ofFigure ? `${ofFigure} of the administrator’s figure` : '', ofNav ? `${ofNav} of the reported NAV of ${dollars(data?.rec?.navReported)}` : ''].filter(Boolean).join(', ')}.
+            </div>
+          )}
+          {found.why && <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 4, maxWidth: 900 }}><b>How ours is worked out:</b> {found.why}</div>}
+          {found.decision && <div style={{ fontSize: 12, color: '#b45309', marginTop: 4 }}>Already decided on the close: {DECISION_WORD[found.decision] || found.decision}. Confirming replaces it.</div>}
         </div>
       )}
-      <div style={{ display: 'grid', gap: 6 }}>
-        <span style={label}>Decision</span>
-        <div role="radiogroup" aria-label="Decision" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {(['ACCEPT', 'ADJUST', 'QUERY'] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              role="radio"
-              aria-checked={decision === option}
-              disabled={!decider.canDecide}
-              onClick={() => decider.edit(item, 'decision', option)}
-              className="btn btn-sm"
-              style={decision === option ? { background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)' } : undefined}
-            >
-              {DECISION_WORD[option]}
-            </button>
-          ))}
-        </div>
-        <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-          <span style={label}>{decision === 'QUERY' ? 'The question for the administrator' : 'Note, kept on the file'}</span>
-          <textarea className="text-input" rows={3} value={note} disabled={!decider.canDecide} onChange={(event) => decider.edit(item, 'note', event.target.value)} />
-        </label>
-      </div>
     </ChangeCard>
   );
 }
@@ -390,32 +499,79 @@ function RecDecision({ item, data, decider }: { item: ProposalItem; data: RecDat
 // Notes
 // ---------------------------------------------------------------------------
 
+/** The headings of a markdown write-up, so a folded one still says what it covers. */
+function headings(markdown: string): string[] {
+  return markdown
+    .split('\n')
+    .filter((line) => /^#{1,6}\s/.test(line))
+    .map((line) => line.replace(/^#{1,6}\s+/, '').trim())
+    .filter(Boolean);
+}
+
 function RecNotes({ item, data, decider, all }: { item: ProposalItem; data: RecData | null | undefined; decider: Decider; all: ProposalItem[] }) {
-  const [preview, setPreview] = useState(false);
-  const [showKept, setShowKept] = useState(false);
-  const notes = String(decider.current(item, 'notes') || '');
-  const kept = data?.rec?.closeNotes?.notes || '';
   const fund = recKey(item.args.fundId, item.args.periodEnd)?.key;
   // The notes were written as if everything else for this fund is approved.
-  const rejected = all.filter((other) => other.id !== item.id && recKey(other.args.fundId, other.args.periodEnd)?.key === fund && decider.choice(other) === 'REJECT');
-  const undecided = all.filter((other) => other.id !== item.id && recKey(other.args.fundId, other.args.periodEnd)?.key === fund && !decider.choice(other));
+  const related = all.filter((other) => other.id !== item.id && recKey(other.args.fundId, other.args.periodEnd)?.key === fund);
+  return <NotesCard item={item} decider={decider} subject={fundLine(data, item)} title="Notes kept on the close" kept={data?.rec?.closeNotes?.notes || ''} related={related} label="Reconciliation notes" />;
+}
+
+interface NotesProps {
+  item: ProposalItem;
+  decider: Decider;
+  /** What the notes are about: the fund and period, the borrower and quarter. */
+  subject: string;
+  title: string;
+  /** The notes kept now, to compare with. */
+  kept: string;
+  /** The other changes these notes describe as approved. */
+  related: ProposalItem[];
+  /** What the notes are called, for a screen reader. */
+  label: string;
+}
+
+/**
+ * A write-up an agent proposes to keep, read from the change's `notes` setting. It opens folded to its
+ * first paragraph, and says when a change it describes as approved was turned down.
+ */
+export function NotesCard({ item, decider, subject, title, kept, related, label: notesLabel }: NotesProps) {
+  // The notes open folded: their first paragraph says how things stand, and the rest is a click away.
+  const [mode, setMode] = useState<'folded' | 'read' | 'edit'>('folded');
+  const [showKept, setShowKept] = useState(false);
+  const notes = String(decider.current(item, 'notes') || '');
+  const rejected = related.filter((other) => decider.choice(other) === 'REJECT');
+  const undecided = related.filter((other) => !decider.choice(other));
+  const sections = headings(notes);
+  const edited = notes !== String(item.args.notes || '');
+  const pick = (next: 'read' | 'edit') => setMode(mode === next ? 'folded' : next);
   return (
-    <ChangeCard item={item} decider={decider} fund={fundLine(data, item)} blocked={!notes.trim() ? 'The notes are empty.' : null}>
-      {undecided.length > 0 && <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Decide the {undecided.length} other change{undecided.length === 1 ? '' : 's'} for this fund first. The notes describe them as approved.</div>}
+    <ChangeCard
+      item={item}
+      decider={decider}
+      fund={subject}
+      title={title}
+      agentLine="The agent wrote these notes"
+      words={{ approve: 'Keep these notes', approved: 'Notes kept', reject: 'Do not keep them', rejected: 'Not kept' }}
+      blocked={!notes.trim() ? 'The notes are empty.' : null}
+    >
+      {decider.canDecide && undecided.length > 0 && <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Decide the {undecided.length} other change{undecided.length === 1 ? '' : 's'} they describe first. The notes describe {undecided.length === 1 ? 'it' : 'them'} as approved.</div>}
       {rejected.length > 0 && (
         <div role="alert" style={{ fontSize: 12.5, border: '1px solid #fedf89', background: '#fffaeb', color: '#93370d', borderRadius: 6, padding: '6px 10px' }}>
-          You rejected {rejected.length === 1 ? 'a change' : `${rejected.length} changes`} these notes describe as approved: {rejected.map((other) => other.summary).join('; ')}. Edit the notes to match before you approve them.
+          You turned down {rejected.length === 1 ? 'a change' : `${rejected.length} changes`} these notes describe as approved: {rejected.map((other) => other.summary).join('; ')}. Edit the notes to match before you keep them.
         </div>
       )}
-      <div style={{ display: 'flex', gap: 6 }}>
-        <button type="button" className="btn btn-sm" aria-pressed={!preview} onClick={() => setPreview(false)}>Edit</button>
-        <button type="button" className="btn btn-sm" aria-pressed={preview} onClick={() => setPreview(true)}>Preview</button>
-        {kept && <button type="button" className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setShowKept(!showKept)}>{showKept ? 'Hide the notes kept now' : 'The notes kept now'}</button>}
+      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 900 }}>
+        {summaryLead(notes, 420) || 'The notes are empty.'}
+        {edited && <span style={{ color: '#b45309', fontWeight: 600 }}> Edited by you.</span>}
       </div>
-      {preview ? (
-        <div className="markdown-content" style={{ fontSize: 13, lineHeight: 1.55, maxHeight: 420, overflowY: 'auto' }} dangerouslySetInnerHTML={{ __html: markdownToHtml(notes.replace(/^#{4,}\s/gm, '### ')) }} />
-      ) : (
-        <textarea className="text-input" aria-label="Reconciliation notes" rows={14} style={{ width: '100%', boxSizing: 'border-box', fontSize: 12.5, fontFamily: 'var(--font-mono, monospace)' }} value={notes} disabled={!decider.canDecide} onChange={(event) => decider.edit(item, 'notes', event.target.value)} />
+      {mode === 'folded' && sections.length > 1 && <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>The full notes cover: {sections.join(', ')}.</div>}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <button type="button" className="btn btn-sm" aria-pressed={mode === 'read'} onClick={() => pick('read')}>{mode === 'read' ? 'Fold the notes' : 'Read the full notes'}</button>
+        {decider.canDecide && <button type="button" className="btn btn-sm" aria-pressed={mode === 'edit'} onClick={() => pick('edit')}>{mode === 'edit' ? 'Done editing' : 'Edit'}</button>}
+        {kept && <button type="button" className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setShowKept(!showKept)}>{showKept ? 'Hide the notes kept now' : 'Compare with the notes kept now'}</button>}
+      </div>
+      {mode === 'read' && <div className="markdown-content" style={{ fontSize: 13, lineHeight: 1.55, maxHeight: 460, overflowY: 'auto', borderTop: '1px solid var(--line)', paddingTop: 8 }} dangerouslySetInnerHTML={{ __html: markdownToHtml(notes.replace(/^#{4,}\s/gm, '### ')) }} />}
+      {mode === 'edit' && (
+        <textarea className="text-input" aria-label={notesLabel} rows={14} style={{ width: '100%', boxSizing: 'border-box', fontSize: 12.5, fontFamily: 'var(--font-mono, monospace)' }} value={notes} disabled={!decider.canDecide} onChange={(event) => decider.edit(item, 'notes', event.target.value)} />
       )}
       {showKept && <div className="markdown-content" style={{ fontSize: 12.5, color: 'var(--ink-2)', borderLeft: '3px solid var(--line-strong)', paddingLeft: 10, maxHeight: 300, overflowY: 'auto' }} dangerouslySetInnerHTML={{ __html: markdownToHtml(kept.replace(/^#{4,}\s/gm, '### ')) }} />}
     </ChangeCard>
@@ -478,14 +634,34 @@ function CashView({ cash, focus }: { cash: CashRec; focus: Set<string> }) {
   );
 }
 
-function NavView({ rec, focus }: { rec: FundRec; focus: Set<string> }) {
-  const items = rec.items.filter((item) => (focus.size > 0 ? focus.has(item.id) : item.decision == null)).slice(0, 30);
+/** One figure of a view, with what it is under it. */
+function Tile({ name, value, tone }: { name: string; value: string; tone?: 'good' | 'warn' | 'bad' }) {
+  const fg = tone === 'good' ? '#166534' : tone === 'warn' ? '#b45309' : tone === 'bad' ? '#b91c1c' : 'var(--ink)';
+  return (
+    <div style={{ border: '1px solid var(--line)', borderRadius: 6, padding: '6px 10px', minWidth: 0 }}>
+      <div style={{ fontSize: 15, fontWeight: 600, color: fg, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
+      <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{name}</div>
+    </div>
+  );
+}
+
+/** A fund's close in five figures, then the review items the agent points at that no card below already shows. */
+function NavView({ rec, focus, covered }: { rec: FundRec; focus: Set<string>; covered: Set<string> }) {
+  const pointed = rec.items.filter((item) => (focus.size > 0 ? focus.has(item.id) : item.decision == null));
+  const items = pointed.filter((item) => !covered.has(item.id)).slice(0, 30);
+  const below = pointed.length - pointed.filter((item) => !covered.has(item.id)).length;
+  const moved = rec.navReported != null && rec.navProposed != null && Math.abs(rec.navProposed - rec.navReported) >= 0.005;
   return (
     <div style={{ display: 'grid', gap: 8 }}>
-      <div style={{ fontSize: 12.5 }}>
-        Reported NAV <b>{dollars(rec.navReported)}</b>, proposed <b>{dollars(rec.navProposed)}</b>. {rec.breaks} {rec.breaks === 1 ? 'check breaks' : 'checks break'}, {rec.missing} missing; {rec.itemsDecided} of {rec.items.length} review items decided.
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(128px, 1fr))', gap: 8 }}>
+        <Tile name="Reported NAV" value={dollars(rec.navReported)} />
+        <Tile name={moved ? 'Proposed NAV, after adjustments' : 'Proposed NAV, unchanged'} value={dollars(rec.navProposed)} tone={moved ? 'warn' : undefined} />
+        <Tile name={rec.breaks === 1 ? 'check breaks' : 'checks break'} value={String(rec.breaks)} tone={rec.breaks > 0 ? 'bad' : 'good'} />
+        <Tile name={rec.missing === 1 ? 'check cannot be made' : 'checks cannot be made'} value={String(rec.missing)} tone={rec.missing > 0 ? 'warn' : 'good'} />
+        <Tile name="review items decided" value={`${rec.itemsDecided} of ${rec.items.length}`} tone={rec.itemsDecided === rec.items.length ? 'good' : 'warn'} />
       </div>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      {below > 0 && <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{below === 1 ? 'The item the agent points at is the decision below.' : `${below} of the items the agent points at are the decisions below.`}</div>}
+      {items.length > 0 && <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr>
             <th style={{ ...cell, ...label }}>Item</th>
@@ -505,36 +681,46 @@ function NavView({ rec, focus }: { rec: FundRec; focus: Set<string> }) {
               <td style={{ ...cell, fontSize: 12 }}>{item.decision ? DECISION_WORD[item.decision] || item.decision : 'Not decided'}</td>
             </tr>
           ))}
-          {items.length === 0 && <tr><td style={{ ...cell, color: 'var(--ink-3)' }} colSpan={5}>Nothing to show.</td></tr>}
         </tbody>
-      </table>
+      </table>}
     </div>
   );
 }
 
-/** What the agent asked the reviewer to look at, each view with its reason. */
-export function AgentViews({ views, data }: { views: ProposalView[]; data: Map<string, RecData | null> }) {
+/**
+ * What the agent asked the reviewer to look at. A view shows where things
+ * stand; a row a decision card below already shows is not repeated here, and
+ * the agent's reason for a view whose rows are all below is folded away.
+ */
+export function AgentViews({ views, data, covered }: { views: ProposalView[]; data: Map<string, RecData | null>; covered?: Set<string> }) {
   if (views.length === 0) return null;
+  const decided = covered || new Set<string>();
   return (
     <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--line)', display: 'grid', gap: 10 }}>
-      <div style={label}>What the agent wants you to see</div>
+      <div style={label}>Where things stand</div>
       {views.map((view) => {
         const spec = reviewView(view.view);
         const key = recKey(view.args.fundId, view.args.periodEnd);
         const found = key ? data.get(key.key) : undefined;
         const focus = new Set(view.focus);
+        // The agent's reason restates the item when every row it points at has its own card below.
+        const allBelow = view.view === 'rec.nav' && view.focus.length > 0 && view.focus.every((id) => decided.has(id));
         return (
-          <details key={view.id} open style={card}>
-            <summary style={{ cursor: 'pointer', fontSize: 13 }}>
+          <div key={view.id} style={card}>
+            <div style={{ fontSize: 13 }}>
               <b>{spec?.label || view.view}</b> <span style={{ color: 'var(--ink-3)' }}>· {fundLine(found, { args: view.args })}</span>
-              {view.why && <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{view.why}</div>}
-            </summary>
-            <div style={{ marginTop: 8 }}>
-              <Loading data={found} />
-              {view.view === 'rec.cash' && found?.cash && <CashView cash={found.cash} focus={focus} />}
-              {view.view === 'rec.nav' && found?.rec && <NavView rec={found.rec} focus={focus} />}
             </div>
-          </details>
+            {view.why && !allBelow && <div style={{ fontSize: 12.5, color: 'var(--ink-2)', maxWidth: 900 }}>{view.why}</div>}
+            <Loading data={found} />
+            {view.view === 'rec.cash' && found?.cash && <CashView cash={found.cash} focus={focus} />}
+            {view.view === 'rec.nav' && found?.rec && <NavView rec={found.rec} focus={focus} covered={decided} />}
+            {view.why && allBelow && (
+              <details style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>
+                <summary style={{ cursor: 'pointer', color: 'var(--entity-link)', fontSize: 12 }}>Why the agent shows this</summary>
+                <div style={{ marginTop: 4, maxWidth: 900 }}>{view.why}</div>
+              </details>
+            )}
+          </div>
         );
       })}
     </div>

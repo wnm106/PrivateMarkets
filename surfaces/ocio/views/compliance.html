@@ -1,0 +1,342 @@
+<style>
+.x-app{display:grid;grid-template-columns:240px minmax(0,1fr);gap:14px;align-items:start}
+.x-top{gap:12px;flex-wrap:wrap;box-shadow:none}
+.x-brand{font-size:14px;font-weight:600}
+.x-brand span{font-weight:400;color:var(--ink-3)}
+.x-seg button{font:inherit;font-size:12.5px;padding:5px 11px;color:var(--ink-2)}
+.x-seg button+button{border-left:1px solid var(--line)}
+.x-seg button[aria-pressed="true"]{color:#fff;font-weight:600}
+.x-acts{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-3);flex-wrap:wrap}
+.x-rail{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 0 12px}
+.x-rail h2{margin:0;padding:0 12px 8px;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.x-ent{display:block;width:100%;text-align:left;border:0;border-top:1px solid var(--line);background:none;font:inherit;color:inherit;padding:7px 12px;cursor:pointer}
+.x-ent.mandate{padding-left:24px}
+.x-ent[aria-current="true"]{background:var(--bg-alt);box-shadow:inset 3px 0 0 var(--accent-2)}
+.x-entl{display:flex;gap:6px;align-items:center}
+.x-entl b{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.x-ent small{display:flex;gap:6px;align-items:center;margin-top:3px;font-size:11.5px;color:var(--ink-3)}
+.x-ent .da-track{margin:0 0 0 auto}
+.x-ent .da-track i{width:12px;height:4px}
+.x-add{margin:10px 12px 0;width:calc(100% - 24px);justify-content:center}
+.x-ribbon .da-title{flex-basis:100%;border-right:0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 16px}
+.x-facts7{grid-template-columns:repeat(2,minmax(96px,0.9fr)) minmax(190px,1.6fr) repeat(4,minmax(110px,1fr))}
+.x-facts7 .da-fact{padding:9px 12px;border-bottom:0}
+.x-facts7 .da-fact:last-child{border-right:0}
+.x-facts7 .da-fact span{font-size:11.5px}
+.x-facts7 .da-fact strong{font-size:18px;font-weight:600;display:flex;gap:6px;align-items:baseline;white-space:nowrap}
+.x-facts7 .da-fact strong small{font-size:12px;font-weight:400}
+.x-facts7 .da-fact>small{font-size:11.5px;line-height:1.35}
+.x-facts7 .fs-track{height:8px;margin:5px 0 3px}
+.x-factlink{cursor:pointer}
+.x-tabs{margin:12px 0 10px}
+.x-tabs button{display:flex;flex-direction:column;justify-content:flex-start;align-items:flex-start;gap:1px;text-align:left;white-space:nowrap;padding:7px 12px}
+.x-tabs button b{display:flex;align-items:center}
+.x-tabs button small{font-size:11px;font-weight:400;color:var(--ink-3)}
+.x-tabs .cr-n,.x-tabs .da-st{margin-left:6px}
+.x-tabsep{flex:none;width:1px;margin:8px 6px;background:var(--line)}
+.x-tile{font:inherit;text-align:left;color:inherit;cursor:pointer}
+.x-tile b.bad{color:var(--red)}.x-tile b.soft{color:var(--amber)}.x-tile b.warn{color:var(--gold)}.x-tile b.pend{color:var(--accent-2)}.x-tile b.ok{color:var(--green)}
+.x-rules{min-width:1320px}
+.x-rules th,.x-rules td{padding:5px 8px}
+.x-rules th{white-space:nowrap;font-weight:600;font-size:12px}
+.x-rules .x-nw{white-space:nowrap}
+.x-rules .da-st{white-space:nowrap}
+.x-rules .da-caret{width:18px;height:18px;margin-right:2px;padding:0;font-size:10px;line-height:1;flex:none}
+.x-grp td{background:var(--bg-alt);font-weight:600;font-size:12.5px}
+.da-grid .x-grp small{display:inline;margin-left:8px}
+.x-req{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.x-req.muted{color:var(--ink-3)}
+.x-in{font:inherit;width:56px;padding:1px 6px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:inherit;text-align:right}
+.x-sev{padding:2px 8px}
+.x-sev.soft{color:var(--amber);border-color:var(--amber)}
+.x-chips{display:flex;flex-wrap:nowrap;gap:3px;align-items:center}
+.x-fc{font-size:10.5px;font-weight:600;padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--ink-2);background:var(--surface)}
+.x-fc.ctx{background:var(--bg-alt)}
+.x-fc.gap{border-style:dashed;color:var(--amber)}
+.x-del{border:0;background:none;font:inherit;color:var(--ink-4);cursor:pointer;padding:0 4px}
+.x-st.soft{background:var(--surface);color:var(--amber);border:1px solid var(--amber)}
+.x-st.pend,.x-st.ahead{background:var(--badge-info-bg);color:var(--badge-info-fg)}
+.x-link{border:0;background:none;font:inherit;color:var(--accent-2);cursor:pointer;padding:0;text-decoration:underline}
+.x-side>summary{cursor:pointer;font-size:14px;font-weight:600;padding:10px 0}
+.x-tgt{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}
+.x-srow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;width:100%;padding:5px 0;border:0;border-bottom:1px solid var(--line);background:none;font:inherit;font-size:12.5px;color:inherit;text-align:left;cursor:pointer}
+.x-srow.d2{padding-left:14px}.x-srow.d3{padding-left:28px}.x-srow.d4{padding-left:42px}
+.x-srow.ctx b{color:var(--ink-3);font-weight:500}
+.x-srow em{font-style:normal;font-weight:600}
+.x-srow .rg{grid-column:1/-1;font-size:11.5px;color:var(--ink-3)}
+.x-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:0}
+.x-dot.in{background:var(--green)}.x-dot.below{background:var(--amber)}.x-dot.above{background:var(--red)}.x-dot.under{background:var(--accent-2)}.x-dot.over{background:var(--gold)}
+.x-gh{display:flex;justify-content:space-between;align-items:baseline;width:100%;border:0;background:none;font:inherit;font-weight:600;color:inherit;cursor:pointer;padding:0}
+.x-legend{display:grid;gap:4px;margin-top:12px;font-size:12px;color:var(--ink-3)}
+@media (max-width:1000px){.x-app,.x-tgt{grid-template-columns:1fr}.x-facts7{grid-template-columns:repeat(2,1fr)}}
+</style>
+<div class="da">
+  <header class="page-header x-top">
+    <div class="page-title-block">
+      <div class="x-brand">Target Manager <span>· Fund-of-Funds &amp; Directs</span></div>
+      <div class="fs-seg x-seg" role="group" aria-label="View">
+        <button aria-pressed="true">Assign targets</button><button aria-pressed="false">Overview</button><button aria-pressed="false">Pipeline</button>
+      </div>
+    </div>
+    <div class="page-actions">
+      <button class="btn btn-sm" title="Undo last change (Ctrl+Z)" disabled>Undo</button>
+      <button class="btn btn-sm" title="Copy all targets as CSV">Copy CSV</button>
+      <button class="btn btn-sm" title="Restore the example clients and targets">Reset example</button>
+    </div>
+  </header>
+
+  <div class="x-app">
+    <nav class="x-rail" aria-label="Clients and mandates">
+      <h2>Clients &amp; mandates</h2>
+      <button class="x-ent client" aria-current="false"><span class="x-entl"><b>Commonwealth Teachers’ Retirement</b><i class="cr-n">14</i><span class="da-st breach" title="5 compliance breaches">5</span></span><small>$2B · 70 inv <span class="da-st ok" title="2026 pacing velocity">1.04x</span><span class="da-track" title="Strategy: 6 · Region: 4 · Structure: 4"><i class="on"></i><i class="on"></i><i class="on"></i></span></small></button>
+      <button class="x-ent mandate" aria-current="true"><span class="x-entl"><b>PE Primary Sleeve</b><i class="cr-n">17</i><span class="da-st breach" title="3 compliance breaches">3</span></span><small>$1.2B · 30 inv <span class="da-st ok" title="2026 pacing velocity">1.06x</span><span class="da-track" title="Strategy: 9 · Region: 3 · Structure: 5"><i class="on"></i><i class="on"></i><i class="on"></i></span></small></button>
+      <button class="x-ent mandate" aria-current="false"><span class="x-entl"><b>Credit &amp; Real Assets Sleeve</b><i class="cr-n">9</i></span><small>$450M · 14 inv <span class="da-st breach" title="2026 pacing velocity">0.77x</span><span class="da-track" title="Strategy: 7 · Region: 2 · Structure: 0"><i class="on"></i><i class="on"></i><i></i></span></small></button>
+      <button class="x-ent mandate" aria-current="false"><span class="x-entl"><b>Co-Investment Sleeve</b><i class="cr-n">7</i><span class="da-st breach" title="2 compliance breaches">2</span></span><small>$400M · 24 inv <span class="da-st ok" title="2026 pacing velocity">1.14x</span><span class="da-track" title="Strategy: 4 · Region: 0 · Structure: 3"><i class="on"></i><i></i><i class="on"></i></span></small></button>
+      <button class="x-ent client" aria-current="false"><span class="x-entl"><b>Halvorsen Family Office</b><i class="cr-n">3</i><span class="da-st breach" title="1 compliance breach">1</span></span><small>$450M · 40 inv <span class="da-st ok" title="2026 pacing velocity">0.96x</span><span class="da-track" title="Strategy: 0 · Region: 3 · Structure: 0"><i></i><i class="on"></i><i></i></span></small></button>
+      <button class="x-ent mandate" aria-current="false"><span class="x-entl"><b>Diversified Sleeve</b><i class="cr-n">4</i><span class="da-st breach" title="1 compliance breach">1</span></span><small>$450M · 40 inv <span class="da-st ok" title="2026 pacing velocity">0.96x</span><span class="da-track" title="Strategy: 4 · Region: 0 · Structure: 0"><i class="on"></i><i></i><i></i></span></small></button>
+      <button class="x-ent client" aria-current="false"><span class="x-entl"><b>Northgate Mutual Insurance</b><i class="cr-n">2</i><span class="da-st breach" title="3 compliance breaches">3</span></span><small>$900M · 40 inv <span class="da-st ok" title="2026 pacing velocity">1.11x</span><span class="da-track" title="Strategy: 2 · Region: 0 · Structure: 0"><i class="on"></i><i></i><i></i></span></small></button>
+      <button class="x-ent mandate" aria-current="false"><span class="x-entl"><b>Private Credit Sleeve</b><i class="cr-n">10</i><span class="da-st breach" title="3 compliance breaches">3</span></span><small>$600M · 28 inv <span class="da-st x-st ahead" title="2026 pacing velocity">1.16x</span><span class="da-track" title="Strategy: 8 · Region: 2 · Structure: 0"><i class="on"></i><i class="on"></i><i></i></span></small></button>
+      <button class="x-ent mandate" aria-current="false"><span class="x-entl"><b>Secondaries Sleeve</b><i class="cr-n">6</i></span><small>$200M · 10 inv <span class="da-st breach" title="2026 pacing velocity">0.85x</span><span class="da-track" title="Strategy: 3 · Region: 0 · Structure: 3"><i class="on"></i><i></i><i class="on"></i></span></small></button>
+      <button class="btn btn-sm x-add">+ Add mandate sleeve</button>
+    </nav>
+
+    <main>
+      <div class="crumbs"><a class="crumb-link" href="#">Commonwealth Teachers’ Retirement</a><span class="sep">›</span><span class="crumb-current">Mandate sleeve</span></div>
+      <header class="da-ribbon x-ribbon" aria-label="Deployment and pacing">
+        <div class="da-title">
+          <h1>PE Primary Sleeve</h1>
+          <div class="x-acts">
+            <span>% basis</span>
+            <div class="fs-seg x-seg" role="group" aria-label="Percent basis" data-editable="true">
+              <button aria-pressed="false" title="Percent targets are a share of the total program">Program</button><button aria-pressed="true" title="Percent targets are a share of the level above">Parent level</button>
+            </div>
+            <button class="btn btn-sm">Copy targets from…</button>
+          </div>
+        </div>
+        <div class="da-facts x-facts7">
+          <div class="da-fact"><span>Program</span><strong data-attr="MND01">$1.2B</strong><small>74% committed · since Apr 2022</small></div>
+          <div class="da-fact"><span>Investments</span><strong>22 <small>/ 30</small></strong><small>made vs target</small></div>
+          <div class="da-fact"><span>2026 deployment vs target</span><strong>$167M <small>/ $180M</small></strong>
+            <div class="fs-track" title="Bar: deployed against the 2026 target. Marker: where pacing says you should be by 17 Nov 2026"><i style="width:92.8%"></i><b style="left:87.7%"></b></div>
+            <small>93% of annual · $157.8M expected to date</small></div>
+          <div class="da-fact"><span>Pacing velocity</span><strong class="up">1.06x <span class="da-st ok">On pace</span></strong><small>YTD vs time-weighted target</small></div>
+          <div class="da-fact"><span>Since inception</span><strong class="up" title="On pace">1.07x</strong><small>$893.9M vs $833.4M</small></div>
+          <div class="da-fact x-factlink" role="button" tabindex="0" title="Open the compliance tab"><span>Compliance</span><strong class="dn">3 breaches</strong><small>13 rules · 1 watch · 2 pending · 2 soft</small></div>
+          <div class="da-fact"><span>Run-rate (LTM)</span><strong>$193.5M<small>/yr</small></strong><small>$306.1M left · ≈1.6 yrs at this pace</small></div>
+        </div>
+      </header>
+
+      <div class="da-tabs x-tabs" role="tablist">
+        <button role="tab" aria-selected="false"><b>Strategy<i class="cr-n">9</i></b><small>Category › Asset Class › Strategy › Sub-Strategy</small></button>
+        <button role="tab" aria-selected="false"><b>Region<i class="cr-n">3</i></b><small>Region › Asset Class</small></button>
+        <button role="tab" aria-selected="false"><b>Structure<i class="cr-n">5</i></b><small>Category › Structure Type › Detail</small></button>
+        <span class="x-tabsep" aria-hidden="true"></span>
+        <button role="tab" aria-selected="false"><b>Pacing</b><small>Annual deployment by year</small></button>
+        <button role="tab" aria-selected="false"><b>Commitments<i class="cr-n">22</i></b><small>Original commitments and attributes</small></button>
+        <button role="tab" aria-selected="true" class="on"><b>Compliance<span class="da-st breach">3 breaches</span></b><small>Rules, limits and results</small></button>
+      </div>
+
+      <section class="da-sec">
+        <div class="fs-tiles">
+          <button class="fs-tile x-tile"><b class="bad">1</b><span>Breach</span></button>
+          <button class="fs-tile x-tile"><b class="soft">2</b><span>Soft breach</span></button>
+          <button class="fs-tile x-tile"><b class="warn">1</b><span>Watch</span></button>
+          <button class="fs-tile x-tile"><b class="pend">2</b><span>Pending</span></button>
+          <button class="fs-tile x-tile"><b class="ok">7</b><span>Pass</span></button>
+          <div class="fs-tile"><b>13</b><span>Rules on this mandate</span></div>
+        </div>
+        <div class="da-toolbar">
+          <select class="btn btn-sm" aria-label="Add a rule">
+            <option value="">+ Add rule from the rule book…</option>
+            <option>Asset Concentration (amount limit)</option><option>Investment Size</option><option>Industry Concentration</option><option>China-specific Primary Investments</option><option>HL Managed/Affiliated (% limit)</option><option>Exposures per Geography</option><option>No Real Estate Funds</option><option>Restricted Industries</option><option>No Fund-of-Funds</option><option>ESG Guidelines</option>
+          </select>
+          <span class="da-note">Expand a rule to see what drives it, and select a commitment there to open its full record · limits are tested against the <span data-attr="MND01">$1.2B</span> program and 22 commitments</span>
+        </div>
+
+        <div class="da-main solo">
+          <div class="da-gridwrap">
+            <table class="da-grid x-rules">
+              <thead><tr><th>Status</th><th>Rule</th><th>Severity</th><th>Requirement</th><th class="num">Result</th><th class="num">Numerator / denominator</th><th class="num">Cushion</th><th>Worst dimension</th><th>Fields</th></tr></thead>
+              <tbody>
+                <tr class="x-grp"><td colspan="9">Whole investment – amount vs limit<small>4 rules</small></td></tr>
+                <tr>
+                  <td><span class="da-st near">Watch</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>Asset Concentration (% limit)</b></div></td>
+                  <td><button class="btn btn-sm x-sev" data-editable="true" title="Switch between hard and soft limit">Hard</button></td>
+                  <td><span class="x-req">&lt; <input class="x-in" value="5%" data-editable="true" aria-label="Asset Concentration (% limit) limit"></span></td>
+                  <td class="num x-nw"><b>5%</b></td><td class="num x-nw">$59.5M / <span data-attr="MND01">$1.2B</span></td><td class="num">0%</td>
+                  <td class="x-nw">Saltmarsh Growth Partners VII</td>
+                  <td><div class="x-chips"><span class="x-fc" title="ECO01 · Commitment Amount (Local) — on 22 of 22 commitments">ECO01</span><span class="x-fc" title="ECO03 · Commitment Amount (Mandate Base Currency) — on 22 of 22 commitments">ECO03</span><span class="x-fc ctx" title="MND01 · Mandate Total Commitment / Program Size — mandate setting">MND01</span><span class="x-fc" title="IDN05 · Underlying Asset (Fund / Company) — on 22 of 22 commitments">IDN05</span><span class="x-fc" title="IDN04 · Investment Type — on 22 of 22 commitments">IDN04</span><span class="x-fc" title="IDN06 · Follow-On Flag &amp; Parent Investment — on 22 of 22 commitments">IDN06</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Asset Concentration (% limit)">×</button></div></td>
+                </tr>
+                <tr>
+                  <td><span class="da-st ok">Pass</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>Issuer Concentration (% limit)</b></div></td>
+                  <td><button class="btn btn-sm x-sev" data-editable="true" title="Switch between hard and soft limit">Hard</button></td>
+                  <td><span class="x-req">&lt; <input class="x-in" value="12%" data-editable="true" aria-label="Issuer Concentration (% limit) limit"></span></td>
+                  <td class="num x-nw"><b>9.7%</b></td><td class="num x-nw">$116.5M / <span data-attr="MND01">$1.2B</span></td><td class="num">2.3%</td>
+                  <td class="x-nw">Harborview</td>
+                  <td><div class="x-chips"><span class="x-fc" title="ECO01 · Commitment Amount (Local) — on 22 of 22 commitments">ECO01</span><span class="x-fc" title="ECO03 · Commitment Amount (Mandate Base Currency) — on 22 of 22 commitments">ECO03</span><span class="x-fc ctx" title="MND01 · Mandate Total Commitment / Program Size — mandate setting">MND01</span><span class="x-fc" title="MGR01 · Manager / GP Firm (Issuer) — on 22 of 22 commitments">MGR01</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Issuer Concentration (% limit)">×</button></div></td>
+                </tr>
+                <tr>
+                  <td><span class="da-st breach">Breach</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>Percent of Total Fund Size (% limit)</b></div></td>
+                  <td><button class="btn btn-sm x-sev" data-editable="true" title="Switch between hard and soft limit">Hard</button></td>
+                  <td><span class="x-req">&lt; <input class="x-in" value="10%" data-editable="true" aria-label="Percent of Total Fund Size (% limit) limit"></span></td>
+                  <td class="num x-nw"><b>12.3%</b></td><td class="num x-nw">$59.5M / $485M</td><td class="num neg">-2.3%</td>
+                  <td class="x-nw">Saltmarsh Growth Partners VII</td>
+                  <td><div class="x-chips"><span class="x-fc" title="ECO01 · Commitment Amount (Local) — on 22 of 22 commitments">ECO01</span><span class="x-fc" title="ECO08 · Underlying Fund Size — on 22 of 22 commitments">ECO08</span><span class="x-fc" title="ECO09 · Ownership % of Underlying Fund — on 22 of 22 commitments">ECO09</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Percent of Total Fund Size (% limit)">×</button></div></td>
+                </tr>
+                <tr>
+                  <td><span class="da-st x-st soft">Soft breach</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>Remaining Allocation</b></div></td>
+                  <td><button class="btn btn-sm x-sev soft" data-editable="true" title="Switch between hard and soft limit">Soft</button></td>
+                  <td><span class="x-req">&lt; <input class="x-in" value="100%" data-editable="true" aria-label="Remaining Allocation limit"></span></td>
+                  <td class="num x-nw"><b>116.5%</b></td><td class="num x-nw">$158M / $135.6M</td><td class="num neg">-16.5%</td>
+                  <td class="x-nw">2022 Allocation</td>
+                  <td><div class="x-chips"><span class="x-fc" title="ECO01 · Commitment Amount (Local) — on 22 of 22 commitments">ECO01</span><span class="x-fc" title="ECO03 · Commitment Amount (Mandate Base Currency) — on 22 of 22 commitments">ECO03</span><span class="x-fc" title="IDN03 · Tranche / Allocation Bucket — on 22 of 22 commitments">IDN03</span><span class="x-fc ctx" title="MND02 · Tranche / Annual Allocation Amount — mandate setting">MND02</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Remaining Allocation">×</button></div></td>
+                </tr>
+
+                <tr class="x-grp"><td colspan="9">Whole investment – count of investments<small>1 rule</small></td></tr>
+                <tr>
+                  <td><span class="da-st ok">Pass</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>Number of Primary Investments</b></div></td>
+                  <td><button class="btn btn-sm x-sev" data-editable="true" title="Switch between hard and soft limit">Hard</button></td>
+                  <td><span class="x-req">&gt; <input class="x-in" value="18" data-editable="true" aria-label="Number of Primary Investments min"> , &lt; <input class="x-in" value="30" data-editable="true" aria-label="Number of Primary Investments max"></span></td>
+                  <td class="num x-nw"><b>19 investments</b></td><td class="num"></td><td class="num"></td>
+                  <td class="x-nw">19 commitments</td>
+                  <td><div class="x-chips"><span class="x-fc" title="IDN04 · Investment Type — on 22 of 22 commitments">IDN04</span><span class="x-fc" title="IDN05 · Underlying Asset (Fund / Company) — on 22 of 22 commitments">IDN05</span><span class="x-fc" title="ECO04 · Commitment / Closing Date — on 22 of 22 commitments">ECO04</span><span class="x-fc ctx" title="MND03 · Commitment Period &amp; Investment-Year Windows — mandate setting">MND03</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Number of Primary Investments">×</button></div></td>
+                </tr>
+
+                <tr class="x-grp"><td colspan="9">Bucket aggregation – share of mandate by attribute<small>5 rules</small></td></tr>
+                <tr>
+                  <td><span class="da-st ok">Pass</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>Non-US Investments (% limit)</b></div></td>
+                  <td><button class="btn btn-sm x-sev" data-editable="true" title="Switch between hard and soft limit">Hard</button></td>
+                  <td><span class="x-req">&lt; <input class="x-in" value="40%" data-editable="true" aria-label="Non-US Investments (% limit) limit"></span></td>
+                  <td class="num x-nw"><b>16.6%</b></td><td class="num x-nw">$199M / <span data-attr="MND01">$1.2B</span></td><td class="num">23.4%</td>
+                  <td class="x-nw">5 commitments</td>
+                  <td><div class="x-chips"><span class="x-fc" title="ECO01 · Commitment Amount (Local) — on 22 of 22 commitments">ECO01</span><span class="x-fc" title="ECO03 · Commitment Amount (Mandate Base Currency) — on 22 of 22 commitments">ECO03</span><span class="x-fc ctx" title="MND01 · Mandate Total Commitment / Program Size — mandate setting">MND01</span><span class="x-fc" title="GEO01 · Geographic Focus Region — on 22 of 22 commitments">GEO01</span><span class="x-fc" title="GEO02 · Market Classification — on 22 of 22 commitments">GEO02</span><span class="x-fc ctx" title="MND03 · Commitment Period &amp; Investment-Year Windows — mandate setting">MND03</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Non-US Investments (% limit)">×</button></div></td>
+                </tr>
+                <tr>
+                  <td><span class="da-st ok">Pass</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>Emerging Markets</b></div></td>
+                  <td><button class="btn btn-sm x-sev" data-editable="true" title="Switch between hard and soft limit">Hard</button></td>
+                  <td><span class="x-req">&lt; <input class="x-in" value="10%" data-editable="true" aria-label="Emerging Markets limit"></span></td>
+                  <td class="num x-nw"><b>3.5%</b></td><td class="num x-nw">$42.5M / <span data-attr="MND01">$1.2B</span></td><td class="num">6.5%</td>
+                  <td class="x-nw">1 commitments</td>
+                  <td><div class="x-chips"><span class="x-fc" title="ECO01 · Commitment Amount (Local) — on 22 of 22 commitments">ECO01</span><span class="x-fc" title="ECO03 · Commitment Amount (Mandate Base Currency) — on 22 of 22 commitments">ECO03</span><span class="x-fc ctx" title="MND01 · Mandate Total Commitment / Program Size — mandate setting">MND01</span><span class="x-fc" title="GEO02 · Market Classification — on 22 of 22 commitments">GEO02</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Emerging Markets">×</button></div></td>
+                </tr>
+                <tr>
+                  <td><span class="da-st ok">Pass</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>Secondary Investments (% limit)</b></div></td>
+                  <td><button class="btn btn-sm x-sev soft" data-editable="true" title="Switch between hard and soft limit">Soft</button></td>
+                  <td><span class="x-req">&lt; <input class="x-in" value="30%" data-editable="true" aria-label="Secondary Investments (% limit) limit"></span></td>
+                  <td class="num x-nw"><b>4.8%</b></td><td class="num x-nw">$57.5M / <span data-attr="MND01">$1.2B</span></td><td class="num">25.2%</td>
+                  <td class="x-nw">2 commitments</td>
+                  <td><div class="x-chips"><span class="x-fc" title="ECO01 · Commitment Amount (Local) — on 22 of 22 commitments">ECO01</span><span class="x-fc" title="ECO03 · Commitment Amount (Mandate Base Currency) — on 22 of 22 commitments">ECO03</span><span class="x-fc ctx" title="MND01 · Mandate Total Commitment / Program Size — mandate setting">MND01</span><span class="x-fc" title="IDN04 · Investment Type — on 22 of 22 commitments">IDN04</span><span class="x-fc" title="STR02 · Strategy — on 22 of 22 commitments">STR02</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Secondary Investments (% limit)">×</button></div></td>
+                </tr>
+                <tr>
+                  <td><span class="da-st ok">Pass</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>Venture Capital Investments (% limit)</b></div></td>
+                  <td><button class="btn btn-sm x-sev" data-editable="true" title="Switch between hard and soft limit">Hard</button></td>
+                  <td><span class="x-req">&lt; <input class="x-in" value="20%" data-editable="true" aria-label="Venture Capital Investments (% limit) limit"></span></td>
+                  <td class="num x-nw"><b>9.7%</b></td><td class="num x-nw">$116.9M / <span data-attr="MND01">$1.2B</span></td><td class="num">10.3%</td>
+                  <td class="x-nw">3 commitments</td>
+                  <td><div class="x-chips"><span class="x-fc" title="ECO01 · Commitment Amount (Local) — on 22 of 22 commitments">ECO01</span><span class="x-fc" title="ECO03 · Commitment Amount (Mandate Base Currency) — on 22 of 22 commitments">ECO03</span><span class="x-fc ctx" title="MND01 · Mandate Total Commitment / Program Size — mandate setting">MND01</span><span class="x-fc" title="STR02 · Strategy — on 22 of 22 commitments">STR02</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Venture Capital Investments (% limit)">×</button></div></td>
+                </tr>
+                <tr>
+                  <td><span class="da-st x-st soft">Soft breach</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>Exposures per Strategy</b></div></td>
+                  <td><button class="btn btn-sm x-sev soft" data-editable="true" title="Switch between hard and soft limit">Soft</button></td>
+                  <td><span class="x-req muted">Within bands <button class="x-link" data-editable="true">edit</button></span></td>
+                  <td class="num x-nw"><b>3 of 8 bands breached</b></td><td class="num"></td><td class="num"></td>
+                  <td class="x-nw">Primary › Private Equity › Buyout · #</td>
+                  <td><div class="x-chips"><span class="x-fc" title="ECO01 · Commitment Amount (Local) — on 22 of 22 commitments">ECO01</span><span class="x-fc" title="ECO03 · Commitment Amount (Mandate Base Currency) — on 22 of 22 commitments">ECO03</span><span class="x-fc ctx" title="MND01 · Mandate Total Commitment / Program Size — mandate setting">MND01</span><span class="x-fc" title="STR01 · Asset Class — on 22 of 22 commitments">STR01</span><span class="x-fc" title="STR02 · Strategy — on 22 of 22 commitments">STR02</span><span class="x-fc" title="IDN04 · Investment Type — on 22 of 22 commitments">IDN04</span><span class="x-fc ctx" title="MND06 · Target Allocation Matrices — mandate setting">MND06</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Exposures per Strategy">×</button></div></td>
+                </tr>
+
+                <tr class="x-grp"><td colspan="9">Eligibility screen – investment attribute<small>1 rule</small></td></tr>
+                <tr>
+                  <td><span class="da-st ok">Pass</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><span><b>Cannot invest in publicly traded securities</b><small class="fs-warn" title="IDN12 Temporary Investment Flag · IDN13 Received as In-Kind Distribution · ECO05 NAV / Market Value">3 fields not captured</small></span></div></td>
+                  <td><button class="btn btn-sm x-sev" data-editable="true" title="Switch between hard and soft limit">Hard</button></td>
+                  <td><span class="x-req muted">Pass / Fail</span></td>
+                  <td class="num x-nw"><b>None found</b></td><td class="num"></td><td class="num"></td>
+                  <td></td>
+                  <td><div class="x-chips"><span class="x-fc" title="IDN11 · Publicly Traded / Listed Flag — on 22 of 22 commitments">IDN11</span><span class="x-fc gap" title="IDN12 · Temporary Investment Flag — not in the security master yet">IDN12</span><span class="x-fc gap" title="IDN13 · Received as In-Kind Distribution — not in the security master yet">IDN13</span><span class="x-fc gap" title="ECO05 · NAV / Market Value — not in the security master yet">ECO05</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Cannot invest in publicly traded securities">×</button></div></td>
+                </tr>
+
+                <tr class="x-grp"><td colspan="9">Questionnaire / attestation<small>2 rules</small></td></tr>
+                <tr>
+                  <td><span class="da-st x-st pend">Pending</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>No Contractual Restrictions</b></div></td>
+                  <td><button class="btn btn-sm x-sev" data-editable="true" title="Switch between hard and soft limit">Hard</button></td>
+                  <td><span class="x-req muted">Attestation</span></td>
+                  <td class="num x-nw"><b>21 of 22 cleared</b></td><td class="num"></td><td class="num"></td>
+                  <td class="x-nw">1 pending</td>
+                  <td><div class="x-chips"><span class="x-fc" title="TRM10 · Contractual Restrictions Identified — on 22 of 22 commitments">TRM10</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove No Contractual Restrictions">×</button></div></td>
+                </tr>
+                <tr>
+                  <td><span class="da-st x-st pend">Pending</span></td>
+                  <td class="x-nw"><div class="da-name"><button class="da-caret" aria-expanded="false">▸</button><b>Manual Rule 2 - Investment Strategy</b></div></td>
+                  <td><button class="btn btn-sm x-sev" data-editable="true" title="Switch between hard and soft limit">Hard</button></td>
+                  <td><span class="x-req muted">Attestation</span></td>
+                  <td class="num x-nw"><b>21 of 22 cleared</b></td><td class="num"></td><td class="num"></td>
+                  <td class="x-nw">1 pending</td>
+                  <td><div class="x-chips"><span class="x-fc" title="QST00 · Questionnaire Response Structure — on 22 of 22 commitments">QST00</span><span class="x-fc" title="QST02 · Investment Strategy Questionnaire (Manual Rule 2.x) — on 22 of 22 commitments">QST02</span><span class="x-fc" title="STR01 · Asset Class — on 22 of 22 commitments">STR01</span><span class="x-fc" title="STR02 · Strategy — on 22 of 22 commitments">STR02</span><span class="x-fc" title="STR03 · Sub-Strategy / Size Segment — on 18 of 22 commitments">STR03</span><span class="x-fc" title="IDN04 · Investment Type — on 22 of 22 commitments">IDN04</span><button class="x-del" title="Remove this rule from the mandate" aria-label="Remove Manual Rule 2 - Investment Strategy">×</button></div></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="da-sec">
+        <details class="x-side" aria-label="Assigned targets">
+          <summary>Assigned targets</summary>
+          <div class="fs-panel" data-attr="MND06" data-editable="true">
+            <div class="x-tgt">
+              <div>
+                <button class="x-gh" title="Open the Strategy targets"><span>Strategy</span><small class="da-note">9 targets</small></button>
+                <p class="da-note">Category › Asset Class › Strategy › Sub-Strategy</p>
+                <button class="x-srow d1" title="Primary"><b><i class="x-dot in" title="In range · under target"></i>Primary</b><span><em>$900M</em> ≈75% <em>22#</em></span><span class="rg">range $800M–$1B · 18–26#</span></button>
+                <button class="x-srow d2" title="Primary › Private Equity"><b><i class="x-dot under" title="93% of target"></i>Private Equity</b><span>≈$900M <em>100%</em></span></button>
+                <button class="x-srow d3" title="Primary › Private Equity › Buyout"><b><i class="x-dot above" title="Above max"></i>Buyout</b><span>≈$540M <em>60%</em> <em>9#</em></span><span class="rg">range 7–11# · 50%–70%</span></button>
+                <button class="x-srow d4" title="Primary › Private Equity › Buyout › Small Cap"><b><i class="x-dot under" title="71% of target"></i>Small Cap</b><span>≈$135M <em>25%</em></span></button>
+                <button class="x-srow d4" title="Primary › Private Equity › Buyout › Mid Cap"><b><i class="x-dot above" title="Above max"></i>Mid Cap</b><span>≈$243M <em>45%</em></span><span class="rg">range 35%–55%</span></button>
+                <button class="x-srow d4" title="Primary › Private Equity › Buyout › Large Cap"><b><i class="x-dot under" title="91% of target"></i>Large Cap</b><span>≈$108M <em>20%</em></span></button>
+                <button class="x-srow d3" title="Primary › Private Equity › Growth Equity"><b><i class="x-dot under" title="67% of target"></i>Growth Equity</b><span>≈$135M <em>15%</em> <em>3#</em></span><span class="rg">range 10%–20%</span></button>
+                <button class="x-srow d3" title="Primary › Private Equity › Venture Capital"><b><i class="x-dot under" title="75% of target"></i>Venture Capital</b><span>≈$180M <em>20%</em> <em>4#</em></span><span class="rg">range 10%–25%</span></button>
+                <button class="x-srow d1" title="Secondary"><b><i class="x-dot below" title="Below min"></i>Secondary</b><span><em>$300M</em> ≈25% <em>8#</em></span><span class="rg">range $200M–…</span></button>
+              </div>
+              <div>
+                <button class="x-gh" title="Open the Region targets"><span>Region</span><small class="da-note">3 targets</small></button>
+                <p class="da-note">Region › Asset Class</p>
+                <button class="x-srow d1" title="North America"><b><i class="x-dot above" title="Above max"></i>North America</b><span>≈$840M <em>70%</em></span><span class="rg">range 60%–80%</span></button>
+                <button class="x-srow d1" title="Western Europe"><b><i class="x-dot under" title="26% of target"></i>Western Europe</b><span>≈$300M <em>25%</em></span></button>
+                <button class="x-srow d1" title="APAC/ROW"><b><i class="x-dot in" title="In range · under target"></i>APAC/ROW</b><span>≈$120M <em>10%</em></span><span class="rg">range …–15%</span></button>
+              </div>
+              <div>
+                <button class="x-gh" title="Open the Structure targets"><span>Structure</span><small class="da-note">5 targets</small></button>
+                <p class="da-note">Category › Structure Type › Detail</p>
+                <button class="x-srow ctx d1" title="Primary"><b>Primary</b><span class="da-note">no target</span></button>
+                <button class="x-srow d2" title="Primary › Traditional Primary"><b><i class="x-dot over" title="Over target"></i>Traditional Primary</b><span><em>85%</em></span></button>
+                <button class="x-srow d2" title="Primary › Fund-of-Funds"><b><i class="x-dot under" title="63% of target"></i>Fund-of-Funds</b><span><em>5%</em></span></button>
+                <button class="x-srow ctx d1" title="Secondary"><b>Secondary</b><span class="da-note">no target</span></button>
+                <button class="x-srow d2" title="Secondary › GP Led"><b><i class="x-dot under" title="48% of target"></i>GP Led</b><span><em>$120M</em></span></button>
+                <button class="x-srow d3" title="Secondary › GP Led › Single Asset"><b><i class="x-dot under" title="72% of target"></i>Single Asset</b><span><em>$80M</em> ≈66.7%</span></button>
+                <button class="x-srow d3" title="Secondary › GP Led › Multi Asset"><b><i class="x-dot under" title="0% of target"></i>Multi Asset</b><span><em>$60M</em> ≈50%</span></button>
+              </div>
+            </div>
+            <div class="x-legend">
+              <div><span class="da-st ok">$ 100%</span> next level adds up</div>
+              <div><span class="da-st x-st pend">$ 85%</span> next level is under</div>
+              <div><span class="da-st near">$ 105%</span> next level is over</div>
+              <div>Dots show the worst band status on the row: <i class="x-dot in"></i>in range <i class="x-dot below"></i>below min <i class="x-dot above"></i>above max <i class="x-dot under"></i>building to target.</div>
+              <div>Values with ≈ are implied from the other measure. Muted rows have no target of their own but hold targets below.</div>
+            </div>
+          </div>
+        </details>
+      </section>
+    </main>
+  </div>
+</div>

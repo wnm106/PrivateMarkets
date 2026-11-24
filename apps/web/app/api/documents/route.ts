@@ -11,7 +11,9 @@ import { supabaseServerClient } from '@/lib/supabase-server';
  * `tags` (comma separated) and `entities` (JSON: [{entityId, role}]).
  *
  * Stores the file under the caller's client in the private documents bucket,
- * records it, and queues it for the job worker to read. Everything runs as the
+ * records it, and queues it for the job worker to read. A PDF with selectable
+ * text, an HTML file or a text file is read on the worker; a scan, a picture or
+ * a Word file is read by the outside reader the worker is set up with. Everything runs as the
  * caller: the bucket's policies and document_create both need document.manage.
  * The same file added twice returns the document that already holds it.
  */
@@ -43,8 +45,10 @@ export async function POST(request: NextRequest) {
 
   const bytes = Buffer.from(await file.arrayBuffer());
   const fileName = (file.name || 'document').slice(0, 300);
-  if (!formatOfFile(fileName, file.type, bytes)) {
-    return NextResponse.json({ error: 'Use a PDF with selectable text, an HTML file or a text file. Word files and scans are not read for their text yet.' }, { status: 400 });
+  // A scan, a picture or a Word file has no text this server reads itself. The worker reads it with the outside
+  // reader when one is set up, and says so on the document when it is not.
+  if (!formatOfFile(fileName, file.type, bytes) && !/\.(png|jpe?g|tiff?|bmp|docx?)$/i.test(fileName)) {
+    return NextResponse.json({ error: 'Use a PDF, a scan or a picture of a page, a Word file, an HTML file or a text file.' }, { status: 400 });
   }
 
   let entities: unknown = [];

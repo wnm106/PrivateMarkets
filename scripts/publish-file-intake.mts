@@ -2,7 +2,7 @@
  * Publishes a workflow for one client from its template: File intake unless
  * another template code is given (NAV_RECONCILIATION, DATA_CLEANUP, ...).
  *
- *   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node --experimental-strip-types scripts/publish-file-intake.mts <client code> [template code]
+ *   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... npx tsx scripts/publish-file-intake.mts <client code> [template code]
  *
  * The first run creates the workflow. A later run saves the template as a new
  * version of it and publishes that, which is how a client picks up a step added

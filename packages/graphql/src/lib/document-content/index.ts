@@ -36,7 +36,8 @@ export {
   type RefineResult,
   type Refiner,
 } from './refine';
-export { UnreadableDocument, cleanText, decodeBytes, decodeEntities, formatOfFile, readDocument, readHtml, readPdfPages, readPlainText } from './read';
+export { UnreadableDocument, cleanText, decodeBytes, decodeEntities, formatOfFile, readDocument, readHtml, readMarkdownPages, readPdfPages, readPlainText } from './read';
+export { cleanReading, loadReading, outsideReading, readingLength, readingPath, saveReading, sha256Hex, type DocumentReading, type OutsideReader, type ReadingPage } from './reading';
 export {
   cleanTemplateSections,
   extendTemplate,

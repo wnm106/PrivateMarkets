@@ -99,6 +99,10 @@ export const tenancyResolvers = {
           .select('*, client:clients(client_name)')
           .eq('admin_user_id', context.user.id)
           .is('ended_at', null)
+          // A support session runs out on its own. The database stops scoping reads to the
+          // client at that moment (tenancy.active_impersonation_client_id), so the banner must
+          // stop saying it is viewing as that client at the same moment.
+          .gt('expires_at', new Date().toISOString())
           .order('started_at', { ascending: false })
           .limit(1)
           .maybeSingle(),

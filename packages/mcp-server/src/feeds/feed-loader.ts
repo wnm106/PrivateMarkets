@@ -6,6 +6,7 @@ import { parseTabularFile } from './parse-table';
 import { POSITION_FILE_MAP } from './position-file-map';
 import { normalizeSourceCode, resolveRowContext } from './row-context';
 import { compactIdentifier } from '../../../graphql/src/lib/entity-resolution/similarity';
+import { requiredParentMessage, requiredParentRules, unmetRequiredParents } from '../../../graphql/src/lib/required-parents';
 import type { DomainLoadStats, EntityResolution, EntityResolutionDecision, FeedLoadResult, FeedMap, FeedPreview, LoadReject, NormalizationHit, ParsedTable } from './types';
 import { emptyReferenceIndex, indexReferences, matchReference, referenceLookups, type ReferenceIndex } from './references';
 import { applyTransform, coerceAttributeValue, dayBefore, planPeriod, indexListParents, indexReferenceLists, listLevelKey, normalizeToList, parseUsDate, type ListValueRow } from './values';
@@ -254,7 +255,7 @@ async function loadCatalog(db: SupabaseClient, map: FeedMap, clientId: string): 
       ? db.schema('metadata_register').from('attribute_register').select('*').in('attribute_code', attributeCodes)
       : Promise.resolve({ data: [], error: null }),
     db.schema('metadata_register').from('reference_list_values').select('*, list:reference_lists!inner(list_code)'),
-    db.schema('metadata_register').from('relationship_types').select('relationship_code, parent_domain_code, child_domain_code, is_required').eq('is_active', true),
+    db.schema('metadata_register').from('relationship_types').select('relationship_code, parent_domain_code, child_domain_code, is_required, required_unless_attribute_code').eq('is_active', true),
   ]);
 
   const failure = source.error || templates.error || attributes.error || listValues.error || relationshipTypes.error;
@@ -1117,6 +1118,23 @@ export async function executeParsedFeed(
         });
         if (hit.via !== 'code' && !hit.entity.provisional) matchedByIdentity += 1;
         stats.matched += 1;
+        continue;
+      }
+      // A record whose entity type needs a parent is not created without one. The parent has to
+      // be on the row and already known: loaded earlier in this file, or stored before it.
+      const unmetParents = unmetRequiredParents(
+        requiredParentRules(catalog.relationshipTypes, domainCode),
+        [...entity.parents]
+          .filter(([parentDomain, parentCode]) => Boolean(parentCode) && Boolean(ids.get(parentDomain)?.get(parentCode) || externalIds.get(parentDomain)?.get(parentCode)))
+          .map(([parentDomain]) => parentDomain),
+        Object.fromEntries(entity.attributes),
+      );
+      if (unmetParents.length) {
+        const message = `${entity.code} was not created. ${requiredParentMessage(domainCode, unmetParents)}`;
+        stats.failed += 1;
+        stats.errors.push(message);
+        errors.push(message);
+        reject({ kind: 'record', domainCode, entityCode: entity.code, message });
         continue;
       }
       const provisionalId = `pending:${entity.code}`;

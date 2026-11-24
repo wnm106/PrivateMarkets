@@ -177,7 +177,12 @@ export function pathSteps(graph: WorkflowGraph, steps: StepMark[]): Array<{ node
     let sure = to;
     if (fork) {
       const arms = to.map(reach);
-      sure = [...arms[0]].filter((candidate) => arms.every((arm) => arm.has(candidate)));
+      // An arm that only tidies up before the run stops (discarding a batch, then End) is not another
+      // journey: it holds nothing a person or an agent does. The steps past the fork are judged on the
+      // arms that go on. When every arm only stops, they are all judged.
+      const goesOn = arms.map((arm) => [...arm].some((id) => HUMAN[byId.get(id)?.type || ''] !== undefined || byId.get(id)?.type === 'agent'));
+      const counted = goesOn.some(Boolean) ? arms.filter((_, index) => goesOn[index]) : arms;
+      sure = counted.length === 1 ? [to[goesOn.indexOf(true)]] : [...counted[0]].filter((candidate) => counted.every((arm) => arm.has(candidate)));
     }
     for (const candidate of sure) {
       if (certain.has(candidate)) continue;
@@ -186,7 +191,26 @@ export function pathSteps(graph: WorkflowGraph, steps: StepMark[]): Array<{ node
     }
   }
 
-  return order.map((id) => byId.get(id)).filter((node): node is WorkflowNode => Boolean(node)).map((node) => ({ node, certain: certain.has(node.id) }));
+  // Where two paths meet, the step they meet at comes after every step on either path: it is listed
+  // by the longest way to it. Steps the same distance along keep the order they were found in.
+  const depth = new Map<string, number>([[start.id, 0]]);
+  for (let pass = 0, moved = true; moved && pass <= order.length; pass += 1) {
+    moved = false;
+    for (const id of order) {
+      const at = depth.get(id);
+      if (at === undefined) continue;
+      for (const to of next(id).to) {
+        if ((depth.get(to) ?? -1) < at + 1) {
+          depth.set(to, at + 1);
+          moved = true;
+        }
+      }
+    }
+  }
+  const found = new Map(order.map((id, index) => [id, index]));
+  const inOrder = [...order].sort((a, b) => (depth.get(a) ?? 0) - (depth.get(b) ?? 0) || (found.get(a) ?? 0) - (found.get(b) ?? 0));
+
+  return inOrder.map((id) => byId.get(id)).filter((node): node is WorkflowNode => Boolean(node)).map((node) => ({ node, certain: certain.has(node.id) }));
 }
 
 function whoText(assignees: CheckRecord['assignees']): string {

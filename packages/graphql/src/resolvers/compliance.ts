@@ -147,6 +147,30 @@ export const complianceResolvers = {
       }
     },
 
+    complianceSnapshot: async (_: any, args: {
+      anchorEntityId: string;
+      asOfDate: string;
+      knowledgeDate?: string | null;
+      sourceScope?: string | null;
+      ruleCodes?: string[] | null;
+    }, context: Context) => {
+      try {
+        const engine = new ComplianceEngine(context.supabase);
+        const lines = await engine.proformaSnapshot({
+          anchorEntityId: args.anchorEntityId,
+          legs: [],
+          asOfDate: args.asOfDate,
+          knowledgeDate: args.knowledgeDate || undefined,
+          sourceScope: args.sourceScope,
+          ruleCodes: args.ruleCodes,
+        });
+        return { lines, errors: [] };
+      } catch (error: any) {
+        console.error('Error scoring the compliance snapshot:', error);
+        return { lines: [], errors: [{ field: 'general', message: error.message, code: 'EVALUATE_FAILED' }] };
+      }
+    },
+
     investmentCapacity: async (_: any, args: {
       anchorEntityId: string;
       securityId?: string | null;
@@ -157,6 +181,8 @@ export const complianceResolvers = {
       ruleCodes?: string[] | null;
       limitKind?: string | null;
       legs?: Array<{ securityId?: string | null; securityCode?: string | null; par: number; attributes?: Record<string, unknown> | null }> | null;
+      probeAttributes?: Record<string, unknown> | null;
+      probeParAttributes?: string[] | null;
     }, context: Context) => {
       try {
         const requested = args.limitKind ? args.limitKind.toUpperCase() : 'HARD';
@@ -174,6 +200,8 @@ export const complianceResolvers = {
           ruleCodes: args.ruleCodes,
           limitKind: requested,
           legs: args.legs,
+          probeAttributes: args.probeAttributes,
+          probeParAttributes: args.probeParAttributes,
         });
         return { ...quote, errors: [] };
       } catch (error: any) {

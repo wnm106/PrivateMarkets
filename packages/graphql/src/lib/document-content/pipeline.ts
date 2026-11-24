@@ -1,7 +1,8 @@
 /**
  * Takes a stored file to searchable chunks, in four steps:
  *
- *   READING    the file becomes text, headings and chunks
+ *   READING    the file becomes text, headings and chunks. A scan, a picture or a Word file is read
+ *              by the outside reader, every page of it, notes and footnotes included
  *   TAGGING    each heading is placed on a section of the type's template
  *   REFINING   a passage that is mostly names and numbers gets a description and topics
  *   EMBEDDING  each chunk gets a vector
@@ -13,7 +14,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { batchesOf, embedPatiently, EmbedRateLimited, rerank, vectorLiteral, type EmbedConfig, type EmbedPacing } from './embed';
 import { buildChunks, buildOutline, guessTitle } from './outline';
-import { readDocument, UnreadableDocument } from './read';
+import { formatOfFile, readDocument, readMarkdownPages, UnreadableDocument } from './read';
+import { outsideReading, type OutsideReader } from './reading';
 import { cleanRefineResult, cleanTopics, ensureTemplateRoutes, type RefineRequest, type Refiner } from './refine';
 import { cleanTemplateSections, labelsToEmbed, matchSections } from './template';
 import type { Section, SectionMatch, TemplateSection } from './types';
@@ -92,6 +94,8 @@ export interface ProcessOptions extends EmbedPacing {
   refiner?: Refiner | null;
   /** Read the file again even when its text is already stored. */
   reread?: boolean;
+  /** Reads a file this server cannot read itself: a scan, a picture, a Word file. Without it those are refused. */
+  reader?: OutsideReader | null;
 }
 
 export interface ProcessResult {
@@ -162,13 +166,29 @@ export async function processDocument(supabase: SupabaseClient, documentId: stri
       await setStatus('FAILED', null, message);
       return { ...base, status: 'FAILED', chunks: 0, embedded: 0, remaining: 0, message };
     }
+    const bytes = new Uint8Array(await blob.arrayBuffer());
     let read;
     try {
-      read = await readDocument(String(context.file_name), context.media_type, new Uint8Array(await blob.arrayBuffer()));
+      // unpdf takes over the buffer it is given, so the reader below gets its own copy.
+      read = await readDocument(String(context.file_name), context.media_type, new Uint8Array(bytes));
     } catch (error) {
       if (!(error instanceof UnreadableDocument)) throw error;
-      await setStatus('FAILED', null, error.message);
-      return { ...base, status: 'FAILED', chunks: 0, embedded: 0, remaining: 0, message: error.message };
+      // No text of its own: the reading kept when the file was loaded, or a new one from the outside reader.
+      let reading = null;
+      let problem: string | null = null;
+      try {
+        reading = context.client_id
+          ? await outsideReading(supabase, String(context.client_id), { fileName: String(context.file_name), mediaType: context.media_type || null, bytes }, options.reader)
+          : null;
+      } catch (failure) {
+        problem = failure instanceof Error ? failure.message : 'The outside reader failed.';
+      }
+      read = reading ? readMarkdownPages(reading.pages, formatOfFile(String(context.file_name), context.media_type, bytes) === 'pdf' ? 'pdf' : 'text') : null;
+      if (!read || !read.body.trim()) {
+        const message = problem ? `${error.message} The outside reader could not read it: ${problem}` : reading ? 'The outside reader found no text in the file.' : error.message;
+        await setStatus('FAILED', null, message);
+        return { ...base, status: 'FAILED', chunks: 0, embedded: 0, remaining: 0, message };
+      }
     }
     const outline = buildOutline(read);
     const chunks = buildChunks(read, outline);

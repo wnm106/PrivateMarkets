@@ -94,6 +94,11 @@ export class ExcelAuth {
     return this.session()?.email || null;
   }
 
+  /** The client this sign-in works in, when the person chose one at sign-in. */
+  clientName(): string | null {
+    return this.session()?.clientName || null;
+  }
+
   onChange(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
