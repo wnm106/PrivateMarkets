@@ -135,7 +135,7 @@ export function navDigest(review: Review) {
     drift: review.drift
       .filter((row) => row.flagged)
       .map((row) => ({ id: row.id, label: row.label, prior: round(row.prior), current: round(row.current), change: round(row.change), changePct: round(row.changePct), explained: row.explained })),
-    steps: review.steps.map((step) => ({ key: step.key, name: step.name, owner: step.owner, due: step.due, state: step.state, overdue: step.overdue, detail: step.detail })),
+    steps: review.steps.map((step) => ({ key: step.key, name: step.name, owner: step.owner, due: step.due, state: step.state, overdue: step.overdue, detail: step.detail, rule: step.rule })),
     notesOnFile: review.closeNotes ?? null,
   };
 }

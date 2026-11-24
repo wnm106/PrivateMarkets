@@ -1,11 +1,11 @@
 import {
-  CASH_RULE_LABEL, clearingAdjustment,
+  CASH_RULE_CONFIDENCE, CASH_RULE_LABEL, bankLagDays, clearingAdjustment, shiftBusinessDays,
   type AdjustmentSide, type CashRec, type CashRule, type CashRuleKind,
 } from '@tapestrai/graphql/src/lib/cash-rec';
 import { CREATE_ENTITY_MUTATION, UPDATE_ENTITY_MUTATION, graphqlMutation } from '@/lib/graphql';
 
 export type { AdjustmentSide, CashRec, CashRule, CashRuleKind };
-export { CASH_RULE_LABEL, clearingAdjustment };
+export { CASH_RULE_CONFIDENCE, CASH_RULE_LABEL, bankLagDays, clearingAdjustment, shiftBusinessDays };
 
 type MutationErrors = { entity?: { id: string } | null; errors?: Array<{ message: string }> };
 

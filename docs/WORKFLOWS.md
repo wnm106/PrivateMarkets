@@ -292,6 +292,15 @@ The agent writes the notes before the review, as the reconciliation will stand i
 
 Saving notes again replaces them. Earlier versions stay in the close record's history.
 
+### The steps on the page
+
+The reconciliation page (`/fund-rec/<fund>`) is where a person works the same close. Each tab is a step, and `?tab=<key>` opens one directly.
+
+- **How this step works**, at the top of every tab, says what the step establishes, what its terms mean, whether it holds certification, and what to do when it does not tie. The text is in `apps/web/lib/rec-guide.ts`. It quotes the reconciliation's own tolerances and is published to the assistant with each tab, so the page and the assistant explain a step the same way. Change it when a step's behaviour changes.
+- **Close status** lists the ten close steps. Each says what makes it done (`rule` on the step, set beside the step in `packages/graphql/src/lib/fund-rec.ts`) and has a button to the tab where it is worked.
+- **Breaks** lists everything that holds certification: checks that break, lines of the position roll-forward that do not tie, and review items not yet accepted or adjusted. Each entry names the tab where it is settled.
+- **Cash reconciliation** does not hold certification. On a certified close it is read only, like the review queue.
+
 ### Setting up
 
 - Apply `supabase/migrations/20261116160000_close_rec_notes.sql`. Without it everything runs except saving the notes, which fails and says so.

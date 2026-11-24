@@ -3,8 +3,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { domainHref } from '@/lib/domain-routes';
-import { cashMoney, cashTypeLabel, clearingAdjustment, moveCashRule, type AdjustmentSide, type CashRec, type CashRule } from '@/lib/cash-rec';
-import type { RecBind } from '@/lib/fund-rec';
+import {
+  CASH_RULE_CONFIDENCE, bankLagDays, cashMoney, cashTypeLabel, clearingAdjustment, moveCashRule, shiftBusinessDays,
+  type AdjustmentSide, type CashRec, type CashRule,
+} from '@/lib/cash-rec';
+import { longDate, type RecBind } from '@/lib/fund-rec';
 import { RecBit, RecCell } from './RecInspect';
 
 /** The stored attribute a cash figure is read from, for the right-click sources panel. */
@@ -65,6 +68,8 @@ function total(rows: Array<{ amount: number }>): number {
 export function CashRecTab({
   cash,
   busy,
+  locked,
+  fundHref,
   onApprove,
   onPair,
   onUnmatch,
@@ -73,6 +78,10 @@ export function CashRecTab({
 }: {
   cash: CashRec;
   busy: boolean;
+  /** Why nothing here can be changed: the close is certified. Null when it can. */
+  locked: string | null;
+  /** The fund record, where bank accounts are added. */
+  fundHref: string;
   onApprove: (bankTxnId: string) => Promise<void>;
   onPair: (bankTxnId: string, flowIds: string[]) => Promise<void>;
   onUnmatch: (matchId: string) => Promise<void>;
@@ -93,7 +102,9 @@ export function CashRecTab({
   }, [cash.periodEnd, cash.fundId]);
 
   const summary = cash.summary;
-  const locked = busy || approvingAll;
+  const frozen = busy || approvingAll || Boolean(locked);
+  const lagDays = bankLagDays(cash.rules);
+  const bankThrough = shiftBusinessDays(cash.periodEnd, lagDays);
   const txnById = useMemo(() => new Map(cash.transactions.map((txn) => [txn.id, txn])), [cash.transactions]);
   const flowById = useMemo(() => new Map(cash.flows.map((flow) => [flow.id, flow])), [cash.flows]);
   const selected = selectedId ? txnById.get(selectedId) ?? null : null;
@@ -125,7 +136,7 @@ export function CashRecTab({
   };
 
   const toggleFlow = (id: string) => {
-    if (!selected || selected.status === 'APPROVED') return;
+    if (!selected || selected.status === 'APPROVED' || frozen) return;
     setChecked((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   };
 
@@ -139,9 +150,9 @@ export function CashRecTab({
   };
 
   const proposedSame = selected?.status === 'PROPOSED' && sameIds(checked, selected.flowIds);
-  const canApprove = Boolean(selected && proposedSame && !locked);
-  const canPair = Boolean(selected && selected.status !== 'APPROVED' && checked.length > 0 && !proposedSame && !locked);
-  const canUnmatch = Boolean(selected?.status === 'APPROVED' && selected.matchId && !locked);
+  const canApprove = Boolean(selected && proposedSame && !frozen);
+  const canPair = Boolean(selected && selected.status !== 'APPROVED' && checked.length > 0 && !proposedSame && !frozen);
+  const canUnmatch = Boolean(selected?.status === 'APPROVED' && selected.matchId && !frozen);
   const checkedAmount = total(checked.flatMap((id) => flowById.get(id) ?? []));
   const pairGap = selected ? Math.round((selected.amount - checkedAmount) * 100) / 100 : 0;
   const clearing = clearingAdjustment(summary.residual);
@@ -171,6 +182,12 @@ export function CashRecTab({
         </div>
       </div>
 
+      {locked && <div className="cert-banner cert-warn"><span><strong>Read only.</strong> {locked}</span></div>}
+      <p className="da-note cr-scope">
+        In this period: position cash flows dated after {longDate(cash.priorPeriodEnd)} up to {longDate(cash.periodEnd)}, and bank transactions in the same dates
+        or up to {lagDays} business days after, through {longDate(bankThrough)}, so a late settlement can be paired. Non-cash flows stay on the roll-forward. Money leaving the fund is negative.
+      </p>
+
       <div className="cr-controls">
         <div className="cr-seg" role="group" aria-label="Status">
           {STATUS_FILTERS.map(([key, label]) => (
@@ -190,14 +207,29 @@ export function CashRecTab({
                 {canUnmatch && <button type="button" className="btn btn-sm" onClick={() => selected.matchId && void onUnmatch(selected.matchId)}>Unmatch</button>}
                 <button type="button" className="btn btn-sm" onClick={() => { setSelectedId(null); setChecked([]); }}>Clear</button>
               </span>
+              <small className="cr-pickhint">
+                {selected.status === 'APPROVED' ? 'This pair is approved. Unmatch it to pair the transaction again.'
+                  : proposedSame ? `Proposed by the rule "${selected.ruleName}". Approve it, or change the ticks to pair it another way.`
+                  : !checked.length ? 'Tick the cash flows that settle this transaction.'
+                  : Math.abs(pairGap) >= 0.01 ? 'The difference stays on the pair as its variance. Pairing does not post an adjustment.'
+                  : 'The cash flows add up to the bank amount.'}
+              </small>
             </>
           ) : (
-            <span className="cr-hint">Select a bank transaction, then check the cash flows that settle it.</span>
+            <span className="cr-hint">{locked ? 'Select a bank transaction to see the cash flows paired to it.' : 'Select a bank transaction, then tick the cash flows that settle it. Proposed pairs are approved in the review tray below.'}</span>
           )}
         </div>
       </div>
 
-      {!cash.accounts.length && <p className="da-note">This fund has no bank accounts yet. Add one on the fund and its transactions can be matched here.</p>}
+      {!cash.accounts.length && (
+        <p className="da-note da-also">This fund has no bank account on file, so there are no bank transactions to pair. Add the account on the <Link className="da-link" href={fundHref}>fund record</Link>, then load its statement in <Link className="da-link" href="/load">Load data</Link>.</p>
+      )}
+      {cash.accounts.length > 0 && !cash.transactions.length && (
+        <p className="da-note da-also">No bank transactions are on file for this period. Load the bank statement in <Link className="da-link" href="/load">Load data</Link>, or wait for its feed; the rules then propose pairs here.</p>
+      )}
+      {!cash.flows.length && (
+        <p className="da-note da-also">No position cash flows are dated in this period. They load with the position book in <Link className="da-link" href="/load">Load data</Link>.</p>
+      )}
 
       <div className="cr-work">
         <section className="cr-panel bank" aria-label="Bank transactions">
@@ -214,7 +246,7 @@ export function CashRecTab({
           <div className="cr-scroll">
             <table className="cr-grid">
               <thead>
-                <tr><th>Date</th><th>Description</th><th className="num">Amount</th><th>Match</th><th className="num">Difference</th></tr>
+                <tr><th>Date</th><th>Description</th><th className="num">Amount</th><th title="The rule that paired it, or Open when nothing has">Match</th><th className="num" title="Bank amount less the cash flows paired to it. For an open transaction, the whole amount.">Difference</th></tr>
               </thead>
               <tbody>
                 {visibleTxns.map((txn) => {
@@ -224,12 +256,12 @@ export function CashRecTab({
                       <RecCell className="date" sources={txnSrc(txn, 'BANK_TXN_DATE', 'Date', 'DATE')} display={txn.date}>{txn.date}</RecCell>
                       <RecCell sources={txnSrc(txn, 'BANK_TXN_DESCRIPTION', 'Description')} display={txn.description || txn.code}><Link href={`${domainHref('BANK_TRANSACTION')}/${txn.id}`} onClick={(event) => event.stopPropagation()}>{txn.description || txn.code}</Link><small>{txn.accountName}{txn.counterparty ? <RecBit sources={txnSrc(txn, 'BANK_TXN_COUNTERPARTY', 'Counterparty')} display={txn.counterparty}>{` · ${txn.counterparty}`}</RecBit> : ''}</small></RecCell>
                       <RecCell className="num" sources={txnSrc(txn, 'BANK_TXN_AMOUNT', 'Amount', 'CURRENCY')} display={cashMoney(txn.amount)}>{cashMoney(txn.amount)}</RecCell>
-                      <td><span className={`da-st ${tone(txn.status)}`}>{txn.ruleName || 'Open'}</span></td>
+                      <td><span className={`da-st ${tone(txn.status)}`} title={txn.status === 'PROPOSED' ? 'Proposed by this rule. Waiting for approval.' : txn.status === 'APPROVED' ? 'Approved pair' : 'No pair yet'}>{txn.ruleName || 'Open'}</span></td>
                       <td className={`num ${txn.variance == null ? 'muted' : Math.abs(gap) < 0.01 ? 'zero' : 'neg'}`}>{cashMoney(gap)}</td>
                     </tr>
                   );
                 })}
-                {!visibleTxns.length && <tr><td colSpan={5} className="cr-none">No bank transactions match.</td></tr>}
+                {!visibleTxns.length && <tr><td colSpan={5} className="cr-none">{cash.transactions.length ? 'No bank transactions fit the filters above.' : 'No bank transactions on file for this period.'}</td></tr>}
               </tbody>
             </table>
           </div>
@@ -265,7 +297,7 @@ export function CashRecTab({
                       title={jump ? 'Show the bank transaction this is paired to' : undefined}
                       onClick={jump ? () => selectTxn(jump) : undefined}
                     >
-                      <td className="chk"><input type="checkbox" checked={inPair} disabled={!selected || selected.status === 'APPROVED' || taken || locked} aria-label={`Pair ${flow.positionName || flow.name}`} onClick={(event) => event.stopPropagation()} onChange={() => toggleFlow(flow.id)} /></td>
+                      <td className="chk"><input type="checkbox" checked={inPair} disabled={!selected || selected.status === 'APPROVED' || taken || frozen} aria-label={`Pair ${flow.positionName || flow.name}`} onClick={(event) => event.stopPropagation()} onChange={() => toggleFlow(flow.id)} /></td>
                       <RecCell className="date" sources={flowSrc(flow, 'CASHFLOW_DATE', 'Date', 'DATE')} display={flow.date}>{flow.date}</RecCell>
                       <td><Link href={`${domainHref('CASH_FLOW')}/${flow.id}`} onClick={(event) => event.stopPropagation()}>{flow.positionName || flow.name}</Link></td>
                       <RecCell sources={flowSrc(flow, 'CASHFLOW_TYPE', 'Type')} display={cashTypeLabel(flow.type)}><span className={`cr-type ${typeTone(flow.type)}`}>{cashTypeLabel(flow.type)}</span></RecCell>
@@ -274,7 +306,7 @@ export function CashRecTab({
                     </tr>
                   );
                 })}
-                {!visibleFlows.length && <tr><td colSpan={6} className="cr-none">No positional cash flows match.</td></tr>}
+                {!visibleFlows.length && <tr><td colSpan={6} className="cr-none">{cash.flows.length ? 'No positional cash flows fit the filters above.' : 'No positional cash flows dated in this period.'}</td></tr>}
               </tbody>
             </table>
           </div>
@@ -293,7 +325,7 @@ export function CashRecTab({
           <span className={`da-st ${proposals.length ? 'near' : 'ok'}`}>{proposals.length ? `${proposals.length} match${proposals.length === 1 ? '' : 'es'} pending approval` : 'Nothing pending'}</span>
           {proposals.length > 0 && <span className="cr-ready">{cashMoney(proposedAmount)} ready to settle</span>}
           <div className="cr-tools">
-            <button type="button" className="btn btn-sm btn-primary" disabled={locked || !proposals.length} onClick={() => void approveAll()}>{approvingAll ? 'Approving…' : 'Approve all'}</button>
+            <button type="button" className="btn btn-sm btn-primary" disabled={frozen || !proposals.length} onClick={() => void approveAll()}>{approvingAll ? 'Approving…' : 'Approve all'}</button>
           </div>
         </header>
         {proposals.length > 0 ? (
@@ -310,7 +342,7 @@ export function CashRecTab({
                   const span = index === 0 ? flows.length : 0;
                   return (
                     <tr key={`${match.id}:${flow.id}`} className={`${index === 0 ? 'lead' : 'more'} ${txn.id === selectedId ? 'sel' : ''}`}>
-                      {span > 0 && <td rowSpan={span} className="act"><button type="button" className="btn btn-sm btn-primary" disabled={locked} onClick={() => void onApprove(txn.id)}>Approve</button></td>}
+                      {span > 0 && <td rowSpan={span} className="act"><button type="button" className="btn btn-sm btn-primary" disabled={frozen} onClick={() => void onApprove(txn.id)}>Approve</button></td>}
                       {span > 0 && <td rowSpan={span}><button type="button" className="cr-link" onClick={() => selectTxn(txn.id)}>{txn.description || txn.code}</button><small>{txn.accountName}{txn.counterparty ? ` · ${txn.counterparty}` : ''}</small></td>}
                       {span > 0 && <td rowSpan={span} className="date"><RecBit sources={txnSrc(txn, 'BANK_TXN_DATE', 'Date', 'DATE')} display={txn.date}>{txn.date}</RecBit></td>}
                       {span > 0 && <td rowSpan={span} className="num"><RecBit sources={txnSrc(txn, 'BANK_TXN_AMOUNT', 'Amount', 'CURRENCY')} display={cashMoney(match.bankAmount)}>{cashMoney(match.bankAmount)}</RecBit></td>}
@@ -327,7 +359,7 @@ export function CashRecTab({
             </table>
           </div>
         ) : (
-          <p className="cr-none">The rules have no proposed matches waiting. Pair what is left by hand above.</p>
+          <p className="cr-none">{summary.openTxnCount ? 'The rules have no proposed pairs waiting. Pair what is left by hand above.' : 'The rules have no proposed pairs waiting, and no bank transaction is open.'}</p>
         )}
       </section>
 
@@ -338,16 +370,17 @@ export function CashRecTab({
             <span className={`da-st ${summary.tied ? 'ok' : 'breach'}`}>{summary.tied ? 'Tied' : `${cashMoney(summary.residual)} apart`}</span>
           </header>
           <div className="cr-body">
-            <p className="da-note">Positional cash plus position adjustments equals bank activity plus bank adjustments.</p>
+            <p className="da-note">Position cash plus position adjustments must equal bank activity plus bank adjustments. Pairing does not change these totals; it shows which items explain them. What is left apart is the open items on each side and the differences kept on pairs.</p>
             <table className="cr-grid cr-tie">
               <thead>
                 <tr><th /><th className="num">Position book</th><th className="num">Bank</th></tr>
               </thead>
               <tbody>
                 <tr><td>Cash in the period</td><td className="num">{cashMoney(summary.positionTotal)}</td><td className="num">{cashMoney(summary.bankTotal)}</td></tr>
-                <tr><td>Matched</td><td className="num">{cashMoney(summary.matchedFlowAmount)}</td><td className="num">{cashMoney(summary.matchedBankAmount)}</td></tr>
-                <tr><td>Adjustments</td><td className="num">{cashMoney(summary.positionAdjustments)}</td><td className="num">{cashMoney(summary.bankAdjustments)}</td></tr>
-                <tr className="net"><td>Tied balance</td><td className="num">{cashMoney(summary.positionTied)}</td><td className="num">{cashMoney(summary.bankTied)}</td></tr>
+                <tr className="of"><td>of which paired, proposed or approved</td><td className="num">{cashMoney(summary.matchedFlowAmount)}</td><td className="num">{cashMoney(summary.matchedBankAmount)}</td></tr>
+                <tr><td>Plus adjustments</td><td className="num">{cashMoney(summary.positionAdjustments)}</td><td className="num">{cashMoney(summary.bankAdjustments)}</td></tr>
+                <tr className="net"><td>After adjustments</td><td className="num">{cashMoney(summary.positionTied)}</td><td className="num">{cashMoney(summary.bankTied)}</td></tr>
+                <tr><td>Position book less bank</td><td className={`num ${summary.tied ? 'zero' : 'neg'}`} colSpan={2}>{summary.tied ? 'Tied' : cashMoney(summary.residual)}</td></tr>
               </tbody>
             </table>
             {cash.adjustments.length > 0 && (
@@ -362,18 +395,20 @@ export function CashRecTab({
                 </tbody>
               </table>
             )}
-            <AdjustmentForm key={`${cash.periodEnd}:${summary.residual}:${cash.adjustments.length}`} busy={locked} clearing={clearing} onAdjust={onAdjust} />
+            {locked
+              ? <p className="da-note">{locked}</p>
+              : <AdjustmentForm key={`${cash.periodEnd}:${summary.residual}:${cash.adjustments.length}`} busy={frozen} clearing={clearing} onAdjust={onAdjust} />}
           </div>
         </section>
 
         <section className="cr-panel" aria-label="Match rules">
           <header className="cr-phead">
             <h2>Match rules</h2>
-            <span className="cr-ready muted">Top to bottom. The first rule that fits wins.</span>
+            <span className="cr-ready muted">Top to bottom. The first rule that fits a bank transaction wins. A change re-runs the proposals; approved pairs stay.</span>
           </header>
           <table className="cr-grid cr-rules">
             <thead>
-              <tr><th>#</th><th>Rule</th><th>Window</th><th>On</th><th aria-label="Reorder" /></tr>
+              <tr><th>#</th><th>Rule</th><th>Window</th><th className="num" title="How sure a pair proposed by this rule is. A looser rule is a weaker match.">Confidence</th><th>On</th><th aria-label="Reorder" /></tr>
             </thead>
             <tbody>
               {cash.rules.map((rule, index) => (
@@ -381,12 +416,13 @@ export function CashRecTab({
                   <td className="date">{index + 1}</td>
                   <td>{rule.name}<small>{ruleDetail(rule)}</small></td>
                   <td>{rule.dateDays ? `${rule.dateDays} business day${rule.dateDays === 1 ? '' : 's'}` : 'Same date'}{rule.amountTolerance > 0.01 ? ` · ${cashMoney(rule.amountTolerance)}` : ''}</td>
-                  <td><input type="checkbox" checked={rule.enabled} disabled={locked} aria-label={`${rule.name} enabled`} onChange={(event) => {
+                  <td className="num">{CASH_RULE_CONFIDENCE[rule.kind]}%</td>
+                  <td><input type="checkbox" checked={rule.enabled} disabled={frozen} aria-label={`${rule.name} enabled`} onChange={(event) => {
                     void onRules(cash.rules.map((item) => item.id === rule.id ? { ...item, enabled: event.target.checked } : item));
                   }} /></td>
                   <td className="act">
-                    <button type="button" className="btn btn-sm" disabled={locked || index === 0} aria-label={`Move ${rule.name} up`} onClick={() => move(rule.id, -1)}>↑</button>{' '}
-                    <button type="button" className="btn btn-sm" disabled={locked || index === cash.rules.length - 1} aria-label={`Move ${rule.name} down`} onClick={() => move(rule.id, 1)}>↓</button>
+                    <button type="button" className="btn btn-sm" disabled={frozen || index === 0} aria-label={`Move ${rule.name} up`} onClick={() => move(rule.id, -1)}>↑</button>{' '}
+                    <button type="button" className="btn btn-sm" disabled={frozen || index === cash.rules.length - 1} aria-label={`Move ${rule.name} down`} onClick={() => move(rule.id, 1)}>↓</button>
                   </td>
                 </tr>
               ))}
@@ -420,10 +456,15 @@ function AdjustmentForm({
   const [reason, setReason] = useState('');
   return (
     <form className="da-editor cr-adjust" onSubmit={(event) => { event.preventDefault(); void onAdjust(Number(amount), side, reason); }}>
-      <p className="da-note">{clearing ? `Post ${cashMoney(clearing.amount)} to the ${clearing.side === 'BANK' ? 'bank' : 'position book'} to tie this period.` : 'The books tie. Post another adjustment if a later item needs one.'}</p>
+      <p className="da-note">
+        {clearing
+          ? `${cashMoney(clearing.amount)} on the ${clearing.side === 'BANK' ? 'bank' : 'position book'} side would close the gap. Post it only when you know what the difference is, and say so in the reason.`
+          : 'The books tie. Post an adjustment only if a later item needs one.'}
+        {' '}Bank side: an item the bank has not shown yet, such as a deposit in transit. Position book side: cash the bank shows that is missing from our book, such as a bank fee.
+      </p>
       <label className="amt">Amount <input inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
       <label className="side">Side <select value={side} onChange={(event) => setSide(event.target.value as AdjustmentSide)}><option value="BANK">Bank</option><option value="POSITION">Position book</option></select></label>
-      <label className="why">Reason <input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why this amount ties the books" /></label>
+      <label className="why">Reason <input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="What the difference is, and the evidence for it" /></label>
       <button type="submit" className="btn btn-sm" disabled={busy}>Post adjustment</button>
     </form>
   );

@@ -14,10 +14,18 @@
 
 import { buildPack, emptyPack, feeSegments, type PackComponentKey, type PackInput, type PackReview } from './nav-pack';
 
+/** Two dollar figures tie when they are closer than this. */
 export const TIE = 5000;
+/** A mark this many points from the agent's price goes to the review queue. */
 export const MARK_TOLERANCE_PTS = 1;
-const DRIFT_FLOOR = 100000;
-const PERF_FEE_FLOOR = 50000;
+/** A line's move is drift only when it is at least this many dollars. */
+export const DRIFT_FLOOR = 100000;
+/** A performance fee this far from the estimate goes to the review queue. */
+export const PERF_FEE_FLOOR = 50000;
+/** A management fee this share away from the recalculation goes to the review queue. */
+export const MGMT_FEE_TOLERANCE = 0.005;
+/** A statement line this percent away from our own figure is a source variance, unless the statement sets its own tolerance. */
+export const SOURCE_TOLERANCE_PCT = 0.5;
 
 export type Frequency = 'MONTHLY' | 'QUARTERLY';
 export type Decision = 'ACCEPT' | 'ADJUST' | 'QUERY';
@@ -296,18 +304,21 @@ export function periodsPerYear(frequency: Frequency): number {
   return frequency === 'MONTHLY' ? 12 : 4;
 }
 
-/** Share of the lag at which each close step is due. 37 days is the quarterly baseline. */
+/**
+ * Share of the lag at which each close step is due. 37 days is the quarterly baseline.
+ * `rule` says what makes the step done, in the words the page and the assistant show.
+ */
 const STEPS = [
-  { key: 'pack', name: 'Admin pack received and logged', owner: 'Fund accountant', frac: 27 / 37 },
-  { key: 'statements', name: 'Statements tie to each other', owner: 'Fund accountant', frac: 29 / 37 },
-  { key: 'evidence', name: 'Cash and capital tied to outside evidence', owner: 'Fund accountant', frac: 29 / 37 },
-  { key: 'roll', name: 'Position roll-forward and P&L attribution', owner: 'Portfolio accountant', frac: 30 / 37 },
-  { key: 'val', name: 'Marks and accruals reviewed', owner: 'Valuation analyst', frac: 33 / 37 },
-  { key: 'fees', name: 'Management and performance fees reviewed', owner: 'Fund accountant', frac: 34 / 37 },
-  { key: 'drift', name: 'Prior period drift explained', owner: 'Senior reviewer', frac: 34 / 37 },
-  { key: 'queries', name: 'Admin queries resolved', owner: 'Fund accountant', frac: 35 / 37 },
-  { key: 'signoff', name: 'Reviewer sign-off', owner: 'Senior reviewer', frac: 36 / 37 },
-  { key: 'certify', name: 'NAV certified', owner: 'Fund CFO', frac: 1 },
+  { key: 'pack', name: 'Admin pack received and logged', owner: 'Fund accountant', frac: 27 / 37, rule: 'Done when the administrator\'s NAV statement for the period is on file. Every later step waits on it.' },
+  { key: 'statements', name: 'Statements tie to each other', owner: 'Fund accountant', frac: 29 / 37, rule: 'Done when every check of the statements against each other, the position book and the NAV pack ties. A check that breaks blocks the step and certification; a check with a figure missing leaves it in progress.' },
+  { key: 'evidence', name: 'Cash and capital tied to outside evidence', owner: 'Fund accountant', frac: 29 / 37, rule: 'Done when closing cash ties to the bank statement, contributions and distributions tie to their notices, and the credit facility ties to the lender statement. A break blocks; missing evidence leaves it in progress.' },
+  { key: 'roll', name: 'Position roll-forward and P&L attribution', owner: 'Portfolio accountant', frac: 30 / 37, rule: 'Done when the roll-forward reaches the reported ending value and each of its totals ties to its statement line. Any line that breaks blocks the step and certification.' },
+  { key: 'val', name: 'Marks and accruals reviewed', owner: 'Valuation analyst', frac: 33 / 37, rule: 'Done when every mark and accrual item in the review queue is accepted or adjusted. An item queried with the administrator blocks it.' },
+  { key: 'fees', name: 'Management and performance fees reviewed', owner: 'Fund accountant', frac: 34 / 37, rule: 'Done when every fee item in the review queue is accepted or adjusted. An item queried with the administrator blocks it.' },
+  { key: 'drift', name: 'Prior period drift explained', owner: 'Senior reviewer', frac: 34 / 37, rule: 'Done when every unexplained move over the drift threshold is accepted or adjusted in the review queue. An item queried with the administrator blocks it.' },
+  { key: 'queries', name: 'Admin queries resolved', owner: 'Fund accountant', frac: 35 / 37, rule: 'Done when no review item is out with the administrator. Each open query blocks certification until it is accepted or adjusted.' },
+  { key: 'signoff', name: 'Reviewer sign-off', owner: 'Senior reviewer', frac: 36 / 37, rule: 'Set by the reviewer on this page. It records the review; certification does not wait on it.' },
+  { key: 'certify', name: 'NAV certified', owner: 'Fund CFO', frac: 1, rule: 'Done when the NAV is certified with Certify NAV at the top of the page. Certifying is offered once no check breaks, the roll-forward ties and every review item is accepted or adjusted.' },
 ] as const;
 
 export type StepKey = (typeof STEPS)[number]['key'];
@@ -475,7 +486,10 @@ export interface RecStep {
   due: string;
   state: StepState;
   detail: string;
+  /** What makes the step done, and whether it holds certification. */
+  rule: string;
   overdue: boolean;
+  /** The tab of the reconciliation page where the step is worked. */
   tab: string | null;
   manual: boolean;
   sources: RecBind[];
@@ -1128,7 +1142,7 @@ export function buildReview(input: RecInput): RecReview {
   }
   const positionBook = input.positions.filter((item) => item.marketValue != null);
   const positionTotal = positionBook.length ? sum(positionBook.map((item) => item.marketValue)) : null;
-  const investmentTie = Math.max(TIE, Math.abs(A('inv') ?? 0) * ((input.statement?.tolerancePct ?? 0.5) / 100));
+  const investmentTie = Math.max(TIE, Math.abs(A('inv') ?? 0) * ((input.statement?.tolerancePct ?? SOURCE_TOLERANCE_PCT) / 100));
   addCheck('positions', 'statements', 'Investments vs our position book', 'Positions',
     A('inv'), positionTotal,
     binds(lineOf('inv')),
@@ -1242,7 +1256,7 @@ export function buildReview(input: RecInput): RecReview {
   const mgmtAdminSource = adminBind(mgmtLine);
   const feeOurs = binds(rateSource, baseSource, frequencySource);
   const feeEffect = binds(mgmtAdminSource, rateSource, baseSource);
-  if (present(mgmtPct) && Math.abs(mgmtPct) > 0.005) {
+  if (present(mgmtPct) && Math.abs(mgmtPct) > MGMT_FEE_TOLERANCE) {
     addItem({
       id: 'fee', tab: 'fees', title: 'Management fee accrual', admin: mgmtAdmin!, ours: recalculated!, effect: mgmtAdmin! - recalculated!, unit: 'USD', drift: false,
       why: (feeTerms.length === 1 && mgmtFeeBasis === 'COMMITMENTS'
@@ -1381,7 +1395,7 @@ export function buildReview(input: RecInput): RecReview {
       const internal = line.shadow;
       const variance = current != null && internal != null ? current - internal : null;
       const base = internal != null && Math.abs(internal) > 1 ? Math.abs(internal) : (current != null ? Math.abs(current) : 0);
-      const varianceFlagged = variance != null && base > 1 && Math.abs(variance / base) * 100 > (input.statement?.tolerancePct ?? 0.5);
+      const varianceFlagged = variance != null && base > 1 && Math.abs(variance / base) * 100 > (input.statement?.tolerancePct ?? SOURCE_TOLERANCE_PCT);
       const currentSources = binds(dated(adminBind(line), periodEnd, null));
       const internalSources = internal != null ? binds(dated(internalBind(line), periodEnd, null)) : [];
       const priorSources = binds(priorBind(line, input.priorAsOf, input.priorKnowledge));
@@ -1442,6 +1456,34 @@ export function buildReview(input: RecInput): RecReview {
   const adjustment = sum(items.filter((item) => item.decision === 'ADJUST').map((item) => item.effect));
   const navProposed = present(navReported) ? navReported + adjustment : null;
 
+  /* the NAV pack, part by part ------------------------------------------ */
+  const statementTitles: Record<string, string> = { BS_ASSET: 'Balance sheet', OPS: 'Statement of operations', CHANGES: 'Changes in net assets', CASH: 'Cash flows' };
+  const pack = buildPack({
+    fund: { id: fund.id, name: fund.name, capitalModel, feeRatePct: fund.feeRatePct, carryPct: fund.carryPct },
+    periodEnd, previous, spanMonths, lagDays: fund.lagDays,
+    amount: (key) => key.startsWith('code:') ? (lines.find((line) => line.code === key.slice(5))?.admin ?? null) : (key in MATCH ? A(key as MatchKey) : null),
+    prior: (key) => (key in MATCH ? P(key as MatchKey) : null),
+    lineSources: (key) => key.startsWith('code:')
+      ? binds(dated(adminBind(lines.find((line) => line.code === key.slice(5))), periodEnd, null))
+      : key in MATCH ? binds(lineOf(key as MatchKey)) : [],
+    statementsWithFigures: Object.entries(statementTitles)
+      .filter(([statement]) => lines.some((line) => (line.statement === statement || (statement === 'BS_ASSET' && line.statement.startsWith('BS_'))) && line.admin != null))
+      .map(([, title]) => title),
+    fee: { segments: feeTerms, admin: mgmtAdmin, sources: binds(mgmtAdminSource, feeOurs) },
+    perf: {
+      basis: perfFeeBasis, ready: perfReady, contributions, distributions, profit, hurdle, excess, carry, admin: perfAdmin,
+      carryPct, catchUpPct, sources: binds(carrySources),
+    },
+    checks: scoped,
+    items,
+  }, input.pack ?? emptyPack());
+  scoped.push(...pack.checks);
+  breaks = scoped.filter((check) => check.result === 'Break').length;
+  missing = scoped.filter((check) => check.result === 'Missing').length;
+  const packExpected = pack.components.filter((part) => part.expected);
+  const packMissing = packExpected.filter((part) => !part.onFile);
+  const packRequired = pack.components.filter((part) => part.required);
+
   /* close steps --------------------------------------------------------- */
   const tabState = (tab: RecItem['tab']): [StepState, string] => {
     const group = items.filter((item) => item.tab === tab);
@@ -1453,7 +1495,8 @@ export function buildReview(input: RecInput): RecReview {
     return [done ? 'In progress' : 'Not started', `${done} of ${group.length} decided`];
   };
   const checkState = (group: RecCheck['group']): [StepState, string] => {
-    const set = scoped.filter((check) => check.group === group);
+    // A NAV pack check that can be made counts with the statements: a break in one holds certification too.
+    const set = scoped.filter((check) => check.group === group || (group === 'statements' && check.group === 'pack' && check.result !== 'Missing'));
     if (!hasStatement) return ['Not started', 'Waiting on admin pack'];
     const bad = set.filter((check) => check.result === 'Break').length;
     const gone = set.filter((check) => check.result === 'Missing').length;
@@ -1486,7 +1529,7 @@ export function buildReview(input: RecInput): RecReview {
     signoff: [signoff, ''],
     certify: certified ? ['Done', input.close?.certifiedAt ?? 'Certified'] : ['Not started', 'Waiting on prior steps'],
   };
-  const tabFor: Partial<Record<StepKey, string>> = { statements: 'integrity', evidence: 'integrity', roll: 'roll', val: 'val', fees: 'fees', drift: 'drift' };
+  const tabFor: Partial<Record<StepKey, string>> = { pack: 'inputs', statements: 'integrity', evidence: 'integrity', roll: 'roll', val: 'val', fees: 'fees', drift: 'drift', queries: 'breaks' };
   const checkSources = (group: RecCheck['group']) => binds(...scoped.filter((check) => check.group === group).flatMap((check) => [check.aSources, check.bSources]));
   const itemSources = (tab: RecItem['tab']) => binds(...items.filter((item) => item.tab === tab).flatMap((item) => [item.adminSources, item.oursSources, item.effectSources]));
   const dueSources = binds(fundOf('FUND_CLOSE_LAG_DAYS'), statementOf('STATEMENT_PERIOD_END'), closeOf('CLOSE_PERIOD_END'));
@@ -1506,40 +1549,12 @@ export function buildReview(input: RecInput): RecReview {
     const due = stepDue(periodEnd, fund.lagDays, step.key);
     const [state, detail] = stepState[step.key];
     return {
-      key: step.key, name: step.name, owner: step.owner, due, state, detail,
+      key: step.key, name: step.name, owner: step.owner, due, state, detail, rule: step.rule,
       overdue: state !== 'Done' && due < today, tab: tabFor[step.key] ?? null, manual: step.key === 'signoff',
       sources: stepSources[step.key], dueSources,
     };
   });
   const stepsDone = steps.filter((step) => step.state === 'Done').length;
-
-  /* the NAV pack, part by part ------------------------------------------ */
-  const statementTitles: Record<string, string> = { BS_ASSET: 'Balance sheet', OPS: 'Statement of operations', CHANGES: 'Changes in net assets', CASH: 'Cash flows' };
-  const pack = buildPack({
-    fund: { id: fund.id, name: fund.name, capitalModel, feeRatePct: fund.feeRatePct, carryPct: fund.carryPct },
-    periodEnd, previous, spanMonths, lagDays: fund.lagDays,
-    amount: (key) => key.startsWith('code:') ? (lines.find((line) => line.code === key.slice(5))?.admin ?? null) : (key in MATCH ? A(key as MatchKey) : null),
-    prior: (key) => (key in MATCH ? P(key as MatchKey) : null),
-    lineSources: (key) => key.startsWith('code:')
-      ? binds(dated(adminBind(lines.find((line) => line.code === key.slice(5))), periodEnd, null))
-      : key in MATCH ? binds(lineOf(key as MatchKey)) : [],
-    statementsWithFigures: Object.entries(statementTitles)
-      .filter(([statement]) => lines.some((line) => (line.statement === statement || (statement === 'BS_ASSET' && line.statement.startsWith('BS_'))) && line.admin != null))
-      .map(([, title]) => title),
-    fee: { segments: feeTerms, admin: mgmtAdmin, sources: binds(mgmtAdminSource, feeOurs) },
-    perf: {
-      basis: perfFeeBasis, ready: perfReady, contributions, distributions, profit, hurdle, excess, carry, admin: perfAdmin,
-      carryPct, catchUpPct, sources: binds(carrySources),
-    },
-    checks: scoped,
-    items,
-  }, input.pack ?? emptyPack());
-  scoped.push(...pack.checks);
-  breaks = scoped.filter((check) => check.result === 'Break').length;
-  missing = scoped.filter((check) => check.result === 'Missing').length;
-  const packExpected = pack.components.filter((part) => part.expected);
-  const packMissing = packExpected.filter((part) => !part.onFile);
-  const packRequired = pack.components.filter((part) => part.required);
 
   /* readiness: every input the rec needs is on file -------------------- */
   const positionsWithMarks = input.positions.filter((item) => present(item.mark) && present(item.agentMark)).length;

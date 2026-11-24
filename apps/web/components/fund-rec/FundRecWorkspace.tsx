@@ -16,13 +16,17 @@ import {
 import { certifyBlockedBy, replacedDependencies, type Certification, type CertificationView } from '@/lib/certification';
 import { CertifiedBanner, ReopenButton, useCertification } from '@/components/certification/CertificationScope';
 import {
-  saveCashAdjustment, saveCashMatch, saveCashRules, unmatchCash,
+  cashMoney, saveCashAdjustment, saveCashMatch, saveCashRules, unmatchCash,
   type CashRec, type CashRule,
 } from '@/lib/cash-rec';
 import { summarizeBreaks, type BreakEntry, type BreakSummary } from '@tapestrai/graphql/src/lib/nav-breaks';
+import { TIE } from '@tapestrai/graphql/src/lib/fund-rec';
+import { domainHref } from '@/lib/domain-routes';
+import { guideText } from '@/lib/rec-guide';
 import { CashRecTab } from './CashRecTab';
 import { NavPackTab } from './NavPackTab';
 import { RecBit, RecCell, RecFact, RecInspectProvider, RecLabel, RecPress, joinSources } from './RecInspect';
+import { StepGuide } from './StepGuide';
 
 type TabKey = 'close' | 'breaks' | 'pack' | 'stmt' | 'roll' | 'cash' | 'integrity' | 'fees' | 'val' | 'drift' | 'inputs';
 
@@ -39,6 +43,9 @@ const TABS: Array<[TabKey, string]> = [
   ['drift', 'Period drift'],
   ['inputs', 'Rec inputs'],
 ];
+
+const TAB_LABEL = Object.fromEntries(TABS) as Record<TabKey, string>;
+const isTab = (value: unknown): value is TabKey => TABS.some(([key]) => key === value);
 
 const SIGNOFF = [['NOT_STARTED', 'Not started'], ['IN_PROGRESS', 'In progress'], ['BLOCKED', 'Blocked'], ['DONE', 'Done']] as const;
 
@@ -57,7 +64,7 @@ const REC_TAB_INFO = {
   close: {
     label: 'Close status',
     purpose: 'Where this period\'s NAV close stands: the steps to certify, who owns them, what blocks certification and which review items are still undecided.',
-    howToRead: 'health and certifyBlock say whether the NAV can be certified now. steps are the close steps in order. items are the review items from the fees, marks and drift tabs; decision is null while undecided.',
+    howToRead: 'health and certifyBlock say whether the NAV can be certified now. steps are the close steps in order: rule says what makes a step done and worked names the tab where it is worked. items are the review items from the fees, marks and drift tabs; decision is null while undecided. cashReconciliation is the cash tie-out worked beside the steps; it does not hold certification.',
   },
   pack: {
     label: 'NAV pack',
@@ -67,7 +74,7 @@ const REC_TAB_INFO = {
   breaks: {
     label: 'Breaks',
     purpose: 'Everything that stands between this period\'s NAV and sign-off, in one list: checks that break, checks with a figure missing, review items still open, and inputs not on file.',
-    howToRead: 'Each entry has the two figures it compares (reported and expected), the difference, the cause, what settles it and who does that. kind is break, missing, item or gap; blocking entries stand in the way of certification. Amounts are dollars, or points for a mark. comparedWith is the date the period is compared with: the statement\'s comparative date when it has one, such as the last fiscal year end for a 10-Q.',
+    howToRead: 'Each entry has the two figures it compares (reported and expected), the difference, the cause, what settles it and who does that. kind is break, missing, item or gap; blocking entries stand in the way of certification, and worked names the tab where an entry is settled. Amounts are dollars, or points for a mark. comparedWith is the date the period is compared with: the statement\'s comparative date when it has one, such as the last fiscal year end for a 10-Q.',
   },
   stmt: {
     label: 'NAV statement',
@@ -77,12 +84,12 @@ const REC_TAB_INFO = {
   roll: {
     label: 'Position roll-forward',
     purpose: 'Whether the position roll-forward from the prior period ties to the NAV statement.',
-    howToRead: 'rows are positions and columns are the movements. ties compares each rolled-forward line with the statement: Ties, Break or Missing.',
+    howToRead: 'rows are positions and columns are the movements. ties compares each rolled-forward line with the statement: Ties, Break or Missing. standing counts the lines that hold the close (the walk and each tie): linesBreaking of lines, and walkDifference is reported ending less the walk. columnsToCheck are columns where the fund total and the statements differ though no line that holds the close covers them.',
   },
   cash: {
     label: 'Cash reconciliation',
     purpose: 'Whether the fund\'s cash flows agree with the bank: matched, proposed and open items and what is left unexplained.',
-    howToRead: 'positionTotal is cash per our records and bankTotal is per the bank. residual is the unexplained difference. flows and transactions that are open have no match yet.',
+    howToRead: 'positionTotal is cash per our records and bankTotal is per the bank. residual is position book less bank after adjustments, the unexplained difference. flows and transactions that are open have no match yet. period says which dates are in scope. locked is why nothing can be changed, when the close is certified.',
   },
   integrity: {
     label: 'Statement integrity',
@@ -111,9 +118,40 @@ const REC_TAB_INFO = {
   },
 } satisfies Record<string, Omit<TabPayload, 'data'>>;
 
+/** A tab's name, purpose and reading notes, with how its step works as the page explains it. */
+function tabInfo(key: TabKey): Omit<TabPayload, 'data'> {
+  const info = REC_TAB_INFO[key];
+  return { ...info, howToRead: `${info.howToRead} How the step works: ${guideText(key)}` };
+}
+
 /** Every tab with data: null, for while the close is still loading. */
 function pendingRecTabs(): Record<string, TabPayload> {
-  return Object.fromEntries(Object.entries(REC_TAB_INFO).map(([key, tab]) => [key, { ...tab, data: null }]));
+  return Object.fromEntries(TABS.map(([key]) => [key, { ...tabInfo(key), data: null }]));
+}
+
+/** Where the roll-forward stands, counted on the lines that hold the close: the walk and each tie to a statement line. */
+function rollStanding(roll: FundRec['roll']) {
+  const at = (key: string) => roll.columns.findIndex((column) => column.key === key);
+  const walkDifference = roll.present ? roll.total[at('diff')] ?? 0 : 0;
+  const walkOff = Math.abs(walkDifference) >= TIE;
+  const lines = roll.present ? roll.ties.length + 1 : 0;
+  const breaking = roll.ties.filter((tie) => tie.result === 'Break').length + (walkOff ? 1 : 0);
+  // A column where the fund total and the statements differ, though every line that holds the close ties.
+  const loose = roll.present && !breaking
+    ? roll.columns.filter((column, index) => column.key !== 'diff' && roll.statement[index] != null && Math.abs(roll.total[index] - roll.statement[index]!) >= TIE).map((column) => column.label)
+    : [];
+  return { walkDifference, walkOff, lines, breaking, loose, workIndex: at('work'), reportedIndex: at('reported'), diffIndex: at('diff') };
+}
+
+/** One line on where the cash reconciliation stands. */
+function cashStanding(cash: CashRec): string {
+  const { summary } = cash;
+  const count = (value: number, one: string, many: string) => `${value} ${value === 1 ? one : many}`;
+  const open = summary.openTxnCount || summary.openFlowCount
+    ? `${count(summary.openTxnCount, 'bank transaction', 'bank transactions')} and ${count(summary.openFlowCount, 'cash flow', 'cash flows')} open`
+    : 'nothing open';
+  const waiting = summary.proposedCount ? `, ${count(summary.proposedCount, 'proposed pair', 'proposed pairs')} to approve` : '';
+  return `${summary.tied ? 'tied' : `${cashMoney(Math.abs(summary.residual))} apart`}, ${open}${waiting}`;
 }
 
 /**
@@ -130,15 +168,17 @@ function recTabs(
   reopened: Certification | null,
 ): Record<string, TabPayload> {
   const undecided = rec.items.filter((item) => item.decision == null);
+  const roll = rollStanding(rec.roll);
   const item = (row: FundRec['items'][number]) => ({ title: row.title, tab: row.tab, administrator: row.admin, ours: row.ours, effect: row.effect, unit: row.unit, why: row.why, decision: row.decision, note: row.note });
   return withoutSources({
     close: {
-      ...REC_TAB_INFO.close,
+      ...tabInfo('close'),
       data: {
         fund: rec.fundName, period: rec.periodLabel, periodEnd: rec.periodEnd, health: rec.health, healthNote: rec.healthNote,
         certified: rec.certified, canCertify: rec.canCertify, certifyBlock: rec.certifyBlock, targetDate: rec.targetDate, daysToTarget: rec.daysToTarget,
         navReported: rec.navReported, navProposed: rec.navProposed, navPrior: rec.navPrior, navChangePct: rec.navChangePct, netIrr: rec.netIrr,
-        adjustments: rec.adjustments, stepsDone: rec.stepsDone, steps: rec.steps.map((step) => ({ name: step.name, owner: step.owner, due: step.due, state: step.state, detail: step.detail, overdue: step.overdue })),
+        adjustments: rec.adjustments, stepsDone: rec.stepsDone, steps: rec.steps.map((step) => ({ name: step.name, owner: step.owner, due: step.due, state: step.state, detail: step.detail, overdue: step.overdue, rule: step.rule, worked: isTab(step.tab) ? TAB_LABEL[step.tab] : null })),
+        cashReconciliation: cash ? { standing: cashStanding(cash), tied: cash.summary.tied, residual: cash.summary.residual, holdsCertification: false } : null,
         itemsDecided: rec.itemsDecided, itemsOpen: undecided.length, openItems: head(undecided, 40).map(item),
         insights: insights?.map((point) => point) ?? null,
         certification: certification
@@ -158,17 +198,17 @@ function recTabs(
       },
     },
     breaks: {
-      ...REC_TAB_INFO.breaks,
+      ...tabInfo('breaks'),
       data: {
         headline: breaks.headline, period: breaks.periodLabel, periodEnd: breaks.periodEnd, comparedWith: breaks.comparedWith, spanMonths: breaks.spanMonths,
         nav: breaks.nav, counts: breaks.counts,
-        entries: head(breaks.entries, 60).map(({ id: _id, ...entry }) => entry),
+        entries: head(breaks.entries, 60).map(({ id: _id, tab, ...entry }) => ({ ...entry, worked: isTab(tab) ? TAB_LABEL[tab] : null })),
         tied: head(breaks.tied, 40),
         pack: breaks.pack,
       },
     },
     pack: {
-      ...REC_TAB_INFO.pack,
+      ...tabInfo('pack'),
       data: {
         period: rec.periodLabel,
         components: rec.pack.components.map(({ checks: _checks, items: _items, ...part }) => part),
@@ -191,16 +231,22 @@ function recTabs(
       },
     },
     stmt: {
-      ...REC_TAB_INFO.stmt,
+      ...tabInfo('stmt'),
       data: { period: rec.periodLabel, statements: rec.statements.map((statement) => ({ kind: statement.kind, title: statement.title, lines: head(statement.lines, 100) })) },
     },
     roll: {
-      ...REC_TAB_INFO.roll,
-      data: { present: rec.roll.present, tied: rec.roll.tied, columns: rec.roll.columns, rows: head(rec.roll.rows, 120), total: rec.roll.total, statement: rec.roll.statement, ties: rec.roll.ties },
+      ...tabInfo('roll'),
+      data: {
+        present: rec.roll.present, tied: rec.roll.tied,
+        standing: { lines: roll.lines, linesBreaking: roll.breaking, walkDifference: roll.walkDifference, columnsToCheck: roll.loose },
+        columns: rec.roll.columns, rows: head(rec.roll.rows, 120), total: rec.roll.total, statement: rec.roll.statement, ties: rec.roll.ties,
+      },
     },
     cash: {
-      ...REC_TAB_INFO.cash,
+      ...tabInfo('cash'),
       data: cash ? {
+        period: { from: cash.priorPeriodEnd, to: cash.periodEnd, note: 'Cash flows dated after from, up to to. Bank transactions in the same dates and a few business days after to.' },
+        locked: rec.certified ? 'The close is certified. Reopen it to change the cash reconciliation.' : null,
         summary: cash.summary,
         matches: head(cash.matches, 60),
         openFlows: head(cash.flows.filter((flow) => flow.status === 'OPEN'), 60),
@@ -209,23 +255,23 @@ function recTabs(
       } : null,
     },
     integrity: {
-      ...REC_TAB_INFO.integrity,
+      ...tabInfo('integrity'),
       data: { breaks: rec.breaks, missing: rec.missing, checks: rec.checks },
     },
     fees: {
-      ...REC_TAB_INFO.fees,
+      ...tabInfo('fees'),
       data: { mgmtFee: rec.mgmtFee, perfFee: rec.perfFee, items: rec.items.filter((row) => row.tab === 'fees').map(item) },
     },
     val: {
-      ...REC_TAB_INFO.val,
+      ...tabInfo('val'),
       data: { marks: head(rec.marks, 100), accruals: head(rec.accruals, 100), items: rec.items.filter((row) => row.tab === 'val').map(item) },
     },
     drift: {
-      ...REC_TAB_INFO.drift,
+      ...tabInfo('drift'),
       data: { drift: head(rec.drift, 120), items: rec.items.filter((row) => row.tab === 'drift').map(item) },
     },
     inputs: {
-      ...REC_TAB_INFO.inputs,
+      ...tabInfo('inputs'),
       data: { readyForRec: rec.readyForRec, readiness: rec.readiness },
     },
   });
@@ -238,7 +284,8 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   const [cash, setCash] = useState<CashRec | null>(null);
   const [period, setPeriod] = useState<string | null>(null);
   const [threshold, setThreshold] = useState(10);
-  const [tab, setTab] = useState<TabKey>(TABS.some(([key]) => key === initialTab) ? (initialTab as TabKey) : 'close');
+  const [tab, setTab] = useState<TabKey>(isTab(initialTab) ? initialTab : 'close');
+  const [guideOpen, setGuideOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -270,6 +317,15 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   }, [fundId, period, pinnedPeriod, asOfDate, dates.knowledgeDate, threshold]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // The address names the step, so a step can be linked to and reloaded.
+  useEffect(() => { setTab(isTab(initialTab) ? initialTab : 'close'); }, [initialTab]);
+  const openTab = useCallback((next: TabKey) => {
+    setTab(next);
+    const url = new URL(window.location.href);
+    if (next === 'close') url.searchParams.delete('tab'); else url.searchParams.set('tab', next);
+    window.history.replaceState(null, '', url);
+  }, []);
 
   const insightStamp = rec ? `${rec.fundId}|${rec.periodEnd}|${rec.drift.map((row) => `${row.id}:${row.flagged}`).join(',')}|${insightTry}` : '';
   useEffect(() => {
@@ -333,14 +389,18 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   });
   const open = rec.items.filter((item) => item.decision == null);
   const decided = rec.items.length - open.length;
+  const roll = rollStanding(rec.roll);
+  const locked = rec.certified ? 'This close is certified. Reopen it at the top of the page to change it.' : null;
   const tabCount = (key: TabKey) => (key === 'val' || key === 'fees' || key === 'drift'
     ? rec.items.filter((item) => item.tab === key && item.decision == null).length
     : key === 'breaks' ? (breaks ? breaks.counts.breaks + breaks.counts.items : 0)
     : key === 'pack' ? rec.pack.components.filter((part) => part.status === 'Breaks' || part.status === 'Not on file').length
-    : key === 'integrity' ? rec.breaks : key === 'roll' && rec.roll.present && !rec.roll.tied ? 1 : key === 'inputs' ? rec.readiness.filter((item) => item.required && !item.ok).length : key === 'cash' && cash ? cash.summary.openFlowCount + cash.summary.openTxnCount : 0);
+    : key === 'integrity' ? rec.breaks : key === 'roll' ? roll.breaking : key === 'inputs' ? rec.readiness.filter((item) => item.required && !item.ok).length : key === 'cash' && cash ? cash.summary.openFlowCount + cash.summary.openTxnCount : 0);
 
   const proposed = millions(rec.navProposed);
   const reported = millions(rec.navReported);
+  /** A figure in $M, or the dash alone when there is none. */
+  const inM = (text: string) => (text === '—' ? text : `${text}M`);
   return (
     <RecInspectProvider onChanged={() => { void load(); }}>
     <div className="view-fade da fund-rec">
@@ -351,16 +411,19 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
           <p>NAV review for <RecBit sources={rec.sources.period} display={longDate(rec.periodEnd)}>{longDate(rec.periodEnd)}</RecBit>. {rec.healthNote}.</p>
         </div>
         <div className="da-facts five">
-          <RecFact className="da-fact big" sources={rec.sources.navReported} display={reported}><span>NAV as reported</span><strong>{reported}M</strong></RecFact>
-          <RecFact className="da-fact" sources={rec.sources.navProposed} display={proposed}><span>Proposed NAV</span><strong>{proposed}M</strong><small>{rec.adjustments ? `${rec.adjustments} adjustment${rec.adjustments === 1 ? '' : 's'}` : 'No adjustments'}</small></RecFact>
-          <RecFact className="da-fact" sources={rec.sources.navChange} display={percent(rec.navChangePct, 1, true)}><span>Change on prior</span><strong>{percent(rec.navChangePct, 1, true)}</strong><small>Prior {millions(rec.navPrior)}M</small></RecFact>
+          <RecFact className="da-fact big" sources={rec.sources.navReported} display={reported}><span>NAV as reported</span><strong>{inM(reported)}</strong></RecFact>
+          <RecFact className="da-fact" sources={rec.sources.navProposed} display={proposed}><span>Proposed NAV</span><strong>{inM(proposed)}</strong><small>{rec.adjustments ? `${rec.adjustments} adjustment${rec.adjustments === 1 ? '' : 's'}` : 'No adjustments'}</small></RecFact>
+          <RecFact className="da-fact" sources={rec.sources.navChange} display={percent(rec.navChangePct, 1, true)}><span>Change on prior</span><strong>{percent(rec.navChangePct, 1, true)}</strong><small>Prior {inM(millions(rec.navPrior))}</small></RecFact>
           <RecFact className="da-fact" sources={rec.sources.netIrr} display={rec.netIrr == null ? '—' : percent(rec.netIrr)}><span>Net IRR</span><strong>{rec.netIrr == null ? '—' : percent(rec.netIrr)}</strong></RecFact>
           <RecFact className="da-fact" sources={rec.sources.target} display={shortDate(rec.targetDate)}><span>Certify by</span><strong>{shortDate(rec.targetDate)}</strong><small>{rec.certified ? 'Certified' : rec.daysToTarget >= 0 ? `${rec.daysToTarget} days left` : `${-rec.daysToTarget} days late`}</small></RecFact>
         </div>
         <RecFact className="da-holdbox" sources={rec.sources.progress} display={`${rec.stepsDone} of ${rec.steps.length}`}>
           <div className="da-holdtop"><span>Close progress</span><b>{rec.stepsDone} of {rec.steps.length}</b></div>
           <div className="da-bar"><i style={{ width: `${(rec.stepsDone / rec.steps.length) * 100}%` }} /></div>
-          <p>{rec.certified ? `NAV certified ${rec.certifiedAt ? longDate(rec.certifiedAt) : ''}.` : rec.certifyBlock || 'Every check ties and every item is decided.'}</p>
+          <p>
+            {rec.certified ? `NAV certified ${rec.certifiedAt ? longDate(rec.certifiedAt) : ''}.` : rec.certifyBlock || 'Every check ties and every item is decided.'}
+            {!rec.certified && rec.certifyBlock ? <>{' '}<button type="button" className="da-link" onClick={() => openTab('breaks')}>See all that holds it</button></> : null}
+          </p>
           {rec.certified
             ? <ReopenButton disabled={busy || !scope.ready} onReopen={onReopen} />
             : <button type="button" className="btn btn-primary" disabled={busy || !rec.canCertify || !scope.ready} onClick={onCertify}>
@@ -379,6 +442,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
         </RecLabel>
         <Link href="/fund-rec" className="btn">All funds</Link>
         <Link href={`/funds/${rec.fundId}/overview`} className="btn">Fund record</Link>
+        <span className="da-hint">Right-click a figure to see the records behind it.</span>
       </div>
       {error && <div className="xp-error">{error}</div>}
       {certFits && scope.ready && <CertifiedBanner scope={scope} figures={figures} />}
@@ -393,7 +457,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
         {TABS.map(([key, label]) => {
           const count = tabCount(key);
           return (
-            <button key={key} type="button" role="tab" aria-selected={tab === key} className={tab === key ? 'on' : ''} onClick={() => setTab(key)}>
+            <button key={key} type="button" role="tab" aria-selected={tab === key} className={tab === key ? 'on' : ''} onClick={() => openTab(key)}>
               {label}{count ? <i className="da-count">{count}</i> : null}
             </button>
           );
@@ -402,15 +466,18 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
 
       <div className={tab === 'cash' ? 'da-main solo' : 'da-main'}>
         <div>
-          {tab === 'close' && <CloseTab rec={rec} onOpen={setTab} onSignoff={(label) => run(() => setSignoff(ctx, SIGNOFF_BY_LABEL[label]))} />}
-          {tab === 'breaks' && breaks && <BreaksTab summary={breaks} onOpen={setTab} />}
+          <StepGuide tab={tab} open={guideOpen} onToggle={setGuideOpen} />
+          {tab === 'close' && <CloseTab rec={rec} cash={cash} onOpen={openTab} onSignoff={(label) => run(() => setSignoff(ctx, SIGNOFF_BY_LABEL[label]))} />}
+          {tab === 'breaks' && breaks && <BreaksTab summary={breaks} onOpen={openTab} />}
           {tab === 'pack' && <NavPackTab pack={rec.pack} checks={rec.checks} />}
-          {tab === 'stmt' && <StatementTab rec={rec} />}
-          {tab === 'roll' && <RollTab rec={rec} />}
+          {tab === 'stmt' && <StatementTab rec={rec} onOpen={openTab} />}
+          {tab === 'roll' && <RollTab rec={rec} standing={roll} onOpen={openTab} />}
           {tab === 'cash' && (cash
             ? <CashRecTab
                 cash={cash}
                 busy={busy}
+                locked={locked}
+                fundHref={`/funds/${rec.fundId}/overview`}
                 onApprove={(bankTxnId) => run(async () => {
                   const txn = cash.transactions.find((row) => row.id === bankTxnId);
                   if (!txn) return;
@@ -426,18 +493,21 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
                 onAdjust={(amount, side, reason) => run(() => saveCashAdjustment(cash, amount, side, reason, asOfDate))}
                 onRules={(rules: CashRule[]) => run(() => saveCashRules(cash, rules, asOfDate))}
               />
-            : <div className="xp-empty">Cash reconciliation is not available for this close.</div>)}
+            : <div className="xp-empty">Cash reconciliation could not be read for this close. Reload the page; if it still does not show, the fund has no client to keep its matches under.</div>)}
           {tab === 'integrity' && <IntegrityTab rec={rec} />}
           {tab === 'fees' && <FeesTab rec={rec} />}
           {tab === 'val' && <MarksTab rec={rec} />}
           {tab === 'drift' && <DriftTab rec={rec} threshold={threshold} onThreshold={setThreshold} />}
-          {tab === 'inputs' && <InputsTab rec={rec} />}
+          {tab === 'inputs' && <InputsTab rec={rec} onOpen={openTab} />}
         </div>
 
         {tab !== 'cash' && <aside className="da-panel" aria-label="Review queue">
           <section>
             <h2 className="da-qtitle">Review queue</h2>
-            <p className="da-note">{decided} of {rec.items.length} items decided. Accept, propose an adjustment, or query the admin.</p>
+            <p className="da-note">
+              {decided} of {rec.items.length} items decided.{' '}
+              {locked || 'Accept takes the administrator\'s figure. Adjust keeps ours and moves the proposed NAV by the NAV effect. Query admin holds certification until it is answered. Press a decision again to clear it.'}
+            </p>
             <div className="da-bar"><i style={{ width: `${rec.items.length ? (decided / rec.items.length) * 100 : 100}%` }} /></div>
             {rec.items.map((item) => {
               const note = notes[item.id] ?? item.note;
@@ -450,7 +520,7 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
                 <div key={item.id} className="da-q">
                   <div className="da-qhead">
                     <RecBit sources={item.adminSources} display={item.title}><b>{item.title}</b></RecBit>
-                    <span className="da-st na">Rule</span>
+                    <button type="button" className="da-link" title={`Open ${TAB_LABEL[item.tab]}, where this item is worked out`} onClick={() => openTab(item.tab)}>{TAB_LABEL[item.tab]}</button>
                   </div>
                   <div className="da-qg">
                     <span>Admin<RecBit sources={item.adminSources} display={adminText}><b>{adminText}</b></RecBit></span>
@@ -553,23 +623,22 @@ function RecNotes({ notes, outcome }: { notes: string; outcome: string }) {
   );
 }
 
-function CloseTab({ rec, onOpen, onSignoff }: { rec: FundRec; onOpen: (tab: TabKey) => void; onSignoff: (label: string) => void }) {
+function CloseTab({ rec, cash, onOpen, onSignoff }: { rec: FundRec; cash: CashRec | null; onOpen: (tab: TabKey) => void; onSignoff: (label: string) => void }) {
   const next = rec.steps.find((step) => step.state !== 'Done');
-  const tabOf: Record<string, TabKey> = { integrity: 'integrity', roll: 'roll', val: 'val', fees: 'fees', drift: 'drift' };
   return (
     <>
     <section className="da-sec">
       <div className="da-sechead">
         <h2>Status to close</h2>
-        <p>{rec.stepsDone} of {rec.steps.length} steps complete. Certification target {shortDate(rec.targetDate)}. {next ? `Next up: ${next.name.toLowerCase()}.` : 'Ready to certify.'}</p>
+        <p>{rec.stepsDone} of {rec.steps.length} steps complete. Certification target {shortDate(rec.targetDate)}. {next ? `Next up: step ${rec.steps.indexOf(next) + 1}, ${next.name}.` : 'Ready to certify.'}</p>
       </div>
       <div className="da-gridwrap">
-        <table className="da-grid">
-          <thead><tr><th>Step</th><th>Owner</th><th>Due</th><th>Status</th><th>Detail</th><th /></tr></thead>
+        <table className="da-grid da-steps">
+          <thead><tr><th>Step</th><th>Owner</th><th>Due</th><th>Status</th><th>Where it stands</th><th>Work it</th></tr></thead>
           <tbody>
-            {rec.steps.map((step) => (
-              <tr key={step.key}>
-                <RecCell sources={step.sources} display={step.name}>{step.name}</RecCell>
+            {rec.steps.map((step, index) => (
+              <tr key={step.key} className={step === next ? 'next' : ''}>
+                <RecCell sources={step.sources} display={step.name}><b>{index + 1}. {step.name}</b><small>{step.rule}</small></RecCell>
                 <td>{step.owner}</td>
                 <RecCell sources={step.dueSources} display={shortDate(step.due)}>{shortDate(step.due)}</RecCell>
                 <RecCell sources={step.sources} display={step.state}>
@@ -581,16 +650,23 @@ function CloseTab({ rec, onOpen, onSignoff }: { rec: FundRec; onOpen: (tab: TabK
                   {step.manual
                     ? (
                       <RecBit sources={step.sources} display={step.state}>
-                        <select value={step.state} disabled={rec.certified} onChange={(event) => onSignoff(event.target.value)}>{SIGNOFF.map(([, label]) => <option key={label}>{label}</option>)}</select>
+                        <select aria-label={step.name} value={step.state} disabled={rec.certified} onChange={(event) => onSignoff(event.target.value)}>{SIGNOFF.map(([, label]) => <option key={label}>{label}</option>)}</select>
                       </RecBit>
                     )
-                    : step.tab ? <button type="button" className="btn" onClick={() => onOpen(tabOf[step.tab!] ?? 'integrity')}>Open</button> : null}
+                    : isTab(step.tab) ? <button type="button" className="btn btn-sm" onClick={() => onOpen(step.tab as TabKey)}>{TAB_LABEL[step.tab]}</button>
+                    : <small>Certify NAV, top right</small>}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {cash && (
+        <p className="da-note da-also">
+          Beside the steps, cash reconciliation: {cashStanding(cash)}. It does not hold certification.{' '}
+          <button type="button" className="da-link" onClick={() => onOpen('cash')}>Open cash reconciliation</button>
+        </p>
+      )}
     </section>
     {rec.closeNotes?.notes ? <RecNotes notes={rec.closeNotes.notes} outcome={rec.closeNotes.outcome} /> : null}
     </>
@@ -612,8 +688,6 @@ const BREAK_GROUPS: Array<[BreakEntry['kind'], string, string]> = [
   ['gap', 'Not on file', 'Inputs the reconciliation needs for this period.'],
 ];
 
-const BREAK_TAB: Partial<Record<BreakEntry['kind'], TabKey>> = { break: 'integrity', missing: 'integrity', gap: 'inputs', item: 'close' };
-
 function breakFigure(value: number | null, unit: BreakEntry['unit']): string {
   if (value == null) return '—';
   if (unit === 'POINTS') return value.toFixed(2);
@@ -630,25 +704,26 @@ function BreaksTab({ summary, onOpen }: { summary: BreakSummary; onOpen: (tab: T
       <section className="da-sec">
         <div className="da-sechead">
           <h2>Breaks</h2>
-          <p>{summary.headline} Compared with {longDate(summary.comparedWith)} ({summary.spanMonths} month{summary.spanMonths === 1 ? '' : 's'}). {summary.counts.ties} of {summary.counts.checks} checks tie.</p>
+          <p>{summary.headline} Compared with {longDate(summary.comparedWith)} ({summary.spanMonths} month{summary.spanMonths === 1 ? '' : 's'}). {summary.counts.ties} of {summary.counts.checks} checks tie{summary.counts.rollLines ? `, and ${summary.counts.rollTies} of ${summary.counts.rollLines} lines of the position roll-forward` : ''}.</p>
         </div>
         {summary.entries.length === 0 && <div className="xp-empty">Nothing breaks, nothing is missing and every review item is decided.</div>}
       </section>
       {BREAK_GROUPS.map(([kind, title, note]) => {
         const entries = summary.entries.filter((entry) => entry.kind === kind);
         if (!entries.length) return null;
-        const tab = BREAK_TAB[kind];
         return (
           <section className="da-sec" key={kind}>
             <div className="da-sechead"><h2>{title}</h2><p>{note}</p></div>
             <div className="da-gridwrap">
               <table className="da-grid">
-                <thead><tr><th>What</th>{kind !== 'gap' && <><th className="num">Reported</th><th className="num">Expected</th><th className="num">Difference</th></>}<th>Cause and next step</th><th>Owner</th></tr></thead>
+                <thead><tr><th>What, and where it is worked</th>{kind !== 'gap' && <><th className="num">Reported</th><th className="num">Expected</th><th className="num">Difference</th></>}<th>Cause and next step</th><th>Owner</th></tr></thead>
                 <tbody>
                   {entries.map((entry) => (
                     <tr key={entry.id} className={entry.kind === 'break' ? 'flag' : ''}>
                       <td>
-                        {tab ? <button type="button" className="cr-link" onClick={() => onOpen(entry.component ? 'pack' : tab)}>{entry.title}</button> : entry.title}
+                        {isTab(entry.tab)
+                          ? <button type="button" className="da-link" title={`Open ${TAB_LABEL[entry.tab]}, where this is worked`} onClick={() => onOpen(entry.tab as TabKey)}>{entry.title}</button>
+                          : entry.title}
                         {entry.blocking && <span className="da-st breach da-gap">Blocks certification</span>}
                       </td>
                       {kind !== 'gap' && <>
@@ -672,7 +747,7 @@ function BreaksTab({ summary, onOpen }: { summary: BreakSummary; onOpen: (tab: T
             <h2>What ties</h2>
             <p>
               {summary.tied.length} checks agree.{' '}
-              <button type="button" className="cr-link" onClick={() => setShowTied((value) => !value)} aria-expanded={showTied}>{showTied ? 'Hide them' : 'Show them'}</button>
+              <button type="button" className="da-link" onClick={() => setShowTied((value) => !value)} aria-expanded={showTied}>{showTied ? 'Hide them' : 'Show them'}</button>
             </p>
           </div>
           {showTied && <ul className="da-note">{summary.tied.map((label) => <li key={label}>{label}</li>)}</ul>}
@@ -682,8 +757,15 @@ function BreaksTab({ summary, onOpen }: { summary: BreakSummary; onOpen: (tab: T
   );
 }
 
-function StatementTab({ rec }: { rec: FundRec }) {
-  if (!rec.statements.length) return <div className="xp-empty">No administrator statement for this period yet.</div>;
+function StatementTab({ rec, onOpen }: { rec: FundRec; onOpen: (tab: TabKey) => void }) {
+  if (!rec.statements.length) {
+    return (
+      <div className="xp-empty">
+        <p>No administrator statement is on file for {rec.periodLabel} yet. It arrives with the administrator&apos;s pack, by feed or by upload, and every later step waits on it.</p>
+        <p className="da-actions"><button type="button" className="btn" onClick={() => onOpen('inputs')}>See what is on file</button> <Link href="/load" className="btn">Load data</Link></p>
+      </div>
+    );
+  }
   return (
     <>
       {rec.statements.map((statement) => (
@@ -726,16 +808,24 @@ function StatementTab({ rec }: { rec: FundRec }) {
   );
 }
 
-function RollTab({ rec }: { rec: FundRec }) {
+function RollTab({ rec, standing, onOpen }: { rec: FundRec; standing: ReturnType<typeof rollStanding>; onOpen: (tab: TabKey) => void }) {
   const { roll } = rec;
-  if (!roll.present) return <div className="xp-empty">No position cash flows are loaded for this period. Each purchase, repayment, sale, interest, fee, and PIK flow rolls into its bucket.</div>;
+  if (!roll.present) {
+    return (
+      <div className="xp-empty">
+        <p>No position cash flows are loaded for {rec.periodLabel}, so there is nothing to roll forward. Each purchase, repayment, sale, interest, fee and PIK flow on a position rolls into its column here.</p>
+        <p className="da-actions"><button type="button" className="btn" onClick={() => onOpen('inputs')}>See what is on file</button> <Link href="/load" className="btn">Load data</Link></p>
+      </div>
+    );
+  }
   const groups: Array<{ label: string; span: number }> = [];
   for (const column of roll.columns) {
     const last = groups[groups.length - 1];
     if (last && last.label === column.group) last.span += 1; else groups.push({ label: column.group, span: 1 });
   }
-  const bad = roll.statement.some((value, index) => value != null && roll.columns[index].key !== 'diff' && Math.abs(roll.total[index] - value) >= 5000);
-  const diffIndex = roll.columns.findIndex((column) => column.key === 'diff');
+  const { diffIndex, workIndex, reportedIndex, breaking, lines, loose } = standing;
+  const headline = breaking ? `${breaking} of ${lines} lines break` : `All ${lines} lines tie`;
+  const off = (value: number) => Math.abs(value) >= TIE;
   return (
     <>
       <section className="da-sec">
@@ -743,7 +833,19 @@ function RollTab({ rec }: { rec: FundRec }) {
           <h2>Position roll-forward</h2>
           <p>Opening value plus cash flows plus every P&amp;L driver equals ending value, $M. Value is fair value plus accrued interest.</p>
         </div>
-        <p><RecBit className={`da-st ${bad || !roll.tied ? 'breach' : 'ok'}`} sources={joinSources(roll.totalSources[diffIndex], roll.statementSources[diffIndex])} display={bad || !roll.tied ? 'Does not tie' : 'Ties to statements'}>{bad || !roll.tied ? 'Does not tie' : 'Ties to statements'}</RecBit></p>
+        <p className="da-standing">
+          <RecBit className={`da-st ${breaking ? 'breach' : 'ok'}`} sources={joinSources(roll.totalSources[diffIndex], roll.statementSources[diffIndex])} display={headline}>{headline}</RecBit>
+          <span className="da-note">
+            {breaking
+              ? <>This step is blocked and the NAV cannot be certified until every line ties. The lines are listed under <a className="da-link" href="#roll-ties">Ties to the statements</a>, and each break is on <button type="button" className="da-link" onClick={() => onOpen('breaks')}>Breaks</button> with its next step.</>
+              : 'The walk reaches the reported ending value and every total agrees with its statement line, so this step is done.'}
+          </span>
+        </p>
+        {loose.length > 0 && (
+          <p className="da-note da-also">
+            Total fund and Per statements differ on {loose.join(', ')}. No line that holds the close covers {loose.length === 1 ? 'that column' : 'those columns'}, so the step still ties; check {loose.length === 1 ? 'it' : 'them'} before certifying.
+          </p>
+        )}
         <div className="da-gridwrap">
           <table className="da-grid da-roll">
             <thead>
@@ -752,10 +854,12 @@ function RollTab({ rec }: { rec: FundRec }) {
             </thead>
             <tbody>
               {roll.rows.map((row) => (
-                <tr key={row.id} className={row.header ? 'sub' : 'indent'}>
-                  <RecCell sources={row.sources[12] || row.sources[0]} display={row.name}>{row.name}</RecCell>
+                <tr key={row.id} className={`${row.header ? 'sub' : 'indent'}${!row.header && off(row.values[diffIndex]) ? ' flag' : ''}`}>
+                  <RecCell sources={row.sources[reportedIndex] || row.sources[0]} display={row.name}>
+                    {row.header ? row.name : <Link href={`${domainHref('POSITION')}/${row.id}`} title="Open the position record">{row.name}</Link>}
+                  </RecCell>
                   {row.values.map((value, index) => {
-                    const text = Math.abs(value) < 5000 ? '—' : millions(value);
+                    const text = !off(value) ? '—' : millions(value);
                     return <RecCell key={index} className={`num ${value < 0 ? 'neg' : ''}`} sources={row.sources[index]} display={text}>{text}</RecCell>;
                   })}
                 </tr>
@@ -763,7 +867,7 @@ function RollTab({ rec }: { rec: FundRec }) {
               <tr className="net">
                 <td>Total fund</td>
                 {roll.total.map((value, index) => {
-                  const text = Math.abs(value) < 5000 ? '—' : millions(value);
+                  const text = !off(value) ? '—' : millions(value);
                   return <RecCell key={index} className="num" sources={roll.totalSources[index]} display={text}>{text}</RecCell>;
                 })}
               </tr>
@@ -778,8 +882,8 @@ function RollTab({ rec }: { rec: FundRec }) {
                 <td>Difference</td>
                 {roll.statement.map((value, index) => {
                   const text = index === diffIndex
-                    ? (Math.abs(roll.total[index]) < 5000 ? 'Ties' : millions(roll.total[index]))
-                    : value == null ? '' : Math.abs(roll.total[index] - value) < 5000 ? 'Ties' : millions(roll.total[index] - value);
+                    ? (!off(roll.total[index]) ? 'Ties' : millions(roll.total[index]))
+                    : value == null ? '' : !off(roll.total[index] - value) ? 'Ties' : millions(roll.total[index] - value);
                   const tone = text === 'Ties' ? 'ok' : text ? 'breach' : '';
                   return (
                     <RecCell key={index} className="num" sources={joinSources(roll.totalSources[index], roll.statementSources[index])} display={text}>
@@ -791,21 +895,31 @@ function RollTab({ rec }: { rec: FundRec }) {
             </tbody>
           </table>
         </div>
+        <p className="da-note da-also">A dash is an amount under ${TIE.toLocaleString('en-US')}. Difference is Total fund less Per statements; under the last column it is reported ending less the walk.</p>
       </section>
-      <section className="da-sec">
-        <div className="da-sechead"><h2>Ties to the statements</h2><p>Roll-forward totals against the reported figures.</p></div>
+      <section className="da-sec" id="roll-ties">
+        <div className="da-sechead"><h2>Ties to the statements</h2><p>The {lines} lines that hold this step: the walk, then each roll-forward total against its statement line. Difference is the roll-forward less what it is compared with. $M.</p></div>
         <div className="da-gridwrap">
           <table className="da-grid">
-            <thead><tr><th>Line</th><th className="num">Roll-forward</th><th className="num">Statement</th><th className="num">Result</th></tr></thead>
+            <thead><tr><th>Line</th><th className="num">Roll-forward</th><th className="num">Compared with</th><th className="num">Difference</th><th className="num">Result</th></tr></thead>
             <tbody>
+              <tr className={standing.walkOff ? 'flag' : ''}>
+                <RecCell sources={joinSources(roll.totalSources[workIndex], roll.totalSources[reportedIndex])} display="Ending value">Ending value: what the positions report against the walk</RecCell>
+                <RecCell className="num" sources={roll.totalSources[reportedIndex]} display={millions(roll.total[reportedIndex])}>{millions(roll.total[reportedIndex])}</RecCell>
+                <RecCell className="num" sources={roll.totalSources[workIndex]} display={millions(roll.total[workIndex])}>{millions(roll.total[workIndex])}</RecCell>
+                <RecCell className={`num ${standing.walkOff ? 'neg' : ''}`} sources={roll.totalSources[diffIndex]} display={signedMillions(standing.walkDifference)}>{signedMillions(standing.walkDifference)}</RecCell>
+                <RecCell className="num" sources={roll.totalSources[diffIndex]} display={standing.walkOff ? 'Break' : 'Ties'}><span className={`da-st ${standing.walkOff ? 'breach' : 'ok'}`}>{standing.walkOff ? 'Break' : 'Ties'}</span></RecCell>
+              </tr>
               {roll.ties.map((tie) => {
                 const both = joinSources(tie.rollSources, tie.statementSources);
                 const result = tie.result === 'Missing' ? 'No statement line' : tie.result;
+                const difference = tie.statement == null ? '' : signedMillions(tie.rollforward - tie.statement);
                 return (
-                  <tr key={tie.line}>
+                  <tr key={tie.line} className={tie.result === 'Break' ? 'flag' : ''}>
                     <RecCell sources={both} display={tie.line}>{tie.line}</RecCell>
                     <RecCell className="num" sources={tie.rollSources} display={millions(tie.rollforward)}>{millions(tie.rollforward)}</RecCell>
                     <RecCell className="num" sources={tie.statementSources} display={millions(tie.statement)}>{millions(tie.statement)}</RecCell>
+                    <RecCell className={`num ${tie.result === 'Break' ? 'neg' : ''}`} sources={both} display={difference}>{difference}</RecCell>
                     <RecCell className="num" sources={both} display={result}><span className={`da-st ${tie.result === 'Ties' ? 'ok' : tie.result === 'Break' ? 'breach' : 'na'}`}>{result}</span></RecCell>
                   </tr>
                 );
@@ -989,10 +1103,16 @@ function DriftTab({ rec, threshold, onThreshold }: { rec: FundRec; threshold: nu
   );
 }
 
-function InputsTab({ rec }: { rec: FundRec }) {
+function InputsTab({ rec, onOpen }: { rec: FundRec; onOpen: (tab: TabKey) => void }) {
+  const gaps = rec.readiness.filter((item) => item.required && !item.ok).length;
   return (
     <section className="da-sec">
       <div className="da-sechead"><h2>Reconciliation inputs</h2><p>What this close reads for {rec.periodLabel}. Comparisons use the values on file at the prior certification.</p></div>
+      <p className="da-note da-also">
+        {gaps ? `${gaps} required input${gaps === 1 ? ' is' : 's are'} missing. ` : 'Every required input is on file. '}
+        Files are loaded in <Link href="/load" className="da-link">Load data</Link>; fee and waterfall terms are set on the <Link href={`/funds/${rec.fundId}/overview`} className="da-link">fund record</Link>.
+        {gaps ? <> What each gap leaves unchecked is on <button type="button" className="da-link" onClick={() => onOpen('breaks')}>Breaks</button>.</> : null}
+      </p>
       <div className="da-gridwrap"><table className="da-grid">
         <thead><tr><th>Input</th><th>On file</th><th className="num">Status</th></tr></thead>
         <tbody>

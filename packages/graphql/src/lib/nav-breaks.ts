@@ -9,7 +9,7 @@
  * the same thing.
  */
 
-import type { RecCheck, RecItem, RecReview } from './fund-rec';
+import { TIE, type RecCheck, type RecItem, type RecReview } from './fund-rec';
 import type { PackComponentKey, PackStatus } from './nav-pack';
 
 type Review = RecReview & { fundCode?: string };
@@ -37,6 +37,8 @@ export interface BreakEntry {
   blocking: boolean;
   /** The part of the NAV pack it is about, for a pack check or a missing part. */
   component?: PackComponentKey;
+  /** The tab of the reconciliation page where it is worked. */
+  tab: string;
 }
 
 export interface BreakSummary {
@@ -47,7 +49,8 @@ export interface BreakSummary {
   spanMonths: number;
   headline: string;
   nav: { reported: number | null; prior: number | null; proposed: number | null; changePct: number | null };
-  counts: { breaks: number; missing: number; items: number; gaps: number; checks: number; ties: number };
+  /** breaks counts checks that break and roll-forward lines that break. checks and ties count the checks alone; rollLines and rollTies the lines of the position roll-forward (0 when it is not loaded). */
+  counts: { breaks: number; missing: number; items: number; gaps: number; checks: number; ties: number; rollLines: number; rollTies: number };
   entries: BreakEntry[];
   /** Checks that tie, by name, so a reader sees what was covered. */
   tied: string[];
@@ -186,6 +189,7 @@ function checkEntry(check: RecCheck): BreakEntry {
     owner: guide.owner,
     blocking: !missing,
     ...(check.component ? { component: check.component } : {}),
+    tab: check.component ? 'pack' : 'integrity',
   };
 }
 
@@ -202,14 +206,51 @@ function itemEntry(item: RecItem): BreakEntry {
     action: item.decision === 'QUERY' ? `With the administrator: ${item.note || 'query sent'}` : 'Accept, adjust, or query the administrator on the reconciliation page.',
     owner: ITEM_OWNER[item.tab],
     blocking: item.decision !== 'ACCEPT' && item.decision !== 'ADJUST',
+    tab: item.tab,
   };
+}
+
+const ROLL_OWNER = 'Portfolio accountant';
+
+/**
+ * The lines of the position roll-forward that do not tie. They hold
+ * certification the same way a check does, so they are listed with the breaks.
+ */
+function rollEntries(review: Review): BreakEntry[] {
+  const roll = review.roll;
+  if (!roll?.present) return [];
+  const at = (key: string) => roll.total[roll.columns.findIndex((column) => column.key === key)] ?? 0;
+  const entries: BreakEntry[] = [];
+  if (Math.abs(at('diff')) >= TIE) {
+    entries.push({
+      kind: 'break', id: 'roll:walk', title: 'Position roll-forward: opening value plus movements against reported ending value',
+      reported: at('reported'), expected: at('work'), difference: at('diff'), unit: 'USD',
+      cause: 'Opening value plus the period\'s cash flows and P&L does not reach the ending value the positions report: a cash flow is missing from a position, or sits in the wrong bucket.',
+      action: 'Open the position roll-forward and find the positions whose Difference is not zero.',
+      owner: ROLL_OWNER, blocking: true, tab: 'roll',
+    });
+  }
+  for (const tie of roll.ties.filter((line) => line.result === 'Break')) {
+    entries.push({
+      kind: 'break', id: `roll:${tie.line}`, title: `Position roll-forward: ${tie.line.charAt(0).toLowerCase()}${tie.line.slice(1)}`,
+      reported: tie.statement, expected: tie.rollforward, difference: tie.statement == null ? null : tie.statement - tie.rollforward, unit: 'USD',
+      cause: 'The statement line differs from the total of the positions\' roll-forward: a position or a cash flow is missing from our book, or the administrator booked it to another line.',
+      action: 'Open the position roll-forward, compare the line position by position, and load or correct the cash flow that differs.',
+      owner: ROLL_OWNER, blocking: true, tab: 'roll',
+    });
+  }
+  return entries;
 }
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
 /** The summary of one fund's reconciliation for one period. */
 export function summarizeBreaks(review: Review): BreakSummary {
-  const breaks = review.checks.filter((check) => check.result === 'Break').map(checkEntry);
+  const checkBreaks = review.checks.filter((check) => check.result === 'Break').map(checkEntry);
+  const rollBreaks = rollEntries(review);
+  const breaks = [...checkBreaks, ...rollBreaks];
+  // The lines that hold the roll-forward step: the walk and each tie to a statement line.
+  const rollLines = review.roll?.present ? review.roll.ties.length + 1 : 0;
   const missing = review.checks.filter((check) => check.result === 'Missing').map(checkEntry);
   const items = review.items.filter((item) => item.decision !== 'ACCEPT' && item.decision !== 'ADJUST').map(itemEntry);
   const missingIds = new Set(review.checks.filter((check) => check.result === 'Missing').map((check) => check.id));
@@ -219,6 +260,7 @@ export function summarizeBreaks(review: Review): BreakSummary {
       kind: 'gap', id: `gap:${item.key}`, title: item.label, reported: null, expected: null, difference: null, unit: 'COUNT',
       cause: /[.!?]$/.test(item.detail) ? item.detail : `${item.detail}.`,
       action: `Get the ${item.label.toLowerCase()} on file for the period.`, owner: GAP_OWNER[item.key] || 'Fund accountant', blocking: false,
+      tab: 'inputs',
     }));
   // Each part of the NAV pack the fund's terms call for, or the fund lists, that is not on file.
   const parts = review.pack?.components ?? [];
@@ -228,6 +270,7 @@ export function summarizeBreaks(review: Review): BreakSummary {
       cause: `${part.detail}. The pack should hold: ${part.covers.charAt(0).toLowerCase()}${part.covers.slice(1)}.`,
       action: `Ask for the ${part.label.charAt(0).toLowerCase()}${part.label.slice(1)} for the period and load it.`, owner: part.owner, blocking: part.required,
       component: part.key,
+      tab: 'pack',
     });
   }
   const entries = [...breaks, ...missing, ...items, ...gaps];
@@ -253,7 +296,7 @@ export function summarizeBreaks(review: Review): BreakSummary {
   lines.push('');
   lines.push(headline);
   lines.push('');
-  lines.push(`Period end ${review.periodEnd}, compared with ${comparedWith} (${plural(review.spanMonths, 'month')}). ${plural(review.checks.length, 'check')}: ${ties.length} tie, ${breaks.length} break, ${missing.length} with a figure missing.`);
+  lines.push(`Period end ${review.periodEnd}, compared with ${comparedWith} (${plural(review.spanMonths, 'month')}). ${plural(review.checks.length, 'check')}: ${ties.length} tie, ${checkBreaks.length} break, ${missing.length} with a figure missing.${rollLines ? ` Position roll-forward: ${rollLines - rollBreaks.length} of ${rollLines} lines tie.` : ''}`);
   const own = review.readiness.find((item) => item.key === 'report');
   if (own) lines.push('', `${own.detail}.`);
   const section = (title: string, list: BreakEntry[]) => {
@@ -294,7 +337,7 @@ export function summarizeBreaks(review: Review): BreakSummary {
     spanMonths: review.spanMonths,
     headline,
     nav: { reported: review.navReported, prior: review.navPrior, proposed: review.navProposed, changePct: review.navChangePct },
-    counts: { breaks: breaks.length, missing: missing.length, items: items.length, gaps: gaps.length, checks: review.checks.length, ties: ties.length },
+    counts: { breaks: breaks.length, missing: missing.length, items: items.length, gaps: gaps.length, checks: review.checks.length, ties: ties.length, rollLines, rollTies: rollLines - rollBreaks.length },
     entries,
     tied,
     pack: parts.map((part) => ({ key: part.key, label: part.label, status: part.status, detail: part.detail, owner: part.owner, required: part.required })),

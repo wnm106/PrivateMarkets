@@ -11146,6 +11146,30 @@ details.rb-sec[open] > .rb-head .rb-chev { transform: rotate(225deg); }
 .da-count { font-style: normal; font-size: 11px; font-weight: 700; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: #faefdb; color: var(--amber); }
 .da-gap { margin-left: 8px; }
 .da-late { color: var(--red); }
+
+/* Fund reconciliation: how a step works, and the links from one step to the next. */
+.da-guide { margin: 0 0 14px; border: 1px solid var(--da-line); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.da-guide summary { cursor: pointer; padding: 8px 12px; font-weight: 600; color: #0b5d73; }
+.da-guide[open] summary { border-bottom: 1px solid var(--da-line); }
+.da-guide p { margin: 10px 12px 0; color: var(--ink-2); }
+.da-guide dl { margin: 10px 12px 12px; display: grid; gap: 8px; }
+.da-guide dl div { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 12px; }
+.da-guide dt { font-weight: 600; }
+.da-guide dd { margin: 0; color: var(--da-muted); }
+.da-link { font: inherit; padding: 0; border: 0; background: none; color: #0b5d73; text-decoration: underline; text-underline-offset: 2px; text-align: left; cursor: pointer; }
+.da-link:hover { color: var(--ink); }
+.da-hint { margin-left: auto; color: var(--da-muted); font-size: 12px; }
+.da-note.da-also { margin-top: 10px; }
+.da-actions { margin: 10px 0 0; display: flex; gap: 8px; }
+.da-standing { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 8px 0; }
+.da-steps td small { max-width: 52ch; margin-top: 2px; }
+.da-steps tr.next td:first-child { box-shadow: inset 3px 0 0 #0b5d73; }
+.da-qhead .da-link { font-size: 11.5px; white-space: nowrap; }
+.cr-pickhint { flex-basis: 100%; }
+.cr-tie tr.of td { color: var(--da-muted); padding-left: 24px; }
+@media (max-width: 760px) {
+  .da-guide dl div { grid-template-columns: 1fr; gap: 2px; }
+}
 .da-grid tbody tr.flag td { background: var(--badge-warn-bg); }
 .da-grid td.neg, .da-grid .neg, .da-grid .dn { color: var(--red); }
 .da-grid .up { color: var(--green); }

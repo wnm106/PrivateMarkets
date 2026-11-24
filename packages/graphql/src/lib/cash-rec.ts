@@ -174,7 +174,8 @@ export const CASH_RULE_LABEL: Record<CashRuleKind, string> = {
   MANUAL: 'Manual',
 };
 
-const CONFIDENCE: Record<CashRuleKind, number> = {
+/** How sure a pair is, by the rule that proposed it. A looser rule is a weaker match. */
+export const CASH_RULE_CONFIDENCE: Record<CashRuleKind, number> = {
   EXACT: 100,
   DATE_DELAY: 90,
   MULTI_POSITION: 85,
@@ -436,7 +437,7 @@ export function buildCashRec(input: CashRecInput): CashRec {
       bankAmount: txn.amount,
       flowAmount,
       variance: cents(txn.amount - flowAmount),
-      confidence: CONFIDENCE[locked.kind],
+      confidence: CASH_RULE_CONFIDENCE[locked.kind],
       status: 'APPROVED',
     });
   }
@@ -453,7 +454,7 @@ export function buildCashRec(input: CashRecInput): CashRec {
       bankAmount: proposal.txn.amount,
       flowAmount,
       variance: cents(proposal.txn.amount - flowAmount),
-      confidence: CONFIDENCE[proposal.rule.kind],
+      confidence: CASH_RULE_CONFIDENCE[proposal.rule.kind],
       status: 'PROPOSED',
     });
   }

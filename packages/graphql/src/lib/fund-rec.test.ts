@@ -243,6 +243,46 @@ describe('position roll-forward', () => {
     expect(review.roll.tied).toBe(false);
     expect(review.steps.find((step) => step.key === 'roll')?.state).toBe('Blocked');
   });
+
+  it('lists each roll-forward line that breaks with the breaks, since it holds certification', () => {
+    const moved = positions();
+    moved[0].roll!.endFv += 2 * M;
+    const review = buildReview(input({ positions: moved }));
+    expect(review.certifyBlock).toBe('Position roll-forward does not tie');
+    const summary = summarizeBreaks(review);
+    const walk = summary.entries.find((entry) => entry.id === 'roll:walk')!;
+    expect(walk).toMatchObject({ kind: 'break', blocking: true, tab: 'roll', owner: 'Portfolio accountant' });
+    expect(walk.difference! / M).toBeCloseTo(2, 6);
+    expect(summary.entries.find((entry) => entry.id === 'roll:Ending fair value')).toMatchObject({ kind: 'break', blocking: true, tab: 'roll' });
+    expect(summary.counts.breaks).toBe(review.breaks + 2);
+    expect(summary.counts).toMatchObject({ rollLines: 13, rollTies: 11 });
+    expect(summary.markdown).toMatch(/Position roll-forward: 11 of 13 lines tie\./);
+    expect(summarizeBreaks(buildReview(input())).entries.some((entry) => entry.id.startsWith('roll:'))).toBe(false);
+  });
+});
+
+describe('close steps', () => {
+  it('says what makes each step done and where it is worked', () => {
+    const review = buildReview(input());
+    expect(review.steps.every((step) => step.rule.length > 20)).toBe(true);
+    expect(Object.fromEntries(review.steps.map((step) => [step.key, step.tab]))).toEqual({
+      pack: 'inputs', statements: 'integrity', evidence: 'integrity', roll: 'roll', val: 'val', fees: 'fees', drift: 'drift',
+      queries: 'breaks', signoff: null, certify: null,
+    });
+  });
+
+  it('blocks the statements step when a NAV pack check breaks, as certification is', () => {
+    const account = (id: string, closing: number): PackCapitalAccount => ({
+      id, name: `Investor ${id}`, investorId: null, isGp: false, opening: null, contributions: null, distributions: null, pnl: null,
+      mgmtFee: null, feeRatePct: null, carry: null, carryBalance: null, other: null, closing, commitment: null, contributedItd: null,
+      unfunded: null, ownershipPct: null,
+    });
+    const clean = buildReview(input());
+    expect(clean.steps.find((step) => step.key === 'statements')?.state).toBe('Done');
+    const review = buildReview(input({ pack: { ...emptyPack(), capitalAccounts: [account('A', 100 * M), account('B', 50 * M)] } }));
+    expect(review.certifyBlock).toMatch(/statement checks? break/);
+    expect(review.steps.find((step) => step.key === 'statements')).toMatchObject({ state: 'Blocked' });
+  });
 });
 
 describe('review items', () => {
