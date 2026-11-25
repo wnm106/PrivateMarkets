@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { CLIENT_ADMIN_PERMISSIONS, isPlatformAdminPath } from '@/lib/admin-access';
 import { loginPath, NEXT_PATH_COOKIE, nextPathFromCookie, safeNextPath } from '@/lib/safe-next-path';
 import { isPublicPath } from '@/lib/public-paths';
+import { licensedPageFor } from '@/lib/tool-pages';
 import { readSignInDecision, REFUSED_SIGN_IN, signInStanding, UNCHECKED_SIGN_IN, uncheckedSignInAction, type SignInDecision } from '@/lib/sign-in-gate';
 
 // Which pages a signed-out visitor may open is in lib/public-paths.ts, shared with the signed-out gate.
@@ -176,6 +177,19 @@ export async function middleware(request: NextRequest) {
     }
     if (!access.tenant && isPlatformAdminPath(pathname)) {
       return redirectTo('/admin/tenancy');
+    }
+  }
+
+  // A page outside the client's license does not open from its address either.
+  // The database decides (tenancy.item_enabled). If it cannot answer, the page
+  // opens as before and the sidebar still follows the license.
+  const licensedPage = user && !isApiOrAsset ? licensedPageFor(pathname) : null;
+  if (licensedPage) {
+    const { data: licensed, error: licenseError } = await supabase
+      .schema('tenancy')
+      .rpc('item_enabled', { p_kind: 'tool', p_code: licensedPage });
+    if (!licenseError && licensed === false) {
+      return redirectTo('/');
     }
   }
 

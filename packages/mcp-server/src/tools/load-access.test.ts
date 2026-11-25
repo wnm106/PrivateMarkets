@@ -28,6 +28,8 @@ function caller(clientIds: string[], permissions: string[]) {
     rpc: async (name: string, args: any) => {
       rpcs.push({ name, args });
       if (name === 'current_client_ids') return { data: clientIds.map((id) => ({ current_client_ids: id })), error: null };
+      // The registry's license check: these tests are about load permissions, so every tool group is licensed.
+      if (name === 'item_enabled') return { data: true, error: null };
       if (name === 'has_permission') return { data: clientIds.includes(args.p_client_id) && permissions.includes(args.p_permission_code), error: null };
       return { data: null, error: { message: `unexpected rpc ${name}` } };
     },

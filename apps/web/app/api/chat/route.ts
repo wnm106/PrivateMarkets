@@ -9,6 +9,7 @@ import { holdAction, type HeldAction } from '@/lib/held-actions';
 import { NARRATIVE_COMPOSE_GUIDE } from '@tapestrai/mcp-server/src/lib/narrative-guide';
 import { formatLessons, lessonFromRow, matchLessons } from '@tapestrai/mcp-server/src/lib/chat-lessons';
 import { getContextProfile, isCategoryAllowed } from '@tapestrai/mcp-server/src/lib/context-profiles';
+import { moduleAllowsToolGroup, parseModuleScope } from '@/lib/client-modules';
 import {
   coerceSkillState,
   completeAssistantTurn,
@@ -399,15 +400,25 @@ export async function POST(request: NextRequest) {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
+    // Tool groups outside the client's license are not offered. The registry
+    // refuses them as well, so this only keeps the model from reaching for them.
+    const { data: scopeRow } = await toolSupabase.schema('tenancy').rpc('module_scope');
+    const licenseScope = parseModuleScope(scopeRow);
+    const licensedTool = (name: string) => {
+      const category = toolRegistry.categoryOf(name);
+      return !category || moduleAllowsToolGroup(licenseScope, category);
+    };
+
     const tools = toolRegistry
       .listToolsForGemini(skill?.toolContext ?? toolContext)
-      .filter((tool) => skillAllowsTool(skill, skillState, tool.name));
+      .filter((tool) => skillAllowsTool(skill, skillState, tool.name))
+      .filter((tool) => licensedTool(tool.name));
 
     // Outside systems the client has connected. Offered only to a signed-in
     // caller, in a context that allows them, and not while a guided skill runs.
     // The client id comes from the caller's own session. A server that cannot
     // be loaded leaves the assistant with Tapestry's own tools.
-    if (auth && clientId && !skill && isCategoryAllowed('external', toolContext)) {
+    if (auth && clientId && !skill && isCategoryAllowed('external', toolContext) && moduleAllowsToolGroup(licenseScope, 'external')) {
       try {
         // Only the connection loader holds the service role, for this one read: the
         // function that returns a server's credentials is not granted to signed-in users.

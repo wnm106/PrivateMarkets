@@ -2407,6 +2407,26 @@ type ClientModule {
   toolHrefs: [String!]!
 }
 
+"""
+One item of one client's license. kind is surface, workflow, tool (a page href) or assistant_tool (a tool category).
+"""
+type ClientLicenseItem {
+  kind: String!
+  code: String!
+  """What the client's modules give, before any switch."""
+  planEnabled: Boolean!
+  """The switch: true on, false off, null when the item follows the modules."""
+  switchEnabled: Boolean
+  note: String
+  """The result the platform enforces."""
+  enabled: Boolean!
+}
+
+input LicenseItemInput {
+  kind: String!
+  code: String!
+}
+
 type Role {
   id: ID!
   clientId: ID
@@ -3761,6 +3781,8 @@ type Query {
   clients: [Client!]!
   client(id: ID!): Client
   clientModuleCatalog: [ClientModule!]!
+  """Tenant admins only. The items asked about, and every item the client has a switch for."""
+  clientLicense(clientId: ID!, items: [LicenseItemInput!]!): [ClientLicenseItem!]!
   clientUsers(clientId: ID!): [ClientUser!]!
   roles(clientId: ID): [Role!]!
   permissionsCatalog: [String!]!
@@ -3989,6 +4011,8 @@ type Mutation {
   # Tenancy mutations
   createClient(input: CreateClientInput!): MutationResult!
   setClientModules(clientId: ID!, curated: Boolean!, moduleCodes: [String!]!): MutationResult!
+  """Turns one item on or off for one client. enabled null removes the switch. Tenant admins only."""
+  setClientLicenseSwitch(clientId: ID!, kind: String!, code: String!, enabled: Boolean, note: String): MutationResult!
   createRole(input: CreateRoleInput!): MutationResult!
   inviteUser(input: InviteUserInput!): MutationResult!
   assignRole(input: AssignRoleInput!): MutationResult!

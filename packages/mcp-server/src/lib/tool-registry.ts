@@ -1,6 +1,7 @@
 import { SupabaseClient } from '@supabase/supabase-js';
-import { ToolDefinition, ToolEffect, ToolExecutionResult } from './types';
+import { ToolCategory, ToolDefinition, ToolEffect, ToolExecutionResult } from './types';
 import { ToolContext, getContextProfile, isCategoryAllowed } from './context-profiles';
+import { ToolNotLicensedError, toolGroupLicensed } from './tool-license';
 
 /**
  * The tools an assistant or a workflow may call.
@@ -112,11 +113,21 @@ export class ToolRegistry {
     if (!supabase) {
       throw new Error(`Tool ${name} was called without a database client. Pass the client of the user the call runs as.`);
     }
+    // Every caller comes through here (chat, confirmed writes, the MCP endpoint,
+    // workflow steps), so this is the one license check for assistant tools.
+    if (!(await toolGroupLicensed(supabase, tool.category))) {
+      throw new ToolNotLicensedError(name, tool.category);
+    }
     return tool.execute(args, supabase);
   }
 
   hasTool(name: string): boolean {
     return this.tools.has(name);
+  }
+
+  /** The tool's category, which is also its license group. Undefined for an unknown tool. */
+  categoryOf(name: string): ToolCategory | undefined {
+    return this.tools.get(name)?.category;
   }
 
   /** What calling the tool does (see ToolEffect). An unknown tool is a write. */

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { filterByTools, moduleAllowsSurface, parseModuleScope } from './client-modules';
+import { filterByTools, moduleAllowsSurface, moduleAllowsToolGroup, parseModuleScope } from './client-modules';
 
 const tools = [
   { href: '/fund-surface', label: 'Fund surface' },
@@ -28,6 +28,31 @@ describe('module scope', () => {
     });
     assert.equal(moduleAllowsSurface(scope, 'fund-index'), true);
     assert.equal(moduleAllowsSurface(scope, 'deal-pipeline'), false);
+    assert.deepEqual(filterByTools(tools, scope).map((tool) => tool.href), ['/fund-surface']);
+  });
+
+  it('drops what a license switch turned off, even on the full catalog', () => {
+    const scope = parseModuleScope({
+      restricted: false,
+      surfaces: [],
+      tools: [],
+      blocked: { surface: ['deal-pipeline'], tool: ['/imports'], assistant_tool: ['reconciliation'] },
+    });
+    assert.equal(moduleAllowsSurface(scope, 'deal-pipeline'), false);
+    assert.equal(moduleAllowsSurface(scope, 'fund-index'), true);
+    assert.deepEqual(filterByTools(tools, scope).map((tool) => tool.href), ['/fund-surface', '/s/deal-pipeline']);
+    assert.equal(moduleAllowsToolGroup(scope, 'reconciliation'), false);
+    assert.equal(moduleAllowsToolGroup(scope, 'compliance'), true);
+  });
+
+  it('keeps a switched-on item in a curated session and drops a switched-off one', () => {
+    const scope = parseModuleScope({
+      restricted: true,
+      surfaces: ['ocio'],
+      tools: ['/fund-surface', '/imports'],
+      blocked: { tool: ['/imports'] },
+    });
+    assert.equal(moduleAllowsSurface(scope, 'ocio'), true);
     assert.deepEqual(filterByTools(tools, scope).map((tool) => tool.href), ['/fund-surface']);
   });
 

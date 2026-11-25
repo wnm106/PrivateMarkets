@@ -2656,6 +2656,39 @@ export const REMOVE_CLIENT_ENTITY_TYPE_ALIAS_MUTATION = `
   }
 `;
 
+export const CLIENT_LICENSE_QUERY = `
+  query ClientLicense($clientId: ID!, $items: [LicenseItemInput!]!) {
+    clientLicense(clientId: $clientId, items: $items) {
+      kind
+      code
+      planEnabled
+      switchEnabled
+      note
+      enabled
+    }
+  }
+`;
+
+export const SET_CLIENT_LICENSE_SWITCH_MUTATION = `
+  mutation SetClientLicenseSwitch($clientId: ID!, $kind: String!, $code: String!, $enabled: Boolean, $note: String) {
+    setClientLicenseSwitch(clientId: $clientId, kind: $kind, code: $code, enabled: $enabled, note: $note) {
+      success
+      errors { field message code }
+    }
+  }
+`;
+
+export const LICENSE_WORKFLOWS_QUERY = `
+  query LicenseWorkflows {
+    workflows {
+      id
+      clientId
+      code
+      name
+    }
+  }
+`;
+
 export const SET_CLIENT_MODULES_MUTATION = `
   mutation SetClientModules($clientId: ID!, $curated: Boolean!, $moduleCodes: [String!]!) {
     setClientModules(clientId: $clientId, curated: $curated, moduleCodes: $moduleCodes) {

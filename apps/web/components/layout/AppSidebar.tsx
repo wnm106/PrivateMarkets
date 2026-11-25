@@ -9,6 +9,7 @@ import { nestDomainLinks } from '@/lib/domain-nav';
 import { domainHref } from '@/lib/domain-routes';
 import { SKILL_NAV } from '@/lib/skill-catalog';
 import { filterByTools } from '@/lib/client-modules';
+import { TOOL_PAGES } from '@/lib/tool-pages';
 import { omitSurfacesFromTools, surfaceLinkActive, type SurfaceNavLink } from '@/lib/surface-links';
 import { BrandLogo } from './BrandLogo';
 import { UserMenu } from './UserMenu';
@@ -25,19 +26,7 @@ interface DomainLink {
   color: string;
 }
 
-const TOOLS = [
-  { href: '/s/deal-pipeline', label: 'Deal Pipeline', icon: 'layers' },
-  { href: '/fund-surface', label: 'Fund surface', icon: 'chart' },
-  { href: '/fund-rec', label: 'Fund reconciliation', icon: 'chart' },
-  { href: '/merge', label: 'Entity Resolution', icon: 'nodes' },
-  { href: '/reconcile', label: 'Reconcile', icon: 'chart' },
-  { href: '/lists', label: 'Value Lists', icon: 'layers' },
-  { href: '/intersections', label: 'Composite Entities', icon: 'nodes' },
-  { href: '/imports', label: 'Load data', icon: 'download' },
-  { href: '/documents', label: 'Documents', icon: 'layers' },
-  { href: '/assistant', label: 'Assistant', icon: 'list' },
-  { href: '/workflows', label: 'Workflows', icon: 'nodes' },
-] as const;
+const TOOLS = TOOL_PAGES;
 
 const ADMIN = [
   { href: '/admin/entities', label: 'Entity Management', icon: 'domains' },

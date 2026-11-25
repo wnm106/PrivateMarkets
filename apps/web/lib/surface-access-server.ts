@@ -1,5 +1,6 @@
 import { supabaseServerClient } from '@/lib/supabase-server';
-import { OPEN_SCOPE, parseModuleScope, moduleAllowsSurface, type ModuleScope } from '@/lib/client-modules';
+import { OPEN_SCOPE, parseModuleScope, moduleAllowsSurface, moduleAllowsTool, type ModuleScope } from '@/lib/client-modules';
+import { LICENSED_PAGES, TOOL_PAGES } from '@/lib/tool-pages';
 import { SURFACES } from '@/lib/surface-registry';
 import { surfaceNavLinks, type SurfaceNavLink } from '@/lib/surface-links';
 
@@ -52,7 +53,7 @@ export async function loadModuleScope(): Promise<ModuleScope> {
 
 export interface AppNav {
   surfaceLinks: SurfaceNavLink[];
-  /** Null when the session uses the full catalog. */
+  /** Null when the session uses the full catalog and no page is switched off. */
   enabledToolHrefs: string[] | null;
 }
 
@@ -63,6 +64,13 @@ export async function loadAppNav(): Promise<AppNav> {
   const manifests = SURFACES.map((entry) => entry.manifest).filter((manifest) => moduleAllowsSurface(scope, manifest.code));
   return {
     surfaceLinks: surfaceNavLinks(manifests, user),
-    enabledToolHrefs: scope.restricted ? [...scope.tools] : null,
+    enabledToolHrefs: toolHrefsFor(scope),
   };
+}
+
+/** The tool pages this session keeps: null for all of them, else the list a curated client saved less what a switch turned off. */
+export function toolHrefsFor(scope: ModuleScope): string[] | null {
+  if (!scope.restricted && (scope.blocked?.tool.length ?? 0) === 0) return null;
+  const hrefs = new Set<string>([...TOOL_PAGES.map((page) => page.href), ...LICENSED_PAGES.map((page) => page.href), ...scope.tools]);
+  return [...hrefs].filter((href) => moduleAllowsTool(scope, href));
 }

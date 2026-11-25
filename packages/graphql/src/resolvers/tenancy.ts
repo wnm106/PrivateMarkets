@@ -163,6 +163,22 @@ export const tenancyResolvers = {
       return (data || []).map(mapModule);
     },
 
+    clientLicense: async (_: any, args: { clientId: string; items: { kind: string; code: string }[] }, context: Context) => {
+      const { data, error } = await tn(context).rpc('client_license_state', {
+        p_client_id: args.clientId,
+        p_items: args.items ?? [],
+      });
+      if (error) throw error;
+      return ((data as any[]) || []).map((row) => ({
+        kind: row.kind,
+        code: row.code,
+        planEnabled: row.plan_enabled === true,
+        switchEnabled: typeof row.switch_enabled === 'boolean' ? row.switch_enabled : null,
+        note: row.note ?? null,
+        enabled: row.enabled === true,
+      }));
+    },
+
     clientUsers: async (_: any, args: { clientId: string }, context: Context) => {
       const [{ data: members, error: membersError }, { data: clientUserRows, error: cuError }, { data: roleRows, error: roleError }] = await Promise.all([
         tn(context).rpc('client_member_directory', { p_client_id: args.clientId }),
@@ -312,6 +328,26 @@ export const tenancyResolvers = {
         return { success: true, errors: [] };
       } catch (error: any) {
         return { success: false, errors: [{ field: 'general', message: error.message, code: 'MODULES_FAILED' }] };
+      }
+    },
+
+    setClientLicenseSwitch: async (
+      _: any,
+      args: { clientId: string; kind: string; code: string; enabled?: boolean | null; note?: string | null },
+      context: Context,
+    ) => {
+      try {
+        const { error } = await tn(context).rpc('set_client_license_switch', {
+          p_client_id: args.clientId,
+          p_kind: args.kind,
+          p_code: args.code,
+          p_enabled: args.enabled ?? null,
+          p_note: args.note ?? null,
+        });
+        if (error) throw error;
+        return { success: true, errors: [] };
+      } catch (error: any) {
+        return { success: false, errors: [{ field: 'general', message: error.message, code: 'LICENSE_FAILED' }] };
       }
     },
 
