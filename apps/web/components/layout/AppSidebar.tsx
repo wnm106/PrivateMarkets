@@ -60,6 +60,7 @@ const ADMIN = [
   { href: '/admin/document-templates', label: 'Document templates', icon: 'layers' },
   { href: '/admin/jobs', label: 'Jobs', icon: 'list' },
   { href: '/admin/agent-usage', label: 'Agent usage', icon: 'chart' },
+  { href: '/admin/audit', label: 'Audit log', icon: 'list' },
   { href: '/admin/agents', label: 'Agents', icon: 'nodes' },
   { href: '/admin/responsibilities', label: 'Responsibilities', icon: 'users' },
   { href: '/admin/tenancy', label: 'Clients, Users & Roles', icon: 'users' },

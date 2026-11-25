@@ -10638,6 +10638,17 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .da-seg2 { display: flex; border: 1px solid var(--da-line); border-radius: 6px; overflow: hidden; }
 .da-seg2 button { flex: 1; border: 0; background: var(--surface); padding: 6px; cursor: pointer; }
 .da-seg2 button[aria-pressed="true"] { background: #0b5d73; color: #fff; }
+/* Audit log (app/admin/audit). What the da- kit lacks, scoped to the page. */
+.x-audit .da-panel { padding: 14px; }
+.x-audit .da-title { flex: 1 1 auto; border-right: 0; }
+.x-audit .da-grid { min-width: 0; }
+.x-audit .da-grid small { font-size: 12px; overflow-wrap: anywhere; }
+.x-audit .da-grid td.x-audit-value { overflow-wrap: anywhere; text-align: left; }
+.x-audit .da-grid td.x-audit-who { min-width: 150px; }
+.x-audit [data-derived] { text-decoration: underline dotted var(--ink-3); text-underline-offset: 3px; cursor: context-menu; }
+.x-audit-note { position: fixed; z-index: 50; max-width: 360px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14); font-size: 12px; line-height: 1.45; }
+.x-audit-note strong { display: block; margin-bottom: 4px; font-size: 13px; }
+.x-audit-note p { margin: 0 0 4px; }
 @media (max-width: 860px) { .da-main { grid-template-columns: 1fr; } .da-columns { grid-template-columns: 1fr; } .da-facts, .da-facts.five, .da-facts.six { grid-template-columns: repeat(2, 1fr); } .da-panel { position: static; height: auto; max-height: none; } }
 
 .dc-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }

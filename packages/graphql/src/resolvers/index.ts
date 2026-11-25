@@ -38,6 +38,7 @@ import { excelResolvers } from './excel';
 import { viewResolvers } from './views';
 import { certificationResolvers } from './certification';
 import { clientCatalogResolvers } from './client-catalog';
+import { auditLogResolvers } from './audit-log';
 
 export const resolvers = {
   Query: {
@@ -92,6 +93,7 @@ export const resolvers = {
     ...viewResolvers.Query,
     ...certificationResolvers.Query,
     ...clientCatalogResolvers.Query,
+    ...auditLogResolvers.Query,
   },
   
   Certification: certificationResolvers.Certification,

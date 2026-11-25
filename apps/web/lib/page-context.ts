@@ -30,6 +30,7 @@ const PAGES: Record<string, string> = {
   '/admin/narratives': 'Narratives',
   '/admin/skills': 'Skills',
   '/admin/tenancy': 'Clients, users, and roles',
+  '/admin/audit': 'Audit log',
 };
 
 const DOMAIN_LABELS: Record<string, string> = {

@@ -3657,6 +3657,8 @@ type Query {
   agentUsage(days: Int, from: String, to: String, feature: String, agent: String, userId: ID, model: String, turnId: String, conversationId: String, subjectType: String, subjectId: String): JSON!
   """One model call, including its thinking, when this session can see that client."""
   agentCall(id: ID!): JSON
+  """Who changed access or configuration, and when, newest first, as {entries, hasMore}. kind is access or configuration. table is schema.table or a table name. from and to are ISO timestamps. search matches the record id or the stored row. Pass the last entry's id as beforeId for the next page. Readable by staff and by a client's user or role managers."""
+  auditLog(kind: String, from: String, to: String, table: String, actorUserId: ID, rowId: String, search: String, limit: Int, beforeId: String): JSON!
   """Forms workflow steps are waiting on. status defaults to OPEN; runId keeps one run's."""
   workflowForms(status: String, runId: ID): [WorkflowForm!]!
   workflowStages(status: String, runId: ID): [WorkflowStage!]!
