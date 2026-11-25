@@ -10,7 +10,7 @@ import { recommendFieldMappings, MappingRecommendation, FieldMapping } from './f
 import { validateIdentifierMappings, validateIdentifierValues, IdentifierValidationResult } from './identifier-validator';
 import { generateImportPlan, validateImportPlan, planToBatches, ImportPlan, ImportBatch } from './relationship-analyzer';
 import { writeGoldenValue } from '../golden-write';
-import { ok } from '../db-result';
+import { DbError } from '../db-result';
 import { RequiredParentError, loadRequiredParentRules, requiredParentMessage, unmetRequiredParents } from '../required-parents';
 
 export interface ImportMap {
@@ -202,13 +202,20 @@ export async function analyzeImportMap(
 }
 
 /**
- * Execute an import map
+ * Execute an import map into one client.
+ *
+ * clientId is the client the records belong to. Codes are unique per client, so
+ * every create carries it and every lookup by code reads only that client's
+ * records. The caller resolves it (resolveEntityClientId, or the MCP session's
+ * one client); the importer never guesses it.
  */
 export async function executeImportMap(
   importMap: ImportMap,
   supabase: SupabaseClient,
+  clientId: string,
   userId?: string
 ): Promise<ImportExecutionResult> {
+  if (!clientId) throw new Error('Choose the client these records are for before importing.');
   const startTime = Date.now();
   const executionId = generateExecutionId();
   const importMapId = importMap.id || generateImportMapId();
@@ -290,6 +297,7 @@ export async function executeImportMap(
         recommendation.mappings,
         domainMapping.relationshipMappings,
         supabase,
+        clientId,
         userId,
         importMap.options
       );
@@ -353,6 +361,7 @@ async function importDomainRecords(
   mappings: FieldMapping[],
   relationshipMappings: RelationshipMapping[] | undefined,
   supabase: SupabaseClient,
+  clientId: string,
   userId?: string,
   options?: ImportOptions
 ): Promise<DomainImportResult> {
@@ -386,13 +395,8 @@ async function importDomainRecords(
         const entityCode = generateEntityCode(domainCode, identity.attributes, mappings);
         const entityName = identity.entityName || identity.attributes['name'] || entityCode;
 
-        // Check if entity already exists
-        const { data: existing } = ok(await supabase
-          .from('master_entities')
-          .select('id')
-          .eq('entity_code', entityCode)
-          .eq('domain_code', domainCode)
-          .maybeSingle());
+        // Check if the entity already exists in this client. Another client may use the same code.
+        const existing = await findEntityByCode(supabase, clientId, domainCode, entityCode);
 
         if (existing) {
           // Update existing entity
@@ -402,7 +406,7 @@ async function importDomainRecords(
         } else {
           // Find the row's parents before anything is written, so a row with no required
           // parent is refused instead of leaving a record with nothing above it.
-          const parents = await resolveRecordParents(record, relationshipMappings || [], supabase);
+          const parents = await resolveRecordParents(record, relationshipMappings || [], supabase, clientId);
           const unmet = unmetRequiredParents(requiredParents, parents.map((parent) => parent.domainCode), identity.attributes);
           if (unmet.length) {
             throw new RequiredParentError(`${entityCode} was not created. ${requiredParentMessage(domainCode, unmet)} Map a column to it, and load it first.`, unmet);
@@ -415,6 +419,7 @@ async function importDomainRecords(
               entity_code: entityCode,
               entity_name: entityName,
               domain_code: domainCode,
+              client_id: clientId,
               created_by: userId,
             })
             .select()
@@ -643,24 +648,52 @@ interface ResolvedParent {
 async function resolveRecordParents(
   record: Record<string, any>,
   relationshipMappings: RelationshipMapping[],
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  clientId: string
 ): Promise<ResolvedParent[]> {
   const parents: ResolvedParent[] = [];
   for (const relMapping of relationshipMappings) {
     const parentKeyValue = record[relMapping.parentKeyField];
     if (!parentKeyValue) continue;
 
-    // Find parent entity by key
-    const { data: parentEntity } = ok(await supabase
-      .from('master_entities')
-      .select('id')
-      .eq('domain_code', relMapping.parentDomainCode)
-      .eq('entity_code', `${relMapping.parentDomainCode}-${String(parentKeyValue).toUpperCase()}`)
-      .maybeSingle());
+    // Find the parent by key, in the same client as the child.
+    const parentEntity = await findEntityByCode(
+      supabase,
+      clientId,
+      relMapping.parentDomainCode,
+      `${relMapping.parentDomainCode}-${String(parentKeyValue).toUpperCase()}`
+    );
 
     if (parentEntity) parents.push({ id: parentEntity.id, domainCode: relMapping.parentDomainCode, relationshipCode: relMapping.relationshipCode });
   }
   return parents;
+}
+
+/**
+ * The record with this code in one client. Codes are unique per client
+ * (UNIQUE (client_id, entity_code)), so the client filter is what makes this one row.
+ *
+ * Not maybeSingle(): for more than one row it answers PGRST116, which ok() reads as
+ * "no row", and the importer would then create a duplicate. A failed read throws,
+ * and so does a second match.
+ */
+export async function findEntityByCode(
+  supabase: SupabaseClient,
+  clientId: string,
+  domainCode: string,
+  entityCode: string
+): Promise<{ id: string } | null> {
+  const { data, error } = await supabase
+    .from('master_entities')
+    .select('id')
+    .eq('client_id', clientId)
+    .eq('entity_code', entityCode)
+    .eq('domain_code', domainCode)
+    .limit(2);
+  if (error) throw new DbError(error.code, error.message || 'The database refused the request.');
+  const rows = (data || []) as { id: string }[];
+  if (rows.length > 1) throw new Error(`More than one ${domainCode} record has the code ${entityCode} in this client. Nothing was written for it.`);
+  return rows[0] ?? null;
 }
 
 async function insertEntityRelationships(

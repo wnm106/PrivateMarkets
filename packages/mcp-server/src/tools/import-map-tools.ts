@@ -6,6 +6,7 @@
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
 import { analyzeImportMap, executeImportMap, ImportMap } from '../lib/import-map/import-orchestrator';
+import { requireLoadWrite } from '../feeds/session-client';
 import { getIdentifierSuggestions } from '../lib/import-map/identifier-validator';
 
 const analyzeImportMapTool: ToolDefinition = {
@@ -167,7 +168,10 @@ const executeImportMapTool: ToolDefinition = {
       options: args.options,
     };
 
-    const result = await executeImportMap(importMap, supabase);
+    // The one client this session writes in, once it may edit records there. A session
+    // in several clients is refused rather than loading into whichever came first.
+    const clientId = await requireLoadWrite(supabase);
+    const result = await executeImportMap(importMap, supabase, clientId);
 
     return result;
   },

@@ -10,6 +10,7 @@ import {
   ImportMap, 
   DomainImportMapping 
 } from '../lib/import-map/import-orchestrator';
+import { resolveEntityClientId } from './schema-scope';
 import { getIdentifierSuggestions } from '../lib/import-map/identifier-validator';
 
 export const importMapResolvers = {
@@ -240,6 +241,8 @@ export const importMapResolvers = {
       try {
         const { input } = args;
         const userId = context.user?.id;
+        // The client the records are created in: the simulated client, or the caller's only one.
+        const clientId = await resolveEntityClientId(context);
 
         // Fetch the import map
         const { data: importMapData, error: fetchError } = await context.supabase
@@ -275,7 +278,7 @@ export const importMapResolvers = {
         };
 
         // Execute import
-        const executionResult = await executeImportMap(importMap, context.supabase, userId);
+        const executionResult = await executeImportMap(importMap, context.supabase, clientId, userId);
 
         // Update import map with execution results
         const newStatus = executionResult.success ? 'COMPLETED' : 'FAILED';
