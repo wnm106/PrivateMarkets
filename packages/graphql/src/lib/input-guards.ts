@@ -16,6 +16,14 @@ export function requireUuid(value: unknown, field: string): string {
   return value;
 }
 
+/**
+ * A PostgREST .or() filter for catalog rows a client sees: the shared ones
+ * (client_id null) and that client's own. With no client, the shared ones only.
+ */
+export function sharedOrClientFilter(clientId: string | null | undefined): string {
+  return clientId ? `client_id.is.null,client_id.eq.${requireUuid(clientId, 'clientId')}` : 'client_id.is.null';
+}
+
 /** The calendar date of an ISO date or timestamp, or an error naming the field. */
 export function requireIsoDate(value: unknown, field: string): string {
   const match = typeof value === 'string' ? ISO_DATE.exec(value.trim()) : null;

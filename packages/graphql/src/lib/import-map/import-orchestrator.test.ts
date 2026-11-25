@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { executeImportMap, findEntityByCode, type ImportMap } from './import-orchestrator';
+import { analyzeImportMap, executeImportMap, findEntityByCode, type ImportMap } from './import-orchestrator';
 import { fakeSupabase, filterValue, type FakeCall } from '../../testing/fake-supabase';
 
-const CLIENT_A = 'client-a';
-const CLIENT_B = 'client-b';
+const CLIENT_A = '00000000-0000-4000-8000-00000000000a';
+const CLIENT_B = '00000000-0000-4000-8000-00000000000b';
 
 interface EntityRow { id: string; client_id: string; entity_code: string; domain_code: string }
 
@@ -25,7 +25,7 @@ function database(rows: EntityRow[]) {
       entities.push(row);
       return { data: row };
     }
-    if (call.table === 'attribute_register') return { data: [{ attribute_code: 'isin', id: 'attr-isin', default_precedence_rank: 10, reference_list_code: null }] };
+    if (call.table === 'attribute_register') return { data: [{ attribute_code: 'isin', attribute_name: 'ISIN', data_type: 'STRING', id: 'attr-isin', default_precedence_rank: 10, reference_list_code: null }] };
     if (call.table === 'source_registry') return { data: { id: 'src-import' } };
     if (call.fn === 'write_value') return { data: 'v' };
     return undefined;
@@ -89,6 +89,39 @@ describe('executeImportMap in one client', () => {
     const db = database([]);
     await expect(executeImportMap(importOf([{ isin: 'x1' }]), db.client, '')).rejects.toThrow(/Choose the client/);
     expect(db.calls).toEqual([]);
+  });
+});
+
+describe('the catalog an import reads is the client\'s', () => {
+  const scoped = (call: FakeCall) => call.filters.find(([op]) => op === 'or')?.[1];
+  const OWN = `client_id.is.null,client_id.eq.${CLIENT_A}`;
+
+  it('analyzes against the shared fields, words and relationship types and the client\'s own', async () => {
+    const db = database([]);
+    const map = importOf([{ isin: 'x1' }]);
+    map.domainMappings.push({ domainCode: 'ISSUER', fieldMappings: [] });
+    await analyzeImportMap(map, db.client, CLIENT_A);
+
+    const attributes = db.calls.filter((call) => call.table === 'attribute_register');
+    const types = db.calls.filter((call) => call.table === 'relationship_types');
+    expect(attributes.length).toBeGreaterThan(0);
+    expect(types.length).toBeGreaterThan(0);
+    for (const call of [...attributes, ...types]) expect(scoped(call)).toBe(OWN);
+    expect(db.calls.find((call) => call.fn === 'alias_words')?.payload).toEqual({ p_client_id: CLIENT_A });
+  });
+
+  it('writes values only to the shared fields and the client\'s own, and applies only their required parents', async () => {
+    const db = database([]);
+    await executeImportMap(importOf([{ isin: 'x1' }]), db.client, CLIENT_A);
+    const reads = db.calls.filter((call) => (call.table === 'attribute_register' || call.table === 'relationship_types') && call.op === 'select');
+    expect(reads.map((call) => call.schema + '.' + call.table)).toEqual(expect.arrayContaining(['public.attribute_register', 'metadata_register.relationship_types']));
+    for (const call of reads) expect(scoped(call)).toBe(OWN);
+  });
+
+  it('refuses to analyze without a client, or with one that is not an id', async () => {
+    const db = database([]);
+    await expect(analyzeImportMap(importOf([]), db.client, '')).rejects.toThrow(/Choose the client/);
+    await expect(analyzeImportMap(importOf([{ isin: 'x1' }]), db.client, "a,client_id.is.not.null")).rejects.toThrow(/clientId must be an id/);
   });
 });
 

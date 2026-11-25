@@ -5001,10 +5001,14 @@ input UpdateImportMapInput {
 
 input AnalyzeImportMapInput {
   importMapId: ID!
+  """The client the records are for. Defaults to the client being simulated, or the caller's only client."""
+  clientId: ID
 }
 
 input ExecuteImportMapInput {
   importMapId: ID!
+  """The client the records are for. Defaults to the client being simulated, or the caller's only client."""
+  clientId: ID
   dryRun: Boolean
   skipValidation: Boolean
   continueOnError: Boolean

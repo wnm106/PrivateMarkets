@@ -162,12 +162,16 @@ export const importMapResolvers = {
     analyzeImportMap: async (_: any, args: { input: any }, context: Context) => {
       try {
         const { input } = args;
+        const importMapId = input.importMapId;
+        // The client whose fields and rules the file is read against: the one named, if the
+        // caller may use it, else the simulated client or the caller's only one.
+        const clientId = await resolveEntityClientId(context, input.clientId ?? null);
 
         // Fetch the import map
         const { data: importMapData, error: fetchError } = await context.supabase
           .from('import_maps')
           .select('*')
-          .eq('id', input.id)
+          .eq('id', importMapId)
           .single();
 
         if (fetchError) throw fetchError;
@@ -177,7 +181,7 @@ export const importMapResolvers = {
         await context.supabase
           .from('import_maps')
           .update({ status: 'ANALYZING' })
-          .eq('id', input.id);
+          .eq('id', importMapId);
 
         // Build import map object for analysis
         const importMap: ImportMap = {
@@ -191,7 +195,7 @@ export const importMapResolvers = {
         };
 
         // Run analysis
-        const analysis = await analyzeImportMap(importMap, context.supabase);
+        const analysis = await analyzeImportMap(importMap, context.supabase, clientId);
 
         // Update import map with analysis results
         const newStatus = analysis.overallValidation.isValid ? 'READY' : 'DRAFT';
@@ -204,7 +208,7 @@ export const importMapResolvers = {
             last_analysis_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           })
-          .eq('id', input.id);
+          .eq('id', importMapId);
 
         return {
           analysis: {
@@ -220,11 +224,11 @@ export const importMapResolvers = {
         };
       } catch (error: any) {
         // Update status to FAILED
-        if (args.input?.id) {
+        if (args.input?.importMapId) {
           await context.supabase
             .from('import_maps')
             .update({ status: 'FAILED' })
-            .eq('id', args.input.id);
+            .eq('id', args.input.importMapId);
         }
 
         return {
@@ -241,14 +245,16 @@ export const importMapResolvers = {
       try {
         const { input } = args;
         const userId = context.user?.id;
-        // The client the records are created in: the simulated client, or the caller's only one.
-        const clientId = await resolveEntityClientId(context);
+        const importMapId = input.importMapId;
+        // The client the records are created in: the one named, if the caller may use it,
+        // else the simulated client or the caller's only one. Settled before anything is written.
+        const clientId = await resolveEntityClientId(context, input.clientId ?? null);
 
         // Fetch the import map
         const { data: importMapData, error: fetchError } = await context.supabase
           .from('import_maps')
           .select('*')
-          .eq('id', input.id)
+          .eq('id', importMapId)
           .single();
 
         if (fetchError) throw fetchError;
@@ -258,7 +264,7 @@ export const importMapResolvers = {
         await context.supabase
           .from('import_maps')
           .update({ status: 'IMPORTING' })
-          .eq('id', input.id);
+          .eq('id', importMapId);
 
         // Build import map object for execution
         const importMap: ImportMap = {
@@ -291,7 +297,7 @@ export const importMapResolvers = {
             last_execution_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           })
-          .eq('id', input.id);
+          .eq('id', importMapId);
 
         // Log execution
         await context.supabase
@@ -317,11 +323,11 @@ export const importMapResolvers = {
         };
       } catch (error: any) {
         // Update status to FAILED
-        if (args.input?.id) {
+        if (args.input?.importMapId) {
           await context.supabase
             .from('import_maps')
             .update({ status: 'FAILED' })
-            .eq('id', args.input.id);
+            .eq('id', args.input.importMapId);
         }
 
         return {

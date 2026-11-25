@@ -6,7 +6,7 @@
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
 import { analyzeImportMap, executeImportMap, ImportMap } from '../lib/import-map/import-orchestrator';
-import { requireLoadWrite } from '../feeds/session-client';
+import { requireLoadWriteFor, sessionClientFor } from '../feeds/session-client';
 import { getIdentifierSuggestions } from '../lib/import-map/identifier-validator';
 
 const analyzeImportMapTool: ToolDefinition = {
@@ -49,6 +49,10 @@ const analyzeImportMapTool: ToolDefinition = {
           required: ['domainCode'],
         },
       },
+      clientId: {
+        type: 'string',
+        description: 'Id of the client the records are for. Needed when the account belongs to more than one client; otherwise the session\'s one client is used.',
+      },
       options: {
         type: 'object',
         description: 'Parsing options',
@@ -63,6 +67,8 @@ const analyzeImportMapTool: ToolDefinition = {
     required: ['sourceData', 'sourceFormat', 'domainMappings'],
   },
   execute: async (args, supabase) => {
+    // The client whose fields and rules the file is read against.
+    const clientId = await sessionClientFor(supabase, args.clientId);
     const importMap: ImportMap = {
       name: 'AI Analysis',
       sourceFormat: args.sourceFormat,
@@ -71,7 +77,7 @@ const analyzeImportMapTool: ToolDefinition = {
       options: args.options,
     };
 
-    const analysis = await analyzeImportMap(importMap, supabase);
+    const analysis = await analyzeImportMap(importMap, supabase, clientId);
 
     return {
       parsedFields: analysis.parsedData.fields,
@@ -142,6 +148,10 @@ const executeImportMapTool: ToolDefinition = {
           required: ['domainCode', 'fieldMappings'],
         },
       },
+      clientId: {
+        type: 'string',
+        description: 'Id of the client the records are for. Needed when the account belongs to more than one client; otherwise the session\'s one client is used.',
+      },
       options: {
         type: 'object',
         description: 'Import execution options',
@@ -168,9 +178,9 @@ const executeImportMapTool: ToolDefinition = {
       options: args.options,
     };
 
-    // The one client this session writes in, once it may edit records there. A session
-    // in several clients is refused rather than loading into whichever came first.
-    const clientId = await requireLoadWrite(supabase);
+    // The client the records are written in: the one named, or the session's one client,
+    // once it may edit records there. A session in several clients must name one.
+    const clientId = await requireLoadWriteFor(supabase, args.clientId);
     const result = await executeImportMap(importMap, supabase, clientId);
 
     return result;

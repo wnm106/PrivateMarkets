@@ -101,6 +101,30 @@ export async function requireLoadWrite(supabase: SupabaseClient): Promise<string
   return clientId;
 }
 
+export const OTHER_CLIENT_MESSAGE = 'That client is not one this session can work in. Nothing was read or written.';
+
+/**
+ * The client a tool call is for. A client named by the caller is used when the
+ * session may act in it; otherwise the session's one client, and a session in
+ * several is refused rather than given whichever came first.
+ */
+export async function sessionClientFor(supabase: SupabaseClient, requested?: string | null): Promise<string> {
+  if (!requested) return sessionWriteClientId(supabase);
+  const ids = await sessionClientIds(supabase);
+  if (ids.length === 0) throw new FeedAccessError(NO_CLIENT_MESSAGE, 400);
+  if (!ids.includes(requested)) throw new FeedAccessError(OTHER_CLIENT_MESSAGE, 403);
+  return requested;
+}
+
+/** requireLoadWrite for a client the caller may name: the client, once the database says they may edit records there. */
+export async function requireLoadWriteFor(supabase: SupabaseClient, requested?: string | null): Promise<string> {
+  const clientId = await sessionClientFor(supabase, requested);
+  if (!(await hasClientPermission(supabase, clientId, LOAD_WRITE_PERMISSION))) {
+    throw new FeedAccessError(LOAD_WRITE_REFUSED, 403);
+  }
+  return clientId;
+}
+
 /**
  * Call before anything that writes live records: promoting or reverting a
  * batch, or loading a file without staging it. The caller must hold

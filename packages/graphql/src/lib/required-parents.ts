@@ -16,6 +16,8 @@
  * The difference between entity types is data. This module names none of them.
  */
 
+
+import { sharedOrClientFilter } from './input-guards';
 export interface RelationshipTypeLike {
   relationship_code: string;
   parent_domain_code: string | null;
@@ -106,15 +108,21 @@ export interface RequiredParentClient {
   from(table: string): any;
 }
 
-/** The relationship types that make a parent required for this entity type. */
-export async function loadRequiredParentRules(supabase: RequiredParentClient, domainCode: string): Promise<RequiredParentRule[]> {
-  const { data, error } = await supabase
+/**
+ * The relationship types that make a parent required for this entity type.
+ * With a client, only the shared types and that client's own apply; without one,
+ * every type the caller can read.
+ */
+export async function loadRequiredParentRules(supabase: RequiredParentClient, domainCode: string, clientId?: string): Promise<RequiredParentRule[]> {
+  let query = supabase
     .schema('metadata_register')
     .from('relationship_types')
     .select('relationship_code, parent_domain_code, child_domain_code, is_required, required_unless_attribute_code')
     .eq('parent_domain_code', upper(domainCode))
     .eq('is_required', true)
     .eq('is_active', true);
+  if (clientId) query = query.or(sharedOrClientFilter(clientId));
+  const { data, error } = await query;
   if (error) throw new Error(error.message);
   return requiredParentRules((data || []) as RelationshipTypeLike[], domainCode);
 }

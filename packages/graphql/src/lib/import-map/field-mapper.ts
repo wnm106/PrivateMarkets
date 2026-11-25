@@ -14,6 +14,7 @@ import {
 } from '../semantic-aliases';
 import { ParsedField } from './data-parsers';
 import { ok } from '../db-result';
+import { sharedOrClientFilter } from '../input-guards';
 
 export interface FieldMapping {
   sourceField: string;
@@ -54,11 +55,13 @@ export async function recommendFieldMappings(
   options?: {
     templateCode?: string;
     existingMappings?: FieldMapping[];
+    /** The client the import is for. Its own fields and words are offered with the shared ones; another client's are not. */
+    clientId?: string;
   }
 ): Promise<MappingRecommendation> {
-  // The words of the client this session is working in, read once for the fields,
-  // the record names and the entity types.
-  const words = await loadAliasWords(supabase);
+  // The words of the client the import is for (or, with none named, the session's),
+  // read once for the fields, the record names and the entity types.
+  const words = await loadAliasWords(supabase, options?.clientId ? { clientId: options.clientId } : {});
 
   // Fetch target attribute metadata
   const targetAttributes = await fetchTargetAttributes(
@@ -66,6 +69,7 @@ export async function recommendFieldMappings(
     options?.templateCode,
     supabase,
     aliasLabelsByAttribute(words),
+    options?.clientId,
   );
   const nameAliases = words.nameAliases.filter((alias) => alias.domainCode === targetDomainCode);
   const domainAliases = words.domainAliases;
@@ -170,6 +174,7 @@ async function fetchTargetAttributes(
   templateCode: string | undefined,
   supabase: SupabaseClient,
   aliasLabels: Map<string, string[]>,
+  clientId?: string,
 ): Promise<AttributeMetadata[]> {
   let query = supabase
     .from('attribute_register')
@@ -184,14 +189,16 @@ async function fetchTargetAttributes(
       list_values
     `)
     .eq('reference_domain_code', domainCode);
+  if (clientId) query = query.or(sharedOrClientFilter(clientId));
 
   // If template specified, only get attributes assigned to that template
   if (templateCode) {
-    const { data: template } = ok(await supabase
+    let templateQuery = supabase
       .from('domain_templates')
       .select('id, template_attribute_assignments(attribute_id)')
-      .eq('template_code', templateCode)
-      .single());
+      .eq('template_code', templateCode);
+    if (clientId) templateQuery = templateQuery.or(sharedOrClientFilter(clientId));
+    const { data: template } = ok(await templateQuery.single());
 
     if (template) {
       const attributeIds = template.template_attribute_assignments.map(

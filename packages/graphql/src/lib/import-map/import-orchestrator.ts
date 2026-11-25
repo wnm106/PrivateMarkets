@@ -11,6 +11,7 @@ import { validateIdentifierMappings, validateIdentifierValues, IdentifierValidat
 import { generateImportPlan, validateImportPlan, planToBatches, ImportPlan, ImportBatch } from './relationship-analyzer';
 import { writeGoldenValue } from '../golden-write';
 import { DbError } from '../db-result';
+import { sharedOrClientFilter } from '../input-guards';
 import { RequiredParentError, loadRequiredParentRules, requiredParentMessage, unmetRequiredParents } from '../required-parents';
 
 export interface ImportMap {
@@ -92,12 +93,15 @@ export interface DomainImportResult {
 }
 
 /**
- * Analyze an import map without executing it
+ * Analyze an import map for one client: the fields, words, templates and
+ * relationship types offered are the shared ones and that client's own.
  */
 export async function analyzeImportMap(
   importMap: ImportMap,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  clientId: string
 ): Promise<ImportMapAnalysis> {
+  if (!clientId) throw new Error('Choose the client these records are for before analyzing an import.');
   const startTime = Date.now();
 
   // 1. Parse the source data
@@ -130,6 +134,7 @@ export async function analyzeImportMap(
       {
         templateCode: domainMapping.templateCode,
         existingMappings: domainMapping.fieldMappings,
+        clientId,
       }
     );
     recommendations.push(recommendation);
@@ -155,7 +160,7 @@ export async function analyzeImportMap(
 
   if (domainMappings.length > 1) {
     const domainCodes = domainMappings.map(d => d.domainCode);
-    importPlan = await generateImportPlan(domainCodes, supabase);
+    importPlan = await generateImportPlan(domainCodes, supabase, clientId);
     importBatches = planToBatches(importPlan);
   }
 
@@ -221,7 +226,7 @@ export async function executeImportMap(
   const importMapId = importMap.id || generateImportMapId();
 
   // Analyze first
-  const analysis = await analyzeImportMap(importMap, supabase);
+  const analysis = await analyzeImportMap(importMap, supabase, clientId);
 
   // Check if validation passes
   if (!analysis.overallValidation.isValid && !importMap.options?.skipValidation) {
@@ -378,7 +383,7 @@ async function importDomainRecords(
     const batch = records.slice(i, i + batchSize);
 
     // The parents this entity type must have. A row that cannot be linked to one is not created.
-    const requiredParents = await loadRequiredParentRules(supabase, domainCode);
+    const requiredParents = await loadRequiredParentRules(supabase, domainCode, clientId);
     for (const record of batch) {
       try {
         // Map source fields to target attributes
@@ -400,7 +405,7 @@ async function importDomainRecords(
 
         if (existing) {
           // Update existing entity
-          await updateEntityAttributes(existing.id, identity.attributes, supabase, userId);
+          await updateEntityAttributes(existing.id, identity.attributes, supabase, userId, clientId);
           await saveEntityAliases(supabase, existing.id, identity.aliases);
           recordsUpdated++;
         } else {
@@ -428,7 +433,7 @@ async function importDomainRecords(
           if (entityError) throw entityError;
 
           // Insert attributes
-          await insertEntityAttributes(entity.id, identity.attributes, supabase, userId);
+          await insertEntityAttributes(entity.id, identity.attributes, supabase, userId, clientId);
           await saveEntityAliases(supabase, entity.id, identity.aliases);
 
           // Insert relationships if defined
@@ -492,17 +497,21 @@ async function insertEntityAttributes(
   entityId: string,
   attributes: Record<string, any>,
   supabase: SupabaseClient,
-  userId?: string
+  userId?: string,
+  clientId?: string
 ): Promise<{ normalized: number; unmapped: string[] }> {
   let normalizedCount = 0;
   const unmappedValues: string[] = [];
 
-  // Pre-fetch attribute metadata including reference list codes
+  // Pre-fetch attribute metadata including reference list codes. Only the shared
+  // fields and the client's own: a value is never written to another client's field.
   const attrCodes = Object.keys(attributes);
-  const { data: attrDefs, error: attrError } = await supabase
+  let attrQuery = supabase
     .from('attribute_register')
     .select('attribute_code, id, default_precedence_rank, reference_list_code, data_type')
     .in('attribute_code', attrCodes);
+  if (clientId) attrQuery = attrQuery.or(sharedOrClientFilter(clientId));
+  const { data: attrDefs, error: attrError } = await attrQuery;
   if (attrError) throw attrError;
 
   const attrMap = new Map((attrDefs || []).map((a: any) => [a.attribute_code, a]));
@@ -567,17 +576,21 @@ export async function updateEntityAttributes(
   entityId: string,
   attributes: Record<string, any>,
   supabase: SupabaseClient,
-  userId?: string
+  userId?: string,
+  clientId?: string
 ): Promise<{ normalized: number; unmapped: string[] }> {
   let normalizedCount = 0;
   const unmappedValues: string[] = [];
 
-  // Pre-fetch attribute metadata including reference list codes
+  // Pre-fetch attribute metadata including reference list codes. Only the shared
+  // fields and the client's own: a value is never written to another client's field.
   const attrCodes = Object.keys(attributes);
-  const { data: attrDefs, error: attrError } = await supabase
+  let attrQuery = supabase
     .from('attribute_register')
     .select('attribute_code, id, default_precedence_rank, reference_list_code')
     .in('attribute_code', attrCodes);
+  if (clientId) attrQuery = attrQuery.or(sharedOrClientFilter(clientId));
+  const { data: attrDefs, error: attrError } = await attrQuery;
   if (attrError) throw attrError;
 
   const attrMap = new Map((attrDefs || []).map((a: any) => [a.attribute_code, a]));

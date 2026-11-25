@@ -4,6 +4,7 @@
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
+import { sharedOrClientFilter } from '../input-guards';
 
 export interface DomainDependency {
   parentDomain: string;
@@ -40,16 +41,19 @@ export interface ImportBatch {
  */
 export async function analyzeRelationships(
   domainCodes: string[],
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  clientId?: string
 ): Promise<{
   dependencies: DomainDependency[];
   adjacencyList: Map<string, Set<string>>;
 }> {
-  // Fetch all relationship types
-  const { data: relationshipTypes, error } = await supabase
+  // The relationship types the client sees: the shared ones and its own.
+  let typesQuery = supabase
     .from('relationship_types')
     .select('*')
     .eq('is_active', true);
+  if (clientId) typesQuery = typesQuery.or(sharedOrClientFilter(clientId));
+  const { data: relationshipTypes, error } = await typesQuery;
 
   if (error) throw error;
 
@@ -164,9 +168,10 @@ export function topologicalSort(
  */
 export async function generateImportPlan(
   domainCodes: string[],
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  clientId?: string
 ): Promise<ImportPlan> {
-  const { dependencies, adjacencyList } = await analyzeRelationships(domainCodes, supabase);
+  const { dependencies, adjacencyList } = await analyzeRelationships(domainCodes, supabase, clientId);
 
   // Topological sort
   const { sorted, hasCycle, cycleNodes } = topologicalSort(domainCodes, adjacencyList);
