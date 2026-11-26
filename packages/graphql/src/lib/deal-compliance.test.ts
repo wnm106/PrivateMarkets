@@ -79,6 +79,14 @@ describe('loadDealScorePlans', () => {
     ]);
   });
 
+  it('asks for the plan as known at the score\'s Knowledge date when one is given', async () => {
+    const compliance = fakeCompliance([], []);
+    await loadDealScorePlans(compliance, ['fund'], '2026-11-21', null, '2026-11-01T00:00:00.000Z');
+    expect(compliance.calls).toEqual([
+      { fn: 'deal_score_plans', args: { p_fund_ids: ['fund'], p_as_of_date: '2026-11-21', p_knowledge_date: '2026-11-01T00:00:00.000Z' } },
+    ]);
+  });
+
   it('asks nothing when the deal has no funds', async () => {
     const compliance = fakeCompliance([], []);
     expect(await loadDealScorePlans(compliance, [], '2026-11-21')).toEqual([]);

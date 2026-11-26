@@ -551,7 +551,7 @@ export const complianceResolvers = {
         // function shared with the hypo and capacity.
         const compliance = writer.schema('compliance');
         // The service role sees every client's rules. Only the shared ones and the deal client's own are scored.
-        const plans = await loadDealScorePlans(compliance, fundIds, asOf, clientId);
+        const plans = await loadDealScorePlans(compliance, fundIds, asOf, clientId, knowledgeDate);
         if (!plans.length) throw new Error('No compliance rules with limits are assigned to the funds on this deal.');
         const versionByRule = await ruleVersionsAt(compliance, plans.map((plan) => plan.rule.id), asOf, knowledgeDate);
 

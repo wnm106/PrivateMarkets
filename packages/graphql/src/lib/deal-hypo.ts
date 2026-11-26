@@ -87,7 +87,7 @@ export async function runDealHypo(context: Context, args: DealScoreArgs, withBef
   // function shared with the deal score and capacity.
   const compliance = writer.schema('compliance');
   // The service role sees every client's rules. Only the shared ones and the deal client's own are scored.
-  const plans = await loadDealScorePlans(compliance, fundIds, draft.asOf, draft.clientId);
+  const plans = await loadDealScorePlans(compliance, fundIds, draft.asOf, draft.clientId, draft.knowledge);
   if (!plans.length) throw new Error('No compliance rules with limits are assigned to the funds on this deal.');
   const versionByRule = await ruleVersionsAt(compliance, plans.map((plan) => plan.rule.id), draft.asOf, draft.knowledge);
 

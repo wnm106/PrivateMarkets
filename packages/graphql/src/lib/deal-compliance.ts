@@ -63,10 +63,16 @@ export async function loadDealScorePlans(
   asOf: string,
   /** The deal's client. When given, only shared rules and that client's own are kept: the service role sees every client's rules. */
   clientId?: string | null,
+  /** The Knowledge date of the score: rules, fund limits and enrollment as known then. Omitted: as known now. */
+  knowledgeDate?: string | null,
 ): Promise<Array<DealScorePlan<any>>> {
   const funds = [...new Set(fundIds)];
   if (!funds.length) return [];
-  const { data, error } = await compliance.rpc('deal_score_plans', { p_fund_ids: funds, p_as_of_date: asOf });
+  const { data, error } = await compliance.rpc('deal_score_plans', {
+    p_fund_ids: funds,
+    p_as_of_date: asOf,
+    ...(knowledgeDate ? { p_knowledge_date: knowledgeDate } : {}),
+  });
   if (error) throw new Error(error.message);
   const planRows = (data || []) as Array<{ rule_id: string; rule_code: string; anchor_ids: string[]; group_label: string | null }>;
   if (!planRows.length) return [];

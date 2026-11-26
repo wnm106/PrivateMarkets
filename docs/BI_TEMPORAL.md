@@ -187,6 +187,22 @@ Query: "What was the price on Feb 1?"
 - As of Feb 1: $100 (Bloomberg)
 - As of Feb 2: $101 (DealCloud, higher precedence)
 
+## Compliance Rules as Known
+
+A compliance run takes an As Of date and a Knowledge date, and reads everything that decides its result at both:
+
+| What | Where | How the Knowledge date applies |
+|---|---|---|
+| The data the rule measures | `golden_master`, relationships | Every reader takes both dates |
+| The rule's formula and default limits | `compliance.rule_versions` | Own `system_from`/`system_to`; `compliance.resolve_rule_version` |
+| The rule header: active, applies to all, metadata | `compliance.rules` | `compliance.rules_as_known(k)` |
+| Each fund's limits and enrollment | `compliance.rule_thresholds` | `compliance.rule_thresholds_as_known(k)` |
+| Which records a rule covers | `compliance.rule_scope_assignments` | `compliance.rule_scope_assignments_as_known(k)` |
+
+The last three tables hold only current values, with `system_from` saying when they became known. A trigger copies each row an edit or delete replaces into `compliance.definition_history`, with the period it was known for. The `*_as_known` functions put the two together; a null instant means now. `compliance.evaluate_rule`, `compliance.resolve_threshold`, `compliance.get_anchor_entities`, `compliance.deal_score_plans` and `compliance.deal_capacity_observations` read through them with the run's Knowledge date. Screens that show today's rules and limits read the tables directly and are unchanged.
+
+Rows that existed before this was added (migration `20261126100000_compliance_rules_as_known`) count as known from the start: their earlier values were not kept. Who changed a definition, and when, is also in `tenancy.audit_log`.
+
 ## Benefits
 
 1. **Auditability**: Complete history of all changes
