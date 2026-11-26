@@ -2770,7 +2770,9 @@ export const CLIENT_AUTH_REQUIREMENTS_QUERY = `
       emailDomains
       maxSessionMinutes
       idleTimeoutMinutes
+      allowedIpRanges
     }
+    myNetworkAddress
     clientIdentityProviders(clientId: $clientId) {
       id
       clientId

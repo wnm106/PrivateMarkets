@@ -19,6 +19,8 @@ export interface Context {
    * not process.env, so resolvers read them here. Absent in tests.
    */
   config?: { supabaseUrl: string; serviceRoleKey: string };
+  /** The caller's network address, when a trusted proxy gave one (lib/client-ip.ts). */
+  clientIp?: string | null;
 }
 
 export interface User {

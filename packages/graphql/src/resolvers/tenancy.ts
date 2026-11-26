@@ -260,7 +260,7 @@ export const tenancyResolvers = {
     clientAuthRequirements: async (_: any, args: { clientId: string }, context: Context) => {
       const { data, error } = await tn(context)
         .from('client_auth_requirements')
-        .select('client_id, password_enabled, mfa_required, email_domains, max_session_minutes, idle_timeout_minutes')
+        .select('client_id, password_enabled, mfa_required, email_domains, max_session_minutes, idle_timeout_minutes, allowed_ip_ranges')
         .eq('client_id', args.clientId)
         .maybeSingle();
       if (error) throw error;
@@ -569,7 +569,7 @@ export const tenancyResolvers = {
       }
     },
 
-    updateClientAuthRequirements: async (_: any, args: { input: { clientId: string; passwordEnabled: boolean; mfaRequired: boolean; emailDomains: string[]; maxSessionMinutes?: number | null; idleTimeoutMinutes?: number | null } }, context: Context) => {
+    updateClientAuthRequirements: async (_: any, args: { input: { clientId: string; passwordEnabled: boolean; mfaRequired: boolean; emailDomains: string[]; maxSessionMinutes?: number | null; idleTimeoutMinutes?: number | null; allowedIpRanges?: string[] | null } }, context: Context) => {
       try {
         await assertTenantAdmin(context);
         const unique = normalizeEmailDomains(args.input.emailDomains || []);
@@ -590,6 +590,7 @@ export const tenancyResolvers = {
           mfa_required: args.input.mfaRequired,
           email_domains: unique,
           ...sessionLimits(args.input),
+          ...(args.input.allowedIpRanges !== undefined ? { allowed_ip_ranges: normalizeIpRanges(args.input.allowedIpRanges) } : {}),
           updated_by: context.user?.id ?? null,
         }, { onConflict: 'client_id' });
         if (error) throw error;
@@ -736,6 +737,16 @@ export function sessionLimits(input: { maxSessionMinutes?: number | null; idleTi
   return limits;
 }
 
+/** Allowed networks as entered: trimmed, without repeats, at most 50, each an address or CIDR network. Empty means any address. */
+export function normalizeIpRanges(ranges: string[] | null): string[] | null {
+  const unique = [...new Set((ranges || []).map((range) => range.trim()).filter(Boolean))];
+  if (unique.length > 50) throw new Error('List at most 50 networks');
+  const shape = /^(\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?|[0-9a-f:]*:[0-9a-f:.]*(\/\d{1,3})?)$/i;
+  const bad = unique.find((range) => !shape.test(range));
+  if (bad) throw new Error(`"${bad}" is not a network address such as 203.0.113.0/24`);
+  return unique.length ? unique : null;
+}
+
 function mapAuthRequirements(row: any) {
   return {
     clientId: row.client_id,
@@ -744,6 +755,7 @@ function mapAuthRequirements(row: any) {
     emailDomains: row.email_domains || [],
     maxSessionMinutes: row.max_session_minutes ?? null,
     idleTimeoutMinutes: row.idle_timeout_minutes ?? null,
+    allowedIpRanges: row.allowed_ip_ranges || [],
   };
 }
 

@@ -72,6 +72,8 @@ export function ClientAuthentication({
   const [domains, setDomains] = useState('');
   const [maxHours, setMaxHours] = useState('');
   const [idleMinutes, setIdleMinutes] = useState('');
+  const [networks, setNetworks] = useState('');
+  const [myAddress, setMyAddress] = useState<string | null>(null);
   const [providers, setProviders] = useState<IdentityProvider[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -98,6 +100,8 @@ export function ClientAuthentication({
     setDomains(loaded.emailDomains.join(', '));
     setMaxHours(next?.maxSessionMinutes ? String(Math.round((next.maxSessionMinutes / 60) * 100) / 100) : '');
     setIdleMinutes(next?.idleTimeoutMinutes ? String(next.idleTimeoutMinutes) : '');
+    setNetworks((next?.allowedIpRanges ?? []).join('\n'));
+    setMyAddress(result.data?.myNetworkAddress ?? null);
     setProviders(result.data?.clientIdentityProviders ?? []);
   };
 
@@ -122,6 +126,7 @@ export function ClientAuthentication({
         emailDomains,
         maxSessionMinutes,
         idleTimeoutMinutes,
+        allowedIpRanges: networks.split(/[\s,]+/).map((range) => range.trim()).filter(Boolean),
       },
     }).toPromise();
     setSaving(false);
@@ -218,6 +223,13 @@ export function ClientAuthentication({
             </div>
             <p className="text-sm text-gray-600">
               Between a quarter of an hour and 30 days, and between 5 minutes and a day. A person in several clients gets the strictest. The idle limit counts activity in the web app; the Excel add-in&apos;s own sign-in has only the time limit.
+            </p>
+            <label className="block text-sm">
+              <span className="font-medium text-gray-700">Allowed networks</span>
+              <textarea value={networks} onChange={(event) => setNetworks(event.target.value)} rows={3} placeholder={'Any address\n203.0.113.0/24'} className="mt-1 w-full px-3 py-2 border rounded font-mono text-sm" />
+            </label>
+            <p className="text-sm text-gray-600">
+              One network per line, such as 203.0.113.0/24, at most 50. When any are listed, this client&apos;s people can use the app, Excel and the assistant connector only from them. Leave it empty for any address. {myAddress ? <>You are using {myAddress} now.</> : <>Your own address could not be read here.</>}
             </p>
             {!requirements.passwordEnabled && !activeSso && (
               <p className="text-sm text-amber-800">Password is off and no identity provider is active, so people at these domains cannot sign in until a connection succeeds.</p>

@@ -53,6 +53,7 @@ export const overrideApprovalResolvers = {
       const rows = (data ?? []) as Array<Record<string, unknown> & { entityId: string }>;
       return withRecordNames(rows, await recordNames(context, rows.map((row) => row.entityId)));
     },
+    myNetworkAddress: (_: unknown, __: unknown, context: Context) => context.clientIp ?? null,
     clientFourEyes: async (_: unknown, args: { clientId: string }, context: Context) => {
       const { data, error } = await context.supabase.schema('tenancy').from('clients').select('four_eyes_required').eq('id', args.clientId).maybeSingle();
       if (error) throw new Error(error.message);

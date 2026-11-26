@@ -2556,6 +2556,8 @@ type ClientAuthRequirements {
   maxSessionMinutes: Int
   """A sign-in the web app has seen ends after this many minutes without activity. Null: no limit."""
   idleTimeoutMinutes: Int
+  """Networks (CIDR) this client's people may use the app from. Empty: any address."""
+  allowedIpRanges: [String!]!
 }
 
 type ClientIdentityProvider {
@@ -2584,6 +2586,8 @@ input UpdateClientAuthRequirementsInput {
   maxSessionMinutes: Int
   """5 to 1440, or null for no limit. Left out: unchanged."""
   idleTimeoutMinutes: Int
+  """Networks (CIDR, at most 50) this client's people may use the app from. Empty: any address. Left out: unchanged."""
+  allowedIpRanges: [String!]
 }
 
 input UpsertClientIdentityProviderInput {
@@ -3669,6 +3673,8 @@ type Query {
   overrideRequests(status: String): JSON!
   """Whether a client requires a second person to approve manual values and workflow reviews."""
   clientFourEyes(clientId: ID!): Boolean!
+  """The network address this request came from, as the allowed-networks rule sees it. Null when no trusted proxy gave one."""
+  myNetworkAddress: String
   """Who changed access or configuration, and when, newest first, as {entries, hasMore}. kind is access or configuration. table is schema.table or a table name. from and to are ISO timestamps. search matches the record id or the stored row. Pass the last entry's id as beforeId for the next page. Readable by staff and by a client's user or role managers."""
   auditLog(kind: String, from: String, to: String, table: String, actorUserId: ID, rowId: String, search: String, limit: Int, beforeId: String): JSON!
   """Forms workflow steps are waiting on. status defaults to OPEN; runId keeps one run's."""

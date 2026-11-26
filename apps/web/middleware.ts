@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { CLIENT_ADMIN_PERMISSIONS, isPlatformAdminPath } from '@/lib/admin-access';
 import { loginPath, NEXT_PATH_COOKIE, nextPathFromCookie, safeNextPath } from '@/lib/safe-next-path';
 import { isPublicPath } from '@/lib/public-paths';
+import { clientIp, IP_UNCHECKED } from '@tapestrai/graphql/src/lib/client-ip';
 import { readSignInDecision, REFUSED_SIGN_IN, signInStanding, UNCHECKED_SIGN_IN, uncheckedSignInAction, type SignInDecision } from '@/lib/sign-in-gate';
 
 // Which pages a signed-out visitor may open is in lib/public-paths.ts, shared with the signed-out gate.
@@ -26,15 +27,19 @@ async function signInDecision(supabase: { schema: (name: string) => any }): Prom
 }
 
 /**
- * Marks this sign-in as active, for a client's idle limit (tenancy.touch_session
- * writes at most once a minute). Best effort: the limit is still enforced by the
- * database on every read, so a failed mark only shortens nobody's session.
+ * A client that lists its networks is used only from them, and a sign-in the
+ * web app sees counts as active for the idle limit: tenancy.check_request does
+ * both. The address is Cloudflare's (lib/client-ip.ts). Returns why the request
+ * is refused, or null. A missing function (not migrated yet) refuses nothing;
+ * any other failure refuses, as the sign-in check does.
  */
-async function touchSession(supabase: { schema: (name: string) => any }) {
+async function checkRequest(supabase: { schema: (name: string) => any }, request: NextRequest): Promise<string | null> {
   try {
-    await supabase.schema('tenancy').rpc('touch_session');
+    const { data, error } = await supabase.schema('tenancy').rpc('check_request', { p_ip: clientIp(request.headers) });
+    if (error) return error.code === 'PGRST202' ? null : IP_UNCHECKED;
+    return typeof data === 'string' && data ? data : null;
   } catch {
-    // Not marked this time.
+    return IP_UNCHECKED;
   }
 }
 
@@ -168,7 +173,21 @@ export async function middleware(request: NextRequest) {
         return withSessionCookies(NextResponse.redirect(redirectUrl), response);
       }
     }
-    if (standing === 'allowed' || standing === 'needs_mfa') await touchSession(supabase);
+    if (standing === 'allowed' || standing === 'needs_mfa') {
+      const refusal = await checkRequest(supabase, request);
+      if (refusal) {
+        if (pathname.startsWith('/api/')) {
+          return withSessionCookies(NextResponse.json({ error: refusal }, { status: 403 }), response);
+        }
+        if (!isPublic && !isApiOrAsset) {
+          // This browser only: the same person may be fine from their office.
+          await supabase.auth.signOut({ scope: 'local' });
+          const redirectUrl = new URL('/login', request.url);
+          redirectUrl.searchParams.set('error', refusal);
+          return withSessionCookies(NextResponse.redirect(redirectUrl), response);
+        }
+      }
+    }
     // The Excel sign-in page checks the step-up for its own session (lib/session-store.ts).
     if (standing === 'needs_mfa' && !pathname.startsWith('/login/mfa') && !pathname.startsWith('/api/auth/') && !pathname.startsWith('/excel/')) {
       if (pathname.startsWith('/api/')) {

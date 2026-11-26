@@ -14,6 +14,8 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { GraphQLError } from 'graphql';
+import { clientIp, ipRefusal } from './lib/client-ip';
 import type { Context, User } from './context';
 
 export interface RequestContextConfig {
@@ -59,6 +61,7 @@ export async function createRequestContext(request: Request, config: RequestCont
     : null;
 
   let user: User | null = null;
+  const ip = clientIp(request.headers);
   if (token) {
     const { data } = await supabase.auth.getUser(token);
     const authUser = data?.user;
@@ -69,6 +72,9 @@ export async function createRequestContext(request: Request, config: RequestCont
         role: roleFromAppMetadata(authUser.app_metadata),
         metadata: authUser.user_metadata,
       };
+      // A client that lists its networks is used only from them (20261126150000_ip_allowlist).
+      const refusal = await ipRefusal(supabase, authUser.id, ip);
+      if (refusal) throw new GraphQLError(refusal, { extensions: { code: 'FORBIDDEN', http: { status: 403 } } });
     }
   }
 
@@ -79,5 +85,6 @@ export async function createRequestContext(request: Request, config: RequestCont
     requestId: crypto.randomUUID(),
     loaders: {} as Context['loaders'],
     config: { supabaseUrl: config.supabaseUrl, serviceRoleKey: config.supabaseServiceRoleKey || '' },
+    clientIp: ip,
   };
 }
