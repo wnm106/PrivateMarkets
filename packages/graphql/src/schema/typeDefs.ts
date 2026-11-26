@@ -3836,6 +3836,7 @@ type Query {
   # Views: saved data tables for an entity type
   entityViews(domainCode: String!): [EntityView!]!
   entityView(id: ID!): EntityView
+  populationFilters(domainCode: String!): [PopulationFilter!]!
 
   # Surface composition
   surfaces: [SurfaceDefinition!]!
@@ -4035,6 +4036,8 @@ type Mutation {
   deleteDashboard(id: ID!): DeleteDashboardResult!
   saveEntityView(id: ID, input: EntityViewInput!): SaveEntityViewResult!
   deleteEntityView(id: ID!): DeleteEntityViewResult!
+  savePopulationFilter(id: ID, input: PopulationFilterInput!): SavePopulationFilterResult!
+  deletePopulationFilter(id: ID!): DeletePopulationFilterResult!
   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
   deleteNarrative(id: ID!): DeleteNarrativeResult!
@@ -5210,9 +5213,41 @@ type EntityView {
   # [{ alias, direction: UP|DOWN, relationshipCode?, domainCode?, from?, label? }]
   lookups: JSON!
   sort: JSON!
+  # The saved population filter the view opens with, if any.
+  filterId: ID
   displayOrder: Int!
   createdAt: DateTime
   updatedAt: DateTime
+}
+
+# Reusable conditions that narrow the records a view reads. Same condition rows as a rule.
+type PopulationFilter {
+  id: ID!
+  clientId: ID
+  domainCode: String!
+  filterName: String!
+  description: String
+  conditions: JSON!
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+
+input PopulationFilterInput {
+  domainCode: String!
+  filterName: String!
+  description: String
+  conditions: JSON!
+  clientId: ID
+}
+
+type SavePopulationFilterResult {
+  filter: PopulationFilter
+  errors: [MutationError!]!
+}
+
+type DeletePopulationFilterResult {
+  success: Boolean!
+  errors: [MutationError!]!
 }
 
 input EntityViewInput {
@@ -5222,6 +5257,7 @@ input EntityViewInput {
   columns: JSON!
   lookups: JSON
   sort: JSON
+  filterId: ID
   displayOrder: Int
   clientId: ID
 }
@@ -5247,6 +5283,8 @@ input GridQueryInput {
   asOfDate: String
   knowledgeDate: String
   filters: JSON
+  # Population filter: condition rows as the condition builder sends them. Only records they select are read.
+  populationConditions: JSON
   columns: [String!]
   sort: JSON
   groupBy: [String!]

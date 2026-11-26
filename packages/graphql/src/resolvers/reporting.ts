@@ -1,3 +1,4 @@
+import { populationRows } from './compliance';
 import { Context } from '../context';
 import {
   runDataQueries, validateDataQueries, runGrid, bindFilters, resolveEntityId, GridRequest,
@@ -266,6 +267,7 @@ export const reportingResolvers = {
         knowledgeDate: i.knowledgeDate ? knowledgeInstant(i.knowledgeDate) : null,
         // filters may carry "param" bindings (dashboard filter inputs) or literal values
         filters: bindFilters(Array.isArray(i.filters) ? i.filters : [], params),
+        populationConditions: Array.isArray(i.populationConditions) ? populationRows(i.populationConditions) : [],
         columns: i.columns || [],
         sort: Array.isArray(i.sort) ? i.sort : [],
         groupBy: i.groupBy || [],

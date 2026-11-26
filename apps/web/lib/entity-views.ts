@@ -41,13 +41,15 @@ export interface EntityView {
   columns: EntityViewColumn[];
   lookups: EntityViewLookup[];
   sort: EntityViewSort[];
+  /** The saved population filter the view opens with. */
+  filterId?: string | null;
   displayOrder: number;
   updatedAt?: string | null;
 }
 
 export type EntityViewDraft = Omit<EntityView, 'id' | 'displayOrder' | 'updatedAt'> & { id?: string | null; displayOrder?: number };
 
-const VIEW_FIELDS = 'id domainCode viewName description columns lookups sort displayOrder updatedAt';
+const VIEW_FIELDS = 'id domainCode viewName description columns lookups sort filterId displayOrder updatedAt';
 
 export const ENTITY_VIEWS_QUERY = `
   query EntityViews($domainCode: String!) {
@@ -99,6 +101,8 @@ export interface ViewGridRequest {
   lookups: EntityViewLookup[];
   columns: string[];
   sort: EntityViewSort[];
+  /** Conditions that narrow the records read (see lib/population-filters.ts). Omitted when there are none. */
+  populationConditions?: Array<Record<string, any>>;
   offset: number;
   limit: number;
 }
@@ -112,6 +116,7 @@ export function viewGridRequest(
   view: Pick<EntityView, 'domainCode' | 'columns' | 'lookups' | 'sort'>,
   dates: { asOfDate?: string | null; knowledgeDate?: string | null },
   limit = 10000,
+  populationConditions: Array<Record<string, any>> = [],
 ): ViewGridRequest {
   const lookups = view.lookups || [];
   const alternates = lookups.map((lookup) => ({
@@ -137,6 +142,7 @@ export function viewGridRequest(
     columns: [...new Set([...fields.filter((field) => !builtins.has(field)), ...altFields, ...recordFields])],
     sort: (view.sort && view.sort.length ? view.sort : [{ field: 'entity_name', dir: 'asc' as const }])
       .map((item) => ({ field: item.field, dir: item.dir })),
+    ...(populationConditions.length ? { populationConditions } : {}),
     offset: 0,
     limit,
   };

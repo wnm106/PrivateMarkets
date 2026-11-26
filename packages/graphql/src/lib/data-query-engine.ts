@@ -228,6 +228,8 @@ export interface GridRequest {
   asOfDate?: string | null;
   knowledgeDate?: string | null;
   filters?: Array<{ field: string; op: DataQueryOperator; value?: any }>;
+  /** Rule-condition rows (snake_case); only records the matcher selects are read. */
+  populationConditions?: Array<Record<string, unknown>>;
   columns?: string[];
   sort?: Array<{ field: string; dir?: 'asc' | 'desc' }>;
   groupBy?: string[];

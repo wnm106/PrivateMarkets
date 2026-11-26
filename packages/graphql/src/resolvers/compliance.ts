@@ -824,6 +824,20 @@ function conditionRow(versionId: string, cond: any, extra: Record<string, unknow
   };
 }
 
+/**
+ * Population conditions (as the condition builder sends them) as the rows the
+ * matcher reads: the same shape a saved rule condition is stored in. A view's
+ * filter, the rule editor's preview and the grid all go through this.
+ */
+export function populationRows(conditions: any[]): Array<Record<string, unknown>> {
+  return (conditions || [])
+    .filter((c: any) => c?.attributeCode)
+    .map((c: any) => {
+      const { rule_version_id: _version, ...row } = conditionRow('', { ...c, appliesTo: 'BASE', operator: c.operator || 'equals' });
+      return row;
+    });
+}
+
 /** Measure lines as rows for compliance.create_rule_version, each with its filter conditions. */
 function measureLineRows(lines: any[]) {
   const rows: any[] = [];
@@ -1330,11 +1344,7 @@ async function previewPopulation(context: Context, input: any) {
   const knowledge = knowledgeInstant(input.knowledgeDate);
 
   const active = (input.conditions || []).filter((c: any) => c?.attributeCode);
-  // The same row shape a saved condition is stored in.
-  const rows = active.map((c: any) => {
-    const { rule_version_id: _version, ...row } = conditionRow('', { ...c, appliesTo: 'BASE', operator: c.operator || 'equals' });
-    return row;
-  });
+  const rows = populationRows(active);
   const { data, error } = await cx(context).rpc('preview_population', {
     p_domain_code: domainCode,
     p_conditions: rows,
