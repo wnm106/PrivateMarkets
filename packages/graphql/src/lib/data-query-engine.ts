@@ -16,6 +16,8 @@
  */
 
 import { overlayTemporalAttributes } from './temporal-attributes';
+import { populationRows } from './condition-rows';
+import { loadCertifiedPopulation } from './population-filters';
 
 export type DataQueryAggregation =
   | 'SUM' | 'AVG' | 'MIN' | 'MAX' | 'COUNT' | 'COUNT_DISTINCT' | 'WEIGHTED_AVG';
@@ -103,6 +105,11 @@ export interface DataQuerySpec {
   orderBy?: Array<{ field: string; dir?: 'asc' | 'desc' }>;
   limit?: number;
   /**
+   * Code of a certified population (see lib/population-filters.ts). Only its members are read.
+   * Needs the entity type the population is for to be the type read.
+   */
+  population?: string;
+  /**
    * Presentation hint: render this query as an interactive host data grid
    * (paging, filtering, grouping with summary rows) instead of passing rows into the HTML.
    */
@@ -132,6 +139,8 @@ export interface DataQueryResult {
   truncated: boolean;
   /** Summary row over all matched entities, using each attribute's aggregation type (row mode). */
   summary?: Record<string, any> | null;
+  /** The certified population the rows were limited to. */
+  population?: { code: string; name: string; definition: string };
   error?: string;
 }
 
@@ -472,6 +481,18 @@ async function runOne(
   catalogCache: Map<string, any[]>
 ): Promise<DataQueryResult> {
   const req = specToGridRequest(spec, anchorRow?.entity_id ?? null, params, asOfDate, knowledgeDate);
+  // A certified population narrows the records read. Its conditions are matched by the database.
+  let population: { code: string; name: string; definition: string } | undefined;
+  if (spec.population) {
+    const found = await loadCertifiedPopulation(supabase, spec.population);
+    const lastHop = (spec.path || [])[(spec.path || []).length - 1];
+    const read = spec.domainCode || lastHop?.domainCode;
+    if (read && found.domainCode !== read) {
+      throw new Error(`Population ${found.populationCode} is for ${found.domainCode} records, not ${read}.`);
+    }
+    req.populationConditions = populationRows(found.conditions);
+    population = { code: found.populationCode, name: found.name, definition: found.definition };
+  }
   const isAggregate = !!req.flat;
 
   // Row mode without an explicit select: identifiers + the first attributes of the entity type.
@@ -494,6 +515,7 @@ async function runOne(
     return {
       key: spec.key,
       label: spec.label,
+      population,
       mode: 'aggregate',
       columns: names.map((name, i) => ({
         name,
@@ -510,6 +532,7 @@ async function runOne(
   return {
     key: spec.key,
     label: spec.label,
+    population,
     mode: 'rows',
     columns: names.map((name) => ({ name, type: guessType(rows.map((r) => r[name])) })),
     rows,
@@ -564,6 +587,10 @@ export function validateDataQueries(specs: any): string[] {
       if (m.agg !== 'COUNT' && m.agg !== 'COUNT_DISTINCT' && !m.field) errors.push(`${where}.metrics[${j}]: field required for ${m.agg}`);
       if (m.agg === 'WEIGHTED_AVG' && !m.weightField) errors.push(`${where}.metrics[${j}]: weightField required`);
     });
+    if (s.population != null) {
+      if (typeof s.population !== 'string' || !s.population.trim()) errors.push(`${where}: "population" must be a population code`);
+      else if (!s.domainCode) errors.push(`${where}: "population" needs domainCode, the entity type the population is for`);
+    }
     (s.filters || []).forEach((f: any, j: number) => {
       if (!f.field || !f.op) errors.push(`${where}.filters[${j}]: field and op required`);
     });
@@ -581,6 +608,7 @@ export function summarizeResultsForLLM(response: DataQueryResponse, maxRowsPerQu
     out[key] = {
       label: r.label,
       mode: r.mode,
+      population: r.population,
       columns: r.columns.map((c) => c.name),
       matchedEntities: r.matched,
       totalRows: r.total,

@@ -22,7 +22,9 @@ import { listLabel, useListLabels } from '@/lib/list-labels';
 import { usePublishTab } from '@/lib/view-context';
 import type { ComplianceCondition } from '@/components/forms/ComplianceRuleForm';
 import {
+  CERTIFY_POPULATION_FILTER_MUTATION,
   DELETE_POPULATION_FILTER_MUTATION,
+  WITHDRAW_POPULATION_CERTIFICATION_MUTATION,
   POPULATION_FILTERS_QUERY,
   SAVE_POPULATION_FILTER_MUTATION,
   conditionsToInput,
@@ -239,12 +241,12 @@ export function EntityViews({
     [working, savedFilter],
   );
 
-  const saveFilter = async ({ id, name, conditions }: { id: string | null; name: string; conditions: PopulationConditionInput[] }) => {
+  const saveFilter = async ({ id, name, populationCode, description, conditions }: { id: string | null; name: string; populationCode?: string | null; description?: string | null; conditions: PopulationConditionInput[] }) => {
     setFilterError(null);
     const res = await graphqlMutation<
       { savePopulationFilter: { filter: PopulationFilter | null; errors: Array<{ message: string }> } },
       { id: string | null; input: any }
-    >(SAVE_POPULATION_FILTER_MUTATION, { id, input: { domainCode, filterName: name, conditions } });
+    >(SAVE_POPULATION_FILTER_MUTATION, { id, input: { domainCode, filterName: name, populationCode: populationCode || null, description: description || null, conditions } });
     const message = errorText(res.error) || res.data?.savePopulationFilter.errors.map((e) => e.message).join(' ');
     const savedRow = res.data?.savePopulationFilter.filter;
     if (message || !savedRow) {
@@ -255,6 +257,36 @@ export function EntityViews({
     setActiveFilterId(savedRow.id);
     setWorking(null);
     return savedRow.id;
+  };
+
+  const replaceFilter = (row: PopulationFilter) => setFilters((current) => current.map((item) => (item.id === row.id ? row : item)));
+
+  /** Set the code and description the assistant reads, then certify. The database allows only administrators. */
+  const certifyFilter = async ({ filter, populationCode, description, note }: { filter: PopulationFilter; populationCode: string; description: string; note: string }) => {
+    setFilterError(null);
+    const saved = await saveFilter({ id: filter.id, name: filter.filterName, populationCode, description, conditions: filter.conditions });
+    if (!saved) return false;
+    const res = await graphqlMutation<
+      { certifyPopulationFilter: { filter: PopulationFilter | null; errors: Array<{ message: string }> } },
+      { id: string; note: string | null }
+    >(CERTIFY_POPULATION_FILTER_MUTATION, { id: filter.id, note: note || null });
+    const message = errorText(res.error) || res.data?.certifyPopulationFilter.errors.map((e) => e.message).join(' ');
+    const row = res.data?.certifyPopulationFilter.filter;
+    if (message || !row) { setFilterError(message || 'Could not certify the filter.'); return false; }
+    replaceFilter(row);
+    return true;
+  };
+
+  const withdrawFilter = async (id: string) => {
+    setFilterError(null);
+    const res = await graphqlMutation<
+      { withdrawPopulationCertification: { filter: PopulationFilter | null; errors: Array<{ message: string }> } },
+      { id: string }
+    >(WITHDRAW_POPULATION_CERTIFICATION_MUTATION, { id });
+    const message = errorText(res.error) || res.data?.withdrawPopulationCertification.errors.map((e) => e.message).join(' ');
+    const row = res.data?.withdrawPopulationCertification.filter;
+    if (message || !row) { setFilterError(message || 'Could not withdraw the certification.'); return; }
+    replaceFilter(row);
   };
 
   const deleteFilter = async (id: string) => {
@@ -488,6 +520,8 @@ export function EntityViews({
       columns: shown ? shown.columns.map((column) => ({ header: headerOf(shown, column), attribute: pathOf(shown, column), source: sourceName(column.source), lockedLeft: Boolean(column.pinned) })) : [],
       filter: {
         saved: savedFilter?.filterName ?? null,
+        certified: Boolean(savedFilter?.certifiedAt),
+        populationCode: savedFilter?.populationCode ?? null,
         changedForThisVisit: Boolean(working),
         asks: filterSummary(populationConditions),
         conditions: populationConditions.length,
@@ -737,6 +771,8 @@ export function EntityViews({
           onWorking={setWorking}
           onSave={saveFilter}
           onDeleteSaved={(id) => { void deleteFilter(id); }}
+          onCertify={certifyFilter}
+          onWithdraw={(id) => { void withdrawFilter(id); }}
           error={filterError}
         />
       )}

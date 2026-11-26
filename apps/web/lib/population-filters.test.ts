@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { conditionsFromInput, conditionsToInput, filterSummary, sameConditions } from './population-filters';
+import { conditionsFromInput, conditionsToInput, filterSummary, sameConditions, suggestPopulationCode } from './population-filters';
 
 const rows = [
   { appliesTo: 'BASE', conditionGroup: 1, conditionOrder: 1, attributeCode: 'STATUS', operator: 'equals', value: 'ACTIVE', logicOperator: 'AND' },
@@ -27,5 +27,13 @@ describe('population filter conditions', () => {
   it('says what a filter asks in a line', () => {
     assert.equal(filterSummary(rows), 'STATUS = ACTIVE and REGION (related) in EU,US');
     assert.equal(filterSummary([]), 'No conditions');
+  });
+});
+
+describe('suggestPopulationCode', () => {
+  it('turns a name into a code an agent can pass', () => {
+    assert.equal(suggestPopulationCode('Active EU funds'), 'ACTIVE_EU_FUNDS');
+    assert.equal(suggestPopulationCode('  100% owned! '), '');
+    assert.equal(suggestPopulationCode('Funds (open)'), 'FUNDS_OPEN');
   });
 });

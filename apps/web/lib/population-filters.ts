@@ -18,9 +18,14 @@ export interface PopulationFilter {
   id: string;
   domainCode: string;
   filterName: string;
+  /** What an agent passes to ask for this population. */
+  populationCode?: string | null;
   description?: string | null;
   /** Condition rows as the condition builder sends them (see conditionsToInput). */
   conditions: PopulationConditionInput[];
+  /** Set when an administrator certified it. Cleared by the database when the definition changes. */
+  certifiedAt?: string | null;
+  certificationNote?: string | null;
   updatedAt?: string | null;
 }
 
@@ -34,7 +39,7 @@ export type PopulationFilterDraft = {
   conditions: PopulationConditionInput[];
 };
 
-const FILTER_FIELDS = 'id domainCode filterName description conditions updatedAt';
+const FILTER_FIELDS = 'id domainCode filterName populationCode description conditions certifiedAt certificationNote updatedAt';
 
 export const POPULATION_FILTERS_QUERY = `
   query PopulationFilters($domainCode: String!) {
@@ -50,6 +55,30 @@ export const SAVE_POPULATION_FILTER_MUTATION = `
     }
   }
 `;
+
+export const CERTIFY_POPULATION_FILTER_MUTATION = `
+  mutation CertifyPopulationFilter($id: ID!, $note: String) {
+    certifyPopulationFilter(id: $id, note: $note) {
+      filter { ${FILTER_FIELDS} }
+      errors { field message code }
+    }
+  }
+`;
+
+export const WITHDRAW_POPULATION_CERTIFICATION_MUTATION = `
+  mutation WithdrawPopulationCertification($id: ID!) {
+    withdrawPopulationCertification(id: $id) {
+      filter { ${FILTER_FIELDS} }
+      errors { field message code }
+    }
+  }
+`;
+
+/** A code an agent can pass, from a name: "Active EU funds" becomes ACTIVE_EU_FUNDS. */
+export function suggestPopulationCode(name: string): string {
+  const code = name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return /^[A-Z]/.test(code) ? code.slice(0, 80) : '';
+}
 
 export const DELETE_POPULATION_FILTER_MUTATION = `
   mutation DeletePopulationFilter($id: ID!) {

@@ -9,6 +9,7 @@ import {
   conditionsToInput,
   filterSummary,
   sameConditions,
+  suggestPopulationCode,
   type PopulationConditionInput,
   type PopulationFilter,
 } from '@/lib/population-filters';
@@ -29,6 +30,8 @@ export function ViewFilterPanel({
   onWorking,
   onSave,
   onDeleteSaved,
+  onCertify,
+  onWithdraw,
   error,
 }: {
   domainCode: string;
@@ -40,13 +43,20 @@ export function ViewFilterPanel({
   working: ComplianceCondition[] | null;
   onWorking: (next: ComplianceCondition[] | null) => void;
   /** Save the working conditions: over the saved filter (id given) or as a new one (name given). */
-  onSave: (args: { id: string | null; name: string; conditions: PopulationConditionInput[] }) => Promise<string | null>;
+  onSave: (args: { id: string | null; name: string; populationCode?: string | null; description?: string | null; conditions: PopulationConditionInput[] }) => Promise<string | null>;
   onDeleteSaved: (id: string) => void;
+  /** Give the filter a code and description if it has none, then certify it. Administrators only; the server decides. */
+  onCertify: (args: { filter: PopulationFilter; populationCode: string; description: string; note: string }) => Promise<boolean>;
+  onWithdraw: (id: string) => void;
   error?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [description, setDescription] = useState('');
+  const [certifying, setCertifying] = useState(false);
+  const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [domains, setDomains] = useState<Domain[]>([]);
   const [relationshipTypes, setRelationshipTypes] = useState<RelationshipTypeOpt[]>([]);
@@ -78,9 +88,32 @@ export function ViewFilterPanel({
   const save = async (id: string | null, filterName: string) => {
     if (!workingInput) return;
     setBusy(true);
-    const savedAs = await onSave({ id, name: filterName, conditions: workingInput });
+    const savedAs = await onSave({
+      id,
+      name: filterName,
+      // Keep what the saved filter already says about itself when it is updated in place.
+      populationCode: id ? saved?.populationCode ?? null : code.trim() || null,
+      description: id ? saved?.description ?? null : description.trim() || null,
+      conditions: workingInput,
+    });
     setBusy(false);
-    if (savedAs) { setNaming(false); setName(''); }
+    if (savedAs) { setNaming(false); setName(''); setCode(''); setDescription(''); }
+  };
+
+  const startCertifying = () => {
+    if (!saved) return;
+    setCode(saved.populationCode || suggestPopulationCode(saved.filterName));
+    setDescription(saved.description || '');
+    setNote('');
+    setCertifying(true);
+  };
+
+  const certify = async () => {
+    if (!saved) return;
+    setBusy(true);
+    const done = await onCertify({ filter: saved, populationCode: code.trim(), description: description.trim(), note: note.trim() });
+    setBusy(false);
+    if (done) setCertifying(false);
   };
 
   const label = saved ? saved.filterName : activeRows.length ? 'Ad hoc filter' : 'No filter';
@@ -109,15 +142,25 @@ export function ViewFilterPanel({
           </button>
         )}
         {changed && saved && (
-          <button type="button" className="btn btn-sm" disabled={busy} onClick={() => { void save(saved.id, saved.filterName); }}>Update “{saved.filterName}”</button>
+          <button type="button" className="btn btn-sm" disabled={busy} title={saved.certifiedAt ? 'Changing the conditions withdraws the certification' : undefined} onClick={() => { void save(saved.id, saved.filterName); }}>Update “{saved.filterName}”</button>
         )}
         {changed && !naming && (
           <button type="button" className="btn btn-sm" onClick={() => setNaming(true)}>Save as new filter</button>
+        )}
+        {saved && !working && !certifying && (
+          saved.certifiedAt
+            ? <button type="button" className="btn btn-sm" onClick={() => onWithdraw(saved.id)}>Withdraw certification</button>
+            : <button type="button" className="btn btn-sm" onClick={startCertifying}>Certify…</button>
         )}
         {saved && !working && (
           <button type="button" className="btn btn-sm" onClick={() => {
             if (window.confirm(`Delete the filter "${saved.filterName}"? Views that use it will show every record.`)) onDeleteSaved(saved.id);
           }}>Delete filter</button>
+        )}
+        {saved && (
+          <span className="view-filter-flag" role="status">
+            {saved.certifiedAt ? `Certified${saved.populationCode ? ` · ${saved.populationCode}` : ''}` : 'Not certified'}
+          </span>
         )}
         {changed && <span className="view-filter-flag" role="status">{saved ? 'Changed for this visit only' : 'Not saved'}</span>}
       </div>
@@ -128,13 +171,27 @@ export function ViewFilterPanel({
             className="xp-input"
             value={name}
             placeholder="Name the filter, e.g. Active EU funds"
-            onChange={(event) => setName(event.target.value)}
+            onChange={(event) => { setName(event.target.value); if (!code || code === suggestPopulationCode(name)) setCode(suggestPopulationCode(event.target.value)); }}
             aria-label="Filter name"
           />
+          <input className="xp-input" value={code} placeholder="Code for the assistant" onChange={(event) => setCode(event.target.value.toUpperCase())} aria-label="Population code" />
+          <input className="xp-input grow" value={description} placeholder="What this population means" onChange={(event) => setDescription(event.target.value)} aria-label="Description" />
           <button type="button" className="btn btn-sm btn-primary" disabled={busy || !name.trim()} onClick={() => { void save(null, name.trim()); }}>
             {busy ? 'Saving…' : 'Save filter'}
           </button>
           <button type="button" className="btn btn-sm" onClick={() => { setNaming(false); setName(''); }}>Cancel</button>
+        </div>
+      )}
+
+      {certifying && saved && (
+        <div className="view-filter-bar">
+          <input className="xp-input" value={code} placeholder="Code, e.g. ACTIVE_FUNDS" onChange={(event) => setCode(event.target.value.toUpperCase())} aria-label="Population code" />
+          <input className="xp-input grow" value={description} placeholder="What this population means (the assistant reads this)" onChange={(event) => setDescription(event.target.value)} aria-label="Description" />
+          <input className="xp-input" value={note} placeholder="Note (optional)" onChange={(event) => setNote(event.target.value)} aria-label="Certification note" />
+          <button type="button" className="btn btn-sm btn-primary" disabled={busy || !code.trim() || !description.trim()} onClick={() => { void certify(); }}>
+            {busy ? 'Certifying…' : 'Certify'}
+          </button>
+          <button type="button" className="btn btn-sm" onClick={() => setCertifying(false)}>Cancel</button>
         </div>
       )}
 

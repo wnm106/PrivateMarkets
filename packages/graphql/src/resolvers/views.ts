@@ -41,6 +41,10 @@ function mapFilter(r: any) {
     clientId: r.client_id,
     domainCode: r.domain_code,
     filterName: r.filter_name,
+    populationCode: r.population_code,
+    certifiedAt: r.certified_at,
+    certifiedBy: r.certified_by,
+    certificationNote: r.certification_note,
     description: r.description,
     conditions: r.conditions ?? [],
     createdAt: r.created_at,
@@ -49,6 +53,8 @@ function mapFilter(r: any) {
 }
 
 function friendly(message: string): string {
+  if (/uq_population_filters_code/i.test(message)) return 'Another population already uses this code.';
+  if (/population_filters_certified_complete/i.test(message)) return 'A certified population needs a code and a description.';
   if (/uq_population_filters_name/i.test(message)) return 'A filter with this name already exists for this entity type.';
   if (/entity_views_filter_id_fkey/i.test(message)) return 'That filter no longer exists.';
   return /uq_entity_views_name|duplicate key/i.test(message)
@@ -124,6 +130,7 @@ export const viewResolvers = {
       const row = {
         domain_code: value.domainCode,
         filter_name: value.filterName,
+        population_code: value.populationCode ?? null,
         description: value.description ?? null,
         conditions: value.conditions,
       };
@@ -158,6 +165,31 @@ export const viewResolvers = {
       if (error) return { success: false, errors: [err('general', error.message)] };
       if (!data?.length) return { success: false, errors: [err('id', 'That filter was not found.', 'NOT_FOUND')] };
       return { success: true, errors: [] };
+    },
+
+    certifyPopulationFilter: async (_: any, args: { id: string; note?: string | null }, { supabase }: Context) => {
+      // The database stamps who and when, and refuses anyone but an administrator.
+      const { data, error } = await supabase
+        .from('population_filters')
+        .update({ certified_at: new Date().toISOString(), certification_note: args.note?.trim() || null })
+        .eq('id', args.id)
+        .select()
+        .maybeSingle();
+      if (error) return { filter: null, errors: [err('general', friendly(error.message), error.code === '42501' ? 'FORBIDDEN' : 'DATABASE_ERROR')] };
+      if (!data) return { filter: null, errors: [err('id', 'That filter was not found.', 'NOT_FOUND')] };
+      return { filter: mapFilter(data), errors: [] };
+    },
+
+    withdrawPopulationCertification: async (_: any, args: { id: string }, { supabase }: Context) => {
+      const { data, error } = await supabase
+        .from('population_filters')
+        .update({ certified_at: null })
+        .eq('id', args.id)
+        .select()
+        .maybeSingle();
+      if (error) return { filter: null, errors: [err('general', friendly(error.message), error.code === '42501' ? 'FORBIDDEN' : 'DATABASE_ERROR')] };
+      if (!data) return { filter: null, errors: [err('id', 'That filter was not found.', 'NOT_FOUND')] };
+      return { filter: mapFilter(data), errors: [] };
     },
 
     deleteEntityView: async (_: any, args: { id: string }, { supabase }: Context) => {

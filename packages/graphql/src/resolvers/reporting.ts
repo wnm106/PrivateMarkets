@@ -1,4 +1,4 @@
-import { populationRows } from './compliance';
+import { populationRows } from '../lib/condition-rows';
 import { Context } from '../context';
 import {
   runDataQueries, validateDataQueries, runGrid, bindFilters, resolveEntityId, GridRequest,

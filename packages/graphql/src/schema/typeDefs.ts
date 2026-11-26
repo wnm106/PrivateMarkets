@@ -4038,6 +4038,9 @@ type Mutation {
   deleteEntityView(id: ID!): DeleteEntityViewResult!
   savePopulationFilter(id: ID, input: PopulationFilterInput!): SavePopulationFilterResult!
   deletePopulationFilter(id: ID!): DeletePopulationFilterResult!
+  # Administrators only. Needs a code and a description. Withdrawn when the definition changes.
+  certifyPopulationFilter(id: ID!, note: String): SavePopulationFilterResult!
+  withdrawPopulationCertification(id: ID!): SavePopulationFilterResult!
   createNarrative(input: CreateNarrativeInput!): CreateNarrativeResult!
   updateNarrative(id: ID!, input: UpdateNarrativeInput!): UpdateNarrativeResult!
   deleteNarrative(id: ID!): DeleteNarrativeResult!
@@ -5226,8 +5229,14 @@ type PopulationFilter {
   clientId: ID
   domainCode: String!
   filterName: String!
+  # What an agent passes to ask for this population. Unique per client.
+  populationCode: String
   description: String
   conditions: JSON!
+  # Set when an administrator certified the definition. Cleared when it changes.
+  certifiedAt: DateTime
+  certifiedBy: ID
+  certificationNote: String
   createdAt: DateTime
   updatedAt: DateTime
 }
@@ -5235,6 +5244,7 @@ type PopulationFilter {
 input PopulationFilterInput {
   domainCode: String!
   filterName: String!
+  populationCode: String
   description: String
   conditions: JSON!
   clientId: ID
