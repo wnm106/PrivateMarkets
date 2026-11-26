@@ -12,6 +12,7 @@ function fakeSupabase(options: {
   writable?: Record<string, boolean>;
   decision?: Row;
   current?: Record<string, string>;
+  fourEyes?: boolean;
 } = {}) {
   const calls: Array<{ fn: string; args?: unknown }> = [];
   const inserted: Row[] = [];
@@ -51,9 +52,10 @@ function fakeSupabase(options: {
       return {
         rpc(fn: string, args: Record<string, any>) {
           calls.push({ fn, args });
-          if (name === 'golden_master' && fn === 'write_value') {
-            inserted.push({ ...args.p_value, valid_from: args.p_valid_from, valid_to: args.p_valid_to, source_id: args.p_source_id, entity_id: args.p_entity_id });
-            return Promise.resolve({ data: `v${inserted.length}`, error: null });
+          if (name === 'golden_master' && fn === 'submit_manual_override') {
+            inserted.push({ ...args.p_value, valid_from: args.p_valid_from, source_id: args.p_source_id, entity_id: args.p_entity_id });
+            if (options.fourEyes) return Promise.resolve({ data: { status: 'PENDING', requestId: `r${inserted.length}` }, error: null });
+            return Promise.resolve({ data: { status: 'APPLIED', id: `v${inserted.length}` }, error: null });
           }
           if (name === 'golden_master') {
             const rows = (args.p_entity_ids as string[]).flatMap((entityId) => {
@@ -135,7 +137,7 @@ describe('submitTapOverrides', () => {
     ], 'Q3 administrator pack', 'user-1');
     // The last row matches today's value, but the 2026-09-30 entry would carry over to it, so it is saved too.
     expect(plans.map((plan) => plan.status)).toEqual(['SAVED', 'SAVED', 'SAVED']);
-    // Written through golden_master.write_value, which stamps the caller from the session.
+    // Written through golden_master.submit_manual_override, which stamps the caller from the session.
     expect(supabase.inserted.map((row) => [row.golden_value, row.valid_from, row.source_id, row.override_reason, row.precedence_rank]))
       .toEqual([
         ['1100', '2026-09-30', 'manual', 'Q3 administrator pack', 1],
@@ -143,6 +145,14 @@ describe('submitTapOverrides', () => {
         ['1000', '2027-03-31', 'manual', 'Q3 administrator pack', 1],
       ]);
     expect(supabase.refreshed).toEqual(['e-fund']);
+  });
+
+  it('sends each row for approval where the client requires four eyes, and refreshes nothing', async () => {
+    const supabase = fakeSupabase({ current: { 'e-fund': '1000' }, fourEyes: true });
+    const plans = await submitTapOverrides(supabase, [{ attribute: 'NAV', entity: 'FUND-1', validFrom: '2026-09-30', value: '1100' }], 'Q3 pack', 'user-1');
+    expect(plans.map((plan) => plan.status)).toEqual(['PENDING_APPROVAL']);
+    expect(plans[0].message).toMatch(/^Sent for approval/);
+    expect(supabase.refreshed).toEqual([]);
   });
 
   it('writes nothing until the organization’s authenticator step is met', async () => {

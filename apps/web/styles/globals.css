@@ -10649,6 +10649,20 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .x-audit-note { position: fixed; z-index: 50; max-width: 360px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14); font-size: 12px; line-height: 1.45; }
 .x-audit-note strong { display: block; margin-bottom: 4px; font-size: 13px; }
 .x-audit-note p { margin: 0 0 4px; }
+/* Approvals (app/approvals). What the da- kit lacks, scoped to the page. */
+.x-approvals .da-title { flex: 1 1 auto; border-right: 0; }
+.x-approvals .da-grid { min-width: 0; }
+.x-approvals .da-grid small { font-size: 12px; overflow-wrap: anywhere; }
+.x-approvals [data-attr], .x-approvals [data-derived] { text-decoration: underline dotted var(--ink-3); text-underline-offset: 3px; cursor: context-menu; }
+.x-approvals-frame { max-height: 70vh; overflow: auto; margin-top: 12px; }
+.x-approvals-frame thead { position: sticky; top: 0; z-index: 1; }
+.x-approvals-value { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.x-approvals-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.x-approvals-actions .text-input { min-width: 160px; padding: 6px 8px; font-size: 12px; }
+.x-approvals-empty { margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--ink-3); font-size: 13px; }
+.x-approvals-note { position: fixed; z-index: 50; max-width: 360px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14); font-size: 12px; line-height: 1.45; }
+.x-approvals-note strong { display: block; margin-bottom: 4px; font-size: 13px; }
+.x-approvals-note p { margin: 0 0 4px; }
 @media (max-width: 860px) { .da-main { grid-template-columns: 1fr; } .da-columns { grid-template-columns: 1fr; } .da-facts, .da-facts.five, .da-facts.six { grid-template-columns: repeat(2, 1fr); } .da-panel { position: static; height: auto; max-height: none; } }
 
 .dc-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }

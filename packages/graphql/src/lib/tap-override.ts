@@ -8,12 +8,13 @@
  * formula: the pane previews, the person confirms, then it saves.
  */
 
-import { ManualOverrideError, refreshCalculations, storedOverrideValue, writeManualOverride } from './source-write';
+import { ManualOverrideError, manualOverrideMessage, refreshCalculations, storedOverrideValue, writeManualOverride } from './source-write';
 import { normalizeTapDate, resolveTapRequests, tapCellValue, type TapResult } from './tap';
 
 export type TapOverrideStatus =
   | 'READY'
   | 'SAVED'
+  | 'PENDING_APPROVAL'
   | 'UNCHANGED'
   | 'STALE'
   | 'DUPLICATE'
@@ -242,7 +243,7 @@ export async function submitTapOverrides(
   const saved = new Set<string>();
   for (const { plan, index } of ready) {
     try {
-      await writeManualOverride(supabase, {
+      const written = await writeManualOverride(supabase, {
         entityId: plan.entityId as string,
         attribute: { id: results[index].attributeId as string, data_type: plan.dataType },
         value: requests[index].value,
@@ -250,9 +251,14 @@ export async function submitTapOverrides(
         reason: String(requests[index].reason ?? '').trim() || batchReason,
         userId,
       });
-      plan.status = 'SAVED';
-      plan.message = null;
-      saved.add(plan.entityId as string);
+      if (written.pending) {
+        plan.status = 'PENDING_APPROVAL';
+        plan.message = manualOverrideMessage(written);
+      } else {
+        plan.status = 'SAVED';
+        plan.message = null;
+        saved.add(plan.entityId as string);
+      }
     } catch (error) {
       if (error instanceof ManualOverrideError && (error.code === 'NO_ACCESS' || error.code === 'INVALID_VALUE')) {
         refuse(plan, error.code, error.message);

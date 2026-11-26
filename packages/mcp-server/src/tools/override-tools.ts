@@ -1,10 +1,10 @@
-import { refreshCalculations, writeManualOverride } from '@tapestrai/graphql/src/lib/source-write';
+import { manualOverrideMessage, refreshCalculations, writeManualOverride } from '@tapestrai/graphql/src/lib/source-write';
 import { ToolRegistry } from '../lib/tool-registry';
 import { ToolDefinition } from '../lib/types';
 
 const submitManualOverride: ToolDefinition = {
   name: 'submit_manual_override',
-  description: 'Store a Manual Entry value on one record. An open manual value wins over every other source. attributeCode comes from search_attributes or get_template_metadata. Required: entityId, attributeCode, value, validFrom (YYYY-MM-DD), and overrideReason.',
+  description: 'Store a Manual Entry value on one record. An open manual value wins over every other source. Where the client requires four eyes, the value is sent for someone else to approve and takes effect then: say so, and do not call it saved. attributeCode comes from search_attributes or get_template_metadata. Required: entityId, attributeCode, value, validFrom (YYYY-MM-DD), and overrideReason.',
   category: 'override',
   inputSchema: {
     type: 'object',
@@ -34,10 +34,20 @@ const submitManualOverride: ToolDefinition = {
       validFrom: args.validFrom,
       reason: args.overrideReason,
     });
+    if (written.pending) {
+      return {
+        success: true,
+        pendingApproval: true,
+        requestId: written.requestId,
+        storedValue: null,
+        message: `${manualOverrideMessage(written)} ${args.attributeCode} on entity ${args.entityId} is unchanged until then.`,
+      };
+    }
     await refreshCalculations(supabase, args.entityId);
 
     return {
       success: true,
+      pendingApproval: false,
       goldenValueId: written.id,
       storedValue: written.stored.golden_value,
       message: `Override applied for ${args.attributeCode} on entity ${args.entityId}`,

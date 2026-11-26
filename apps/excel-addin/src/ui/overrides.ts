@@ -97,7 +97,7 @@ export function mountOverrides(container: HTMLElement, deps: Deps): void {
       line.now.textContent = `Now ${shown(plan.currentValue)}${plan.newText !== null && plan.status !== 'SAVED' ? `  →  ${shown(plan.newValue)}` : ''}`;
     }
     line.status.textContent = statusText(plan);
-    const tone = plan.status === 'SAVED' ? 'ok' : plan.status === 'READY' ? 'ready' : plan.status === 'UNCHANGED' ? 'muted' : 'error';
+    const tone = plan.status === 'SAVED' ? 'ok' : plan.status === 'READY' || plan.status === 'PENDING_APPROVAL' ? 'ready' : plan.status === 'UNCHANGED' ? 'muted' : 'error';
     line.status.className = `override-status ${tone}`;
   };
 

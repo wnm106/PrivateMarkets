@@ -141,6 +141,7 @@ export function statusText(plan: Pick<OverridePlan, 'status' | 'message'>): stri
   const words: Record<string, string> = {
     READY: 'Will be saved',
     SAVED: 'Saved',
+    PENDING_APPROVAL: 'Sent for approval',
     UNCHANGED: 'Unchanged, skipped',
     STALE: 'Changed since you checked',
     DUPLICATE: 'Listed twice',
@@ -155,7 +156,7 @@ export function statusText(plan: Pick<OverridePlan, 'status' | 'message'>): stri
     FAILED: 'Not saved',
   };
   const label = words[plan.status] || plan.status;
-  if (!plan.message || plan.status === 'READY' || plan.status === 'SAVED') return label;
+  if (!plan.message || plan.status === 'READY' || plan.status === 'SAVED' || plan.status === 'PENDING_APPROVAL') return label;
   const same = (text: string) => text.trim().replace(/\.$/, '').toLowerCase();
   return same(plan.message) === same(label) ? plan.message : `${label}: ${plan.message}`;
 }
@@ -164,9 +165,10 @@ export function summarize(plans: readonly Pick<OverridePlan, 'status'>[]): strin
   const counts = new Map<string, number>();
   for (const plan of plans) counts.set(plan.status, (counts.get(plan.status) || 0) + 1);
   const part = (status: string, word: string) => (counts.get(status) ? `${counts.get(status)} ${word}` : null);
-  const other = plans.filter((plan) => !['READY', 'SAVED', 'UNCHANGED'].includes(plan.status)).length;
+  const other = plans.filter((plan) => !['READY', 'SAVED', 'PENDING_APPROVAL', 'UNCHANGED'].includes(plan.status)).length;
   return [
     part('SAVED', 'saved'),
+    part('PENDING_APPROVAL', 'sent for approval'),
     part('READY', 'ready to save'),
     part('UNCHANGED', 'unchanged'),
     other ? `${other} need attention` : null,

@@ -220,6 +220,8 @@ export const SUBMIT_MANUAL_OVERRIDE_MUTATION = `
     submitManualOverride(input: $input) {
       success
       goldenValueId
+      pendingApproval
+      message
       errors { field message code }
     }
   }

@@ -37,6 +37,7 @@ const TOOLS = [
   { href: '/documents', label: 'Documents', icon: 'layers' },
   { href: '/assistant', label: 'Assistant', icon: 'list' },
   { href: '/workflows', label: 'Workflows', icon: 'nodes' },
+  { href: '/approvals', label: 'Approvals', icon: 'list' },
 ] as const;
 
 const ADMIN = [

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ManualOverrideError, storedOverrideValue, writeManualOverride } from './source-write';
+import { ManualOverrideError, manualOverrideOutcome, storedOverrideValue, writeManualOverride } from './source-write';
 
 /** A stand-in for the client that records each golden_master.write_value call. */
-function fakeSupabase(options: { rpcError?: { code?: string; message: string } } = {}) {
+function fakeSupabase(options: { rpcError?: { code?: string; message: string }; answer?: unknown } = {}) {
   const writes: Array<{ schema: string; fn: string; args: Record<string, any> }> = [];
   const client = {
     writes,
@@ -14,7 +14,7 @@ function fakeSupabase(options: { rpcError?: { code?: string; message: string } }
         },
         rpc: async (fn: string, args: Record<string, any>) => {
           writes.push({ schema: name, fn, args });
-          return options.rpcError ? { data: null, error: options.rpcError } : { data: 'v-new', error: null };
+          return options.rpcError ? { data: null, error: options.rpcError } : { data: options.answer ?? { status: 'APPLIED', id: 'v-new' }, error: null };
         },
       };
     },
@@ -29,22 +29,31 @@ function fakeSupabase(options: { rpcError?: { code?: string; message: string } }
 const nav = { id: 'attr-nav', data_type: 'CURRENCY' };
 
 describe('writeManualOverride', () => {
-  it('writes the Manual Entry source through write_value, from the date until its next later value', async () => {
+  it('submits the Manual Entry source through submit_manual_override, from the date until its next later value', async () => {
     const supabase = fakeSupabase();
     const written = await writeManualOverride(supabase as never, { entityId: 'e1', attribute: nav, value: '120', validFrom: '2026-12-31T00:00:00Z', reason: 'Q4 pack', userId: 'u1' });
-    expect(written.id).toBe('v-new');
+    expect(written).toMatchObject({ pending: false, id: 'v-new', requestId: null });
     expect(supabase.writes).toEqual([{
       schema: 'golden_master',
-      fn: 'write_value',
+      fn: 'submit_manual_override',
       args: {
         p_entity_id: 'e1',
         p_attribute_id: 'attr-nav',
         p_source_id: 'manual',
         p_valid_from: '2026-12-31',
         p_value: { golden_value: '120', golden_value_numeric: 120, golden_value_date: null, precedence_rank: 1, is_manual_override: true, override_reason: 'Q4 pack' },
-        p_valid_to: null,
       },
     }]);
+  });
+
+  it('returns the request when the client needs someone else to approve it', async () => {
+    const supabase = fakeSupabase({ answer: { status: 'PENDING', requestId: 'req-1' } });
+    const written = await writeManualOverride(supabase as never, { entityId: 'e1', attribute: nav, value: '120', validFrom: '2026-12-31', reason: 'Q4 pack' });
+    expect(written).toMatchObject({ pending: true, id: null, requestId: 'req-1' });
+  });
+
+  it('refuses an answer it does not understand', () => {
+    expect(() => manualOverrideOutcome({ status: 'APPLIED' }, { golden_value: '1', golden_value_numeric: 1, golden_value_date: null })).toThrow('not saved');
   });
 
   it('stores the typed value the way a file load does', async () => {

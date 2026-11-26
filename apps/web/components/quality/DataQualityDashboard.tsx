@@ -2653,9 +2653,9 @@ function ExceptionRow({ entityId, ruleId, ruleName, severity, attributeCode, act
     }
     setBusy(true);
     setMessage(null);
-    const result = await graphqlMutation<{ submitManualOverride: { success: boolean; errors: Array<{ message: string }> } }>(
+    const result = await graphqlMutation<{ submitManualOverride: { success: boolean; pendingApproval?: boolean; message?: string | null; errors: Array<{ message: string }> } }>(
       `mutation CorrectQualityValue($input: ManualOverrideInput!) {
-        submitManualOverride(input: $input) { success errors { message } }
+        submitManualOverride(input: $input) { success pendingApproval message errors { message } }
       }`,
       {
         input: {
@@ -2671,6 +2671,10 @@ function ExceptionRow({ entityId, ruleId, ruleName, severity, attributeCode, act
     setBusy(false);
     if (error || !result.data?.submitManualOverride?.success) {
       setMessage(error || 'The correction was not saved.');
+      return;
+    }
+    if (result.data.submitManualOverride.pendingApproval) {
+      setMessage(`${result.data.submitManualOverride.message || 'Sent for approval.'} See Approvals.`);
       return;
     }
     onDone();
@@ -2855,9 +2859,9 @@ function EntityTable({ rows, limit, attributeCode, attributeName, asOf, onDone, 
     setBulkBusy(true);
     setBulkMessage(null);
     const outcomes = await Promise.all(targets.map(async (entity) => {
-      const result = await graphqlMutation<{ submitManualOverride: { success: boolean; errors: Array<{ message: string }> } }>(
+      const result = await graphqlMutation<{ submitManualOverride: { success: boolean; pendingApproval?: boolean; message?: string | null; errors: Array<{ message: string }> } }>(
         `mutation CorrectQualityValue($input: ManualOverrideInput!) {
-          submitManualOverride(input: $input) { success errors { message } }
+          submitManualOverride(input: $input) { success pendingApproval message errors { message } }
         }`,
         {
           input: {
@@ -2870,14 +2874,18 @@ function EntityTable({ rows, limit, attributeCode, attributeName, asOf, onDone, 
         }
       );
       const error = result.error?.message || result.data?.submitManualOverride?.errors?.[0]?.message;
-      return { id: entity.id, ok: !error && Boolean(result.data?.submitManualOverride?.success), error };
+      return { id: entity.id, ok: !error && Boolean(result.data?.submitManualOverride?.success), pending: Boolean(result.data?.submitManualOverride?.pendingApproval), error };
     }));
     setBulkBusy(false);
     const failed = outcomes.filter((outcome) => !outcome.ok);
     setSelected(new Set(failed.map((outcome) => outcome.id)));
+    const pending = outcomes.filter((outcome) => outcome.ok && outcome.pending).length;
+    const savedCount = outcomes.length - failed.length - pending;
+    const sentWords = pending ? `${pending} sent for approval` : null;
     if (failed.length > 0) {
-      setBulkMessage(`${outcomes.length - failed.length} saved, ${failed.length} failed: ${failed[0].error || 'not saved'}`);
+      setBulkMessage([`${savedCount} saved`, sentWords, `${failed.length} failed: ${failed[0].error || 'not saved'}`].filter(Boolean).join(', '));
     } else {
+      if (pending) setBulkMessage(`${[savedCount ? `${savedCount} saved` : null, sentWords].filter(Boolean).join(', ')}. See Approvals.`);
       setBulkValue('');
     }
     onDone();
@@ -2964,9 +2972,9 @@ function ResolveForm({ entityId, ruleId, attributeCode, attributeName, actualVal
     if (!attributeCode) return;
     setBusy('save');
     setMessage(null);
-    const result = await graphqlMutation<{ submitManualOverride: { success: boolean; errors: Array<{ message: string }> } }>(
+    const result = await graphqlMutation<{ submitManualOverride: { success: boolean; pendingApproval?: boolean; message?: string | null; errors: Array<{ message: string }> } }>(
       `mutation CorrectQualityValue($input: ManualOverrideInput!) {
-        submitManualOverride(input: $input) { success errors { message } }
+        submitManualOverride(input: $input) { success pendingApproval message errors { message } }
       }`,
       {
         input: {
@@ -2982,6 +2990,10 @@ function ResolveForm({ entityId, ruleId, attributeCode, attributeName, actualVal
     setBusy(null);
     if (error || !result.data?.submitManualOverride?.success) {
       setMessage(error || 'The correction was not saved.');
+      return;
+    }
+    if (result.data.submitManualOverride.pendingApproval) {
+      setMessage(`${result.data.submitManualOverride.message || 'Sent for approval.'} See Approvals.`);
       return;
     }
     onDone();

@@ -165,6 +165,7 @@ describe('lineage value writers', () => {
     if (call.table === 'attribute_register') return { data: { id: 'attr-1', default_precedence_rank: 60 } };
     if (call.table === 'source_registry') return { data: source.source_code === 'MANUAL' ? { id: source.id } : source };
     if (call.fn === 'write_value') return { data: 'v-new' };
+    if (call.fn === 'submit_manual_override') return { data: { status: 'APPLIED', id: 'v-new' } };
     return { data: [] };
   });
 
@@ -182,9 +183,9 @@ describe('lineage value writers', () => {
   it('submitManualOverride writes the manual source at precedence 1', async () => {
     const { db, ctx } = lineageDb({ id: 'src-manual', source_code: 'MANUAL', precedence_rank: 1 });
     const result = await lineageResolvers.Mutation.submitManualOverride(undefined, { input: { entityId: 'e1', attributeCode: 'NAV', value: '9', validFrom: '2026-03-01', overrideReason: 'Admin statement' } }, ctx);
-    expect(result.goldenValueId).toBe('v-new');
-    expect(writes(db.calls)[0].payload).toMatchObject({
-      p_source_id: 'src-manual', p_valid_from: '2026-03-01', p_valid_to: null,
+    expect(result).toMatchObject({ goldenValueId: 'v-new', pendingApproval: false, requestId: null, message: 'Saved.' });
+    expect(db.calls.filter((call) => call.fn === 'submit_manual_override')[0].payload).toMatchObject({
+      p_source_id: 'src-manual', p_valid_from: '2026-03-01',
       p_value: { golden_value: '9', precedence_rank: 1, is_manual_override: true, override_reason: 'Admin statement' },
     });
     expect(directValueEdits(db.calls)).toEqual([]);

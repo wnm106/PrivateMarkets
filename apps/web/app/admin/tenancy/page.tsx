@@ -22,6 +22,7 @@ import {
 } from '@/lib/graphql';
 import { EntityRoleAccess, type AccessGrant } from '@/components/security/EntityRoleAccess';
 import { ClientAuthentication } from '@/components/admin/ClientAuthentication';
+import { ClientFourEyes } from '@/components/admin/ClientFourEyes';
 import { experienceLabel, ModuleChoices, type ClientModuleOption } from '@/components/admin/ClientExperience';
 
 interface Client {
@@ -142,12 +143,15 @@ export default function TenancyAdminPage() {
           onError={setError}
         />
       ) : tab === 'authentication' ? (
-        <ClientAuthentication
-          clients={clients}
-          selectedClientId={selectedClientId}
-          onSelectClient={setSelectedClientId}
-          onError={setError}
-        />
+        <div className="space-y-4">
+          <ClientAuthentication
+            clients={clients}
+            selectedClientId={selectedClientId}
+            onSelectClient={setSelectedClientId}
+            onError={setError}
+          />
+          {me?.isTenantAdmin && selectedClientId && <ClientFourEyes clientId={selectedClientId} onError={setError} />}
+        </div>
       ) : (
         <EntityAccessTab clients={clients} onError={setError} />
       )}

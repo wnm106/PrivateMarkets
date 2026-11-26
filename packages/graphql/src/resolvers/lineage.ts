@@ -3,7 +3,7 @@ import { loadAttributeSequences, pickPersistedWinner, sequenceLabel, sequencePos
 import { knowledgeCutoff, loadOnReadValues, mergeOnReadLineage } from '../lib/on-read-values';
 import { dirtyAttributeCodes } from './calculation';
 import { planVersionDelete } from '../lib/source-version';
-import { ManualOverrideError, OPEN_SYSTEM_TO, refreshCalculations, versionCopy, writeManualOverride } from '../lib/source-write';
+import { ManualOverrideError, manualOverrideMessage, OPEN_SYSTEM_TO, refreshCalculations, versionCopy, writeManualOverride } from '../lib/source-write';
 import { requireIsoDate } from '../lib/input-guards';
 import { writeGoldenValue } from '../lib/golden-write';
 import { buildTimelineVersions, candidateChangeDays, type TimelineCell, type VersionSpan } from '../lib/entity-timeline';
@@ -432,11 +432,18 @@ export const lineageResolvers = {
           reason: input.overrideReason,
           userId: context.user?.id,
         });
-        await refreshEntityCalculations(context, input.entityId);
-        return { success: true, goldenValueId: written.id, errors: [] };
+        if (!written.pending) await refreshEntityCalculations(context, input.entityId);
+        return {
+          success: true,
+          goldenValueId: written.id,
+          pendingApproval: written.pending,
+          requestId: written.requestId,
+          message: manualOverrideMessage(written),
+          errors: [],
+        };
       } catch (error: any) {
         const code = error instanceof ManualOverrideError ? error.code : 'OVERRIDE_FAILED';
-        return { success: false, goldenValueId: null, errors: [{ field: '', message: error.message, code }] };
+        return { success: false, goldenValueId: null, pendingApproval: false, requestId: null, message: null, errors: [{ field: '', message: error.message, code }] };
       }
     },
     

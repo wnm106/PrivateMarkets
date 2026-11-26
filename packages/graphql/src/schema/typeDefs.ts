@@ -1736,7 +1736,7 @@ type TapOverridePlan {
   """The value as it will be stored, typed like a TAP result."""
   newValue: JSON
   newText: String
-  """READY, SAVED, UNCHANGED, STALE, DUPLICATE, INVALID_REQUEST, INVALID_VALUE, NOT_EDITABLE, NO_ACCESS, UNKNOWN_ATTRIBUTE, AMBIGUOUS_ATTRIBUTE, UNKNOWN_ENTITY, AMBIGUOUS_ENTITY, or FAILED."""
+  """READY, SAVED, PENDING_APPROVAL (the client needs someone else to approve it), UNCHANGED, STALE, DUPLICATE, INVALID_REQUEST, INVALID_VALUE, NOT_EDITABLE, NO_ACCESS, UNKNOWN_ATTRIBUTE, AMBIGUOUS_ATTRIBUTE, UNKNOWN_ENTITY, AMBIGUOUS_ENTITY, or FAILED."""
   status: String!
   message: String
   candidates: [String!]!
@@ -3657,6 +3657,10 @@ type Query {
   agentUsage(days: Int, from: String, to: String, feature: String, agent: String, userId: ID, model: String, turnId: String, conversationId: String, subjectType: String, subjectId: String): JSON!
   """One model call, including its thinking, when this session can see that client."""
   agentCall(id: ID!): JSON
+  """Manual values waiting for someone else to approve them, in four-eyes clients, as a list. status is PENDING (default), APPROVED, REJECTED, WITHDRAWN or ALL. Each item says whether you can decide it (canDecide) and, if not, why (blocker)."""
+  overrideRequests(status: String): JSON!
+  """Whether a client requires a second person to approve manual values and workflow reviews."""
+  clientFourEyes(clientId: ID!): Boolean!
   """Who changed access or configuration, and when, newest first, as {entries, hasMore}. kind is access or configuration. table is schema.table or a table name. from and to are ISO timestamps. search matches the record id or the stored row. Pass the last entry's id as beforeId for the next page. Readable by staff and by a client's user or role managers."""
   auditLog(kind: String, from: String, to: String, table: String, actorUserId: ID, rowId: String, search: String, limit: Int, beforeId: String): JSON!
   """Forms workflow steps are waiting on. status defaults to OPEN; runId keeps one run's."""
@@ -3871,6 +3875,12 @@ type Mutation {
   updateAttribute(input: UpdateAttributeInput!): UpdateAttributeResult!
   splitValidTime(input: SplitValidTimeInput!): SplitValidTimeResult!
   submitManualOverride(input: ManualOverrideInput!): ManualOverrideResult!
+  """Approve (writes the value) or reject a manual value someone else entered. Nobody decides their own."""
+  decideOverrideRequest(id: ID!, approve: Boolean!, note: String): MutationResult!
+  """Withdraw a manual value you entered that is still waiting for approval."""
+  withdrawOverrideRequest(id: ID!): MutationResult!
+  """Staff only: require a second person to approve this client's manual values and workflow reviews."""
+  setClientFourEyes(clientId: ID!, required: Boolean!): MutationResult!
   clearManualOverride(input: ClearManualOverrideInput!): ClearManualOverrideResult!
   """Save manual entries from Excel through the same writer as submitManualOverride. Only rows a preview finds READY are written; unchanged values are skipped. At most 200."""
   submitTapOverrides(overrides: [TapOverrideInput!]!, reason: String!): [TapOverridePlan!]!
@@ -4192,7 +4202,14 @@ type SplitValidTimeResult {
 
 type ManualOverrideResult {
   success: Boolean!
+  """Set when the value was written. Null when it waits for approval."""
   goldenValueId: ID
+  """True when the client requires four eyes: the value takes effect once someone else approves it."""
+  pendingApproval: Boolean!
+  """The approval request, when pendingApproval."""
+  requestId: ID
+  """What to tell the person: saved, or sent for approval."""
+  message: String
   errors: [MutationError!]!
 }
 

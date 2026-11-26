@@ -75,6 +75,8 @@ export function ConflictResolution() {
   const [reason, setReason] = useState(REASONS[0]);
   const [note, setNote] = useState('Resolved a source conflict.');
   const [saved, setSaved] = useState<Record<string, string>>({});
+  // A four-eyes client: the kept value waits for someone else to approve it.
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const entities = useMemo(() => entitiesFromConflicts(conflicts), [conflicts]);
@@ -184,7 +186,7 @@ export function ConflictResolution() {
     const sourceName = choice.kind === 'source'
       ? field.candidates.find((row) => row.source === choice.source)?.sourceName
       : null;
-    const result = await graphqlMutation<{ submitManualOverride: { success: boolean; errors: Array<{ message: string }> } }>(
+    const result = await graphqlMutation<{ submitManualOverride: { success: boolean; pendingApproval?: boolean; message?: string | null; errors: Array<{ message: string }> } }>(
       SUBMIT_MANUAL_OVERRIDE_MUTATION,
       {
         input: {
@@ -203,6 +205,7 @@ export function ConflictResolution() {
       return false;
     }
     setSaved((current) => ({ ...current, [field.attributeCode]: value }));
+    if (result.data.submitManualOverride.pendingApproval) setNotice(result.data.submitManualOverride.message || 'Sent for approval.');
     setBusy(null);
     const refresh = await graphqlQuery<{ fieldLineage: LineageField[] }, { entityId: string; asOfDate: string; knowledgeDate: string | null }>(
       FIELD_LINEAGE_QUERY,
@@ -300,6 +303,7 @@ export function ConflictResolution() {
       </div>
 
       {error && <div className="dq-error">{error}</div>}
+      {notice && <div className="dq-sub" role="status">{notice} See Approvals.</div>}
 
       <div className="resolve-layout">
         <div>

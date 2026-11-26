@@ -48,5 +48,7 @@ describe('status words', () => {
     expect(statusText({ status: 'STALE', message: 'It is now 1000.' })).toBe('Changed since you checked: It is now 1000.');
     expect(statusText({ status: 'NO_ACCESS', message: 'You cannot change this record.' })).toBe('You cannot change this record.');
     expect(summarize([{ status: 'SAVED' }, { status: 'SAVED' }, { status: 'UNCHANGED' }, { status: 'NO_ACCESS' }])).toBe('2 saved, 1 unchanged, 1 need attention');
+    expect(statusText({ status: 'PENDING_APPROVAL', message: 'Sent for approval. This client needs someone else to approve manual values before they take effect.' })).toBe('Sent for approval');
+    expect(summarize([{ status: 'PENDING_APPROVAL' }, { status: 'SAVED' }])).toBe('1 saved, 1 sent for approval');
   });
 });

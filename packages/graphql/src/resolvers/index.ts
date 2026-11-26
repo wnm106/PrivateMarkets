@@ -39,6 +39,7 @@ import { viewResolvers } from './views';
 import { certificationResolvers } from './certification';
 import { clientCatalogResolvers } from './client-catalog';
 import { auditLogResolvers } from './audit-log';
+import { overrideApprovalResolvers } from './override-approvals';
 
 export const resolvers = {
   Query: {
@@ -94,6 +95,7 @@ export const resolvers = {
     ...certificationResolvers.Query,
     ...clientCatalogResolvers.Query,
     ...auditLogResolvers.Query,
+    ...overrideApprovalResolvers.Query,
   },
   
   Certification: certificationResolvers.Certification,
@@ -143,6 +145,7 @@ export const resolvers = {
     ...viewResolvers.Mutation,
     ...certificationResolvers.Mutation,
     ...clientCatalogResolvers.Mutation,
+    ...overrideApprovalResolvers.Mutation,
   },
   
   Subscription: {},

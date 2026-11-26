@@ -168,23 +168,52 @@ export async function writeManualOverride(
     /** Not written: golden_master.write_value stamps the caller from the session. */
     userId?: string | null;
   },
-): Promise<{ id: string; stored: StoredValue }> {
+): Promise<ManualOverrideOutcome> {
   const reason = String(input.reason ?? '').trim();
   if (!reason) throw new ManualOverrideError('REASON_REQUIRED', 'A reason is required for a manual entry.');
   const value = storedOverrideValue(input.value, input.attribute.data_type);
   if (!value.ok) throw new ManualOverrideError('INVALID_VALUE', value.message);
   const sourceId = await manualSourceId(supabase);
-  const written = await writeSourceVersion(supabase, {
-    entityId: input.entityId,
-    attributeId: input.attribute.id,
-    sourceId,
-    validFrom: input.validFrom || new Date().toISOString().slice(0, 10),
-    stored: value.stored,
-    precedenceRank: 1,
-    isManualOverride: true,
-    overrideReason: reason.slice(0, 1000),
+  // golden_master.submit_manual_override writes it, or, where the client requires
+  // four eyes, files it for someone else to approve (20261126120000_four_eyes_approvals).
+  const { data, error } = await supabase.schema('golden_master').rpc('submit_manual_override', {
+    p_entity_id: input.entityId,
+    p_attribute_id: input.attribute.id,
+    p_source_id: sourceId,
+    p_valid_from: dateOnly(input.validFrom || new Date().toISOString().slice(0, 10)),
+    p_value: {
+      ...value.stored,
+      precedence_rank: 1,
+      is_manual_override: true,
+      override_reason: reason.slice(0, 1000),
+    },
   });
-  return { id: written.id, stored: value.stored };
+  if (error) fail(error);
+  return manualOverrideOutcome(data, value.stored);
+}
+
+/** A manual value was written (`id`), or is waiting for someone else to approve it (`requestId`). */
+export type ManualOverrideOutcome =
+  | { pending: false; id: string; requestId: null; stored: StoredValue }
+  | { pending: true; id: null; requestId: string; stored: StoredValue };
+
+/** Reads golden_master.submit_manual_override's answer. */
+export function manualOverrideOutcome(data: unknown, stored: StoredValue): ManualOverrideOutcome {
+  const answer = (data ?? {}) as { status?: unknown; id?: unknown; requestId?: unknown };
+  if (answer.status === 'PENDING' && typeof answer.requestId === 'string') {
+    return { pending: true, id: null, requestId: answer.requestId, stored };
+  }
+  if (answer.status === 'APPLIED' && typeof answer.id === 'string') {
+    return { pending: false, id: answer.id, requestId: null, stored };
+  }
+  throw new Error('The value was not saved.');
+}
+
+/** What to tell the person who entered a manual value. */
+export function manualOverrideMessage(outcome: ManualOverrideOutcome): string {
+  return outcome.pending
+    ? 'Sent for approval. This client needs someone else to approve manual values before they take effect.'
+    : 'Saved.';
 }
 
 /**
