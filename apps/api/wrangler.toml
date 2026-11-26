@@ -6,12 +6,39 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 ENVIRONMENT = "development"
 # SUPABASE_URL, SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY are secrets.
+# ERROR_REPORT_DSN (optional) sends errors to a Sentry-compatible tracker.
 # Local: put them in apps/api/.dev.vars (gitignored).
-# Deployed: `wrangler secret put <NAME>` for each one.
+# Deployed: `wrangler secret put <NAME> --env <production|staging>` for each one.
 
 [dev]
 port = 4000
 
+# Requests per person per minute (packages/graphql/src/lib/rate-limit.ts).
+# Bindings are not inherited by environments, so each environment repeats it.
+[[unsafe.bindings]]
+name = "RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 300, period = 60 }
+
 [env.production]
 [env.production.vars]
 ENVIRONMENT = "production"
+
+[[env.production.unsafe.bindings]]
+name = "RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 300, period = 60 }
+
+# Staging: its own worker (tapestrai-api-staging), secrets and Supabase project.
+# See docs/ENVIRONMENTS.md.
+[env.staging]
+[env.staging.vars]
+ENVIRONMENT = "staging"
+
+[[env.staging.unsafe.bindings]]
+name = "RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1012"
+simple = { limit = 300, period = 60 }

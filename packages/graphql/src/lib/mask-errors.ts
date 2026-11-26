@@ -11,6 +11,7 @@
  * P0001, or the readable 22023 / P0002 ones) are written for people and pass.
  */
 import { GraphQLError } from 'graphql';
+import { reportError } from './error-report';
 
 interface Coded {
   code?: unknown;
@@ -80,7 +81,8 @@ export function maskGraphqlError(error: unknown, message: string): Error {
   const shown = safeMessage(original, text);
   if (shown === text && graphqlError) return graphqlError;
   const reference = Math.random().toString(36).slice(2, 10).toUpperCase();
-  if (shown === null) console.error(`[GraphQL] ${reference}:`, original);
+  // Every failure whose text is not shown is reported, under the reference the caller sees.
+  if (shown === null) void reportError(original, { source: 'graphql', where: graphqlError?.path?.join('.') ?? null, reference });
   return new GraphQLError(shown ?? `The request could not be completed. Reference ${reference}.`, {
     nodes: graphqlError?.nodes,
     source: graphqlError?.source,

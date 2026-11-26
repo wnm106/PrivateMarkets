@@ -1,11 +1,16 @@
 import { createYoga } from 'graphql-yoga';
-import { createRequestContext, GRAPHQL_CORS, maskGraphqlError, schema, useQueryLimits } from '@tapestrai/graphql';
+import { configureErrorReporting, createRequestContext, GRAPHQL_CORS, maskGraphqlError, schema, useQueryLimits, type RateLimitBinding } from '@tapestrai/graphql';
 
 export interface Env {
   SUPABASE_URL: string;
   SUPABASE_ANON_KEY: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
   ENVIRONMENT: string;
+  /** Sentry-compatible DSN for error reports; unset logs only (packages/graphql/src/lib/error-report.ts). */
+  ERROR_REPORT_DSN?: string;
+  ERROR_REPORT_RELEASE?: string;
+  /** Requests per person per minute (wrangler.toml, unsafe.bindings). */
+  RATE_LIMITER?: RateLimitBinding;
 }
 
 const yoga = createYoga<{ env: Env }>({
@@ -23,6 +28,7 @@ const yoga = createYoga<{ env: Env }>({
       supabaseUrl: env.SUPABASE_URL,
       supabaseAnonKey: env.SUPABASE_ANON_KEY,
       supabaseServiceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
+      rateLimiter: env.RATE_LIMITER ?? null,
     }),
 });
 
@@ -30,6 +36,8 @@ export default {
   async fetch(request: Request, env: Env, ctx: any): Promise<Response> {
     // yoga.fetch is compatible with Workers fetch signature
     // It takes (request: Request | URL, requestInit?: RequestInit, env?: E, ctx?: C)
+    // Workers hand settings to each request, not to the process.
+    configureErrorReporting({ dsn: env.ERROR_REPORT_DSN ?? null, environment: env.ENVIRONMENT, release: env.ERROR_REPORT_RELEASE ?? null });
     return (yoga as any).fetch(request, { env, ctx });
   },
 };

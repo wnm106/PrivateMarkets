@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter, IBM_Plex_Mono } from 'next/font/google';
 import { AppChrome } from '@/components/layout/AppChrome';
 import { AuthSync } from '@/components/auth/AuthSync';
+import { ErrorReporter } from '@/components/layout/ErrorReporter';
 import { loadAppNav } from '@/lib/surface-access-server';
 import 'katex/dist/katex.min.css';
 import '../styles/globals.css';
@@ -36,6 +37,7 @@ export default async function RootLayout({
     <html lang="en" className={`${inter.variable} ${ibmPlexMono.variable}`}>
       <body>
         <AuthSync />
+        <ErrorReporter />
         <AppChrome surfaceLinks={nav.surfaceLinks} enabledToolHrefs={nav.enabledToolHrefs}>{children}</AppChrome>
       </body>
     </html>

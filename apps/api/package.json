@@ -6,6 +6,7 @@
     "dev": "wrangler dev",
     "build": "tsc",
     "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "test": "vitest",

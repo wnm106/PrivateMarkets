@@ -6,3 +6,5 @@ export { useQueryLimits, queryLimitsRule, QUERY_LIMITS } from './lib/query-limit
 export { PUBLIC_ROOT_FIELDS } from './lib/auth-guard';
 export { createRequestContext, roleFromAppMetadata, GRAPHQL_CORS, type RequestContextConfig } from './request-context';
 export { maskGraphqlError, safeMessage } from './lib/mask-errors';
+export { configureErrorReporting, reportError, type ErrorContext } from './lib/error-report';
+export { RATE_LIMITED, rateLimitKey, withinRateLimit, type RateLimitBinding } from './lib/rate-limit';

@@ -2,6 +2,8 @@ import type { NextRequest } from 'next/server';
 import { handleMcpHttpRequest } from '@tapestrai/mcp-server/src/http';
 import { authenticate, bearerToken } from '@/lib/chat-server';
 import { clientIp, ipRefusal } from '@tapestrai/graphql/src/lib/client-ip';
+import { RATE_LIMITED, rateLimitKey, withinRateLimit } from '@tapestrai/graphql/src/lib/rate-limit';
+import { rateLimiter } from '@/lib/cloudflare-bindings';
 import { REMOTE_TOOL_EFFECTS, bearerChallenge, publicOrigin, signInRefusal } from '@/lib/mcp-remote';
 import { readSignInDecision } from '@/lib/sign-in-gate';
 
@@ -36,6 +38,9 @@ async function handle(request: NextRequest): Promise<Response> {
   const { data, error } = await auth.supabase.schema('tenancy').rpc('current_sign_in_decision');
   const refusal = signInRefusal(error ? null : readSignInDecision(data));
   if (refusal) return Response.json({ error: refusal }, { status: 403 });
+  if (!(await withinRateLimit(rateLimiter(), rateLimitKey(auth.userId, clientIp(request.headers))))) {
+    return Response.json({ error: RATE_LIMITED }, { status: 429, headers: { 'Retry-After': '60' } });
+  }
   // A client that lists its networks is used only from them (20261126150000_ip_allowlist).
   const network = await ipRefusal(auth.supabase, auth.userId, clientIp(request.headers));
   if (network) return Response.json({ error: network }, { status: 403 });

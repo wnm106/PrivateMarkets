@@ -1,6 +1,7 @@
 import { createYoga } from 'graphql-yoga';
 import { createRequestContext, GRAPHQL_CORS, maskGraphqlError, schema, useQueryLimits } from '@tapestrai/graphql';
 import { NextRequest } from 'next/server';
+import { rateLimiter } from '@/lib/cloudflare-bindings';
 import { accessTokenFromCookieHeader, supabaseProjectRef } from '@/lib/auth-token';
 // GraphQL route.
 
@@ -63,6 +64,7 @@ const yoga = createYoga({
       supabaseUrl,
       supabaseAnonKey,
       supabaseServiceRoleKey,
+      rateLimiter: rateLimiter(),
     }),
 });
 

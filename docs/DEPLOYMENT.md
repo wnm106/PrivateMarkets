@@ -1,5 +1,8 @@
 # Meridian MDM Deployment Guide
 
+> **Out of date in parts.** This guide predates the current setup. For staging, error tracking and request limits see [ENVIRONMENTS.md](ENVIRONMENTS.md); for migrations see [MIGRATIONS.md](MIGRATIONS.md). The logger, alerting and backup sections below describe intentions, not code in this repository.
+
+
 ## Overview
 
 Meridian MDM is deployed using:

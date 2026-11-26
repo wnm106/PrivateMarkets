@@ -16,12 +16,15 @@
 import { createClient } from '@supabase/supabase-js';
 import { GraphQLError } from 'graphql';
 import { clientIp, ipRefusal } from './lib/client-ip';
+import { RATE_LIMITED, rateLimitKey, withinRateLimit, type RateLimitBinding } from './lib/rate-limit';
 import type { Context, User } from './context';
 
 export interface RequestContextConfig {
   supabaseUrl: string;
   supabaseAnonKey: string;
   supabaseServiceRoleKey?: string;
+  /** Cloudflare's rate-limiting binding, where the entry point has one (lib/rate-limit.ts). */
+  rateLimiter?: RateLimitBinding | null;
 }
 
 const ROLES: ReadonlyArray<User['role']> = ['admin', 'steward', 'ops', 'governance', 'readonly'];
@@ -76,6 +79,10 @@ export async function createRequestContext(request: Request, config: RequestCont
       const refusal = await ipRefusal(supabase, authUser.id, ip);
       if (refusal) throw new GraphQLError(refusal, { extensions: { code: 'FORBIDDEN', http: { status: 403 } } });
     }
+  }
+
+  if (!(await withinRateLimit(config.rateLimiter, rateLimitKey(user?.id, ip)))) {
+    throw new GraphQLError(RATE_LIMITED, { extensions: { code: 'RATE_LIMITED', http: { status: 429, headers: { 'Retry-After': '60' } } } });
   }
 
   return {
