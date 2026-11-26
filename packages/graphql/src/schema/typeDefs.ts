@@ -2552,6 +2552,10 @@ type ClientAuthRequirements {
   passwordEnabled: Boolean!
   mfaRequired: Boolean!
   emailDomains: [String!]!
+  """A sign-in ends this many minutes after it started. Null: no limit."""
+  maxSessionMinutes: Int
+  """A sign-in the web app has seen ends after this many minutes without activity. Null: no limit."""
+  idleTimeoutMinutes: Int
 }
 
 type ClientIdentityProvider {
@@ -2576,6 +2580,10 @@ input UpdateClientAuthRequirementsInput {
   passwordEnabled: Boolean!
   mfaRequired: Boolean!
   emailDomains: [String!]!
+  """15 to 43200 (30 days), or null for no limit. Left out: unchanged."""
+  maxSessionMinutes: Int
+  """5 to 1440, or null for no limit. Left out: unchanged."""
+  idleTimeoutMinutes: Int
 }
 
 input UpsertClientIdentityProviderInput {
@@ -3881,6 +3889,8 @@ type Mutation {
   withdrawOverrideRequest(id: ID!): MutationResult!
   """Staff only: require a second person to approve this client's manual values and workflow reviews."""
   setClientFourEyes(clientId: ID!, required: Boolean!): MutationResult!
+  """End every sign-in of a person, on every device. Leave userId out for yourself. A client's user managers can do it for their members; staff for anyone."""
+  signOutEverywhere(userId: ID): MutationResult!
   clearManualOverride(input: ClearManualOverrideInput!): ClearManualOverrideResult!
   """Save manual entries from Excel through the same writer as submitManualOverride. Only rows a preview finds READY are written; unchanged values are skipped. At most 200."""
   submitTapOverrides(overrides: [TapOverrideInput!]!, reason: String!): [TapOverridePlan!]!

@@ -19,6 +19,7 @@ import {
   DEACTIVATE_CLIENT_USER_MUTATION,
   ENTITY_ACCESS_ROSTER_QUERY,
   ME_QUERY,
+  SIGN_OUT_EVERYWHERE_MUTATION,
 } from '@/lib/graphql';
 import { EntityRoleAccess, type AccessGrant } from '@/components/security/EntityRoleAccess';
 import { ClientAuthentication } from '@/components/admin/ClientAuthentication';
@@ -410,6 +411,13 @@ function MembersTab({
     load(selectedClientId);
   };
 
+  const handleSignOutEverywhere = async (userId: string) => {
+    if (!confirm('Sign this person out on every device? They can sign in again.')) return;
+    const result = await graphqlClient.mutation(SIGN_OUT_EVERYWHERE_MUTATION, { userId }).toPromise();
+    const error = result.error?.message || result.data?.signOutEverywhere?.errors?.[0]?.message;
+    onError(error || (result.data?.signOutEverywhere?.success ? null : 'Could not sign them out.'));
+  };
+
   const handleDeactivate = async (userId: string) => {
     if (!confirm('Remove this user from the client?')) return;
     await graphqlClient.mutation(DEACTIVATE_CLIENT_USER_MUTATION, { clientId: selectedClientId, userId }).toPromise();
@@ -439,8 +447,8 @@ function MembersTab({
     load(selectedClientId);
   };
 
-  const memberActions = useRef({ handleRevoke, handleAssign, handleDeactivate, roles });
-  memberActions.current = { handleRevoke, handleAssign, handleDeactivate, roles };
+  const memberActions = useRef({ handleRevoke, handleAssign, handleDeactivate, handleSignOutEverywhere, roles });
+  memberActions.current = { handleRevoke, handleAssign, handleDeactivate, handleSignOutEverywhere, roles };
   const memberContext = useMemo(() => ({ get: () => memberActions.current }), []);
 
   return (
@@ -729,11 +737,16 @@ const MEMBER_COLUMNS: ColDef[] = [
   {
     colId: 'remove',
     headerName: '',
-    width: 110,
+    width: 170,
     sortable: false,
     filter: false,
     cellRenderer: (params: any) => params.data.isActive
-      ? <button type="button" onClick={() => params.context.get().handleDeactivate(params.data.userId)} className="text-red-600 hover:text-red-800">Remove</button>
+      ? (
+        <span className="flex gap-3">
+          <button type="button" onClick={() => params.context.get().handleSignOutEverywhere(params.data.userId)} className="text-blue-600 hover:text-blue-800">Sign out</button>
+          <button type="button" onClick={() => params.context.get().handleDeactivate(params.data.userId)} className="text-red-600 hover:text-red-800">Remove</button>
+        </span>
+      )
       : null,
   },
 ];

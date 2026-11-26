@@ -8,6 +8,8 @@ export interface SignInDecision {
   reason?: string | null;
   mfa_required?: boolean;
   mfa_satisfied?: boolean;
+  /** The sign-in itself is over: its client's time or idle limit, or "sign out everywhere". */
+  session_ended?: boolean;
 }
 
 /**

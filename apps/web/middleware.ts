@@ -25,6 +25,19 @@ async function signInDecision(supabase: { schema: (name: string) => any }): Prom
   return null;
 }
 
+/**
+ * Marks this sign-in as active, for a client's idle limit (tenancy.touch_session
+ * writes at most once a minute). Best effort: the limit is still enforced by the
+ * database on every read, so a failed mark only shortens nobody's session.
+ */
+async function touchSession(supabase: { schema: (name: string) => any }) {
+  try {
+    await supabase.schema('tenancy').rpc('touch_session');
+  } catch {
+    // Not marked this time.
+  }
+}
+
 function withSessionCookies(next: NextResponse, response: NextResponse) {
   response.cookies.getAll().forEach((cookie) => next.cookies.set(cookie));
   return next;
@@ -128,7 +141,8 @@ export async function middleware(request: NextRequest) {
     const decision = await signInDecision(supabase);
     const standing = signInStanding(decision);
     if (standing === 'refused') {
-      await supabase.auth.signOut();
+      // A sign-in that ran out ends here only; "refused" for any other reason ends them all.
+      await supabase.auth.signOut(decision?.session_ended ? { scope: 'local' } : undefined);
       const message = decision?.reason || REFUSED_SIGN_IN;
       if (pathname.startsWith('/api/')) {
         return withSessionCookies(NextResponse.json({ error: message }, { status: 403 }), response);
@@ -154,6 +168,7 @@ export async function middleware(request: NextRequest) {
         return withSessionCookies(NextResponse.redirect(redirectUrl), response);
       }
     }
+    if (standing === 'allowed' || standing === 'needs_mfa') await touchSession(supabase);
     // The Excel sign-in page checks the step-up for its own session (lib/session-store.ts).
     if (standing === 'needs_mfa' && !pathname.startsWith('/login/mfa') && !pathname.startsWith('/api/auth/') && !pathname.startsWith('/excel/')) {
       if (pathname.startsWith('/api/')) {

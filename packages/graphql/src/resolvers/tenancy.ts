@@ -260,7 +260,7 @@ export const tenancyResolvers = {
     clientAuthRequirements: async (_: any, args: { clientId: string }, context: Context) => {
       const { data, error } = await tn(context)
         .from('client_auth_requirements')
-        .select('client_id, password_enabled, mfa_required, email_domains')
+        .select('client_id, password_enabled, mfa_required, email_domains, max_session_minutes, idle_timeout_minutes')
         .eq('client_id', args.clientId)
         .maybeSingle();
       if (error) throw error;
@@ -569,7 +569,7 @@ export const tenancyResolvers = {
       }
     },
 
-    updateClientAuthRequirements: async (_: any, args: { input: { clientId: string; passwordEnabled: boolean; mfaRequired: boolean; emailDomains: string[] } }, context: Context) => {
+    updateClientAuthRequirements: async (_: any, args: { input: { clientId: string; passwordEnabled: boolean; mfaRequired: boolean; emailDomains: string[]; maxSessionMinutes?: number | null; idleTimeoutMinutes?: number | null } }, context: Context) => {
       try {
         await assertTenantAdmin(context);
         const unique = normalizeEmailDomains(args.input.emailDomains || []);
@@ -589,6 +589,7 @@ export const tenancyResolvers = {
           password_enabled: args.input.passwordEnabled,
           mfa_required: args.input.mfaRequired,
           email_domains: unique,
+          ...sessionLimits(args.input),
           updated_by: context.user?.id ?? null,
         }, { onConflict: 'client_id' });
         if (error) throw error;
@@ -596,6 +597,12 @@ export const tenancyResolvers = {
       } catch (error: any) {
         return { success: false, errors: [{ field: 'general', message: error.message, code: 'AUTH_REQUIREMENTS_FAILED' }] };
       }
+    },
+
+    signOutEverywhere: async (_: any, args: { userId?: string | null }, context: Context) => {
+      const { error } = await tn(context).rpc('sign_out_everywhere', { p_user_id: args.userId || null });
+      if (error) return { success: false, errors: [{ field: 'general', message: error.message, code: 'SIGN_OUT_FAILED' }] };
+      return { success: true, errors: [] };
     },
 
     upsertClientIdentityProvider: async (_: any, args: { input: any }, context: Context) => {
@@ -716,12 +723,27 @@ async function assertTenantAdmin(context: Context) {
   if (!data) throw new Error('Only a tenant admin can manage authentication');
 }
 
+/** The session limits an update sets. A limit left out of the input is left as it is. */
+export function sessionLimits(input: { maxSessionMinutes?: number | null; idleTimeoutMinutes?: number | null }) {
+  const limits: { max_session_minutes?: number | null; idle_timeout_minutes?: number | null } = {};
+  const check = (value: number | null, low: number, high: number, what: string) => {
+    if (value === null) return null;
+    if (!Number.isInteger(value) || value < low || value > high) throw new Error(`${what} must be a whole number of minutes from ${low} to ${high}`);
+    return value;
+  };
+  if (input.maxSessionMinutes !== undefined) limits.max_session_minutes = check(input.maxSessionMinutes, 15, 43200, 'The sign-in time limit');
+  if (input.idleTimeoutMinutes !== undefined) limits.idle_timeout_minutes = check(input.idleTimeoutMinutes, 5, 1440, 'The idle limit');
+  return limits;
+}
+
 function mapAuthRequirements(row: any) {
   return {
     clientId: row.client_id,
     passwordEnabled: row.password_enabled,
     mfaRequired: row.mfa_required,
     emailDomains: row.email_domains || [],
+    maxSessionMinutes: row.max_session_minutes ?? null,
+    idleTimeoutMinutes: row.idle_timeout_minutes ?? null,
   };
 }
 

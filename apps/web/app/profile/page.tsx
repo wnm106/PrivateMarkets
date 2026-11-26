@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabaseBrowserClient } from '@/lib/supabase-browser';
-import { graphqlClient, ME_QUERY, UPDATE_PROFILE_MUTATION } from '@/lib/graphql';
+import { graphqlClient, ME_QUERY, SIGN_OUT_EVERYWHERE_MUTATION, UPDATE_PROFILE_MUTATION } from '@/lib/graphql';
 import { signOutAndRedirect } from '@/components/layout/UserMenu';
 
 interface MeData {
@@ -143,9 +143,25 @@ export default function ProfilePage() {
         </section>
       )}
 
-      <button className="px-4 py-2 rounded text-[13px] border border-line text-ink-2 hover:bg-bg-alt transition-colors" onClick={signOutAndRedirect}>
-        Sign out
-      </button>
+      <div className="flex flex-wrap gap-3">
+        <button className="px-4 py-2 rounded text-[13px] border border-line text-ink-2 hover:bg-bg-alt transition-colors" onClick={signOutAndRedirect}>
+          Sign out
+        </button>
+        <button
+          className="px-4 py-2 rounded text-[13px] border border-line text-ink-2 hover:bg-bg-alt transition-colors"
+          onClick={async () => {
+            if (!confirm('Sign out on every device, including Excel and this browser?')) return;
+            const result = await graphqlClient.mutation(SIGN_OUT_EVERYWHERE_MUTATION, {}).toPromise();
+            if (result.error || !result.data?.signOutEverywhere?.success) {
+              alert(result.error?.message || result.data?.signOutEverywhere?.errors?.[0]?.message || 'Could not sign out everywhere.');
+              return;
+            }
+            await signOutAndRedirect();
+          }}
+        >
+          Sign out everywhere
+        </button>
+      </div>
     </div>
   );
 }

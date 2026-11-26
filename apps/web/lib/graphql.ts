@@ -2768,6 +2768,8 @@ export const CLIENT_AUTH_REQUIREMENTS_QUERY = `
       passwordEnabled
       mfaRequired
       emailDomains
+      maxSessionMinutes
+      idleTimeoutMinutes
     }
     clientIdentityProviders(clientId: $clientId) {
       id
@@ -2785,6 +2787,12 @@ export const CLIENT_AUTH_REQUIREMENTS_QUERY = `
       registrationError
       isEnabled
     }
+  }
+`;
+
+export const SIGN_OUT_EVERYWHERE_MUTATION = `
+  mutation SignOutEverywhere($userId: ID) {
+    signOutEverywhere(userId: $userId) { success errors { message } }
   }
 `;
 

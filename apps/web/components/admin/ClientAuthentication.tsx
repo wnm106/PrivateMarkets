@@ -9,6 +9,7 @@ import {
   UPSERT_CLIENT_IDENTITY_PROVIDER_MUTATION,
   graphqlClient,
 } from '@/lib/graphql';
+import { limitMinutes } from '@/lib/session-limits';
 
 interface ClientOption {
   id: string;
@@ -20,6 +21,7 @@ interface Requirements {
   mfaRequired: boolean;
   emailDomains: string[];
 }
+
 
 interface IdentityProvider {
   id: string;
@@ -68,6 +70,8 @@ export function ClientAuthentication({
 }) {
   const [requirements, setRequirements] = useState<Requirements>({ passwordEnabled: true, mfaRequired: false, emailDomains: [] });
   const [domains, setDomains] = useState('');
+  const [maxHours, setMaxHours] = useState('');
+  const [idleMinutes, setIdleMinutes] = useState('');
   const [providers, setProviders] = useState<IdentityProvider[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -92,6 +96,8 @@ export function ClientAuthentication({
     };
     setRequirements(loaded);
     setDomains(loaded.emailDomains.join(', '));
+    setMaxHours(next?.maxSessionMinutes ? String(Math.round((next.maxSessionMinutes / 60) * 100) / 100) : '');
+    setIdleMinutes(next?.idleTimeoutMinutes ? String(next.idleTimeoutMinutes) : '');
     setProviders(result.data?.clientIdentityProviders ?? []);
   };
 
@@ -100,6 +106,12 @@ export function ClientAuthentication({
   }, [selectedClientId]);
 
   const saveRequirements = async () => {
+    const maxSessionMinutes = limitMinutes(maxHours, 60);
+    const idleTimeoutMinutes = limitMinutes(idleMinutes, 1);
+    if (Number.isNaN(maxSessionMinutes) || Number.isNaN(idleTimeoutMinutes)) {
+      onError('Enter the limits as numbers, or leave them blank for no limit.');
+      return;
+    }
     setSaving(true);
     const emailDomains = domains.split(/[,\s]+/).map((domain) => domain.trim()).filter(Boolean);
     const result = await graphqlClient.mutation(UPDATE_CLIENT_AUTH_REQUIREMENTS_MUTATION, {
@@ -108,6 +120,8 @@ export function ClientAuthentication({
         passwordEnabled: requirements.passwordEnabled,
         mfaRequired: requirements.mfaRequired,
         emailDomains,
+        maxSessionMinutes,
+        idleTimeoutMinutes,
       },
     }).toPromise();
     setSaving(false);
@@ -192,6 +206,19 @@ export function ClientAuthentication({
               <input type="checkbox" checked={requirements.mfaRequired} onChange={(event) => setRequirements((current) => ({ ...current, mfaRequired: event.target.checked }))} />
               Require an authenticator app
             </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="block text-sm">
+                <span className="font-medium text-gray-700">End each sign-in after (hours)</span>
+                <input value={maxHours} onChange={(event) => setMaxHours(event.target.value)} inputMode="decimal" placeholder="No limit" className="mt-1 w-full px-3 py-2 border rounded" />
+              </label>
+              <label className="block text-sm">
+                <span className="font-medium text-gray-700">End a sign-in idle for (minutes)</span>
+                <input value={idleMinutes} onChange={(event) => setIdleMinutes(event.target.value)} inputMode="numeric" placeholder="No limit" className="mt-1 w-full px-3 py-2 border rounded" />
+              </label>
+            </div>
+            <p className="text-sm text-gray-600">
+              Between a quarter of an hour and 30 days, and between 5 minutes and a day. A person in several clients gets the strictest. The idle limit counts activity in the web app; the Excel add-in&apos;s own sign-in has only the time limit.
+            </p>
             {!requirements.passwordEnabled && !activeSso && (
               <p className="text-sm text-amber-800">Password is off and no identity provider is active, so people at these domains cannot sign in until a connection succeeds.</p>
             )}
