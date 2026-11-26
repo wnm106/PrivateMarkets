@@ -1,5 +1,6 @@
 'use client';
 
+import { isHiddenAttribute, RESTRICTED_TEXT, useHiddenAttributes } from '@/lib/hidden-attributes';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ColDef } from 'ag-grid-community';
 import { attributeDisplayKind, formatAttributeDisplay, tableCellAlign, type TableCellAlign } from '@/lib/attribute-display';
@@ -435,6 +436,7 @@ function GroupDetail(props: any) {
 
 /** One level of the grid tree: either a page of entity rows or a page of groups (each expandable). */
 function GridLevel({ baseInput, keys, depth, visible, colInfo, groupBy, onError, showSummary, domainCode, refreshTick = 0, onDataChanged, headerStore, toggleSort, setFilterText }: LevelProps) {
+  const hiddenCodes = useHiddenAttributes();
   const [offset, setOffset] = useState(0);
   const [res, setRes] = useState<GridResultPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -492,11 +494,12 @@ function GridLevel({ baseInput, keys, depth, visible, colInfo, groupBy, onError,
         headerComponent: depth === 0 ? ReportHeader : undefined,
         headerComponentParams: { code },
         cellStyle: { textAlign: info?.align || 'left' },
-        valueGetter: (params) => displayGridValue(params.data, code, index, colInfo),
+        // A field this person is not cleared for reads Restricted, in the grid and in what it exports.
+        valueGetter: (params) => (isHiddenAttribute(hiddenCodes, code) && params.data?.__kind !== 'group' ? RESTRICTED_TEXT : displayGridValue(params.data, code, index, colInfo)),
       });
     });
     return defs;
-  }, [colInfo, depth, groupBy.length, visible]);
+  }, [colInfo, depth, groupBy.length, visible, hiddenCodes]);
 
   if (!res) {
     return <div style={{ padding: 10, color: '#888' }}>{loading ? 'Loading…' : 'No data'}</div>;

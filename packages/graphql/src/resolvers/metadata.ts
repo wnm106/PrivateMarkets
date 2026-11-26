@@ -5,6 +5,15 @@ import { withClientNames } from './schema-scope';
 import { ok } from '../lib/db-result';
 import { ID_BATCH } from '../lib/read-batches';
 
+const ACCESS_LEVELS = ['STANDARD', 'CONFIDENTIAL', 'RESTRICTED'] as const;
+
+/** An access level as entered, or an error naming the three there are. */
+export function accessLevelInput(value: unknown): string {
+  const level = String(value ?? '').trim().toUpperCase();
+  if (!(ACCESS_LEVELS as readonly string[]).includes(level)) throw new Error('The access level is STANDARD, CONFIDENTIAL or RESTRICTED');
+  return level;
+}
+
 export const metadataResolvers = {
   Query: {
     /**
@@ -446,6 +455,7 @@ export const metadataResolvers = {
         }
         if (input.isEditable !== undefined) updateData.is_editable = input.isEditable;
         if (input.isVisible !== undefined) updateData.is_visible = input.isVisible;
+        if (input.accessLevel !== undefined) updateData.access_level = accessLevelInput(input.accessLevel);
         
         // Reference list link
         if (input.referenceListCode !== undefined) updateData.reference_list_code = input.referenceListCode;
@@ -988,6 +998,9 @@ function mapAttributeDefinition(row: any) {
     // The catalog's own flag, and whether the session's client hides the field.
     catalogIsVisible: (row.catalog_is_visible ?? row.is_visible) !== false,
     hiddenForClient: row.hidden_for_client === true,
+    accessLevel: row.access_level || 'STANDARD',
+    clientAccessLevel: row.client_access_level ?? null,
+    valueHidden: row.value_hidden === true,
     // Reference list link
     referenceListCode: row.reference_list_code || null,
     referenceListLevel: row.reference_list_level ?? null,
@@ -1091,6 +1104,7 @@ interface UpdateAttributeDefinitionInput {
   displaySpanRows?: number;
   isEditable?: boolean;
   isVisible?: boolean;
+  accessLevel?: string;
   // Reference list link
   referenceListCode?: string;
   // Aggregation and precision

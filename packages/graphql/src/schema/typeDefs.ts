@@ -182,6 +182,12 @@ type AttributeDefinition {
   isVisible: Boolean!
   # The catalog's own flag, whatever a client hides. Edit screens write this one.
   catalogIsVisible: Boolean!
+  """Who sees this attribute's values: STANDARD, CONFIDENTIAL or RESTRICTED. The catalog's level."""
+  accessLevel: String!
+  """The open client's own level for it, when the client set one."""
+  clientAccessLevel: String
+  """True when you are not cleared to see this attribute's values: show it as restricted, not blank."""
+  valueHidden: Boolean!
   # True when the client this session is working in hides the field.
   hiddenForClient: Boolean!
   
@@ -2101,6 +2107,10 @@ type ClientCatalogField {
   hidden: Boolean!
   # Records of this type holding a value today. Null when it could not be counted.
   recordsWithValue: Int
+  """Who sees the values by the catalog: STANDARD, CONFIDENTIAL or RESTRICTED."""
+  accessLevel: String!
+  """This client's own level, when it set one."""
+  clientAccessLevel: String
 }
 
 # What one client calls an entity type, and which of its fields it hides.
@@ -3673,6 +3683,8 @@ type Query {
   overrideRequests(status: String): JSON!
   """Whether a client requires a second person to approve manual values and workflow reviews."""
   clientFourEyes(clientId: ID!): Boolean!
+  """Codes of the attributes whose values you are not cleared to see. Show them as restricted."""
+  hiddenAttributeCodes: [String!]!
   """The network address this request came from, as the allowed-networks rule sees it. Null when no trusted proxy gave one."""
   myNetworkAddress: String
   """Who changed access or configuration, and when, newest first, as {entries, hasMore}. kind is access or configuration. table is schema.table or a table name. from and to are ISO timestamps. search matches the record id or the stored row. Pass the last entry's id as beforeId for the next page. Readable by staff and by a client's user or role managers."""
@@ -3895,6 +3907,8 @@ type Mutation {
   withdrawOverrideRequest(id: ID!): MutationResult!
   """Staff only: require a second person to approve this client's manual values and workflow reviews."""
   setClientFourEyes(clientId: ID!, required: Boolean!): MutationResult!
+  """A client's own level for an attribute: STANDARD, CONFIDENTIAL, RESTRICTED, or null for the catalog's level. Needs role management in the client."""
+  setClientAttributeAccessLevel(clientId: ID!, attributeCode: String!, level: String): MutationResult!
   """End every sign-in of a person, on every device. Leave userId out for yourself. A client's user managers can do it for their members; staff for anyone."""
   signOutEverywhere(userId: ID): MutationResult!
   clearManualOverride(input: ClearManualOverrideInput!): ClearManualOverrideResult!
@@ -4278,6 +4292,8 @@ input UpdateAttributeDefinitionInput {
   displaySpanRows: Int
   isEditable: Boolean
   isVisible: Boolean
+  """STANDARD, CONFIDENTIAL or RESTRICTED."""
+  accessLevel: String
   aggregationType: String
   weightAttributeCode: String
   numericPrecision: Int

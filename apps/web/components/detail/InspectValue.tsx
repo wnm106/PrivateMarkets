@@ -2,6 +2,7 @@
 
 import type { MouseEvent, ReactNode } from 'react';
 import { useAttributeInspect } from './AttributeInspect';
+import { isHiddenAttribute, RESTRICTED_TEXT, useHiddenAttributes } from '@/lib/hidden-attributes';
 
 /** Where a displayed value lives in the entity model: one attribute on one entity. */
 export interface AttrBind {
@@ -46,7 +47,12 @@ export function InspectValue({
   children: ReactNode;
 }) {
   const open = useInspectBind(onChanged);
+  const hidden = useHiddenAttributes();
   if (!bind) return <>{children}</>;
+  // Not cleared for this field: say so, rather than show a blank that reads as missing data.
+  if (isHiddenAttribute(hidden, bind.code) && (value == null || value === '')) {
+    return <span className="restricted-value" title="You are not cleared to see this field">{RESTRICTED_TEXT}</span>;
+  }
   return (
     <span
       className="attr-inspectable"

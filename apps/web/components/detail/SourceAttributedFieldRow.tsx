@@ -1,5 +1,6 @@
 'use client';
 
+import { isHiddenAttribute, RESTRICTED_TEXT, useHiddenAttributes } from '@/lib/hidden-attributes';
 import { useEffect, useRef, useState } from 'react';
 import { sources, type SourceKey } from '@/lib/data';
 import { inlineCommitValue, inlineDraft } from '@/lib/inline-field';
@@ -78,6 +79,8 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onValueChange, on
     ? { name: dbSource.name, color: dbSource.hex, hex: dbSource.hex }
     : (sources[normalizedFieldSource] ?? { name: field.source, color: '#475569', hex: '#475569' });
 
+  const hiddenCodes = useHiddenAttributes();
+  const restricted = isHiddenAttribute(hiddenCodes, field.attributeCode);
   const hasValue = field.value !== '' && field.value !== '—' && field.value != null;
   const hasSource = hasValue && Boolean(field.source);
   const borderColor = hasSource ? src.hex : 'var(--ink-4)';
@@ -123,14 +126,16 @@ export function SourceAttributedFieldRow({ field, onDrilldown, onValueChange, on
           className="sa-field-value-cell"
           onClick={field.editable === false ? undefined : (event) => event.stopPropagation()}
         >
-          <InlineFieldValue
+          {restricted ? (
+            <span className="restricted-value" title="You are not cleared to see or change this field">{RESTRICTED_TEXT}</span>
+          ) : <InlineFieldValue
             field={field}
             onSave={field.editable === false ? undefined : (onAddSourceValue
               ? (next) => onAddSourceValue(field.attributeCode || field.label, 'manual', next)
               : (onValueChange
                 ? (next) => onValueChange(field.attributeCode || field.label, next)
                 : undefined))}
-          />
+          />}
           {field.conflict && <span className="conflict-badge">CONFLICT</span>}
           {field.alt && field.alt > 0 && (
             <span className="alt-count" title={`${field.alt} alternative value(s) available`}>±{field.alt}</span>

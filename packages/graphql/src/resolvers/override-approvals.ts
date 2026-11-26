@@ -54,6 +54,15 @@ export const overrideApprovalResolvers = {
       return withRecordNames(rows, await recordNames(context, rows.map((row) => row.entityId)));
     },
     myNetworkAddress: (_: unknown, __: unknown, context: Context) => context.clientIp ?? null,
+    hiddenAttributeCodes: async (_: unknown, __: unknown, context: Context) => {
+      const { data, error } = await context.supabase.rpc('hidden_attribute_codes');
+      if (error) {
+        // Not migrated yet: nothing is classified.
+        if (error.code === 'PGRST202') return [];
+        throw new Error(error.message);
+      }
+      return Array.isArray(data) ? data : [];
+    },
     clientFourEyes: async (_: unknown, args: { clientId: string }, context: Context) => {
       const { data, error } = await context.supabase.schema('tenancy').from('clients').select('four_eyes_required').eq('id', args.clientId).maybeSingle();
       if (error) throw new Error(error.message);
@@ -71,6 +80,15 @@ export const overrideApprovalResolvers = {
     withdrawOverrideRequest: async (_: unknown, args: { id: string }, context: Context) => {
       const { error } = await gm(context).rpc('withdraw_override_request', { p_request_id: args.id });
       if (error) return { success: false, errors: [{ field: 'general', message: error.message, code: 'WITHDRAW_FAILED' }] };
+      return { success: true, errors: [] };
+    },
+    setClientAttributeAccessLevel: async (_: unknown, args: { clientId: string; attributeCode: string; level?: string | null }, context: Context) => {
+      const { error } = await context.supabase.rpc('set_client_attribute_access_level', {
+        p_client_id: args.clientId,
+        p_attribute_code: args.attributeCode,
+        p_level: args.level ?? null,
+      });
+      if (error) return { success: false, errors: [{ field: 'general', message: error.message, code: 'ACCESS_LEVEL_FAILED' }] };
       return { success: true, errors: [] };
     },
     setClientFourEyes: async (_: unknown, args: { clientId: string; required: boolean }, context: Context) => {

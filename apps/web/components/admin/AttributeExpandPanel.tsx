@@ -43,6 +43,8 @@ export interface ExpandableAttribute {
   /** The catalog's own flag; isVisible is also false when the client being worked in hides the field. */
   catalogIsVisible?: boolean;
   hiddenForClient?: boolean;
+  /** STANDARD, CONFIDENTIAL or RESTRICTED: who sees the values. */
+  accessLevel?: string;
   aggregationType?: string;
   weightAttributeCode?: string;
   numericPrecision?: number;
@@ -112,6 +114,7 @@ export function AttributeExpandPanel({
     // The catalog's flag. isVisible is also false when the client being worked in hides the field.
     isVisible: attribute.catalogIsVisible ?? attribute.isVisible ?? true,
     aggregationType: attribute.aggregationType || 'NONE',
+    accessLevel: attribute.accessLevel || 'STANDARD',
     weightAttributeCode: attribute.weightAttributeCode || '',
     numericPrecision: attribute.numericPrecision,
     referenceListCode: attribute.referenceListCode || '',
@@ -202,6 +205,7 @@ export function AttributeExpandPanel({
           displaySpanRows: form.displaySpanRows,
           isEditable: form.isEditable,
           isVisible: form.isVisible,
+          accessLevel: form.accessLevel || 'STANDARD',
           aggregationType: form.aggregationType || 'NONE',
           weightAttributeCode: form.aggregationType === 'WEIGHTED_AVG' ? (form.weightAttributeCode || null) : null,
           numericPrecision: form.numericPrecision,
@@ -381,6 +385,14 @@ export function AttributeExpandPanel({
         >
           <option value="">None</option>
           {referenceLists.map((list) => <option key={list.listCode} value={list.listCode}>{list.listName}</option>)}
+        </select>
+      </label>
+      <label>
+        Who sees the values
+        <select className="text-input" value={form.accessLevel} onChange={(e) => setForm({ ...form, accessLevel: e.target.value })}>
+          <option value="STANDARD">Everyone who can read the record</option>
+          <option value="CONFIDENTIAL">Confidential: cleared people only</option>
+          <option value="RESTRICTED">Restricted: highest clearance only</option>
         </select>
       </label>
       <label>

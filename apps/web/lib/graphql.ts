@@ -304,6 +304,9 @@ export const ATTRIBUTE_REGISTER_QUERY = `
       isVisible
       catalogIsVisible
       hiddenForClient
+      accessLevel
+      clientAccessLevel
+      valueHidden
       isDerived
       derivationFormula
       isTimeVarying
@@ -2606,6 +2609,8 @@ const CLIENT_CATALOG_SETTINGS_FIELDS = `
     catalogIsVisible
     hidden
     recordsWithValue
+    accessLevel
+    clientAccessLevel
   }
 `;
 
@@ -2789,6 +2794,14 @@ export const CLIENT_AUTH_REQUIREMENTS_QUERY = `
       registrationError
       isEnabled
     }
+  }
+`;
+
+export const HIDDEN_ATTRIBUTE_CODES_QUERY = `query HiddenAttributeCodes { hiddenAttributeCodes }`;
+
+export const SET_CLIENT_ATTRIBUTE_ACCESS_LEVEL_MUTATION = `
+  mutation SetClientAttributeAccessLevel($clientId: ID!, $attributeCode: String!, $level: String) {
+    setClientAttributeAccessLevel(clientId: $clientId, attributeCode: $attributeCode, level: $level) { success errors { message } }
   }
 `;
 

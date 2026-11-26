@@ -28,3 +28,11 @@ describe('normalizeIpRanges', () => {
     expect(() => normalizeIpRanges(Array.from({ length: 51 }, (_, i) => `10.0.${i}.0/24`))).toThrow('at most 50');
   });
 });
+
+describe('accessLevelInput', () => {
+  it('takes the three levels in any case, and refuses anything else', async () => {
+    const { accessLevelInput } = await import('./metadata');
+    expect(accessLevelInput('confidential')).toBe('CONFIDENTIAL');
+    expect(() => accessLevelInput('secret')).toThrow('STANDARD, CONFIDENTIAL or RESTRICTED');
+  });
+});

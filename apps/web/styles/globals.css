@@ -10638,6 +10638,9 @@ textarea.skill-in { min-height: 84px; line-height: 1.5; resize: vertical; }
 .da-seg2 { display: flex; border: 1px solid var(--da-line); border-radius: 6px; overflow: hidden; }
 .da-seg2 button { flex: 1; border: 0; background: var(--surface); padding: 6px; cursor: pointer; }
 .da-seg2 button[aria-pressed="true"] { background: #0b5d73; color: #fff; }
+/* A value the person is not cleared to see (lib/hidden-attributes.ts). */
+.restricted-value { color: var(--ink-3); font-style: italic; }
+
 /* Audit log (app/admin/audit). What the da- kit lacks, scoped to the page. */
 .x-audit .da-panel { padding: 14px; }
 .x-audit .da-title { flex: 1 1 auto; border-right: 0; }

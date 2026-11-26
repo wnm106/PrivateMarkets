@@ -17,6 +17,22 @@ export interface ClientCatalogField {
   hidden: boolean;
   /** Records of this type holding a value today. Null when it was not counted. */
   recordsWithValue: number | null;
+  /** Who sees the values by the catalog: STANDARD, CONFIDENTIAL or RESTRICTED. */
+  accessLevel?: string;
+  /** This client's own level, when it set one. */
+  clientAccessLevel?: string | null;
+}
+
+export const ACCESS_LEVEL_LABEL: Record<string, string> = {
+  STANDARD: 'Everyone',
+  CONFIDENTIAL: 'Confidential',
+  RESTRICTED: 'Restricted',
+};
+
+/** The level in force for this client, and whether it is the client's own choice. */
+export function effectiveAccessLevel(field: Pick<ClientCatalogField, 'accessLevel' | 'clientAccessLevel'>): { level: string; own: boolean } {
+  if (field.clientAccessLevel) return { level: field.clientAccessLevel, own: true };
+  return { level: field.accessLevel || 'STANDARD', own: false };
 }
 
 export interface ClientTypeAlias {

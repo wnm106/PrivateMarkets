@@ -48,6 +48,10 @@ export interface ClientCatalogField {
   hidden: boolean;
   /** Records of this type holding a value today. Null when it could not be counted. */
   recordsWithValue: number | null;
+  /** Who sees the values by the catalog. */
+  accessLevel: string;
+  /** This client's own level, when it set one. */
+  clientAccessLevel: string | null;
 }
 
 /** How many fields one grid request counts. Each is a column of the pivot. */
@@ -124,6 +128,8 @@ export function shapeFields(
       catalogIsVisible: (row.catalog_is_visible ?? row.is_visible) !== false,
       hidden: hidden.has(String(row.id)),
       recordsWithValue: usage ? usage.get(String(row.attribute_code)) ?? 0 : null,
+      accessLevel: String(row.access_level || 'STANDARD'),
+      clientAccessLevel: row.client_access_level ? String(row.client_access_level) : null,
     }))
     .sort((a, b) =>
       a.displaySection.localeCompare(b.displaySection) || a.attributeName.localeCompare(b.attributeName));

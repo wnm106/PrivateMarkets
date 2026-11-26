@@ -8,10 +8,13 @@ import {
   CLIENT_CATALOG_SETTINGS_QUERY,
   REMOVE_CLIENT_ENTITY_TYPE_ALIAS_MUTATION,
   SET_CLIENT_ENTITY_TYPE_NAME_MUTATION,
+  SET_CLIENT_ATTRIBUTE_ACCESS_LEVEL_MUTATION,
   SET_CLIENT_FIELDS_HIDDEN_MUTATION,
 } from '@/lib/graphql';
 import {
+  ACCESS_LEVEL_LABEL,
   canToggle,
+  effectiveAccessLevel,
   fieldState,
   fieldSummary,
   filterFields,
@@ -143,6 +146,27 @@ export function ClientCatalogPanel({
     );
     apply(result, 'removeClientEntityTypeAlias');
     setSaving(false);
+  };
+
+  // Who sees the values, for this client. Empty means the catalog's level.
+  const setAccessLevel = async (attributeCode: string, level: string) => {
+    if (!settings?.clientId) return;
+    setSaving(true);
+    setError(null);
+    const result = await graphqlMutation<{ setClientAttributeAccessLevel: { success: boolean; errors: Array<{ message: string }> } }>(
+      SET_CLIENT_ATTRIBUTE_ACCESS_LEVEL_MUTATION,
+      { clientId: settings.clientId, attributeCode, level: level || null },
+    );
+    setSaving(false);
+    const message = result.error?.message || result.data?.setClientAttributeAccessLevel?.errors?.[0]?.message;
+    if (message || !result.data?.setClientAttributeAccessLevel?.success) {
+      setError(message || 'The level could not be saved.');
+      return;
+    }
+    setSettings((current) => current && {
+      ...current,
+      fields: current.fields.map((field) => (field.attributeCode === attributeCode ? { ...field, clientAccessLevel: level || null } : field)),
+    });
   };
 
   const setHidden = async (attributeIds: string[], hidden: boolean) => {
@@ -344,6 +368,7 @@ export function ClientCatalogPanel({
                 <th style={thStyle}>Field</th>
                 <th style={thStyle}>Section</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Records with a value</th>
+                <th style={thStyle}>Who sees values</th>
               </tr>
             </thead>
             <tbody>
@@ -373,6 +398,22 @@ export function ClientCatalogPanel({
                     <td style={{ ...tdStyle, fontSize: '13px', color: 'var(--ink-2)' }}>{field.displaySection}</td>
                     <td style={{ ...tdStyle, fontSize: '13px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                       {usageLabel(field, settings.recordCount)}
+                    </td>
+                    <td style={tdStyle}>
+                      <select
+                        className="text-input"
+                        aria-label={`Who sees ${field.attributeName} values`}
+                        value={field.clientAccessLevel ?? ''}
+                        disabled={readOnly || saving || !settings.clientId}
+                        title={effectiveAccessLevel(field).own ? 'This client\'s own level' : 'The catalog\'s level'}
+                        onChange={(event) => void setAccessLevel(field.attributeCode, event.target.value)}
+                        style={{ fontSize: '13px', padding: '4px 6px' }}
+                      >
+                        <option value="">As the catalog: {ACCESS_LEVEL_LABEL[field.accessLevel || 'STANDARD'] ?? field.accessLevel}</option>
+                        <option value="STANDARD">Everyone</option>
+                        <option value="CONFIDENTIAL">Confidential</option>
+                        <option value="RESTRICTED">Restricted</option>
+                      </select>
                     </td>
                   </tr>
                 );

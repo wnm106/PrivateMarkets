@@ -1,5 +1,6 @@
 'use client';
 
+import { isHiddenAttribute, RESTRICTED_TEXT, useHiddenAttributes } from '@/lib/hidden-attributes';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -515,9 +516,12 @@ export function EntityAttributeTable({
 
   // List columns store a code and show its label.
   const listLabels = useListLabels(columns.map((col) => col.listCode || '').filter(Boolean));
+  const hiddenCodes = useHiddenAttributes();
   const shownValue = useCallback((value: any, col: Col) => (
-    col.listCode ? listLabel(listLabels[col.listCode], value) : formatCell(value, col)
-  ), [listLabels]);
+    isHiddenAttribute(hiddenCodes, col.code)
+      ? RESTRICTED_TEXT
+      : col.listCode ? listLabel(listLabels[col.listCode], value) : formatCell(value, col)
+  ), [listLabels, hiddenCodes]);
 
   // The database compares stored codes, so a filter typed on a list column is
   // sent as the codes whose label (or code) matches what was typed.
