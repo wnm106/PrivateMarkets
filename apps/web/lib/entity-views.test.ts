@@ -97,3 +97,14 @@ describe('related entities a view can reach', () => {
     assert.deepEqual(pruneLookups({ ...chained.view, columns: [] }).lookups, []);
   });
 });
+
+describe('viewGridRequest population filter', () => {
+  const view = { domainCode: 'FUND', columns: [{ field: 'entity_name' }], lookups: [], sort: [] };
+  it('leaves populationConditions out when there is no filter', () => {
+    assert.equal('populationConditions' in viewGridRequest(view, {}), false);
+  });
+  it('sends the conditions it is given', () => {
+    const rows = [{ attributeCode: 'STATUS', operator: 'equals', value: 'ACTIVE' }];
+    assert.deepEqual(viewGridRequest(view, {}, 10000, rows).populationConditions, rows);
+  });
+});

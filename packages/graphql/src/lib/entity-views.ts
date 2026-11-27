@@ -40,6 +40,8 @@ export interface EntityViewInput {
   columns: EntityViewColumn[];
   lookups: EntityViewLookup[];
   sort: EntityViewSort[];
+  /** The saved population filter the view opens with. */
+  filterId?: string | null;
   displayOrder?: number | null;
 }
 
@@ -180,6 +182,7 @@ export function normalizeEntityView(raw: any): { value: EntityViewInput; errors:
       columns,
       lookups,
       sort,
+      filterId: text(raw?.filterId) || null,
       displayOrder: Number.isFinite(order) ? Math.trunc(order) : null,
     },
     errors,

@@ -8,6 +8,7 @@ import { conditionValueKey, type RelationshipHopRef } from '../lib/compliance-po
 import { parseFundBoardResultPayload, selectLatestFundResults } from '../lib/fund-board-results';
 import { knowledgeInstant } from '../lib/fund-surface';
 import { ok } from '../lib/db-result';
+import { conditionRow, populationRows, toSnakeDim } from '../lib/condition-rows';
 import { groupBy, loaderFor } from '../lib/request-loaders';
 
 // `compliance` lives in a non-public Postgres schema; every call must go
@@ -735,32 +736,6 @@ function toSnakeHops(hops?: Array<{ relationshipCode: string; direction: string;
   }));
 }
 
-function toSnakeDim(dim?: {
-  sourceScope?: string;
-  offsetUnit?: string;
-  offsetAmount?: number;
-  snapTo?: string;
-  knowledgeMode?: string;
-  relationshipPath?: Array<{ relationshipCode: string; direction: string; recursive?: boolean }>;
-} | null) {
-  if (!dim) return {};
-  const out: Record<string, any> = {};
-  if (dim.sourceScope) out.source_scope = dim.sourceScope;
-  if (dim.offsetUnit) out.offset_unit = dim.offsetUnit;
-  if (dim.offsetAmount !== undefined && dim.offsetAmount !== null) out.offset_amount = dim.offsetAmount;
-  if (dim.snapTo) out.snap_to = dim.snapTo;
-  if (dim.knowledgeMode) out.knowledge_mode = dim.knowledgeMode;
-  const path = (dim.relationshipPath || []).filter((h) => h?.relationshipCode);
-  if (path.length) {
-    out.relationship_path = path.map((h) => ({
-      relationship_code: h.relationshipCode,
-      direction: h.direction,
-      recursive: !!h.recursive,
-    }));
-  }
-  return out;
-}
-
 function toCamelDim(dim: any) {
   if (!dim || Object.keys(dim).length === 0) return null;
   const relationshipPath = Array.isArray(dim.relationship_path)
@@ -802,25 +777,6 @@ function mapRule(row: any) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdBy: row.created_by,
-  };
-}
-
-function conditionRow(versionId: string, cond: any, extra: Record<string, unknown> = {}) {
-  return {
-    rule_version_id: versionId,
-    applies_to: cond.appliesTo,
-    condition_group: cond.conditionGroup ?? 1,
-    condition_order: cond.conditionOrder ?? 1,
-    attribute_code: cond.attributeCode,
-    attribute_dimension: toSnakeDim(cond.attributeDimension),
-    compare_attribute_code: cond.compareAttributeCode || null,
-    compare_dimension: toSnakeDim(cond.compareDimension),
-    operator: cond.operator,
-    value: cond.value ?? null,
-    logic_operator: cond.logicOperator ?? 'AND',
-    ...(cond.leftExpression ? { left_expression: cond.leftExpression } : {}),
-    ...(cond.rightExpression ? { right_expression: cond.rightExpression } : {}),
-    ...extra,
   };
 }
 
@@ -1330,11 +1286,7 @@ async function previewPopulation(context: Context, input: any) {
   const knowledge = knowledgeInstant(input.knowledgeDate);
 
   const active = (input.conditions || []).filter((c: any) => c?.attributeCode);
-  // The same row shape a saved condition is stored in.
-  const rows = active.map((c: any) => {
-    const { rule_version_id: _version, ...row } = conditionRow('', { ...c, appliesTo: 'BASE', operator: c.operator || 'equals' });
-    return row;
-  });
+  const rows = populationRows(active);
   const { data, error } = await cx(context).rpc('preview_population', {
     p_domain_code: domainCode,
     p_conditions: rows,

@@ -30,6 +30,14 @@ checked by a machine, so they hold no matter who or what writes the change.
      `entity_matches_conditions`; the editor's preview through
      `compliance.preview_population`. A result's contributors and their
      amounts come from `compliance.result_contributor_values`.
+   - A population (which records a view or an agent's question covers) is a
+     `public.population_filters` row whose conditions are matched by
+     `compliance.entity_matches_condition_set`, reached through
+     `reporting.grid`'s `populationConditions`. The MCP serves the certified
+     ones (`list_populations`, `get_population`, `population` in `query_data`);
+     an administrator certifies, and the database withdraws the certification
+     when the definition changes. An agent does not rebuild a population as
+     its own filter.
    - Whether a record may exist without a parent is decided by
      `packages/graphql/src/lib/required-parents.ts`. A relationship type marked
      `is_required` means a record of its first entity type must be linked to a

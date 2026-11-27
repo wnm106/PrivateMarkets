@@ -20,6 +20,19 @@ import { GRID_QUERY, type GridResultPayload } from '@/lib/reporting';
 import { aggregateNumber, attributeAggregation, gridAggFunc, numericValue } from '@/lib/grid-aggregation';
 import { listLabel, useListLabels } from '@/lib/list-labels';
 import { usePublishTab } from '@/lib/view-context';
+import type { ComplianceCondition } from '@/components/forms/ComplianceRuleForm';
+import {
+  CERTIFY_POPULATION_FILTER_MUTATION,
+  DELETE_POPULATION_FILTER_MUTATION,
+  WITHDRAW_POPULATION_CERTIFICATION_MUTATION,
+  POPULATION_FILTERS_QUERY,
+  SAVE_POPULATION_FILTER_MUTATION,
+  conditionsToInput,
+  filterSummary,
+  type PopulationConditionInput,
+  type PopulationFilter,
+} from '@/lib/population-filters';
+import { ViewFilterPanel } from './ViewFilterPanel';
 import {
   DELETE_ENTITY_VIEW_MUTATION,
   ENTITY_VIEWS_QUERY,
@@ -102,6 +115,7 @@ function emptyDraft(domainCode: string): EntityViewDraft {
     columns: [{ field: 'entity_name' }],
     lookups: [],
     sort: [],
+    filterId: null,
   };
 }
 
@@ -123,6 +137,13 @@ export function EntityViews({
   const [draft, setDraft] = useState<EntityViewDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // ---- population filters: saved ones, the one in use, and a temporary change to it ----
+  const [filters, setFilters] = useState<PopulationFilter[]>([]);
+  const [filterError, setFilterError] = useState<string | null>(null);
+  const [activeFilterId, setActiveFilterId] = useState<string | null>(null);
+  /** Conditions edited for this visit only. Null means the saved filter, as saved. */
+  const [working, setWorking] = useState<ComplianceCondition[] | null>(null);
 
   const [sources, setSources] = useState<Source[]>([]);
   const [relTypes, setRelTypes] = useState<ViewRelationshipType[]>([]);
@@ -188,6 +209,97 @@ export function EntityViews({
   }, []);
 
   const selected = useMemo(() => views.find((view) => view.id === selectedId) || null, [views, selectedId]);
+
+  const loadFilters = useCallback(async () => {
+    const res = await graphqlQuery<{ populationFilters: PopulationFilter[] }, { domainCode: string }>(
+      POPULATION_FILTERS_QUERY, { domainCode }, 'network-only',
+    );
+    if (res.error) {
+      setFilterError(/populationFilters|population_filters/i.test(errorText(res.error))
+        ? 'Filters are not set up on this database yet. Apply migration 20261125090000_population_filters.sql.'
+        : errorText(res.error));
+      setFilters([]);
+    } else {
+      setFilters(res.data?.populationFilters || []);
+      setFilterError(null);
+    }
+  }, [domainCode]);
+  useEffect(() => { void loadFilters(); }, [loadFilters]);
+
+  // Opening a view starts from the filter it was saved with, and drops any temporary change.
+  useEffect(() => {
+    setActiveFilterId(selected?.filterId ?? null);
+    setWorking(null);
+    // Only a different view resets the filter, not a re-read of the same one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
+  const savedFilter = useMemo(() => filters.find((filter) => filter.id === activeFilterId) || null, [filters, activeFilterId]);
+  /** What narrows the records now: the temporary conditions if there are any, else the saved filter. */
+  const populationConditions = useMemo<PopulationConditionInput[]>(
+    () => (working ? conditionsToInput(working) : savedFilter?.conditions ?? []),
+    [working, savedFilter],
+  );
+
+  const saveFilter = async ({ id, name, populationCode, description, conditions }: { id: string | null; name: string; populationCode?: string | null; description?: string | null; conditions: PopulationConditionInput[] }) => {
+    setFilterError(null);
+    const res = await graphqlMutation<
+      { savePopulationFilter: { filter: PopulationFilter | null; errors: Array<{ message: string }> } },
+      { id: string | null; input: any }
+    >(SAVE_POPULATION_FILTER_MUTATION, { id, input: { domainCode, filterName: name, populationCode: populationCode || null, description: description || null, conditions } });
+    const message = errorText(res.error) || res.data?.savePopulationFilter.errors.map((e) => e.message).join(' ');
+    const savedRow = res.data?.savePopulationFilter.filter;
+    if (message || !savedRow) {
+      setFilterError(message || 'Could not save the filter.');
+      return null;
+    }
+    setFilters((current) => [...current.filter((item) => item.id !== savedRow.id), savedRow].sort((a, b) => a.filterName.localeCompare(b.filterName)));
+    setActiveFilterId(savedRow.id);
+    setWorking(null);
+    return savedRow.id;
+  };
+
+  const replaceFilter = (row: PopulationFilter) => setFilters((current) => current.map((item) => (item.id === row.id ? row : item)));
+
+  /** Set the code and description the assistant reads, then certify. The database allows only administrators. */
+  const certifyFilter = async ({ filter, populationCode, description, note }: { filter: PopulationFilter; populationCode: string; description: string; note: string }) => {
+    setFilterError(null);
+    const saved = await saveFilter({ id: filter.id, name: filter.filterName, populationCode, description, conditions: filter.conditions });
+    if (!saved) return false;
+    const res = await graphqlMutation<
+      { certifyPopulationFilter: { filter: PopulationFilter | null; errors: Array<{ message: string }> } },
+      { id: string; note: string | null }
+    >(CERTIFY_POPULATION_FILTER_MUTATION, { id: filter.id, note: note || null });
+    const message = errorText(res.error) || res.data?.certifyPopulationFilter.errors.map((e) => e.message).join(' ');
+    const row = res.data?.certifyPopulationFilter.filter;
+    if (message || !row) { setFilterError(message || 'Could not certify the filter.'); return false; }
+    replaceFilter(row);
+    return true;
+  };
+
+  const withdrawFilter = async (id: string) => {
+    setFilterError(null);
+    const res = await graphqlMutation<
+      { withdrawPopulationCertification: { filter: PopulationFilter | null; errors: Array<{ message: string }> } },
+      { id: string }
+    >(WITHDRAW_POPULATION_CERTIFICATION_MUTATION, { id });
+    const message = errorText(res.error) || res.data?.withdrawPopulationCertification.errors.map((e) => e.message).join(' ');
+    const row = res.data?.withdrawPopulationCertification.filter;
+    if (message || !row) { setFilterError(message || 'Could not withdraw the certification.'); return; }
+    replaceFilter(row);
+  };
+
+  const deleteFilter = async (id: string) => {
+    const res = await graphqlMutation<{ deletePopulationFilter: { success: boolean; errors: Array<{ message: string }> } }, { id: string }>(
+      DELETE_POPULATION_FILTER_MUTATION, { id },
+    );
+    const message = errorText(res.error) || res.data?.deletePopulationFilter.errors.map((e) => e.message).join(' ');
+    if (message) { setFilterError(message); return; }
+    setFilters((current) => current.filter((item) => item.id !== id));
+    setViews((current) => current.map((view) => (view.filterId === id ? { ...view, filterId: null } : view)));
+    setActiveFilterId(null);
+    setWorking(null);
+  };
   const shown: EntityViewDraft | null = draft || selected;
 
   // Attribute lists for this entity type and every related type the shown view reaches.
@@ -264,7 +376,7 @@ export function EntityViews({
   const gridView: EntityViewDraft | null = draft ? null : selected;
 
   const requestKey = gridView && gridView.columns.length
-    ? JSON.stringify(viewGridRequest(gridView, { asOfDate, knowledgeDate }))
+    ? JSON.stringify(viewGridRequest(gridView, { asOfDate, knowledgeDate }, 10000, populationConditions))
     : '';
 
   useEffect(() => {
@@ -400,12 +512,20 @@ export function EntityViews({
   usePublishTab('views', {
     label: 'Views',
     purpose: `Saved data tables for ${domainNames[domainCode] || domainLabel(domainCode)} records: each view picks attributes of the record and of related records, and can read a named source instead of the golden value.`,
-    howToRead: 'Each column header names the attribute; a source in brackets means the column shows the value that source supplied, otherwise it is the golden value. A related record column shows one related record per row. matched is every record of this type; rows is the first part of them, with blanks left out.',
+    howToRead: 'Each column header names the attribute; a source in brackets means the column shows the value that source supplied, otherwise it is the golden value. A related record column shows one related record per row. matched is every record of this type that passes the population filter (none means every record); the filter named is saved, and changedForThisVisit means it was edited on the spot and not saved; rows is the first part of them, with blanks left out.',
     data: viewsReady && (!gridView || !loading) ? {
       views: views.map((view) => view.viewName),
       open: shown ? (shown.viewName || 'Unsaved view') : null,
       editing: Boolean(draft),
       columns: shown ? shown.columns.map((column) => ({ header: headerOf(shown, column), attribute: pathOf(shown, column), source: sourceName(column.source), lockedLeft: Boolean(column.pinned) })) : [],
+      filter: {
+        saved: savedFilter?.filterName ?? null,
+        certified: Boolean(savedFilter?.certifiedAt),
+        populationCode: savedFilter?.populationCode ?? null,
+        changedForThisVisit: Boolean(working),
+        asks: filterSummary(populationConditions),
+        conditions: populationConditions.length,
+      },
       matched,
       shown: rows.length,
       error: gridError || viewsError || null,
@@ -562,6 +682,7 @@ export function EntityViews({
         columns: draft.columns,
         lookups: pruneLookups(draft).lookups,
         sort: draft.sort.filter((item) => keys.has(item.field)),
+        filterId: draft.filterId || null,
         ...(draft.displayOrder != null ? { displayOrder: draft.displayOrder } : {}),
       },
     });
@@ -577,6 +698,8 @@ export function EntityViews({
     setViews((current) => [...current.filter((view) => view.id !== savedView.id), savedView]
       .sort((a, b) => (a.displayOrder - b.displayOrder) || a.viewName.localeCompare(b.viewName)));
     setSelectedId(savedView.id);
+    setActiveFilterId(savedView.filterId ?? null);
+    setWorking(null);
     setViewsError(null);
     setDraft(null);
   };
@@ -638,12 +761,39 @@ export function EntityViews({
 
       {viewsError && <div className="attr-table-error">{viewsError}</div>}
 
+      {!draft && selected && (
+        <ViewFilterPanel
+          domainCode={domainCode}
+          filters={filters}
+          savedId={activeFilterId}
+          onPickSaved={setActiveFilterId}
+          working={working}
+          onWorking={setWorking}
+          onSave={saveFilter}
+          onDeleteSaved={(id) => { void deleteFilter(id); }}
+          onCertify={certifyFilter}
+          onWithdraw={(id) => { void withdrawFilter(id); }}
+          error={filterError}
+        />
+      )}
+
       {draft && (
         <div className="entity-views-editor">
           <div className="entity-views-row">
             <label className="entity-views-field grow">
               <span>Name</span>
               <input className="xp-input" value={draft.viewName} placeholder="e.g. Prices by source" onChange={(event) => update({ viewName: event.target.value })} />
+            </label>
+            <label className="entity-views-field">
+              <span>Opens with filter</span>
+              <select
+                className="xp-input"
+                value={draft.filterId || ''}
+                onChange={(event) => update({ filterId: event.target.value || null })}
+              >
+                <option value="">No filter</option>
+                {filters.map((filter) => <option key={filter.id} value={filter.id}>{filter.filterName}</option>)}
+              </select>
             </label>
             <label className="entity-views-field">
               <span>Sort by</span>

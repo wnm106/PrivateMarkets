@@ -12549,3 +12549,33 @@ button.sb-tree-row:hover { background: var(--bg-alt); }
   .cd-watch li { grid-template-columns: 1fr; }
   .cd-watch-fig { text-align: left; }
 }
+
+/* Population filter of a view */
+.view-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
+  border-radius: 8px;
+}
+.view-filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.view-filter-flag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.view-filter-summary {
+  font-size: 12px;
+  color: var(--ink-2, var(--ink-3));
+  overflow-wrap: anywhere;
+}
+.view-filter-builder {
+  max-height: 60vh;
+  overflow: auto;
+}

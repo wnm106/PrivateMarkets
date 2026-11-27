@@ -21,6 +21,7 @@ import { registerSpecialistTools } from './tools/specialist-tools';
 import { registerComplianceTools } from './tools/compliance-tools';
 import { registerReportingTools } from './tools/reporting-tools';
 import { registerQueryTools } from './tools/query-data';
+import { registerPopulationTools } from './tools/population-tools';
 import { registerNarrativeTools } from './tools/narrative-tools';
 import { registerExternalIdTools } from './tools/external-id-tools';
 import { SERVER_INSTRUCTIONS } from './lib/narrative-guide';
@@ -50,6 +51,7 @@ export function registerAllTools(registry: ToolRegistry = new ToolRegistry()): T
   registerComplianceTools(registry);
   registerReportingTools(registry);
   registerQueryTools(registry);
+  registerPopulationTools(registry);
   registerNarrativeTools(registry);
   registerExternalIdTools(registry);
   return registry;
