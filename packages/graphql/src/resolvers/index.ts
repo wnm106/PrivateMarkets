@@ -23,6 +23,7 @@ import { entityResolutionResolvers } from './entity-resolution';
 import { allocationResolvers } from './allocation';
 import { fundSurfaceResolvers } from './fund-surface';
 import { fundRecResolvers } from './fund-rec';
+import { cloResolvers } from './clo';
 import { icMemoResolvers } from './ic-memo';
 import { jobResolvers } from './jobs';
 import { workflowResolvers } from './workflows';
@@ -79,6 +80,7 @@ export const resolvers = {
     icMemo: icMemoResolvers.Query.icMemo,
     fundSurface: fundSurfaceResolvers.Query.fundSurface,
     ...fundRecResolvers.Query,
+    ...cloResolvers.Query,
     ...jobResolvers.Query,
     ...workflowResolvers.Query,
     ...feedResolvers.Query,
