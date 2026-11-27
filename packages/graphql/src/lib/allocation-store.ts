@@ -564,6 +564,9 @@ export async function loadAllocationDraft(
   };
 }
 
+/** Rank walks run at once. Each probe writes and evaluates a hypothetical book, so keep it small. */
+const RANK_WALK_CONCURRENCY = 3;
+
 /** One dollar of each security: small enough that ranks are read as the buy starts. */
 const PROBE_PAR = 1;
 
@@ -634,10 +637,23 @@ async function attachComplianceCapacity(
   if (errors.length) throw new Error(`Compliance capacity could not be read. ${errors.join(' ')}`);
 
   // A rank band can move the limit, or another group's limit, as the buy grows.
-  for (const line of lines) {
-    if (!line.rankSensitive || line.capacity == null || line.capacity <= 0) continue;
-    line.capacity = await walkRankedCapacity(line, (par) => observe([line.fundId], [legFor(line.securityId, par)], [line.ruleCode], true));
-  }
+  // The same probe (fund, security, rule, amount) gives the same rows within one read,
+  // so a repeated probe is answered from the first. Lines are walked a few at a time:
+  // each walk is a chain of dependent probes, but separate lines do not depend on each other.
+  const probes = new Map<string, Promise<DealObservationRow[]>>();
+  const probe = (fundId: string, securityId: string, ruleCode: string, par: number) => {
+    const key = `${fundId}|${securityId}|${ruleCode}|${par}`;
+    let found = probes.get(key);
+    if (!found) {
+      found = observe([fundId], [legFor(securityId, par)], [ruleCode], true);
+      probes.set(key, found);
+    }
+    return found;
+  };
+  const ranked = lines.filter((line) => line.rankSensitive && line.capacity != null && line.capacity > 0);
+  await inParallel(ranked, RANK_WALK_CONCURRENCY, async (line) => {
+    line.capacity = await walkRankedCapacity(line, (par) => probe(line.fundId, line.securityId, line.ruleCode, par));
+  });
 
   const groupOf = (value: string | null) => (value && value !== '__ALL__' && value !== '__UNASSIGNED__' ? value : null);
   // One reading per fund, rule and group. Securities in one group share its room.

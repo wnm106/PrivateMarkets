@@ -58,19 +58,7 @@ export async function createRequestContext(request: Request, config: RequestCont
     ? createClient(config.supabaseUrl, config.supabaseServiceRoleKey, options)
     : null;
 
-  let user: User | null = null;
-  if (token) {
-    const { data } = await supabase.auth.getUser(token);
-    const authUser = data?.user;
-    if (authUser) {
-      user = {
-        id: authUser.id,
-        email: authUser.email || '',
-        role: roleFromAppMetadata(authUser.app_metadata),
-        metadata: authUser.user_metadata,
-      };
-    }
-  }
+  const user = token ? await verifiedCaller(supabase, token) : null;
 
   return {
     supabase,
@@ -79,5 +67,41 @@ export async function createRequestContext(request: Request, config: RequestCont
     requestId: crypto.randomUUID(),
     loaders: {} as Context['loaders'],
     config: { supabaseUrl: config.supabaseUrl, serviceRoleKey: config.supabaseServiceRoleKey || '' },
+  };
+}
+
+/**
+ * The caller behind a token. getClaims checks the token's signature locally when
+ * the project signs with asymmetric keys, so no call to Auth is made; with a
+ * shared-secret key, or when it cannot decide, it asks Auth itself. Should it
+ * fail, Auth is asked directly, as before. Resolvers read only the id and email;
+ * permissions are decided in the database.
+ */
+async function verifiedCaller(supabase: { auth: any }, token: string): Promise<User | null> {
+  const auth = supabase.auth as { getClaims?: (jwt: string) => Promise<any> };
+  if (typeof auth.getClaims === 'function') {
+    try {
+      const { data, error } = await auth.getClaims(token);
+      const claims = data?.claims;
+      if (!error && claims && typeof claims.sub === 'string' && claims.sub) {
+        return {
+          id: claims.sub,
+          email: typeof claims.email === 'string' ? claims.email : '',
+          role: roleFromAppMetadata(claims.app_metadata),
+          metadata: claims.user_metadata,
+        };
+      }
+    } catch {
+      // Asked of Auth below.
+    }
+  }
+  const { data } = await supabase.auth.getUser(token);
+  const authUser = data?.user;
+  if (!authUser) return null;
+  return {
+    id: authUser.id,
+    email: authUser.email || '',
+    role: roleFromAppMetadata(authUser.app_metadata),
+    metadata: authUser.user_metadata,
   };
 }

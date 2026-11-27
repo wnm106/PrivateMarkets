@@ -10,6 +10,7 @@ import {
   headRow, hint, sectionHead, sectionTitle, shortDate, table, tagLabel,
   type DocumentRow, type DocumentTypeRow, type EntityLink,
 } from '@/components/documents/shared';
+import { useVisiblePolling } from '@/lib/use-visible-polling';
 
 const PAGE_QUERY = `
   query Documents {
@@ -110,11 +111,7 @@ export default function DocumentsPage() {
 
   // While a document is being read, keep its progress current.
   const busy = documents.some((document) => document.status === 'RECEIVED' || document.status === 'PROCESSING');
-  useEffect(() => {
-    if (!busy) return undefined;
-    const timer = setInterval(load, 5000);
-    return () => clearInterval(timer);
-  }, [busy, load]);
+  useVisiblePolling(load, 5000, busy);
 
   const search = async () => {
     const asked = question.trim();

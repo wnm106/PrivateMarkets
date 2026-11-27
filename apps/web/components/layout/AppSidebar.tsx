@@ -218,6 +218,17 @@ function NavIcon({ name }: { name: string }) {
   }
 }
 
+type SidebarDomainType = {
+  domainCode: string;
+  domainName: string;
+  isActive: boolean;
+  displayOrder: number;
+  parentDomainCode?: string | null;
+  group?: { groupName: string; color: string; displayOrder: number } | null;
+};
+const SIDEBAR_TYPES_TTL_MS = 5 * 60_000;
+let sidebarTypes: { at: number; data: { domainTypes: SidebarDomainType[] } } | null = null;
+
 export function AppSidebar({
   surfaceLinks = [],
   enabledToolHrefs = null,
@@ -246,30 +257,29 @@ export function AppSidebar({
   }, []);
 
   const load = useCallback(async () => {
-    const [domainsResult, exceptionsResult] = await Promise.all([
-      graphqlQuery<
-        {
-          domainTypes: Array<{
-            domainCode: string;
-            domainName: string;
-            isActive: boolean;
-            displayOrder: number;
-            parentDomainCode?: string | null;
-            group?: { groupName: string; color: string; displayOrder: number } | null;
-          }>;
-          domainRecordCounts: Array<{ domainCode: string; totalCount: number }>;
-        },
-        Record<string, never>
-      >(
-        `query SidebarDomains {
-          domainTypes {
-            domainCode
-            domainName
-            isActive
-            displayOrder
-            parentDomainCode
-            group { groupName color displayOrder }
-          }
+    // Entity types and their groups change only when an administrator edits them, so they
+    // are kept for a few minutes and read fresh on the admin pages. Record counts and open
+    // exceptions move as people work, so they are read on every navigation.
+    const typesFresh = sidebarTypes && Date.now() - sidebarTypes.at < SIDEBAR_TYPES_TTL_MS && !pathname.startsWith('/admin');
+    const [typesResult, countsResult, exceptionsResult] = await Promise.all([
+      typesFresh
+        ? Promise.resolve({ data: sidebarTypes!.data, error: undefined })
+        : graphqlQuery<{ domainTypes: SidebarDomainType[] }, Record<string, never>>(
+            `query SidebarDomainTypes {
+              domainTypes {
+                domainCode
+                domainName
+                isActive
+                displayOrder
+                parentDomainCode
+                group { groupName color displayOrder }
+              }
+            }`,
+            {},
+            'network-only'
+          ),
+      graphqlQuery<{ domainRecordCounts: Array<{ domainCode: string; totalCount: number }> }, Record<string, never>>(
+        `query SidebarDomainCounts {
           domainRecordCounts { domainCode totalCount }
         }`,
         {},
@@ -285,6 +295,11 @@ export function AppSidebar({
         'network-only'
       ),
     ]);
+    if (!typesFresh && !typesResult.error && typesResult.data) sidebarTypes = { at: Date.now(), data: typesResult.data };
+    const domainsResult = {
+      error: typesResult.error || countsResult.error,
+      data: typesResult.data && countsResult.data ? { ...typesResult.data, ...countsResult.data } : null,
+    };
     if (!domainsResult.error && domainsResult.data) {
       const counts: Record<string, number> = {};
       for (const row of domainsResult.data.domainRecordCounts || []) counts[row.domainCode] = row.totalCount || 0;
@@ -307,11 +322,11 @@ export function AppSidebar({
     if (!exceptionsResult.error && exceptionsResult.data) {
       setOpenExceptions(exceptionsResult.data.openExceptions?.totalCount || 0);
     }
-  }, []);
+  }, [pathname]);
 
   useEffect(() => {
     load();
-  }, [load, pathname]);
+  }, [load]);
 
   const domainRows = useMemo(() => nestDomainLinks(domains), [domains]);
 

@@ -118,18 +118,25 @@ async function walk(supabase: SupabaseClient, ids: string[], code: string, direc
 
 async function walkPages(supabase: SupabaseClient, ids: string[], code: string, direction: 'UP' | 'DOWN', asOf: string, knowledge: string): Promise<string[]> {
   if (!ids.length) return [];
+  const page = async (n: number) => {
+    const start = n * PAGE;
+    const { data, error } = await supabase.schema('compliance').rpc('walk_relationship', {
+      p_start_ids: ids, p_relationship_code: code, p_direction: direction, p_recursive: false, p_as_of_date: asOf, p_knowledge_date: knowledge,
+    }).order('entity_id').range(start, start + PAGE - 1);
+    if (error) throw new Error(error.message);
+    return (data || []) as Array<{ entity_id: string }>;
+  };
   const out = new Set<string>();
-  for (let from = 0; ; from += PAGE * 4) {
-    const pages = await Promise.all([0, 1, 2, 3].map(async (n) => {
-      const start = from + n * PAGE;
-      const { data, error } = await supabase.schema('compliance').rpc('walk_relationship', {
-        p_start_ids: ids, p_relationship_code: code, p_direction: direction, p_recursive: false, p_as_of_date: asOf, p_knowledge_date: knowledge,
-      }).order('entity_id').range(start, start + PAGE - 1);
-      if (error) throw new Error(error.message);
-      return (data || []) as Array<{ entity_id: string }>;
-    }));
-    for (const page of pages) for (const row of page) out.add(row.entity_id);
-    if (pages.some((page) => page.length < PAGE)) break;
+  // Every request recomputes the whole walk and slices it, so a walk that fits in one
+  // page (the usual case) should cost one request, not four. Ask for the rest only when
+  // the first page came back full.
+  const first = await page(0);
+  for (const row of first) out.add(row.entity_id);
+  if (first.length < PAGE) return [...out];
+  for (let from = 1; ; from += 4) {
+    const pages = await Promise.all([0, 1, 2, 3].map((n) => page(from + n)));
+    for (const rows of pages) for (const row of rows) out.add(row.entity_id);
+    if (pages.some((rows) => rows.length < PAGE)) break;
   }
   return [...out];
 }

@@ -302,7 +302,11 @@ export function FundRecWorkspace({ fundId, initialTab }: { fundId: string; initi
   const breaks = useMemo(() => (rec ? summarizeBreaks(rec) : null), [rec]);
   const certification = certFits ? scope.certification ?? null : null;
   const reopened = certFits ? scope.reopened : null;
-  usePublishTabs(rec && breaks && scope.ready ? recTabs(rec, cash, insights, breaks, certification, scope.view, reopened) : pendingRecTabs());
+  const publishedTabs = useMemo(
+    () => (rec && breaks && scope.ready ? recTabs(rec, cash, insights, breaks, certification, scope.view, reopened) : pendingRecTabs()),
+    [rec, breaks, scope.ready, cash, insights, certification, scope.view, reopened],
+  );
+  usePublishTabs(publishedTabs);
 
   if (!rec) return error ? <div className="xp-error">{error}</div> : <div className="xp-empty">Loading close…</div>;
 

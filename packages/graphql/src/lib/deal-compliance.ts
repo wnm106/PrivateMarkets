@@ -29,6 +29,16 @@ export async function ruleVersionsAt(
   knowledge: string,
 ): Promise<Map<string, any>> {
   const ids = [...new Set(ruleIds)];
+  if (!ids.length) return new Map();
+  // One request for every rule. compliance.resolve_rule_versions calls
+  // resolve_rule_version for each, so the choice of version is unchanged.
+  const batch = await compliance.rpc('resolve_rule_versions', { p_rule_ids: ids, p_as_of_date: asOf, p_knowledge_date: knowledge });
+  if (!batch.error) {
+    const rows = (Array.isArray(batch.data) ? batch.data : []) as Array<{ id?: string; rule_id: string }>;
+    return new Map(rows.filter((version) => version && version.id).map((version) => [version.rule_id, version] as const));
+  }
+  // Until the batch function is deployed, ask once per rule as before.
+  if (!isMissingFunction(batch.error)) throw new Error(batch.error.message);
   const found = await Promise.all(ids.map(async (ruleId) => {
     const { data, error } = await compliance.rpc('resolve_rule_version', { p_rule_id: ruleId, p_as_of_date: asOf, p_knowledge_date: knowledge });
     if (error) throw new Error(error.message);
@@ -36,6 +46,10 @@ export async function ruleVersionsAt(
     return [ruleId, version && (version as any).id ? version : null] as const;
   }));
   return new Map(found.filter(([, version]) => version));
+}
+
+function isMissingFunction(error: { code?: string; message?: string }): boolean {
+  return error.code === 'PGRST202' || error.code === '42883' || /could not find the function|does not exist/i.test(error.message || '');
 }
 
 /**

@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { EVALUATE_COMPLIANCE_RULE_MUTATION, graphqlMutation, graphqlQuery, UPDATE_ENTITY_MUTATION, UPSERT_COMPLIANCE_THRESHOLD_MUTATION } from '@/lib/graphql';
 import { domainHref } from '@/lib/domain-routes';
@@ -671,7 +671,12 @@ export function FundSurface({ fundId }: { fundId: string }) {
       ]
     : [{ label: 'Fund surface' }]);
 
-  usePublishTabs(surface ? fundTabs(surface, effectiveStructure) : pendingFundTabs(effectiveStructure));
+  // Built from the loaded surface only, so typing in the search box does not rebuild every tab.
+  const publishedTabs = useMemo(
+    () => (surface ? fundTabs(surface, effectiveStructure) : pendingFundTabs(effectiveStructure)),
+    [surface, effectiveStructure],
+  );
+  usePublishTabs(publishedTabs);
 
   if (loading && !surface) return <div className="xp-empty">Loading fund…</div>;
   if (!surface) return <div className="xp-error">{error || 'Fund not found'}</div>;

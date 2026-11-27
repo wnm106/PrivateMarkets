@@ -582,13 +582,16 @@ export async function loadFundSurface(
   if (!fund || fund.domain_code !== 'FUND') throw new Error('Fund not found');
 
   const tie = [asOf, knowledge] as const;
-  const commitmentRels = await links(supabase, 'COMMITMENT_FUND', 'child_entity_id', [fund.id], ...tie);
-  const activityRels = await links(supabase, 'ACTIVITY_FUND', 'child_entity_id', [fund.id], ...tie);
-  const statementRels = await links(supabase, 'STATEMENT_FUND', 'child_entity_id', [fund.id], ...tie);
-  const planRels = await links(supabase, 'PLAN_FUND', 'child_entity_id', [fund.id], ...tie);
-  const facilityRels = await links(supabase, 'FACILITY_FUND', 'child_entity_id', [fund.id], ...tie);
-  const forecastRels = await links(supabase, 'FORECAST_FUND', 'child_entity_id', [fund.id], ...tie);
-  const positionRels = await links(supabase, 'POSITION_FUND', 'child_entity_id', [fund.id], ...tie);
+  // Independent reads: ask for them together. Each is filtered by the same dates.
+  const [commitmentRels, activityRels, statementRels, planRels, facilityRels, forecastRels, positionRels] = await Promise.all([
+    links(supabase, 'COMMITMENT_FUND', 'child_entity_id', [fund.id], ...tie),
+    links(supabase, 'ACTIVITY_FUND', 'child_entity_id', [fund.id], ...tie),
+    links(supabase, 'STATEMENT_FUND', 'child_entity_id', [fund.id], ...tie),
+    links(supabase, 'PLAN_FUND', 'child_entity_id', [fund.id], ...tie),
+    links(supabase, 'FACILITY_FUND', 'child_entity_id', [fund.id], ...tie),
+    links(supabase, 'FORECAST_FUND', 'child_entity_id', [fund.id], ...tie),
+    links(supabase, 'POSITION_FUND', 'child_entity_id', [fund.id], ...tie),
+  ]);
 
   const commitmentIds = commitmentRels.map((row) => row.parent_entity_id);
   const activityIds = activityRels.map((row) => row.parent_entity_id);
@@ -598,11 +601,13 @@ export async function loadFundSurface(
   const forecastIds = forecastRels.map((row) => row.parent_entity_id);
   const positionIds = positionRels.map((row) => row.parent_entity_id);
 
-  const investorRels = await links(supabase, 'COMMITMENT_INVESTOR', 'parent_entity_id', commitmentIds, asOf, knowledge);
+  const [investorRels, securityRels] = await Promise.all([
+    links(supabase, 'COMMITMENT_INVESTOR', 'parent_entity_id', commitmentIds, asOf, knowledge),
+    links(supabase, 'POSITION_SECURITY', 'parent_entity_id', positionIds, asOf, knowledge),
+  ]);
   const investorOf = new Map(investorRels.map((row) => [row.parent_entity_id, row.child_entity_id]));
   const investorIds = [...new Set(investorRels.map((row) => row.child_entity_id))];
 
-  const securityRels = await links(supabase, 'POSITION_SECURITY', 'parent_entity_id', positionIds, asOf, knowledge);
   const securityOf = new Map(securityRels.map((row) => [row.parent_entity_id, row.child_entity_id]));
   const securityIds = [...new Set(securityRels.map((row) => row.child_entity_id))];
   const issuerRels = await links(supabase, 'SECURITY_ISSUER', 'parent_entity_id', securityIds, asOf, knowledge);

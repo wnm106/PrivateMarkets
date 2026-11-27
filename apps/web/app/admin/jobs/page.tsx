@@ -5,6 +5,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { usePublishViewContext } from '@/lib/view-context';
 import { graphqlMutation, graphqlQuery, ME_QUERY } from '@/lib/graphql';
 import { codeFromName, describeCron, duration, parsePayload, platformFor, type JobTypeOption } from '@/lib/jobs';
+import { useVisiblePolling } from '@/lib/use-visible-polling';
 
 const SCHEDULE_FIELDS = `
   id clientId scheduleCode scheduleName jobType jobTypeLabel payload cronExpression timezone
@@ -151,11 +152,7 @@ export default function JobsPage() {
 
   // Keep the history moving while something is queued or running.
   const open = runs.some((run) => run.status === 'QUEUED' || run.status === 'RUNNING');
-  useEffect(() => {
-    if (!open) return;
-    const timer = setInterval(load, 5000);
-    return () => clearInterval(timer);
-  }, [open, load]);
+  useVisiblePolling(load, 5000, open);
 
   const typeByCode = useMemo(() => new Map(types.map((type) => [type.code, type])), [types]);
   const draftType = draft ? typeByCode.get(draft.jobType) : undefined;
