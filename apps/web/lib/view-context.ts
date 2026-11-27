@@ -97,7 +97,28 @@ export function combinePageData(
   };
 }
 
+// While a surface publishes all its tabs at once, listeners hear about it once, not once per tab.
+let batchDepth = 0;
+let batchDirty = false;
+
+function batched(run: () => void) {
+  batchDepth++;
+  try {
+    run();
+  } finally {
+    batchDepth--;
+    if (batchDepth === 0 && batchDirty) {
+      batchDirty = false;
+      emit();
+    }
+  }
+}
+
 function emit() {
+  if (batchDepth > 0) {
+    batchDirty = true;
+    return;
+  }
   const focus = [...stack].reverse().find((entry) => entry.focus)?.focus ?? null;
   const base = [...pageStack].reverse().find((entry) => entry.data)?.data ?? null;
   const pageData = combinePageData(base, tabStack);
@@ -228,23 +249,27 @@ export function usePublishTabs(tabs: Record<string, TabPayload | null>) {
 
   useEffect(() => {
     const current = tabsRef.current;
-    for (const [key, id] of [...ids.current]) {
-      if (key in current) continue;
-      removeTab(id);
-      ids.current.delete(key);
-    }
-    for (const [key, entry] of Object.entries(current)) {
-      let id = ids.current.get(key);
-      if (!id) {
-        id = nextId++;
-        ids.current.set(key, id);
+    batched(() => {
+      for (const [key, id] of [...ids.current]) {
+        if (key in current) continue;
+        removeTab(id);
+        ids.current.delete(key);
       }
-      publishTab(id, key, entry);
-    }
+      for (const [key, entry] of Object.entries(current)) {
+        let id = ids.current.get(key);
+        if (!id) {
+          id = nextId++;
+          ids.current.set(key, id);
+        }
+        publishTab(id, key, entry);
+      }
+    });
   }, [serialized]);
 
   useEffect(() => () => {
-    for (const id of ids.current.values()) removeTab(id);
+    batched(() => {
+      for (const id of ids.current.values()) removeTab(id);
+    });
     ids.current.clear();
   }, []);
 }

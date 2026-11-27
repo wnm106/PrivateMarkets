@@ -58,7 +58,15 @@ async function adminAccess(supabase: { schema: (name: string) => any }, userId: 
   return { tenant: false, admin };
 }
 
+// Images in public/ are readable without signing in (the sign-in page shows the logo),
+// so they carry nothing the sign-in gate protects. Answering them here skips a round
+// trip to Auth and a database call for each image.
+const PUBLIC_IMAGE = /\.(jpg|jpeg|png|svg|ico|webp|gif)$/i;
+
 export async function middleware(request: NextRequest) {
+  if (!request.nextUrl.pathname.startsWith('/api/') && PUBLIC_IMAGE.test(request.nextUrl.pathname)) {
+    return NextResponse.next();
+  }
   let response = NextResponse.next({ request });
   const refreshedCookies: { name: string; value: string; options?: Record<string, unknown> }[] = [];
 
