@@ -163,6 +163,13 @@ const OPERATIONAL: Partial<Record<SkillId, {
     check: 'The rule reads back as one plain sentence the user accepted',
     example: { title: 'Rejected: "keep exposure under control"', body: 'User: Add a rule to keep exposure under control.\nAgent: That is not a limit I can test. What is added up, what is it compared with, and what number is the breach?' },
   },
+  'change-compliance-rule': {
+    notTrigger: 'Creating a new rule, deleting a rule, or asking which rules are breached.',
+    outcome: 'One change to one existing rule: its name or status, a new version of its limits or math, or a record added to or removed from its scope.',
+    done: 'The user saw the rule as it stands, was told what the change affects, accepted it, and the rule was read back with the change in place.',
+    check: 'The rule was read before it was changed, and a change to the limits was made as a new version, not an edit',
+    example: { title: 'Rejected: "make it stricter"', body: 'User: Make the issuer limit stricter.\nAgent: The limit is 5% hard, 4.5% soft today. What should the hard limit be, and from what date? Earlier results stay as they are.' },
+  },
   'start-workflow': {
     notTrigger: 'Designing or editing a workflow, or asking how a run went.',
     outcome: 'One run of a published workflow on named records with every value it asks for.',

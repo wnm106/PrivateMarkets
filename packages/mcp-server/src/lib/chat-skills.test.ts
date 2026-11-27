@@ -157,7 +157,7 @@ describe('chat skills', () => {
 });
 
 describe('guided skills for configuration and operations', () => {
-  const ids = ['add-field', 'create-compliance-rule', 'start-workflow', 'create-relationship-type', 'create-dq-rule', 'manual-override'] as const;
+  const ids = ['add-field', 'create-compliance-rule', 'change-compliance-rule', 'start-workflow', 'create-relationship-type', 'create-dq-rule', 'manual-override'] as const;
 
   function readyState(id: (typeof ids)[number]): SkillState {
     const skill = skillById(id)!;
@@ -175,6 +175,8 @@ describe('guided skills for configuration and operations', () => {
     expect(skillFromUserText('I need to add a new attribute for rating')?.id).toBe('add-field');
     expect(skillFromUserText('Create a compliance rule for issuer concentration')?.id).toBe('create-compliance-rule');
     expect(skillFromUserText('Add a concentration limit of 5% per issuer')?.id).toBe('create-compliance-rule');
+    expect(skillFromUserText('Tighten the issuer concentration limit to 4%')?.id).toBe('change-compliance-rule');
+    expect(skillFromUserText('Stop the leverage compliance rule for Fund II')?.id).toBe('change-compliance-rule');
     expect(skillFromUserText('Start the quarterly close workflow for Fund I')?.id).toBe('start-workflow');
     expect(skillFromUserText('Create a relationship type between fund and position')?.id).toBe('create-relationship-type');
     expect(skillFromUserText('Create a data quality rule for negative prices')?.id).toBe('create-dq-rule');
@@ -188,6 +190,7 @@ describe('guided skills for configuration and operations', () => {
     expect(skillFromUserText('How many workflows ran last week?')).toBeNull();
     expect(skillFromUserText('Which compliance rules are breached?')).toBeNull();
     expect(skillFromUserText('Show me the data quality rules')).toBeNull();
+    expect(skillFromUserText('Which concentration limit was updated last week?')).toBeNull();
   });
 
   it('holds every write tool until the user accepts the spec, for each skill', () => {
@@ -233,6 +236,8 @@ describe('guided skills for configuration and operations', () => {
   it('keeps each skill to the tools it needs', () => {
     expect(skillById('start-workflow')!.toolContext).toBe('workflow');
     expect(skillById('create-compliance-rule')!.denyTools).toContain('delete_compliance_rule');
+    expect(skillById('change-compliance-rule')!.denyTools).toContain('delete_compliance_rule');
+    expect(skillById('change-compliance-rule')!.writeTools).toContain('create_compliance_rule_version');
     expect(skillById('create-relationship-type')!.denyTools).toContain('create_relationship');
     expect(skillById('add-field')!.denyTools).toContain('create_domain_type');
   });

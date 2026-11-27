@@ -15,6 +15,7 @@ export type SkillId =
   | 'create-entity'
   | 'add-field'
   | 'create-compliance-rule'
+  | 'change-compliance-rule'
   | 'start-workflow'
   | 'create-relationship-type'
   | 'create-dq-rule'
@@ -635,6 +636,68 @@ const RELATIONSHIP_TYPE_SLOTS: SlotDef[] = [
   },
 ];
 
+const CHANGE_COMPLIANCE_SLOTS: SlotDef[] = [
+  {
+    id: 'rule',
+    label: 'Rule',
+    prompt: 'Which rule do you want to change?',
+    clarity: 'One rule code returned by list_compliance_rules. Two rules with similar names stay ambiguous.',
+    required: true,
+    identity: true,
+    dependents: ['current', 'change', 'newValue', 'effective', 'impact', 'specAccepted'],
+  },
+  {
+    id: 'current',
+    label: 'What it says today',
+    prompt: 'Here is the rule as it stands today, with its current limit and scope. Is this the rule you mean?',
+    clarity: 'The rule read with get_compliance_rule: its current version, limits, conditions and scope, stated back in one plain sentence, and the user agrees it is the one.',
+    required: true,
+    identity: true,
+    dependents: ['change', 'newValue', 'specAccepted'],
+  },
+  {
+    id: 'change',
+    label: 'What changes',
+    prompt: 'What should change: its name, category or description, whether it is active, the limit or the math, or who it applies to?',
+    clarity: 'One of: name, category or description; stop or restart the rule; the math or limits (a new version); the scope (add or remove a record). Deleting a rule is not offered here.',
+    required: true,
+    dependents: ['newValue', 'effective', 'impact', 'specAccepted'],
+  },
+  {
+    id: 'newValue',
+    label: 'New value',
+    prompt: 'What should it be instead?',
+    clarity: 'The new values in the same units the rule uses (5% is 5 as a percentage unless the tool says otherwise). For a new version, only the fields that change, with attribute and relationship codes taken from tools. For scope, the named records and INCLUDE or EXCLUDE.',
+    required: true,
+    identity: true,
+    dependents: ['impact', 'specAccepted'],
+  },
+  {
+    id: 'effective',
+    label: 'Effective from',
+    prompt: 'From what date should the change apply?',
+    clarity: 'A date, or "today", for a change to the math or limits. For any other change, resolved as not needed.',
+    required: true,
+    dependents: ['impact', 'specAccepted'],
+  },
+  {
+    id: 'impact',
+    label: 'What it affects',
+    prompt: 'Here is what this changes and what it leaves alone. Is that what you expect?',
+    clarity: 'The user has been told which funds the rule covers, that earlier versions and past results are kept, and that a stopped rule is no longer scored. For a limit that gets tighter, the breaches it could create are named when an evaluation shows them.',
+    required: true,
+    dependents: ['specAccepted'],
+  },
+  {
+    id: 'specAccepted',
+    label: 'Spec',
+    prompt: 'Here is the change I would make. Should I make it?',
+    clarity: 'The user explicitly accepts the rule, the change, the new value and the date. A single tool match is not acceptance.',
+    required: true,
+    identity: true,
+  },
+];
+
 const DQ_RULE_SLOTS: SlotDef[] = [
   {
     id: 'domain',
@@ -937,6 +1000,40 @@ When phase is apply, in this order: create_compliance_rule, create_compliance_ru
     artifacts: [],
   },
   {
+    id: 'change-compliance-rule',
+    name: 'Change a compliance rule',
+    toolContext: 'compliance',
+    intro: 'I will read the rule as it is today and tell you what the change affects before I make it.',
+    placeholder: 'Which rule, and what should change?',
+    startsWhen: 'You ask to change, edit, tighten, loosen, stop or restart a compliance rule, or to add or remove a record from its scope.',
+    discovery: [
+      ['list_compliance_rules'],
+      ['get_compliance_rule'],
+    ],
+    previewTools: [],
+    writeTools: ['update_compliance_rule', 'create_compliance_rule_version', 'create_compliance_scope_assignment', 'delete_compliance_scope_assignment'],
+    denyTools: ['create_compliance_rule', 'delete_compliance_rule'],
+    slots: CHANGE_COMPLIANCE_SLOTS,
+    prefix: `<model>
+A change to a rule is one of four things, and each has its own tool.
+- Name, category, description or active flag: update_compliance_rule. It does not change the math.
+- The math or the limits: create_compliance_rule_version with changeReason and validFrom. The old version is kept and the new one is current from validFrom. Send the complete version, so read the current one first and carry over every field that is not changing.
+- Stopping a rule: update_compliance_rule with isActive false. History is kept and the rule is no longer scored. Restarting it is isActive true.
+- Scope: create_compliance_scope_assignment adds INCLUDE or EXCLUDE for a named record. delete_compliance_scope_assignment removes one row, with the id from get_compliance_rule.
+</model>
+
+<avoid>
+A rule code that list_compliance_rules did not return, changing the math with update_compliance_rule, a new version that drops a condition or limit the user did not mention, limits in the wrong unit, and deleting a rule. Deletion removes its versions and evaluation history, so it is not offered here: tell the user to stop the rule instead, and that a delete is made by an administrator in Admin.
+</avoid>
+
+<task>
+Find the rule with list_compliance_rules, then read it with get_compliance_rule. Say back what it measures, what it is compared with, its limits and its scope in one plain sentence before you ask anything else. Ask only the open slot.
+Before you ask the user to confirm, say what the change affects: the funds the rule covers, that earlier versions and past results are kept, and, for a stopped rule, that it is no longer scored. Where you can, run evaluate_compliance_rule on a real record to show what the new limit would report.
+When phase is apply, make only the change in the ledger, then read the rule back with get_compliance_rule and tell the user what it says now. If a write fails, stop, say what has already changed, and ask. ${WRITE_RULES}
+</task>`,
+    artifacts: [],
+  },
+  {
     id: 'start-workflow',
     name: 'Workflow run',
     toolContext: 'workflow',
@@ -1048,17 +1145,7 @@ When phase is apply call submit_manual_override once with entityId, attributeCod
   },
 ];
 
-const SKILL_BY_ID: Record<SkillId, SkillDef> = {
-  'design-dashboard': SKILLS[0],
-  'design-narrative': SKILLS[1],
-  'create-entity': SKILLS[2],
-  'add-field': SKILLS[3],
-  'create-compliance-rule': SKILLS[4],
-  'start-workflow': SKILLS[5],
-  'create-relationship-type': SKILLS[6],
-  'create-dq-rule': SKILLS[7],
-  'manual-override': SKILLS[8],
-};
+const SKILL_BY_ID = Object.fromEntries(SKILLS.map((skill) => [skill.id, skill])) as Record<SkillId, SkillDef>;
 
 export function skillById(id: unknown): SkillDef | null {
   return typeof id === 'string' && Object.prototype.hasOwnProperty.call(SKILL_BY_ID, id) ? SKILL_BY_ID[id as SkillId] : null;
@@ -1073,6 +1160,13 @@ export function skillFromUserText(text: string): SkillDef | null {
   if (/\b(override|overwrite)\s+(the|a|an|this|that|its|their|our)\b/i.test(text)
     || /\b(apply|submit|enter|make|create|add|store|put in)\b[^.?!]{0,30}\boverride\b/i.test(text)) {
     return SKILL_BY_ID['manual-override'];
+  }
+
+  // Changing a rule that exists is not creating one.
+  if (/\b(change|edit|update|modify|amend|raise|lower|tighten|loosen|stop|retire|deactivate|disable|restart|reactivate)\b[^.?!]{0,40}\b(compliance\s+)?(rule|limit)\b/i.test(text)
+    && /\b(compliance|concentration|exposure|leverage|diversification|liquidity|limit)\b/i.test(text)
+    && !/^\s*(what|which|who|how|why|when|where|show|list|is|are|does|do)\b/i.test(text)) {
+    return SKILL_BY_ID['change-compliance-rule'];
   }
 
   const create = /\b(create|design|build|add|draft|make|define|set up|write)\b/i.test(text);
