@@ -3744,6 +3744,12 @@ type Query {
   fundRecBoard(asOfDate: Date, knowledgeDate: DateTime): JSON!
   """One fund close: statement integrity, roll-forward, fees, marks, drift, review items, and close steps."""
   fundRec(fundId: ID!, periodEnd: Date, asOfDate: Date, knowledgeDate: DateTime, driftThresholdPct: Float): JSON!
+  """Every CLO among the funds given (a fund with a CLO transaction): indenture terms, notes, trustee accounts, holdings, the compliance engine's tests, the diversity score and the payment-date waterfall."""
+  cloBook(fundIds: [ID!]!, asOfDate: Date, knowledgeDate: DateTime): JSON!
+  """One CLO at each quarter end up to the As Of date, and at the As Of date: its headline tests, collateral and notes, each scored by the compliance engine at that date."""
+  cloDrift(fundId: ID!, quarters: Int, asOfDate: Date, knowledgeDate: DateTime): JSON!
+  """Loans offered in the market that one CLO does not hold, each scored as a buy by the compliance engine's pro forma, ranked by how much it improves the CLO."""
+  cloOpportunities(fundId: ID!, limit: Int, asOfDate: Date, knowledgeDate: DateTime): JSON!
   """The certification in force for a record (and period): the As Of date and knowledge instant its page is pinned to. Null when it is not certified."""
   certification(processCode: String!, subjectEntityId: ID!, periodEnd: Date): Certification
   """Every certification of a record, reopened ones included, newest first."""

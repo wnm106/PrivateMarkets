@@ -6,6 +6,7 @@
  * server without importing any surface UI.
  */
 import type { SurfaceManifest, SurfaceModule } from '@tapestrai/surface-sdk';
+import { manifest as clo } from '@surfaces/clo/src/manifest';
 import { manifest as dealPipeline } from '@surfaces/deal-pipeline/src/manifest';
 import { manifest as fundIndex } from '@surfaces/fund-index/src/manifest';
 import { manifest as ocio } from '@surfaces/ocio/src/manifest';
@@ -17,6 +18,7 @@ export interface SurfaceRegistration {
 }
 
 export const SURFACES: readonly SurfaceRegistration[] = [
+  { manifest: clo, load: () => import('@surfaces/clo/src') },
   { manifest: dealPipeline, load: () => import('@surfaces/deal-pipeline/src') },
   { manifest: fundIndex, load: () => import('@surfaces/fund-index/src') },
   { manifest: ocio, load: () => import('@surfaces/ocio/src') },

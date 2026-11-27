@@ -87,7 +87,7 @@ export function resolveWindows(input: WindowInput[] | null | undefined, asOf: st
   });
 }
 
-async function defsFor(supabase: SupabaseClient, codes: string[]): Promise<Map<string, Def>> {
+export async function defsFor(supabase: SupabaseClient, codes: string[]): Promise<Map<string, Def>> {
   const { data, error } = await supabase.from('attribute_register').select('id, attribute_code').in('attribute_code', codes);
   if (error) throw new Error(error.message);
   const defs = new Map<string, Def>();
@@ -96,7 +96,7 @@ async function defsFor(supabase: SupabaseClient, codes: string[]): Promise<Map<s
 }
 
 /** Run in groups so a large id list is read in parallel without flooding the API. */
-async function inChunks<T>(ids: string[], size: number, run: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
+export async function inChunks<T>(ids: string[], size: number, run: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
   const chunks: string[][] = [];
   for (let i = 0; i < ids.length; i += size) chunks.push(ids.slice(i, i + size));
   const out: T[] = [];
@@ -110,7 +110,7 @@ async function inChunks<T>(ids: string[], size: number, run: (chunk: string[]) =
 const PAGE = 1000;
 
 /** Ids one hop along a relationship from many records, through compliance.walk_relationship. */
-async function walk(supabase: SupabaseClient, ids: string[], code: string, direction: 'UP' | 'DOWN', asOf: string, knowledge: string): Promise<string[]> {
+export async function walk(supabase: SupabaseClient, ids: string[], code: string, direction: 'UP' | 'DOWN', asOf: string, knowledge: string): Promise<string[]> {
   // The ids travel in the request body; a few thousand at a time keeps each request small.
   const found = await inChunks(ids, 3000, (chunk) => walkPages(supabase, chunk, code, direction, asOf, knowledge));
   return [...new Set(found)];
@@ -135,7 +135,7 @@ async function walkPages(supabase: SupabaseClient, ids: string[], code: string, 
 }
 
 /** Both ends of a relationship code, from the records given: the other record for each. */
-async function neighbours(supabase: SupabaseClient, codes: readonly string[], ids: string[], asOf: string, knowledge: string): Promise<Array<{ from: string; to: string }>> {
+export async function neighbours(supabase: SupabaseClient, codes: readonly string[], ids: string[], asOf: string, knowledge: string): Promise<Array<{ from: string; to: string }>> {
   const mine = new Set(ids);
   const rows: Rel[] = [];
   for (const code of codes) {
@@ -153,7 +153,7 @@ async function neighbours(supabase: SupabaseClient, codes: readonly string[], id
   return out;
 }
 
-async function values(supabase: SupabaseClient, ids: string[], defs: Map<string, Def>, asOf: string, knowledge: string): Promise<Map<string, ValueRow>> {
+export async function values(supabase: SupabaseClient, ids: string[], defs: Map<string, Def>, asOf: string, knowledge: string): Promise<Map<string, ValueRow>> {
   const out = new Map<string, ValueRow>();
   const maps = await inChunks(ids, 200, async (chunk) => [await valuesFor(supabase, chunk, defs, asOf, knowledge)]);
   for (const map of maps) for (const [k, v] of map) out.set(k, v);
