@@ -16,62 +16,70 @@ export const DASHBOARD_SHELL: SkillArtifact = {
   title: 'Dashboard shell',
   phases: ['build', 'apply'],
   instruction:
-    'Match this shell: one primary figure, then one chart, then one table. Keep the class names, spacing, and right-aligned figures. Replace the labels, attribute codes, and numbers with the ledger and the previewed queries.',
-  body: `<div class="wrap">
-  <header class="head">
+    'Match this shell: one primary figure, then one chart, then one table, with loading, empty and error states and the As Of date. Keep the x- class pattern (one style block, tokens only), the bindings on every figure, and right-aligned figures. Replace the labels, attribute codes, query keys and numbers with the ledger and the previewed queries.',
+  body: `<div class="x-wrap">
+  <header class="x-head">
     <div>
-      <div class="kicker" id="domain"></div>
-      <h2 id="title">Loading…</h2>
+      <div class="x-kicker" id="domain"></div>
+      <h2 id="title">Dashboard</h2>
     </div>
-    <div class="asof" id="asof"></div>
+    <div class="x-asof" id="asof"></div>
   </header>
-  <section class="primary" id="primary"></section>
-  <section class="chart" id="chart"></section>
-  <section>
-    <h3 id="table-title">Detail</h3>
+  <section class="x-primary" id="primary"><div class="t-loading">Loading…</div></section>
+  <section class="x-chart" id="chart"></section>
+  <section id="detail">
+    <h3>Positions</h3>
     <div id="table"></div>
   </section>
 </div>
 <style>
-  .wrap { padding: 16px; color: #18181b; font: 14px/1.4 ui-sans-serif, system-ui, sans-serif; }
-  .head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 16px; }
-  .kicker { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: #71717a; }
-  h2 { margin: 2px 0 0; font-size: 20px; font-weight: 600; }
-  h3 { margin: 20px 0 8px; font-size: 14px; font-weight: 600; }
-  .asof { font-size: 12px; color: #71717a; font-variant-numeric: tabular-nums; }
-  .primary { border: 1px solid #e4e4e7; border-radius: 8px; padding: 16px 20px; }
-  .primary .label { font-size: 12px; color: #71717a; }
-  .primary .value { display: block; margin-top: 4px; font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; color: #1d4ed8; }
-  .primary .note { font-size: 12px; color: #71717a; }
-  .chart { margin-top: 16px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { border-bottom: 1px solid #f4f4f5; padding: 8px; text-align: left; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  tr:hover td { background: #fafafa; }
-  button:focus-visible, a:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+  .x-wrap { padding: 16px; }
+  .x-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 12px; }
+  .x-kicker { font-size: 12px; color: var(--ink-3); }
+  .x-wrap h2 { margin: 2px 0 0; font-size: 20px; font-weight: 600; overflow-wrap: anywhere; }
+  .x-wrap h3 { margin: 16px 0 8px; font-size: 14px; font-weight: 600; }
+  .x-asof { font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .x-primary { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 12px 16px; }
+  .x-label { font-size: 12px; color: var(--ink-3); }
+  .x-value { display: inline-block; margin-top: 4px; font-size: 28px; font-weight: 600; color: var(--accent); }
+  .x-note { font-size: 12px; color: var(--ink-3); }
+  .x-chart { margin-top: 16px; }
 </style>
 <script>
 tapestr.onData(function (payload) {
   var entity = payload.entity || {};
-  var rows = (payload.data.by_type && payload.data.by_type.rows) || [];
-  document.getElementById('domain').textContent = entity.domainName || '';
-  document.getElementById('title').textContent = entity.entityName || 'Dashboard';
-  document.getElementById('asof').textContent = payload.params && payload.params.asOfDate ? payload.params.asOfDate : '';
-  var total = rows.reduce(function (sum, row) { return sum + Number(row.value || 0); }, 0);
+  var set = payload.data.positions || {};
+  var rows = set.rows || [];
+  document.getElementById('domain').innerHTML = tapestr.esc(entity.domainName || '');
+  document.getElementById('title').innerHTML = '<span' + tapestr.bind.attr('ENTITY_NAME', null, 'Name') + '>' + tapestr.esc(entity.entityName || 'Dashboard') + '</span>';
+  document.getElementById('asof').textContent = payload.params && payload.params.asOfDate ? 'As of ' + tapestr.fmt.date(payload.params.asOfDate) : '';
   var primary = document.getElementById('primary');
-  if (!rows.length) {
-    primary.innerHTML = '<div class="label">No rows</div><div class="note">Nothing matched this as-of date.</div>';
-    document.getElementById('chart').innerHTML = '';
-    document.getElementById('table').innerHTML = '';
+  var chart = document.getElementById('chart');
+  var table = document.getElementById('table');
+  document.getElementById('detail').hidden = !!set.error || !rows.length;
+  if (set.error) {
+    primary.innerHTML = '<div class="t-error">The positions could not be read: ' + tapestr.esc(set.error) + '. Change the As Of date or ask an administrator to check the query.</div>';
+    chart.innerHTML = '';
+    table.innerHTML = '';
     return;
   }
-  primary.innerHTML = '<div class="label">Open items</div><span class="value">' + tapestr.fmt.number(total, 0) + '</span><div class="note">across ' + rows.length + ' groups</div>';
-  document.getElementById('chart').innerHTML = tapestr.charts.bar(rows.map(function (row) {
-    return { label: row.label, value: Number(row.value || 0) };
-  }), { width: 560, height: 160, color: '#1d4ed8' });
-  tapestr.table(document.getElementById('table'), rows, [
-    { key: 'label', label: 'Group' },
-    { key: 'value', label: 'Value', align: 'right' }
+  if (!rows.length) {
+    primary.innerHTML = '<div class="t-empty">No positions at this As Of date.</div>';
+    chart.innerHTML = '';
+    table.innerHTML = '';
+    return;
+  }
+  var total = rows.reduce(function (sum, row) { return sum + Number(row.MARKET_VALUE || 0); }, 0);
+  primary.innerHTML = '<div class="x-label">Market value</div>'
+    + '<span class="x-value num"' + tapestr.bind.derived('Sum of market value across the positions below', 'positions', 'MARKET_VALUE') + '>' + tapestr.fmt.currency(total) + '</span>'
+    + '<div class="x-note">across <span' + tapestr.bind.derived('Count of positions', 'positions') + '>' + rows.length + '</span> positions</div>';
+  chart.innerHTML = tapestr.charts.bar(rows.slice(0, 12).map(function (row) {
+    return { label: row.entity_name, value: Number(row.MARKET_VALUE || 0) };
+  }), { width: 640, height: 200 });
+  tapestr.table(table, rows, [
+    { key: 'entity_name', label: 'Position' },
+    { key: 'MARKET_VALUE', label: 'Market value', align: 'right', format: function (v) { return tapestr.fmt.currency(v); } },
+    { key: 'share', label: 'Share', align: 'right', derived: 'Market value divided by the total above', format: function (v, row) { return tapestr.fmt.percent(Number(row.MARKET_VALUE || 0) / (total || 1)); } }
   ]);
 });
 </script>`,

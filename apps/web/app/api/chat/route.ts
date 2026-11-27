@@ -1,3 +1,4 @@
+import type Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 import { QUERY_DATA_GUIDE } from '@tapestrai/mcp-server/src/tools/query-data';
@@ -39,6 +40,7 @@ import { chatVoiceInstruction } from '@/lib/chat-voice';
 import { callerClientId } from '@/lib/agent-audit';
 import { bindAgentContext, invokeAgent, usageForClient, type AgentAudit } from '@tapestrai/mcp-server/src/agent/harness';
 import { geminiAnswerText } from '@tapestrai/mcp-server/src/agent/usage';
+import { callClaude, claudeAnswerText, claudeFor, claudeToolCalls, toClaudeMessages } from '@/lib/chat-claude';
 
 const geminiApiKey =
   process.env.GEMINI_API_KEY ||
@@ -254,10 +256,6 @@ export async function POST(request: NextRequest) {
     const { messages, context, toolContext, conversationId, attachmentIds, designerDraft, voice, skill: requestedSkill, skillState: clientSkillState } = await request.json();
     const requestedAttachmentIds: string[] = Array.isArray(attachmentIds) ? attachmentIds : [];
 
-    if (!geminiApiKey) {
-      return NextResponse.json({ error: 'Gemini API key not configured' }, { status: 500 });
-    }
-
     const clientId = await callerClientId(auth.supabase);
     bindAgentContext({ userId: auth.userId, clientId, feature: 'chat', activity: 'chat.turn' });
     const audits: AgentAudit[] = [];
@@ -357,6 +355,14 @@ export async function POST(request: NextRequest) {
         )
       : null;
 
+    // A skill may name its own model (dashboard and narrative design run on Claude).
+    // Without that provider's key the turn runs on the default model.
+    const claude = claudeFor(skill?.model);
+    const servedModel = claude?.model ?? geminiModel;
+    if (!claude && !geminiApiKey) {
+      return NextResponse.json({ error: 'Gemini API key not configured' }, { status: 500 });
+    }
+
     const profile = getContextProfile(skill?.toolContext ?? toolContext);
     let systemInstruction = profile.systemInstruction + chatVoiceInstruction(voice) + DOMAIN_GLOSSARY + LINKS_AND_FORMULAS + screenContextBlock(context);
 
@@ -447,7 +453,7 @@ export async function POST(request: NextRequest) {
         role: 'model',
         content: text.slice(0, MAX_STORED_CONTENT),
         tool_calls: executedCalls.length ? executedCalls : null,
-        model: geminiModel,
+        model: servedModel,
       });
       const patch: Record<string, unknown> = {};
       if (skillState) patch.skill_state = skillState;
@@ -483,6 +489,126 @@ export async function POST(request: NextRequest) {
       metadata: { page: context?.page ?? null },
     };
 
+    type ToolOutcome = { ok: boolean; value?: any; error?: string };
+    /** Runs one tool call the model asked for, under the skill's gates, and records it. */
+    const runTool = async (name: string, rawArgs: any): Promise<ToolOutcome> => {
+      const args = withGlobalDates(name, rawArgs, context);
+      executedCalls.push({ name, args: args || {} });
+
+      // A model that re-requests an identical call gains nothing, so serve the
+      // cached outcome instead of spending another round on it.
+      const cacheKey = `${name}:${JSON.stringify(args || {})}`;
+      const cached = callCache.get(cacheKey);
+      if (cached) {
+        return {
+          ok: false,
+          error: `${cached.ok ? 'Already retrieved this exact result' : cached.error}. `
+            + 'Do not repeat this call; use a different tool or answer with what you have.',
+        };
+      }
+
+      try {
+        if (skill && !skillAllowsTool(skill, skillState, name)) {
+          const outcome = {
+            ok: false,
+            error: 'This skill is still collecting decisions. Do not call this tool until the user confirms the spec.',
+          };
+          callCache.set(cacheKey, outcome);
+          return outcome;
+        }
+        // A tool that changes live records, rules or settings is never run by the model:
+        // it is held like an outside write, and runs only on the person's Confirm.
+        if (!externalToolset?.has(name) && toolRegistry.effectOf(name) === 'write') {
+          throw new ConfirmationRequired(name, 'Tapestry', 'internal');
+        }
+        const value = externalToolset?.has(name)
+          ? await externalToolset.execute(name, args || {})
+          : await toolRegistry.executeTool(name, args || {}, toolSupabase);
+        const outcome = { ok: true, value };
+        successfulTools.add(name);
+        callCache.set(cacheKey, outcome);
+        return outcome;
+      } catch (error: any) {
+        // An outside write: held for the person, never run here.
+        if (error instanceof ConfirmationRequired && clientId) {
+          let held: HeldAction | null = null;
+          try {
+            held = holdAction({ name, args: args || {}, serverName: error.serverName, tool: error.tool, kind: error.kind }, { userId: auth.userId, clientId });
+          } catch (holdError) {
+            console.error('[Chat API] Could not hold a change for confirmation:', holdError);
+          }
+          if (held) heldActions.push(held);
+          const outcome = held
+            ? {
+                ok: true,
+                value: {
+                  status: 'awaiting_user_confirmation',
+                  note: `Not run. The user is shown this exact ${error.tool} call in ${error.serverName} with a Confirm button below your reply, and it runs only if they press it. Say in one or two sentences what it will change and ask them to confirm below. Do not call it again and do not say it is done.`,
+                },
+              }
+            : { ok: false, error: `${error.tool} could not be held for confirmation, so it was not run. Tell the user.` };
+          callCache.set(cacheKey, outcome);
+          return outcome;
+        }
+        // Tell the model not to simply retry a failing call, which otherwise
+        // burns every remaining round on the same broken tool.
+        const outcome = {
+          ok: false,
+          error: `${error?.message || String(error)}. Do not repeat this call; use a different tool or answer with what you have.`,
+        };
+        callCache.set(cacheKey, outcome);
+        return outcome;
+      }
+    };
+
+    const respond = async (raw: string) => {
+      const finished = finish(raw);
+      // Keep the answer block. The panel turns it into cards, colored changes, and a chart.
+      const text = finished.text;
+      const turnConversationId = await persistAssistantTurn(text);
+      return withUsage({
+        text,
+        skill: finished.skill,
+        skillState,
+        toolCalls: executedCalls,
+        conversationId: turnConversationId,
+        conversation,
+      });
+    };
+
+    if (claude) {
+      const attachmentParts = turnAttachments.flatMap((attachment) => attachment.parts);
+      const claudeMessages = toClaudeMessages(history.length ? history : incoming, attachmentParts);
+      const claudeTools = toolRegistry
+        .listToolsForClaude(skill?.toolContext ?? toolContext)
+        .filter((tool) => skillAllowsTool(skill, skillState, tool.name))
+        .map((tool) => ({ ...tool, input_schema: tool.input_schema as Anthropic.Beta.BetaTool['input_schema'] }));
+      for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+        const allowTools = round < MAX_TOOL_ROUNDS;
+        const response = await callClaude({ choice: claude, system: systemInstruction, messages: claudeMessages, tools: claudeTools, allowTools }, scope, audits);
+        const calls = response.stop_reason === 'tool_use' ? claudeToolCalls(response) : [];
+        if (!calls.length) {
+          return respond(claudeAnswerText(response)
+            || 'I gathered data but did not finish within the allotted steps. Please ask a narrower question or try again.');
+        }
+        // Thinking and tool_use blocks go back exactly as returned.
+        claudeMessages.push({ role: 'assistant', content: response.content as any });
+        const results: any[] = [];
+        for (const call of calls) {
+          const outcome = await runTool(call.name, call.input);
+          results.push({
+            type: 'tool_result',
+            tool_use_id: call.id,
+            content: JSON.stringify(outcome.ok ? clampResult(asStruct(outcome.value)) : { error: outcome.error ?? 'Tool did not run' }),
+            ...(outcome.ok ? {} : { is_error: true }),
+          });
+        }
+        // Every result in one user message, so parallel calls stay parallel.
+        claudeMessages.push({ role: 'user', content: results });
+      }
+      return respond('I gathered data but did not finish within the allotted steps. Please ask a narrower question or try again.');
+    }
+
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       const data = await callGemini({
         contents,
@@ -503,95 +629,13 @@ export async function POST(request: NextRequest) {
       const functionCalls = parts.filter((p) => p.functionCall);
 
       if (functionCalls.length === 0) {
-        const raw = geminiAnswerText(data) || 'No response generated.';
-        const finished = finish(raw);
-        // Keep the answer block. The panel turns it into cards, colored changes, and a chart.
-        const text = finished.text;
-        const turnConversationId = await persistAssistantTurn(text);
-        return withUsage({
-          text,
-          skill: finished.skill,
-          skillState,
-          toolCalls: executedCalls,
-          conversationId: turnConversationId,
-          conversation,
-        });
+        return respond(geminiAnswerText(data) || 'No response generated.');
       }
 
       // Execute requested tools and feed results back.
-      const results = new Map<any, { ok: boolean; value?: any; error?: string }>();
+      const results = new Map<any, ToolOutcome>();
       for (const call of functionCalls) {
-        const { name } = call.functionCall;
-        const args = withGlobalDates(name, call.functionCall.args, context);
-        executedCalls.push({ name, args: args || {} });
-
-        // A model that re-requests an identical call gains nothing, so serve the
-        // cached outcome instead of spending another round on it.
-        const cacheKey = `${name}:${JSON.stringify(args || {})}`;
-        const cached = callCache.get(cacheKey);
-        if (cached) {
-          results.set(call, {
-            ok: false,
-            error: `${cached.ok ? 'Already retrieved this exact result' : cached.error}. `
-              + 'Do not repeat this call; use a different tool or answer with what you have.',
-          });
-          continue;
-        }
-
-        try {
-          if (skill && !skillAllowsTool(skill, skillState, name)) {
-            const outcome = {
-              ok: false,
-              error: 'This skill is still collecting decisions. Do not call this tool until the user confirms the spec.',
-            };
-            callCache.set(cacheKey, outcome);
-            results.set(call, outcome);
-            continue;
-          }
-          // A tool that changes live records, rules or settings is never run by the model:
-          // it is held like an outside write, and runs only on the person's Confirm.
-          if (!externalToolset?.has(name) && toolRegistry.effectOf(name) === 'write') {
-            throw new ConfirmationRequired(name, 'Tapestry', 'internal');
-          }
-          const value = externalToolset?.has(name)
-            ? await externalToolset.execute(name, args || {})
-            : await toolRegistry.executeTool(name, args || {}, toolSupabase);
-          const outcome = { ok: true, value };
-          successfulTools.add(name);
-          callCache.set(cacheKey, outcome);
-          results.set(call, outcome);
-        } catch (error: any) {
-          // An outside write: held for the person, never run here.
-          if (error instanceof ConfirmationRequired && clientId) {
-            let held: HeldAction | null = null;
-            try {
-              held = holdAction({ name, args: args || {}, serverName: error.serverName, tool: error.tool, kind: error.kind }, { userId: auth.userId, clientId });
-            } catch (holdError) {
-              console.error('[Chat API] Could not hold a change for confirmation:', holdError);
-            }
-            if (held) heldActions.push(held);
-            const outcome = held
-              ? {
-                  ok: true,
-                  value: {
-                    status: 'awaiting_user_confirmation',
-                    note: `Not run. The user is shown this exact ${error.tool} call in ${error.serverName} with a Confirm button below your reply, and it runs only if they press it. Say in one or two sentences what it will change and ask them to confirm below. Do not call it again and do not say it is done.`,
-                  },
-                }
-              : { ok: false, error: `${error.tool} could not be held for confirmation, so it was not run. Tell the user.` };
-            callCache.set(cacheKey, outcome);
-            results.set(call, outcome);
-            continue;
-          }
-          // Tell the model not to simply retry a failing call, which otherwise
-          // burns every remaining round on the same broken tool.
-          const outcome = {
-            ok: false,
-            error: `${error?.message || String(error)}. Do not repeat this call; use a different tool or answer with what you have.`,
-          };
-          callCache.set(cacheKey, outcome);
-          results.set(call, outcome);
-        }
+        results.set(call, await runTool(call.functionCall.name, call.functionCall.args));
       }
 
       // Echo the model's own functionCall parts back verbatim: each carries a

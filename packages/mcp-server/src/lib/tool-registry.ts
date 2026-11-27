@@ -44,6 +44,23 @@ export class ToolRegistry {
   }
 
   /**
+   * Tool definitions in the Anthropic Messages API format: the tool's own JSON Schema,
+   * which Claude reads directly, so nothing is lost in conversion.
+   */
+  listToolsForClaude(context?: ToolContext | string): Array<{ name: string; description: string; input_schema: Record<string, any> }> {
+    const tools = Array.from(this.tools.values());
+    const filtered = context ? tools.filter((tool) => isCategoryAllowed(tool.category, context)) : tools;
+    return filtered.map((tool) => {
+      const schema = tool.inputSchema && typeof tool.inputSchema === 'object' ? tool.inputSchema : {};
+      return {
+        name: tool.name,
+        description: tool.description || tool.name,
+        input_schema: { ...schema, type: 'object', properties: schema.properties ?? {} },
+      };
+    });
+  }
+
+  /**
    * Get tool definitions in Gemini function calling format
    */
   listToolsForGemini(context?: ToolContext | string): any[] {

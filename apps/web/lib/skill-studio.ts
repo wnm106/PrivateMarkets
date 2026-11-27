@@ -373,7 +373,7 @@ export function publishedSkillDocument(skillId: SkillId): SkillDocument {
         load: 'always',
         phase: 'any',
         instruction: 'Apply to every build.',
-        content: 'One primary figure. One chart. Right-align numbers. Tabular numerals. One accent, used only for the primary figure.',
+        content: 'The surface standards (surfaces/README.md) apply. One primary figure, one chart, one table. Every figure answers right-click: data-attr on values read from an attribute, data-derived on figures worked out from others, each table cell bound. House tokens only, one accent. No text below 12px; names wrap, nothing cut off. One style block of x- classes. Loading, empty and error states, and the As Of date shown. Right-align numbers, tabular numerals.',
       },
       {
         id: 'r-transcript',

@@ -143,7 +143,7 @@ describe('chat skills', () => {
     ready.discoveries.push('preview_data_queries');
     expect(skillPhase(dashboard, ready)).toBe('apply');
     const producing = skillSystemAddendum(dashboard, ready);
-    expect(producing).toContain('class="primary"');
+    expect(producing).toContain('class="x-primary"');
     expect(artifactBlock(dashboard, 'apply')).toContain('Match this shell');
 
     const spec = emptySkillState(entity);

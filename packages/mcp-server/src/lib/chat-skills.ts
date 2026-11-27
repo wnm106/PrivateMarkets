@@ -61,7 +61,23 @@ export interface SkillDef {
   prefix: string;
   /** Sample outputs. The body is included only in the artifact's phases. */
   artifacts: SkillArtifact[];
+  /**
+   * The model that runs this skill's turns, when it is not the assistant's default.
+   * The chat route falls back to the default model when this provider has no key.
+   */
+  model?: SkillModel;
 }
+
+export interface SkillModel {
+  provider: 'claude';
+  /** Overridden by CHAT_DESIGN_MODEL. */
+  model: string;
+  /** Overridden by CHAT_DESIGN_EFFORT. */
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+}
+
+/** Dashboard and narrative design: layout, evidence and the reader's outline reward a stronger model. */
+const DESIGN_MODEL: SkillModel = { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' };
 
 export interface SlotValue {
   status: SlotStatus;
@@ -94,37 +110,69 @@ const PHASE_LABEL: Record<SkillPhase, string> = {
   apply: 'Ready to apply',
 };
 
-const DESIGN_SYSTEM = `You are a senior product designer working inside tapestr.ai.
+/**
+ * The house design standards, as the surfaces apply them (surfaces/README.md, "What every
+ * value and every screen must do"; apps/web/lib/surface-builder/standards.ts holds them as
+ * data). Dashboards and narratives are held to the same rules, so a dashboard reads like a tab
+ * of a surface. Keep this in step with those files.
+ */
+const DESIGN_SYSTEM = `You are a senior product designer working inside tapestr.ai. What you design sits next to the house surfaces and is held to the same standards.
 
 <design_system>
-- Typography: system UI font only (the sandbox cannot load fonts). Tabular numerals for every figure. Scale: 12/14/16/20/28px. At most two weights in one view.
-- Color: one accent, used only for primary actions and the single figure that must be seen first. Neutral grays for everything else. Light background.
-- Spacing: 4px grid. Cards use 16-24px padding and 16px gaps.
-- Surfaces: 1px borders at low contrast, 8px radius, no shadows.
-- Data viz: muted categorical colors, direct labels, light gridlines, no chart junk. Use tapestr.charts (bar, line, donut). Record-level browsing is a query with "grid": true, rendered by the host, not drawn in the HTML.
+- Point of view: dense and editorial, like a Bloomberg terminal crossed with Linear. The reader is a portfolio manager scanning for exceptions.
+- Color: the house tokens only, never a raw hex: --ink, --ink-2, --ink-3 (labels, captions), --ink-4 (hints), --line, --line-strong, --surface, --bg, --bg-alt, --accent (the one accent: primary actions and the single figure that must be seen first), --accent-2, --green, --red, --amber, and the badge pairs --badge-ok-bg/-fg, --badge-warn-bg/-fg, --badge-bad-bg/-fg, --badge-info-bg/-fg for status.
+- Typography: the house font (var(--font)). Tabular numerals and right alignment for every figure. Scale 12/13/14/16/20/28px. No text below 12px. At most two weights in one view.
+- Spacing: 4px grid. Panels use 12-16px padding and 12-16px gaps.
+- Surfaces: 1px borders in var(--line), radius var(--radius-lg) (8px), no shadows, no gradients.
+- Data viz: muted categorical colors, direct labels, light gridlines, no chart junk.
 </design_system>
 
+<standards>
+Every value answers right-click.
+- A value read from an attribute is bound: it carries data-attr="<CODE>", and data-entity, data-domain and data-entity-name when it belongs to a record other than the one the view is open on. Right-click opens its sources (history, golden value, override).
+- A figure worked out from other values (a total, a share, a ratio, a count, a status) carries data-derived="<one sentence: what is added up or divided>", and data-query / data-column naming the rows behind it, so right-click shows how it is worked out and lists those records, each bound in turn.
+- This holds everywhere a value is drawn: the primary figure, KPI strips, each cell of a table, side lists, totals and footers. A table whose cells come from an attribute binds each cell, not the table.
+- A bound or derived value shows it on hover (a dotted underline; the host supplies it).
+Dense, but nothing clipped, cut off or too small.
+- Every value, label and name shows in full. Names wrap; they are not cut off with an ellipsis.
+- A row with nothing in it is one quiet line, not a row of empty boxes.
+- A table that can grow taller than its panel scrolls in its own frame with a sticky header.
+- The page never scrolls sideways at 1100px wide.
+One stylesheet.
+- One <style> block. What the house classes lack goes in x- classes, each defined once and built from the tokens.
+States and dates.
+- Show the As Of date the figures are read at. Every view has a loading state, an empty state that says why, and an error state that says what to do. Never a blank panel.
+Nothing dropped quietly.
+- If the person asked for a control, a column or a figure and it is not in the design, say so and why in a short "Left out or changed" list.
+</standards>
+
 <avoid>
-Gradients on backgrounds, emoji as icons, more than one accent color, centered text in data tables,
+Raw hex colors, gradients, shadows, emoji as icons, more than one accent color, centered text in data tables,
 legends when direct labels fit, decorative animation, generic placeholder names like "Item 1",
-five identical KPI cards, rainbow charts, invented attribute or relationship codes.
-</avoid>
+five identical KPI cards, rainbow charts, ellipsis-truncated names, text under 12px, unbound figures,
+invented attribute or relationship codes.
+</avoid>`;
 
-<point_of_view>
-Dense and editorial, like a Bloomberg terminal crossed with Linear. The reader is a portfolio manager scanning for exceptions. Density, tabular numerals, right-aligned figures, and restrained color are what read as credible.
-</point_of_view>
-
-<stack>
-The HTML is a fragment in a sandboxed iframe with no network. Inline style and script only. Read data from tapestr.onData. Format with tapestr.fmt. Draw charts with tapestr.charts. Escape text with tapestr.esc. Do not load Chart.js, fonts, images, or stylesheets. Aggregates for KPIs and charts. Never pull thousands of rows into the page.
+/** How a dashboard is built: the sandboxed frame and its runtime (apps/web/components/reporting/frameRuntime.ts). */
+const DASHBOARD_STACK = `<stack>
+The HTML is a fragment in a sandboxed iframe with no network. Inline style and script only. The host injects the house tokens as CSS variables, the .num class, the hover affordance for bound values, and these classes: .t-frame + .t-table (a scrolling table with a sticky header), .t-empty, .t-loading, .t-error.
+- Read data with tapestr.onData(payload). payload.entity is the record the dashboard is open on ({ entityId, entityName, domainCode }); payload.data[key].rows are the query rows; row-mode rows carry entity_id, entity_name and domain_code; payload.params.asOfDate is the As Of date.
+- Bind with tapestr.bind.attr(code, row, label), which returns the data-attr attributes to put on an element (pass no row for a value of the open record), and tapestr.bind.derived(sentence, queryKey, column) for a figure worked out from others.
+- tapestr.table(el, rows, columns) draws a .t-table and binds every cell: a column whose key is an attribute code (or that sets attr) binds each cell to its row's record; a column with derived: "sentence" marks each cell derived. Columns are { key, label, align?, attr?, derived?, format? }.
+- Format with tapestr.fmt (number, currency, percent, date). Draw charts with tapestr.charts (bar, line, donut). Escape text with tapestr.esc.
+- Record-level browsing is a query with "grid": true, rendered by the host, not drawn in the HTML.
+- Do not load Chart.js, fonts, images, or stylesheets. Aggregates for KPIs and charts. Never pull thousands of rows into the page.
 </stack>
 
 <example>
-Match this density throughout:
-<div class="kpi"><span class="kpi-label">Covenant breaches</span><span class="kpi-value">3</span><span class="kpi-note">of 42 positions</span></div>
-.kpi { border: 1px solid #e4e4e7; border-radius: 8px; padding: 16px 20px; }
-.kpi-label { font-size: 12px; color: #71717a; }
-.kpi-value { display: block; font-size: 28px; font-variant-numeric: tabular-nums; font-weight: 600; }
-.kpi-note { font-size: 12px; color: #71717a; }
+Match this density and binding throughout:
+el.innerHTML = '<div class="x-kpi"><span class="x-kpi-label">Covenant breaches</span>'
+  + '<span class="x-kpi-value num"' + tapestr.bind.derived('Positions whose covenant headroom is below zero', 'breaches', 'HEADROOM') + '>3</span>'
+  + '<span class="x-kpi-note">of 42 positions</span></div>';
+.x-kpi { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 12px 16px; }
+.x-kpi-label { font-size: 12px; color: var(--ink-3); }
+.x-kpi-value { display: block; font-size: 28px; font-weight: 600; color: var(--accent); }
+.x-kpi-note { font-size: 12px; color: var(--ink-3); }
 </example>`;
 
 const GUIDED = `You are a guided assistant. Fill the answer ledger. Do not design or write ahead of it.
@@ -792,12 +840,15 @@ export const SKILLS: SkillDef[] = [
     slots: DASHBOARD_SLOTS,
     prefix: `${DESIGN_SYSTEM}
 
+${DASHBOARD_STACK}
+
 <task>
-Design one dashboard. Layout follows the job in the ledger: the two-second read is first, drill-down is second. Preview every dataQueries array with preview_data_queries against the sample entity, then fix errors and empty results.
-When phase is apply, end the visible reply with one fenced json block and nothing else inside it: { "dashboardName"?, "description"?, "htmlTemplate"?, "dataQueries"?, "parameters"? }. dataQueries and parameters are complete arrays when present. Include empty, loading, and error states. Hover and focus are visible. Figures are right-aligned.
-If the user attaches a screenshot, list violations of hierarchy, contrast, alignment, and spacing against the design system and the reference shell, then emit a corrected json block.
+Design one dashboard. Layout follows the job in the ledger: the two-second read is first, drill-down is second. Preview every dataQueries array with preview_data_queries against the sample entity, then fix errors and empty results. Select entity_id, entity_name and domain_code in every row-mode query whose rows the page draws, so each cell can be bound to its record.
+When phase is apply, end the visible reply with one fenced json block and nothing else inside it: { "dashboardName"?, "description"?, "htmlTemplate"?, "dataQueries"?, "parameters"? }. dataQueries and parameters are complete arrays when present. Before the block, check the design against the standards: every figure bound or derived, nothing below 12px or cut off, one style block of x- classes from the tokens, loading, empty and error states, the As Of date shown. Say which line it does not meet, if any, and list anything left out or changed.
+If the user attaches a screenshot, list violations of hierarchy, contrast, alignment, spacing, legibility and right-click binding against the standards and the reference shell, then emit a corrected json block.
 </task>`,
     artifacts: [DASHBOARD_SHELL],
+    model: DESIGN_MODEL,
   },
   {
     id: 'design-narrative',
@@ -816,10 +867,12 @@ If the user attaches a screenshot, list violations of hierarchy, contrast, align
 <task>
 Design one narrative. A short report is one section; a review, briefing, or pack is several sections that mirror the reader's outline. Each section has: key, title, purpose (the question it answers), instructions (naming the query keys it may cite), dataQueries, optional comparisons (as-of dates such as last quarter, one year ago, an inception date taken from a parameter), measures (derived columns), screens (thresholds applied to every row, e.g. cushion under 15%), scenarios (rate shocks, a stress where the largest names stop paying), blocks, agentic ({"enabled":true} lets the section call read-only tools for what the queries cannot reach), research (web queries, only used when allowExternalSearch is true), dependsOn (sections written first; an executive summary depends on all the others), and batch ({"query","size"}) to review a long list a group at a time.
 A block is { "type": "markdown"|"kpis"|"table"|"scorecard"|"chart"|"insights"|"callouts"|"sources", "key", "title", "guidance" }. Charts are bar, line, pie, stacked, waterfall (NAV bridge, gross-to-net), or heatmap (covenant headroom). Do not ask the model to invent a figure that no query, measure, screen, scenario, or dated source returns; say "data not available" instead. Pick screens and scenarios over asking the model to compute. Say which entity types the narrative should be offered on (exposedDomains) and whether it may research the web.
+The generated report is read beside the house surfaces, so its blocks follow the same standards: each figure in a kpis, table or scorecard block comes from a query, measure, screen or scenario the guidance names, so a reader can trace it; names are written in full; a block with nothing to show says why in one line; the As Of date and any comparison date are stated.
 Check the design with validate_narrative before you propose it. A single-section narrative may still use instructions, dataQueries, and outputBlocks.
 When phase is apply, end the visible reply with one fenced json block: { "narrativeName"?, "description"?, "persona"?, "audience"?, "rules"?, "exposedDomains"?, "allowExternalSearch"?, "sections"?, "instructions"?, "dataQueries"?, "parameters"?, "outputBlocks"? }. Included arrays replace the draft, so send them complete.
 </task>`,
     artifacts: [NARRATIVE_BLOCKS],
+    model: DESIGN_MODEL,
   },
   {
     id: 'create-entity',

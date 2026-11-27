@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildDashboardSrcDoc } from './frameRuntime';
+import { useAttributeInspect } from '@/components/detail/AttributeInspect';
 import type { DataQueryPayload } from '@/lib/reporting';
 
 interface DashboardFrameProps {
@@ -22,6 +23,10 @@ export function DashboardFrame({ html, payload, minHeight = 160, onSetParam, onS
   const payloadRef = useRef<DataQueryPayload | null>(payload);
   const [height, setHeight] = useState(minHeight);
   const srcDoc = useMemo(() => buildDashboardSrcDoc(html), [html]);
+  // Right-click on a bound value in the frame opens the same source panel as on a surface.
+  const inspect = useAttributeInspect();
+  const inspectRef = useRef(inspect);
+  inspectRef.current = inspect;
 
   const post = () => {
     const win = iframeRef.current?.contentWindow;
@@ -58,6 +63,20 @@ export function DashboardFrame({ html, payload, minHeight = 160, onSetParam, onS
         case 'tapestr:setParam':
           if (typeof msg.name === 'string') onSetParam?.(msg.name, msg.value);
           break;
+        case 'tapestr:inspect': {
+          const target = msg.target;
+          if (!target || typeof target.entityId !== 'string' || typeof target.attributeCode !== 'string') break;
+          inspectRef.current.open({
+            entityId: target.entityId,
+            entityName: typeof target.entityName === 'string' ? target.entityName : undefined,
+            domainCode: typeof target.domainCode === 'string' ? target.domainCode : undefined,
+            attributeCode: target.attributeCode,
+            attributeName: typeof target.attributeName === 'string' ? target.attributeName : target.attributeCode,
+            value: typeof target.value === 'string' ? target.value.slice(0, 500) : undefined,
+            asOfDate: typeof payloadRef.current?.params?.asOfDate === 'string' ? payloadRef.current.params.asOfDate : undefined,
+          });
+          break;
+        }
         case 'tapestr:error':
           onScriptError?.(String(msg.message ?? 'Script error'));
           break;
@@ -74,7 +93,7 @@ export function DashboardFrame({ html, payload, minHeight = 160, onSetParam, onS
       title="Dashboard"
       sandbox="allow-scripts"
       srcDoc={srcDoc}
-      style={{ width: '100%', height, border: '1px solid var(--line)', background: 'white', display: 'block' }}
+      style={{ width: '100%', height, border: '1px solid var(--line)', background: 'var(--surface)', display: 'block' }}
     />
   );
 }
