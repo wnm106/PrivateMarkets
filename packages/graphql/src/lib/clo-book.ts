@@ -3,10 +3,10 @@
  *
  * Every test result (OC, IC, WARF, WAS, WAL, WARR, concentrations, eligibility) comes from
  * the compliance engine (`compliance.proforma_snapshot` and `compliance.evaluate_proforma`),
- * read by clo-book-store.ts. This module only arranges those results and works out the three
- * figures the engine does not hold:
+ * read by clo-book-store.ts. The Moody's diversity score is one of those tests (the DIVERSITY
+ * term kind, compliance.clo_diversity_rows). This module only arranges those results and works
+ * out the two figures the engine does not hold:
  *
- *   - the Moody's diversity score, from holdings and the MOODYS_DIVERSITY_TABLE reference list
  *   - the payment-date waterfall, from note interest due, fees and the engine's coverage tests
  *   - how much each offered loan would improve a CLO, from the engine's pro forma of buying it
  *
@@ -53,7 +53,7 @@ export interface RuleShape {
 }
 
 /** A headline measure the surface tracks. Keyed by what the rule reads, not by its code. */
-export type Metric = 'WARF' | 'WAS' | 'WAL' | 'WARR' | 'CCC' | 'OC' | 'IC';
+export type Metric = 'WARF' | 'WAS' | 'WAL' | 'WARR' | 'CCC' | 'OC' | 'IC' | 'DIVERSITY';
 
 /** The weighted-average attribute that identifies each quality metric. */
 const WEIGHTED_METRIC: Record<string, Metric> = {
@@ -95,6 +95,7 @@ export function tagRule(shape: RuleShape | undefined): TestTag {
     const rank = Number(equalsCondition(limit, 'CLO_NOTE_SENIORITY_RANK'));
     return { metric: trigger, rank: Number.isFinite(rank) && rank > 0 ? rank : null, limitAttribute, limitHolder };
   }
+  if (shape.lines.some((line) => line.side === 'NUMERATOR' && line.kind === 'DIVERSITY')) return { metric: 'DIVERSITY', rank: null, limitAttribute, limitHolder };
   const weighted = shape.lines.find((line) => line.side === 'NUMERATOR' && line.kind === 'WAVG' && line.attributeCode && WEIGHTED_METRIC[line.attributeCode]);
   if (weighted?.attributeCode) return { metric: WEIGHTED_METRIC[weighted.attributeCode], rank: null, limitAttribute, limitHolder };
   const ccc = shape.lines.some((line) => line.side === 'NUMERATOR' && equalsCondition(line, 'CLO_IS_CCC') === 'true');
@@ -169,9 +170,8 @@ export const isWarning = (status: string | null | undefined) => status === 'SOFT
 // Diversity
 // ---------------------------------------------------------------------------
 
-export interface DiversityRow { units: number; score: number }
-
-export interface DiversityHolding { obligorKey: string; industry: string | null; par: number; performing: boolean }
+/** One industry behind the engine's diversity score (compliance.clo_diversity_breakdown). A null industry is par whose obligor has none. */
+export interface DiversityIndustry { industry: string | null; obligors: number; par: number; units: number; score: number }
 
 export interface DiversityResult {
   score: number | null;
@@ -182,50 +182,15 @@ export interface DiversityResult {
   unclassifiedPar: number;
 }
 
-/** Industry diversity score for an aggregate unit score: linear between table rows, held at the last row above it. */
-export function industryScore(units: number, table: DiversityRow[]): number {
-  const rows = [...table].sort((a, b) => a.units - b.units);
-  if (!rows.length || units <= 0) return 0;
-  if (units >= rows[rows.length - 1].units) return rows[rows.length - 1].score;
-  for (let i = 1; i < rows.length; i += 1) {
-    const lo = rows[i - 1];
-    const hi = rows[i];
-    if (units <= hi.units) return lo.score + ((units - lo.units) / (hi.units - lo.units)) * (hi.score - lo.score);
-  }
-  return rows[rows.length - 1].score;
-}
-
-/**
- * Moody's diversity score. Performing par is summed by obligor group; each obligor counts
- * min(1, its par / the average obligor par) units; an industry's units go through the table;
- * the score is the sum over industries.
- */
-export function diversityScore(holdings: DiversityHolding[], table: DiversityRow[]): DiversityResult {
-  const byObligor = new Map<string, { par: number; industry: string | null }>();
-  for (const h of holdings) {
-    if (!h.performing || !(h.par > 0)) continue;
-    const row = byObligor.get(h.obligorKey) || { par: 0, industry: h.industry };
-    row.par += h.par;
-    if (!row.industry && h.industry) row.industry = h.industry;
-    byObligor.set(h.obligorKey, row);
-  }
-  const obligors = [...byObligor.values()];
-  if (!obligors.length || !table.length) return { score: null, obligors: obligors.length, averagePar: null, industries: [], unclassifiedPar: 0 };
-  const total = obligors.reduce((sum, o) => sum + o.par, 0);
-  const average = total / obligors.length;
-  const industries = new Map<string, { obligors: number; par: number; units: number }>();
-  let unclassifiedPar = 0;
-  for (const o of obligors) {
-    if (!o.industry) { unclassifiedPar += o.par; continue; }
-    const row = industries.get(o.industry) || { obligors: 0, par: 0, units: 0 };
-    row.obligors += 1;
-    row.par += o.par;
-    row.units += Math.min(1, o.par / average);
-    industries.set(o.industry, row);
-  }
-  const out = [...industries.entries()].map(([industry, row]) => ({ industry, ...row, score: industryScore(row.units, table) }))
-    .sort((a, b) => b.par - a.par);
-  return { score: out.reduce((sum, row) => sum + row.score, 0), obligors: obligors.length, averagePar: average, industries: out, unclassifiedPar };
+/** The engine's industry rows, summarised for the screen. The score itself is the engine's test value. */
+export function summariseDiversity(rows: DiversityIndustry[], score: number | null): DiversityResult {
+  const obligors = rows.reduce((n, r) => n + r.obligors, 0);
+  const par = rows.reduce((n, r) => n + r.par, 0);
+  const industries = rows.filter((r): r is DiversityIndustry & { industry: string } => Boolean(r.industry)).sort((a, b) => b.par - a.par);
+  return {
+    score, obligors, averagePar: obligors ? par / obligors : null, industries,
+    unclassifiedPar: rows.filter((r) => !r.industry).reduce((n, r) => n + r.par, 0),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -514,7 +479,7 @@ export interface ProformaLineLite {
 }
 
 export interface MetricChange {
-  metric: Metric | 'DIVERSITY';
+  metric: Metric;
   label: string;
   rank: number | null;
   direction: Direction;
@@ -538,7 +503,7 @@ export interface OpportunityScore {
   compositionScore: number;
 }
 
-export function metricLabel(metric: Metric | 'DIVERSITY', rank: number | null, noteLabel?: (rank: number) => string): string {
+export function metricLabel(metric: Metric, rank: number | null, noteLabel?: (rank: number) => string): string {
   if (metric === 'OC' || metric === 'IC') return `${rank != null && noteLabel ? noteLabel(rank) : `Rank ${rank ?? '?'}`} ${metric}`;
   if (metric === 'DIVERSITY') return 'Diversity';
   if (metric === 'CCC') return 'CCC bucket';
@@ -549,7 +514,6 @@ export function metricLabel(metric: Metric | 'DIVERSITY', rank: number | null, n
 export function scoreOpportunity(
   lines: ProformaLineLite[],
   shapes: Map<string, RuleShape>,
-  diversity: { before: number | null; after: number | null; limit: number | null },
   noteLabel?: (rank: number) => string,
 ): OpportunityScore {
   let cures = 0;
@@ -567,12 +531,11 @@ export function scoreOpportunity(
     const direction: Direction = line.limitDirection === 'MIN' ? 'MIN' : 'MAX';
     changes.push(change(tag.metric, tag.rank, direction, line.baselineValue, line.scenarioValue, line.hardLimitValue, noteLabel));
   }
-  changes.push(change('DIVERSITY', null, 'MIN', diversity.before, diversity.after, diversity.limit, noteLabel));
   const compositionScore = changes.reduce((sum, c) => sum + Math.max(-100, Math.min(100, c.gainPctOfCushion ?? 0)), 0);
   return { approved: lines.every((l) => l.approved), cures, newBreaches, worsensFailing, improvesFailing, changes, compositionScore };
 }
 
-function change(metric: Metric | 'DIVERSITY', rank: number | null, direction: Direction, before: number | null, after: number | null, limit: number | null, noteLabel?: (rank: number) => string): MetricChange {
+function change(metric: Metric, rank: number | null, direction: Direction, before: number | null, after: number | null, limit: number | null, noteLabel?: (rank: number) => string): MetricChange {
   const gain = before == null || after == null ? null : direction === 'MIN' ? after - before : before - after;
   const cushion = cushionOf(direction, before, limit);
   const base = cushion != null && cushion > 0 ? cushion : limit != null ? Math.abs(limit) : null;

@@ -36,7 +36,7 @@ function ChangeCell({ o, c }: { o: Opportunity; c: MetricChange | undefined }) {
   const tone = c.gain > 1e-9 ? 'x-up' : c.gain < -1e-9 ? 'x-dn' : 'x-mut';
   return (
     <Derived className={tone} name={`${o.name} ${c.label}`} how={() => countHow(`${o.name} · ${c.label}`, fmtMeasureChange(c.metric, raw),
-      `${c.metric === 'DIVERSITY' ? 'The diversity score worked out by the platform with this loan added at the ticket size' : 'The compliance engine’s pro forma: the CLO scored with and without this loan bought at the ticket size'}. Green is better: lower for a maximum, higher for a minimum.`,
+      `The compliance engine’s pro forma: the CLO scored with and without this loan bought at the ticket size. Green is better: lower for a maximum, higher for a minimum.`,
       [
         { label: 'Before', value: fmtMeasure(c.metric, c.before) },
         { label: 'After', value: fmtMeasure(c.metric, c.after) },

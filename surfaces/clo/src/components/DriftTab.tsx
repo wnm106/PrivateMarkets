@@ -34,7 +34,7 @@ export function improvement(s: Series): number | null {
 const pointHow = (v: Vehicle, p: DriftPoint, k: Kpi) => () => countHow(
   `${v.name} · ${k.label} · ${fmtQuarter(p.date)}`,
   fmtMeasure(k.metric, k.value),
-  `${k.metric === 'DIVERSITY' ? 'Worked out by the platform from the holdings' : 'Scored by the compliance engine'} as of ${fmtDay(p.date)}, on the book as it stood that day, as known at the Knowledge date. The limit is the one in force that day.`,
+  `Scored by the compliance engine as of ${fmtDay(p.date)}, on the book as it stood that day, as known at the Knowledge date. The limit is the one in force that day.`,
   [
     { label: k.direction === 'MIN' ? 'Minimum' : 'Maximum', value: fmtMeasure(k.metric, k.limit) },
     { label: 'Cushion', value: k.cushion == null ? '—' : fmtMeasureChange(k.metric, k.cushion) },

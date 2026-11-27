@@ -79,7 +79,7 @@ export function buildTabs(input: {
       ...openClo,
       measures: v!.kpis.map(kpiRow),
       acrossClos: book!.vehicles.map((x) => ({ clo: x.name, measures: x.kpis.map(kpiRow) })),
-    }, `${UNITS} ${STATUS} Diversity is the Moody’s diversity score worked out by the platform against the indenture minimum; every other measure is the compliance engine’s.`),
+    }, `${UNITS} ${STATUS} Every measure is the compliance engine’s, diversity included (the Moody’s diversity score against the indenture minimum).`),
 
     drift: base('drift', !ready || !drift ? null : {
       ...openClo,

@@ -1,13 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  cureAmount, dealPhase, diversityScore, industryScore, quarterEnds, rankOpportunities, runWaterfall, scoreOpportunity, tagRule, toTests,
+  cureAmount, dealPhase, quarterEnds, rankOpportunities, runWaterfall, scoreOpportunity, summariseDiversity, tagRule, toTests,
   type RuleShape, type WaterfallInput,
 } from './clo-book';
-
-const TABLE = [
-  { units: 0, score: 0 }, { units: 1, score: 1 }, { units: 2, score: 1.5 }, { units: 3, score: 2 }, { units: 4, score: 2.33 },
-  { units: 5, score: 2.67 }, { units: 6, score: 3 }, { units: 7, score: 3.25 }, { units: 8, score: 3.5 }, { units: 9, score: 3.75 }, { units: 10, score: 4 },
-];
 
 const shape = (ruleCode: string, category: string, lines: RuleShape['lines'], limitTermAttribute: string | null = null): RuleShape => ({ ruleCode, ruleName: ruleCode, category, lines, limitTermAttribute });
 const line = (side: string, kind: string, attributeCode: string, conditions: Array<[string, string, string]> = []) => ({
@@ -46,25 +41,22 @@ describe('toTests', () => {
   });
 });
 
-describe('diversityScore', () => {
-  it('interpolates the table and holds the last row', () => {
-    expect(industryScore(2.5, TABLE)).toBeCloseTo(1.75);
-    expect(industryScore(14, TABLE)).toBe(4);
-    expect(industryScore(0, TABLE)).toBe(0);
+describe('diversity', () => {
+  it('tags the diversity test from its DIVERSITY line', () => {
+    const d = shape('X', 'COLLATERAL_QUALITY', [line('NUMERATOR', 'DIVERSITY', 'MOODYS_INDUSTRY_CODE'), line('LIMIT', 'MAX', 'CLO_MIN_DIVERSITY_SCORE')]);
+    expect(tagRule(d)).toMatchObject({ metric: 'DIVERSITY', limitAttribute: 'CLO_MIN_DIVERSITY_SCORE', limitHolder: 'TRANSACTION' });
   });
-  it('groups by obligor, caps each obligor at one unit and leaves defaults out', () => {
-    const result = diversityScore([
-      { obligorKey: 'a', industry: 'X', par: 10, performing: true },
-      { obligorKey: 'a', industry: 'X', par: 10, performing: true }, // same group: 20
-      { obligorKey: 'b', industry: 'X', par: 10, performing: true },
-      { obligorKey: 'c', industry: 'Y', par: 10, performing: true },
-      { obligorKey: 'd', industry: 'Y', par: 50, performing: false },
-    ], TABLE);
-    // average obligor par 40/3; a = 1 unit (capped), b and c = 0.75 each
-    expect(result.obligors).toBe(3);
-    const x = result.industries.find((i) => i.industry === 'X')!;
-    expect(x.units).toBeCloseTo(1.75);
-    expect(result.score).toBeCloseTo(industryScore(1.75, TABLE) + industryScore(0.75, TABLE));
+  it('summarises the engine\'s industry rows and keeps the engine\'s score', () => {
+    const r = summariseDiversity([
+      { industry: 'X', obligors: 2, par: 20, units: 1.75, score: 1.38 },
+      { industry: null, obligors: 1, par: 10, units: 0.75, score: 0 },
+      { industry: 'Y', obligors: 1, par: 30, units: 1, score: 1 },
+    ], 2.38);
+    expect(r.score).toBe(2.38);
+    expect(r.obligors).toBe(4);
+    expect(r.averagePar).toBe(15);
+    expect(r.unclassifiedPar).toBe(10);
+    expect(r.industries.map((i) => i.industry)).toEqual(['Y', 'X']);
   });
 });
 
@@ -126,13 +118,15 @@ describe('scoreOpportunity', () => {
   const shapes = new Map<string, RuleShape>([
     ['W', shape('W', 'COLLATERAL_QUALITY', [line('NUMERATOR', 'WAVG', 'CLO_MOODYS_RATING_FACTOR')])],
     ['C', shape('C', 'CONCENTRATION', [line('NUMERATOR', 'SUM', 'FUNDED_PAR_AMOUNT', [['CLO_IS_CCC', 'equals', 'true']])])],
+    ['D', shape('D', 'COLLATERAL_QUALITY', [line('NUMERATOR', 'DIVERSITY', 'MOODYS_INDUSTRY_CODE')])],
   ]);
   const lineOf = (ruleCode: string, before: number, after: number, limit: number, verdict: string, approved = true) => ({
     ruleCode, ruleName: ruleCode, groupByValue: null, limitDirection: 'MAX' as const, baselineValue: before, scenarioValue: after,
     baselineStatus: before > limit ? 'HARD_BREACH' : 'PASS', scenarioStatus: after > limit ? 'HARD_BREACH' : 'PASS', hardLimitValue: limit, verdict, approved,
   });
   it('counts cures and scores the gain against the cushion', () => {
-    const s = scoreOpportunity([lineOf('W', 2900, 2850, 3000, 'PASS'), lineOf('C', 8, 7.4, 7.5, 'CURED')], shapes, { before: 40, after: 41, limit: 35 });
+    const div = { ...lineOf('D', 40, 41, 35, 'PASS'), limitDirection: 'MIN' as const };
+    const s = scoreOpportunity([lineOf('W', 2900, 2850, 3000, 'PASS'), lineOf('C', 8, 7.4, 7.5, 'CURED'), div], shapes);
     expect(s.cures).toBe(1);
     const warf = s.changes.find((c) => c.metric === 'WARF')!;
     expect(warf.gain).toBe(50);

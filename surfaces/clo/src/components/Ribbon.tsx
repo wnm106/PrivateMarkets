@@ -47,7 +47,7 @@ export function Ribbon({ v, asOf }: { v: Vehicle; asOf: string }) {
       <div className="da-fact">
         <span>Tests</span>
         <strong className={v.summary.breaches ? 'x-dn' : undefined}>
-          <Derived name="Tests in breach" how={() => countHow(`${v.name} · Tests`, `${v.summary.breaches} in breach`, 'Every line the compliance engine scored for this CLO, plus the diversity score against its minimum. A grouped test (industry, obligor) counts once per group.', [
+          <Derived name="Tests in breach" how={() => countHow(`${v.name} · Tests`, `${v.summary.breaches} in breach`, 'Every line the compliance engine scored for this CLO. A grouped test (industry, obligor) counts once per group.', [
             { label: 'In breach', value: String(v.summary.breaches) },
             { label: 'Warning', value: String(v.summary.warnings) },
             { label: 'Passing', value: String(v.summary.passing) },

@@ -40,6 +40,7 @@ export interface Holding {
 
 export interface Kpi { metric: Metric; label: string; rank: number | null; value: number | null; limit: number | null; direction: 'MAX' | 'MIN'; status: string; cushion: number | null; cushionPct: number | null; ruleCode: string | null; ruleName: string | null }
 
+/** One industry behind the engine's diversity score. */
 export interface DiversityIndustry { industry: string; obligors: number; par: number; units: number; score: number }
 
 export interface WaterfallStep {
@@ -76,7 +77,6 @@ export interface Vehicle {
 export interface Book {
   asOfDate: string; knowledgeDate: string; vehicles: Vehicle[];
   totals: { vehicles: number; collateralPar: number; notesPar: number; breaches: number; warnings: number };
-  diversityTable: Array<{ units: number; score: number }>;
   errors: string[];
 }
 

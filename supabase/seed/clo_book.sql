@@ -3,8 +3,8 @@
 -- Safe to run again: values are rewritten, records and links are kept.
 --
 -- What it writes, all in the client that owns the CLO rule-library sample (CLOS-FUND):
---   * reference lists CLO_MARKET_STATUS and MOODYS_DIVERSITY_TABLE (the Moody's industry
---     diversity table: aggregate industry equivalent units to industry diversity score)
+--   * the reference list CLO_MARKET_STATUS (the Moody's diversity table and the diversity test
+--     are library records: supabase/seed/clo_diversity_rule.sql)
 --   * attributes on the global CLO model:
 --       CLO_TRANSACTION  CLO_COLLATERAL_MANAGER, CLO_TRUSTEE, CLO_SENIOR_MGMT_FEE_BPS,
 --                        CLO_SUB_MGMT_FEE_BPS, CLO_BENCHMARK_RATE_PCT
@@ -56,8 +56,7 @@ BEGIN
     -- ------------------------------------------------------------------
     INSERT INTO metadata_register.reference_lists (list_code, list_name, domain_code, description)
     VALUES
-        ('CLO_MARKET_STATUS', 'CLO Market Status', 'SECURITY', 'Where a loan stands in the market for the CLO desk: offered to buy, allocated, or withdrawn.'),
-        ('MOODYS_DIVERSITY_TABLE', 'Moody''s Diversity Table', NULL, 'Moody''s industry diversity table. Each row maps an aggregate industry equivalent unit score (metadata units) to an industry diversity score (metadata score). Values between rows are interpolated; above the last row the last score holds. Replace the rows with your indenture''s table.')
+        ('CLO_MARKET_STATUS', 'CLO Market Status', 'SECURITY', 'Where a loan stands in the market for the CLO desk: offered to buy, allocated, or withdrawn.')
     ON CONFLICT (list_code) DO UPDATE SET list_name = EXCLUDED.list_name, description = EXCLUDED.description;
 
     INSERT INTO metadata_register.reference_list_values (list_id, value_code, value_label, display_order, synonyms, metadata)
@@ -66,18 +65,7 @@ BEGIN
     JOIN (VALUES
         ('CLO_MARKET_STATUS', 'OFFERED', 'Offered', 1, '{}'),
         ('CLO_MARKET_STATUS', 'ALLOCATED', 'Allocated', 2, '{}'),
-        ('CLO_MARKET_STATUS', 'WITHDRAWN', 'Withdrawn', 3, '{}'),
-        ('MOODYS_DIVERSITY_TABLE', 'U00', '0 units', 0, '{"units":0,"score":0}'),
-        ('MOODYS_DIVERSITY_TABLE', 'U01', '1 unit', 1, '{"units":1,"score":1.00}'),
-        ('MOODYS_DIVERSITY_TABLE', 'U02', '2 units', 2, '{"units":2,"score":1.50}'),
-        ('MOODYS_DIVERSITY_TABLE', 'U03', '3 units', 3, '{"units":3,"score":2.00}'),
-        ('MOODYS_DIVERSITY_TABLE', 'U04', '4 units', 4, '{"units":4,"score":2.33}'),
-        ('MOODYS_DIVERSITY_TABLE', 'U05', '5 units', 5, '{"units":5,"score":2.67}'),
-        ('MOODYS_DIVERSITY_TABLE', 'U06', '6 units', 6, '{"units":6,"score":3.00}'),
-        ('MOODYS_DIVERSITY_TABLE', 'U07', '7 units', 7, '{"units":7,"score":3.25}'),
-        ('MOODYS_DIVERSITY_TABLE', 'U08', '8 units', 8, '{"units":8,"score":3.50}'),
-        ('MOODYS_DIVERSITY_TABLE', 'U09', '9 units', 9, '{"units":9,"score":3.75}'),
-        ('MOODYS_DIVERSITY_TABLE', 'U10', '10 units', 10, '{"units":10,"score":4.00}')
+        ('CLO_MARKET_STATUS', 'WITHDRAWN', 'Withdrawn', 3, '{}')
     ) AS v(list_code, code, label, ord, meta) ON v.list_code = rl.list_code
     ON CONFLICT (list_id, value_code) DO UPDATE SET value_label = EXCLUDED.value_label, display_order = EXCLUDED.display_order, metadata = EXCLUDED.metadata;
 

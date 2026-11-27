@@ -42,6 +42,13 @@ function holdingsFor(v: Vehicle, t: Pick<Test, 'metric' | 'group' | 'category' |
     case 'OC':
     case 'IC':
       return {};
+    case 'DIVERSITY': {
+      const d = v.diversity;
+      return {
+        rows: d.industries.slice(0, LISTED).map((i) => ({ label: i.industry, sub: `${i.obligors} obligors · ${fmtUsd(i.par)} · ${fmtNum(i.units, 2)} units`, value: fmtNum(i.score, 2) })),
+        more: d.industries.length > LISTED ? d.industries.length - LISTED : undefined,
+      };
+    }
     default:
       rows = list.slice(0, LISTED).map((h) => ({ label: h.name, sub: [h.industry, h.obligorGroup].filter(Boolean).join(' · '), value: fmtUsd(h.par), bind: onPosition(h, ATTR.par, 'Funded par') }));
   }
@@ -79,7 +86,7 @@ export function diversityHow(v: Vehicle): Derivation {
   return {
     title: `${v.name} · Diversity score`,
     value: fmtNum(d.score, 1),
-    formula: `Moody’s diversity score, worked out by the platform from performing holdings. Par is summed by obligor group (${d.obligors} obligors, average ${fmtUsd(d.averagePar)}); each obligor counts its par over the average, up to one unit; each industry’s units go through the Moody’s diversity table (the MOODYS_DIVERSITY_TABLE list), and the industry scores add up. The minimum is the indenture term ${ATTR.minDiversity}.${d.unclassifiedPar ? ` ${fmtUsd(d.unclassifiedPar)} of par has no Moody’s industry and is left out.` : ''}`,
+    formula: `Moody’s diversity score, scored by the compliance engine (${v.tests.find((t) => t.metric === 'DIVERSITY' && !t.group)?.ruleName || 'the diversity test'}) from performing holdings. Par is summed by obligor group (${d.obligors} obligors, average ${fmtUsd(d.averagePar)}); each obligor counts its par over the average, up to one unit; each industry’s units go through the Moody’s diversity table (the MOODYS_DIVERSITY_TABLE list), and the industry scores add up. The industry rows below come from the same engine function. The minimum is the indenture term ${ATTR.minDiversity}.${d.unclassifiedPar ? ` ${fmtUsd(d.unclassifiedPar)} of par has no Moody’s industry and is left out.` : ''}`,
     rows: [
       { label: 'Minimum', value: fmtNum(d.limit, 1), bind: onTxn(v, ATTR.minDiversity, 'Minimum diversity score') ?? undefined },
       ...d.industries.slice(0, LISTED).map((i) => ({ label: i.industry, sub: `${i.obligors} obligors · ${fmtUsd(i.par)} · ${fmtNum(i.units, 2)} units`, value: fmtNum(i.score, 2) })),

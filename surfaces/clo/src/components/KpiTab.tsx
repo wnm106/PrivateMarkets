@@ -46,7 +46,7 @@ export function KpiTab({ book, v }: { book: Book; v: Vehicle }) {
     <>
       <div className="x-section">
         <h2>Collateral quality</h2>
-        <p>Each measure as the compliance engine scores it (diversity is worked out by the platform), against the limit in the indenture. The bar shows how much of the limit is used.</p>
+        <p>Each measure as the compliance engine scores it, against the limit in the indenture. The bar shows how much of the limit is used.</p>
         <div className="x-cards">{quality.map((k) => <KpiCard key={kpiKey(k)} v={v} asOf={asOf} k={k} />)}</div>
       </div>
       <div className="x-section">

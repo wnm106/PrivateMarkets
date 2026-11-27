@@ -18,14 +18,13 @@ Every tab is published to the assistant, open or not (`src/lib/publish.ts`). Dri
 
 Nowhere in the surface. Three GraphQL queries, all with the user's As Of and Knowledge dates:
 
-- **`cloBook(fundIds)`**: `packages/graphql/src/lib/clo-book-store.ts` loads each CLO through the shared readers. Its tests come from the compliance engine (`compliance.proforma_snapshot`, the same evaluator the compliance screens and pre-trade use). `packages/graphql/src/lib/clo-book.ts` adds the three figures the engine does not hold:
-  - the **Moody's diversity score**, from performing par by obligor group and the `MOODYS_DIVERSITY_TABLE` reference list;
+- **`cloBook(fundIds)`**: `packages/graphql/src/lib/clo-book-store.ts` loads each CLO through the shared readers. Its tests come from the compliance engine (`compliance.proforma_snapshot`, the same evaluator the compliance screens and pre-trade use). The Moody's diversity score is one of those tests (`CLO_DIVERSITY`, below), and its industry breakdown comes from the same engine function (`compliance.clo_diversity_breakdown`). `packages/graphql/src/lib/clo-book.ts` adds the two figures the engine does not hold:
   - the **waterfall**, from interest due on each class, the fees and senior expenses on the indenture, and the engine's coverage tests;
   - the **deal phase**, from the indenture dates.
 - **`cloDrift(fundId, quarters)`**: the same book and engine at each quarter end.
-- **`cloOpportunities(fundId)`**: each offered loan (`CLO_MARKET_STATUS = OFFERED`) bought at a ticket through `compliance.evaluate_proforma`, plus the diversity score with the loan added. **Largest buy** calls the existing `investmentCapacity` query (`compliance-capacity.ts`).
+- **`cloOpportunities(fundId)`**: each offered loan (`CLO_MARKET_STATUS = OFFERED`) bought at a ticket through `compliance.evaluate_proforma`, which scores the diversity test with the loan added like every other test. **Largest buy** calls the existing `investmentCapacity` query (`compliance-capacity.ts`).
 
-The surface tells tests apart by the rule's own data, never by rule code. Its limit line names a note trigger (OC or IC) and a seniority rank. Its weighted-average line names the rating factor (WARF), spread (WAS), maturity (WAL) or recovery rate (WARR). A numerator filter on `CLO_IS_CCC` marks the CCC bucket.
+The surface tells tests apart by the rule's own data, never by rule code. Its limit line names a note trigger (OC or IC) and a seniority rank. Its weighted-average line names the rating factor (WARF), spread (WAS), maturity (WAL) or recovery rate (WARR). A numerator filter on `CLO_IS_CCC` marks the CCC bucket, and a numerator line of kind DIVERSITY marks the diversity test.
 
 ## Decisions (asked and answered before the build, 2026-11-27)
 
@@ -40,13 +39,14 @@ The surface tells tests apart by the rule's own data, never by rule code. Its li
 - **Attributes (seed):** `CLO_COLLATERAL_MANAGER`, `CLO_TRUSTEE`, `CLO_SENIOR_MGMT_FEE_BPS`, `CLO_SUB_MGMT_FEE_BPS`, `CLO_BENCHMARK_RATE_PCT` on CLO_TRANSACTION. `CLO_MARKET_STATUS`, `CLO_OFFER_PRICE`, `CLO_OFFER_SIZE` on SECURITY. Reference lists `CLO_MARKET_STATUS` and `MOODYS_DIVERSITY_TABLE`.
 - **Enrollment (seed):** every CLO fund of the sample client is enrolled in every CLO rule, the rule-library sample (`CLOS-FUND`) included. The rows are blank where the indenture holds the limit, and carry the rule's own number for the eligibility counts.
 - **Module (seed):** the `clo` surface and the three CLO record types join the Funds module, so a curated client with Funds can open the surface once its modules are saved again (the same pattern as `supabase/seed/performance_surface.sql`).
+- **Diversity test (migration `20261127130000_clo_diversity_term` and seed `supabase/seed/clo_diversity_rule.sql`):** the engine gains a DIVERSITY measure-line kind, read by one interpreter, `compliance.clo_diversity_rows`: par by obligor group, units of min(1, par / average obligor par), each industry's units through `MOODYS_DIVERSITY_TABLE`. `eval_clo_term` is patched in place, so whichever definition is live keeps every other branch. The rule `CLO_DIVERSITY` (collateral quality, minimum from `CLO_MIN_DIVERSITY_SCORE`) is seeded, and enrolled wherever the CLO WARF test is. The surface's own diversity calculation is gone; it reads the engine.
 - `performance-store.ts` now exports its shared read helpers (`walk`, `neighbours`, `values`, `defsFor`, `inChunks`), so the CLO store reuses them rather than copying them.
 
 ## Left out or changed
 
 - **No Surface Builder handoff folder.** The surface was built from the request, with the Surface Builder's standards and process as the guide: the questions were asked first, the tabs are published, every value is bound and acceptance was measured. With no `views/`, there are no view counts to check bindings against, so `acceptance.js` runs with no minimum bound count.
 - **Waterfall is simplified.** It does not model the reinvestment OC test, the incentive fee and its hurdle, caps on senior expenses, or interest reserve and smoothing accounts. An IC cure is sized as the share of covered par whose interest must go. Interest collections are each holding's expected interest for the period (`CLO_EXPECTED_INTEREST`), not the trustee's collection account. The tab says all of this.
-- **Diversity score uses the classic Moody's table**, 0 to 10 units by industry, interpolated, and held at 4.0 above 10. Replace the `MOODYS_DIVERSITY_TABLE` rows with the indenture's own table where it differs. The diversity minimum is tested here, not by a compliance rule: the rule library has no diversity rule yet.
+- **Diversity score uses the classic Moody's table**, 0 to 10 units by industry, interpolated, and held at 4.0 above 10. Replace the `MOODYS_DIVERSITY_TABLE` rows with the indenture's own table where it differs. The test itself is in the compliance engine (`CLO_DIVERSITY`), so it has a status, history, pre-trade maintain-or-improve and capacity like the other CLO tests.
 - **Pro forma buys add par without spending cash.** `evaluate_proforma` adds the bought loan's par and does not debit the principal account, so an OC improvement from a buy is overstated by the cash it would use. The ranking is a proposal; buying goes through the allocation and pre-trade flow.
 - **Largest buy carries no expected interest.** The capacity probe has the offer price but no interest, so IC tests read it as earning nothing (the cautious side).
 - **The drift tab shows the open CLO only**, not every CLO at once: each CLO costs nine engine snapshots, about eight seconds. Switching CLO loads its history.

@@ -15,9 +15,9 @@ import { asOfDate, knowledgeInstant, loadEntities, numeric, read, text, type Def
 import { defsFor, inChunks, neighbours, values } from './performance-store';
 import { ComplianceEngine } from './compliance-engine';
 import {
-  dealPhase, diversityScore, expectedInterest, isBreach, isWarning, periodsPerYear, quarterEnds, rankOpportunities, runWaterfall,
-  scoreOpportunity, toTests, yearsBetween,
-  type DiversityHolding, type DiversityResult, type DiversityRow, type EngineLine, type Metric, type OpportunityScore,
+  dealPhase, expectedInterest, isBreach, isWarning, periodsPerYear, quarterEnds, rankOpportunities, runWaterfall,
+  scoreOpportunity, summariseDiversity, tagRule, toTests, yearsBetween,
+  type DiversityIndustry, type DiversityResult, type EngineLine, type Metric, type OpportunityScore,
   type ProformaLineLite, type RuleShape, type Test, type WaterfallResult,
 } from './clo-book';
 
@@ -48,7 +48,6 @@ export const ATTR = {
 } as const;
 
 const CLO_DOMAINS = ['CLO_TRANSACTION', 'CLO_NOTE_CLASS', 'CLO_ACCOUNT'] as const;
-const DIVERSITY_LIST = 'MOODYS_DIVERSITY_TABLE';
 
 export interface Term { code: string; name: string; section: string; order: number; dataType: string; value: string | null; numeric: number | null }
 
@@ -73,7 +72,7 @@ export interface Holding {
   carryValue: number | null; sharePct: number | null;
 }
 
-export interface Kpi { metric: Metric | 'DIVERSITY'; label: string; rank: number | null; value: number | null; limit: number | null; direction: 'MAX' | 'MIN'; status: string; cushion: number | null; cushionPct: number | null; ruleCode: string | null; ruleName: string | null }
+export interface Kpi { metric: Metric; label: string; rank: number | null; value: number | null; limit: number | null; direction: 'MAX' | 'MIN'; status: string; cushion: number | null; cushionPct: number | null; ruleCode: string | null; ruleName: string | null }
 
 export interface Vehicle {
   id: string; code: string; name: string; currency: string | null;
@@ -104,7 +103,6 @@ export interface CloBook {
   knowledgeDate: string;
   vehicles: Vehicle[];
   totals: { vehicles: number; collateralPar: number; notesPar: number; breaches: number; warnings: number };
-  diversityTable: DiversityRow[];
   errors: string[];
 }
 
@@ -122,14 +120,18 @@ async function register(supabase: SupabaseClient): Promise<Register[]> {
   return (data || []).map((r: any) => ({ id: r.id, code: r.attribute_code, name: r.attribute_name, section: r.display_section || 'General', order: Number(r.display_group) || 0, dataType: r.data_type, domain: r.domain_code }));
 }
 
-export async function diversityTable(supabase: SupabaseClient): Promise<DiversityRow[]> {
-  const { data: list, error } = await supabase.from('reference_lists').select('id').eq('list_code', DIVERSITY_LIST).maybeSingle();
+/**
+ * The industry rows behind one diversity test's score for one fund, from the engine's own
+ * interpreter (compliance.clo_diversity_breakdown reads the rule's DIVERSITY line).
+ */
+async function diversityRows(supabase: SupabaseClient, ruleCode: string, fundId: string, asOf: string, knowledge: string): Promise<DiversityIndustry[]> {
+  const { data, error } = await supabase.schema('compliance').rpc('clo_diversity_breakdown', {
+    p_rule_code: ruleCode, p_anchor_id: fundId, p_as_of_date: asOf, p_knowledge_date: knowledge,
+  });
   if (error) throw new Error(error.message);
-  if (!list) return [];
-  const { data, error: valueError } = await supabase.from('reference_list_values').select('metadata').eq('list_id', (list as any).id);
-  if (valueError) throw new Error(valueError.message);
-  return (data || []).map((r: any) => ({ units: Number(r.metadata?.units), score: Number(r.metadata?.score) }))
-    .filter((r) => Number.isFinite(r.units) && Number.isFinite(r.score));
+  return ((data || []) as any[]).map((r) => ({
+    industry: r.industry ?? null, obligors: Number(r.obligors) || 0, par: Number(r.par) || 0, units: Number(r.units) || 0, score: Number(r.score) || 0,
+  }));
 }
 
 /** The rule data that says what each scored rule measures: its lines and their conditions. */
@@ -283,7 +285,7 @@ async function loadFrame(supabase: SupabaseClient, fundIds: string[], asOf: stri
 }
 
 /** One CLO as of the frame's date, with its tests from the engine. */
-function buildVehicle(frame: Frame, fundId: string, asOf: string, lines: EngineLine[], engineError: string | null, shapes: Map<string, RuleShape>, table: DiversityRow[]): Vehicle {
+function buildVehicle(frame: Frame, fundId: string, asOf: string, lines: EngineLine[], engineError: string | null, shapes: Map<string, RuleShape>, diversityIndustries: DiversityIndustry[]): Vehicle {
   const { defs, names } = frame;
   const v = (map: Map<string, ValueRow>, id: string | null | undefined, code: string) => (id ? read(map, id, defs.get(code)) : undefined);
   const num = (map: Map<string, ValueRow>, id: string | null | undefined, code: string) => numeric(v(map, id, code));
@@ -398,19 +400,19 @@ function buildVehicle(frame: Frame, fundId: string, asOf: string, lines: EngineL
   const interestProceeds = sum(performing.map((h) => h.expectedInterest ?? 0));
   const equityPar = sum(notes.filter((n) => n.residual).map((n) => n.par));
 
-  const divHoldings: DiversityHolding[] = holdings.map((h) => ({ obligorKey: h.obligorGroup || h.issuerId || h.positionId, industry: h.industry, par: h.par, performing: !h.defaulted }));
-  const div = diversityScore(divHoldings, table);
-  const minDiv = termNum('CLO_MIN_DIVERSITY_SCORE');
-  const divStatus = div.score == null ? 'NO_DATA' : minDiv == null ? 'NO_LIMIT' : div.score < minDiv ? 'HARD_BREACH' : 'PASS';
-
   const headline = (metric: Metric) => tests.find((t) => t.metric === metric && !t.group);
+  // The diversity score is the engine's test; its industry rows come from the same interpreter.
+  const divTest = headline('DIVERSITY');
+  const div = summariseDiversity(diversityIndustries, divTest?.value ?? null);
+  const divLimit = divTest?.limit ?? null;
+  const divStatus = divTest?.status ?? 'NO_DATA';
+
+  const LABEL: Partial<Record<Metric, string>> = { CCC: 'CCC bucket', DIVERSITY: 'Diversity' };
   const kpis: Kpi[] = [];
-  for (const metric of ['WARF', 'WAS', 'WAL', 'WARR', 'CCC'] as Metric[]) {
+  for (const metric of ['WARF', 'WAS', 'WAL', 'WARR', 'CCC', 'DIVERSITY'] as Metric[]) {
     const t = headline(metric);
-    kpis.push({ metric, label: metric === 'CCC' ? 'CCC bucket' : metric, rank: null, value: t?.value ?? null, limit: t?.limit ?? null, direction: t?.direction ?? 'MAX', status: t?.status ?? 'NO_DATA', cushion: t?.cushion ?? null, cushionPct: t?.cushionPct ?? null, ruleCode: t?.ruleCode ?? null, ruleName: t?.ruleName ?? null });
+    kpis.push({ metric, label: LABEL[metric] ?? metric, rank: null, value: t?.value ?? null, limit: t?.limit ?? null, direction: t?.direction ?? (metric === 'DIVERSITY' ? 'MIN' : 'MAX'), status: t?.status ?? 'NO_DATA', cushion: t?.cushion ?? null, cushionPct: t?.cushionPct ?? null, ruleCode: t?.ruleCode ?? null, ruleName: t?.ruleName ?? null });
   }
-  kpis.push({ metric: 'DIVERSITY', label: 'Diversity', rank: null, value: div.score, limit: minDiv, direction: 'MIN', status: divStatus,
-    cushion: div.score != null && minDiv != null ? div.score - minDiv : null, cushionPct: div.score != null && minDiv ? ((div.score - minDiv) / minDiv) * 100 : null, ruleCode: null, ruleName: null });
   for (const t of tests.filter((x) => (x.metric === 'OC' || x.metric === 'IC') && !x.group).sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0) || (a.metric! < b.metric! ? 1 : -1))) {
     kpis.push({ metric: t.metric!, label: `${classLabel(t.rank ?? 0)} ${t.metric}`, rank: t.rank, value: t.value, limit: t.limit, direction: t.direction, status: t.status, cushion: t.cushion, cushionPct: t.cushionPct, ruleCode: t.ruleCode, ruleName: t.ruleName });
   }
@@ -450,35 +452,42 @@ function buildVehicle(frame: Frame, fundId: string, asOf: string, lines: EngineL
       interestProceeds, principalCash, notesPar, ratedNotesPar: notesPar - equityPar, equityPar,
     },
     tests, kpis,
-    diversity: { ...div, limit: minDiv, status: divStatus },
+    diversity: { ...div, limit: divLimit, status: divStatus },
     waterfall,
     summary: {
       tests: scored.length,
-      breaches: scored.filter((t) => isBreach(t.status)).length + (divStatus === 'HARD_BREACH' ? 1 : 0),
+      breaches: scored.filter((t) => isBreach(t.status)).length,
       warnings: scored.filter((t) => isWarning(t.status)).length,
       noData: scored.filter((t) => t.status === 'NO_DATA').length,
-      passing: scored.filter((t) => t.status === 'PASS').length + (divStatus === 'PASS' ? 1 : 0),
+      passing: scored.filter((t) => t.status === 'PASS').length,
       tightest: tightest ? { label: tightest.label, cushionPct: tightest.cushionPct! } : null,
     },
     errors,
   };
 }
 
-async function bookAt(supabase: SupabaseClient, fundIds: string[], asOf: string, knowledge: string, ruleCodes?: string[] | null): Promise<{ vehicles: Vehicle[]; table: DiversityRow[] }> {
-  const [frame, table] = await Promise.all([loadFrame(supabase, fundIds, asOf, knowledge), diversityTable(supabase)]);
+async function bookAt(supabase: SupabaseClient, fundIds: string[], asOf: string, knowledge: string, ruleCodes?: string[] | null): Promise<{ vehicles: Vehicle[] }> {
+  const frame = await loadFrame(supabase, fundIds, asOf, knowledge);
   const scores = await pool(frame.funds, 4, (fund) => snapshot(supabase, fund.id, asOf, knowledge, ruleCodes));
   const shapes = await ruleShapes(supabase, scores.flatMap((s) => s.lines.map((l) => l.ruleCode)), asOf);
-  const vehicles = frame.funds.map((fund, i) => buildVehicle(frame, fund.id, asOf, scores[i].lines, scores[i].error, shapes, table));
+  // The industry rows behind each fund's diversity test, when the fund is scored on one.
+  const industries = await pool(frame.funds, 4, async (fund) => {
+    const i = frame.funds.indexOf(fund);
+    const line = scores[i].lines.find((l) => !l.groupByValue && tagRule(shapes.get(l.ruleCode)).metric === 'DIVERSITY');
+    if (!line) return [] as DiversityIndustry[];
+    try { return await diversityRows(supabase, line.ruleCode, fund.id, asOf, knowledge); } catch { return [] as DiversityIndustry[]; }
+  });
+  const vehicles = frame.funds.map((fund, i) => buildVehicle(frame, fund.id, asOf, scores[i].lines, scores[i].error, shapes, industries[i]));
   vehicles.sort((a, b) => a.name.localeCompare(b.name));
-  return { vehicles, table };
+  return { vehicles };
 }
 
 export async function loadCloBook(supabase: SupabaseClient, args: { fundIds: string[]; asOfDate?: string | null; knowledgeDate?: string | null }): Promise<CloBook> {
   const asOf = asOfDate(args.asOfDate);
   const knowledge = knowledgeInstant(args.knowledgeDate);
-  const { vehicles, table } = await bookAt(supabase, args.fundIds, asOf, knowledge);
+  const { vehicles } = await bookAt(supabase, args.fundIds, asOf, knowledge);
   return {
-    asOfDate: asOf, knowledgeDate: knowledge, vehicles, diversityTable: table,
+    asOfDate: asOf, knowledgeDate: knowledge, vehicles,
     totals: {
       vehicles: vehicles.length,
       collateralPar: sum(vehicles.map((v) => v.collateral.par)),
@@ -572,7 +581,7 @@ async function offeredLoans(supabase: SupabaseClient): Promise<string[]> {
 
 /**
  * Each offered loan scored as a buy for one CLO, by the engine's pro forma (every rule the CLO is
- * enrolled in, before and after), plus the diversity score with the loan added. The ticket is the
+ * enrolled in, before and after; the diversity test among them). The ticket is the
  * CLO's average holding par, rounded to $250,000, capped at the size offered.
  */
 export async function loadCloOpportunities(supabase: SupabaseClient, args: { fundId: string; asOfDate?: string | null; knowledgeDate?: string | null; limit?: number | null }): Promise<CloOpportunities> {
@@ -580,7 +589,7 @@ export async function loadCloOpportunities(supabase: SupabaseClient, args: { fun
   const knowledge = knowledgeInstant(args.knowledgeDate);
   const tie = [asOf, knowledge] as const;
   const errors: string[] = [];
-  const { vehicles, table } = await bookAt(supabase, [args.fundId], asOf, knowledge);
+  const { vehicles } = await bookAt(supabase, [args.fundId], asOf, knowledge);
   const vehicle = vehicles[0];
   const base = { fundId: args.fundId, asOfDate: asOf, knowledgeDate: knowledge, ticketRule: 'Average holding par, rounded to $250,000, capped at the size offered' };
   if (!vehicle) return { ...base, candidates: 0, scored: 0, baseline: { diversity: null, diversityLimit: null, averagePar: null }, opportunities: [], errors: ['This fund has no CLO transaction.'] };
@@ -603,7 +612,6 @@ export async function loadCloOpportunities(supabase: SupabaseClient, args: { fun
 
   const avg = vehicle.collateral.count ? vehicle.collateral.par / vehicle.collateral.count : 0;
   const heldIndustries = new Set(vehicle.holdings.map((h) => h.industry).filter(Boolean));
-  const baseDiv: DiversityHolding[] = vehicle.holdings.map((h) => ({ obligorKey: h.obligorGroup || h.issuerId || h.positionId, industry: h.industry, par: h.par, performing: !h.defaulted }));
   const shapes = await ruleShapes(supabase, vehicle.tests.map((t) => t.ruleCode), asOf);
   const classLabel = (rank: number) => vehicle.kpis.find((k) => k.rank === rank)?.label.replace(/ (OC|IC)$/, '') ?? `Rank ${rank}`;
   const engine = new ComplianceEngine(supabase);
@@ -636,8 +644,7 @@ export async function loadCloOpportunities(supabase: SupabaseClient, args: { fun
         } }],
       });
       const lines = score.lines as unknown as ProformaLineLite[];
-      const after = diversityScore([...baseDiv, { obligorKey: text(iv(iid, ATTR.issuer.obligorGroup)) || iid || sid, industry, par: ticket, performing: true }], table);
-      row.score = scoreOpportunity(lines, shapes, { before: vehicle.diversity.score, after: after.score, limit: vehicle.diversity.limit }, classLabel);
+      row.score = scoreOpportunity(lines, shapes, classLabel);
       const weight: Record<string, number> = { NEW_BREACH: 0, DETERIORATES: 1, CURED: 2, IMPROVES: 3 };
       row.moves = lines.filter((l) => l.verdict in weight).sort((a, b) => weight[a.verdict] - weight[b.verdict]).slice(0, 12);
     } catch (error: any) {

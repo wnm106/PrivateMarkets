@@ -13,7 +13,7 @@ export const VEHICLES_TAB = {
   purpose: 'Every CLO vehicle side by side: size, phase, the headline quality measures, the most junior OC cushion and how many tests are in breach.',
 };
 
-/** One measure for one CLO, from the engine (or the diversity score), coloured when it is past its limit. */
+/** One measure for one CLO, from the engine, coloured when it is past its limit. */
 export function KpiCell({ v, asOf, k }: { v: Vehicle; asOf: string; k: Kpi | null }) {
   if (!k || k.value == null) return <span className="x-nil">—</span>;
   const tone = k.status === 'HARD_BREACH' ? 'x-dn' : undefined;
@@ -79,7 +79,7 @@ export function VehiclesTab({ book, selected, onSelect }: { book: Book; selected
                   )}
                 </td>
                 <td className="num">
-                  <Derived className={v.summary.breaches ? 'x-dn' : undefined} name={`${v.name} breaches`} how={() => countHow(`${v.name} · Tests in breach`, String(v.summary.breaches), 'Lines the compliance engine scored past their limit, plus the diversity score when it is under its minimum.', v.tests.filter((x) => x.status === 'HARD_BREACH').slice(0, 14).map((x) => ({ label: x.ruleName, sub: x.group || undefined, value: fmtTest(x, x.value) })))}>{v.summary.breaches}</Derived>
+                  <Derived className={v.summary.breaches ? 'x-dn' : undefined} name={`${v.name} breaches`} how={() => countHow(`${v.name} · Tests in breach`, String(v.summary.breaches), 'Lines the compliance engine scored past their limit.', v.tests.filter((x) => x.status === 'HARD_BREACH').slice(0, 14).map((x) => ({ label: x.ruleName, sub: x.group || undefined, value: fmtTest(x, x.value) })))}>{v.summary.breaches}</Derived>
                 </td>
                 <td><BoundOr bind={onTxn(v, ATTR.nextPayment, 'Next payment date')} value={v.nextPayment} shown={fmtDay(v.nextPayment)} /></td>
               </tr>
