@@ -1,0 +1,9 @@
+{
+  "name": "@tapestrai-surfaces/performance",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "dependencies": { "@tapestrai/surface-sdk": "*" },
+  "peerDependencies": { "react": "^19.0.0" }
+}

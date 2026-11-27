@@ -11,6 +11,7 @@ export interface SurfaceNavLink {
 const ICONS: Record<string, string> = {
   'deal-pipeline': 'layers',
   'fund-index': 'chart',
+  performance: 'chart',
 };
 
 export type SurfaceNavUser = {

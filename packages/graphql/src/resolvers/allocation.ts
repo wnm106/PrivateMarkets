@@ -8,6 +8,7 @@ import {
 } from '../lib/allocation-store';
 import type { AllocationAdjustment } from '../lib/allocation-engine';
 import { storeDealPerformance } from '../lib/deal-performance-store';
+import { loadPerformanceBook } from '../lib/performance-store';
 import { activeCertification } from '../lib/certification-store';
 
 /** The certification process a deal's allocation is certified under (golden_master.certification_processes). */
@@ -85,6 +86,11 @@ export const allocationResolvers = {
         value: row.value == null ? null : Number(row.value),
       }));
     },
+    performanceBook: async (
+      _: unknown,
+      args: { fundIds: string[]; windows?: any[] | null; filter?: any | null; asOfDate?: string | null; knowledgeDate?: string | null },
+      context: Context,
+    ) => loadPerformanceBook(context.supabase, args),
   },
   Mutation: {
     commitAllocation: async (

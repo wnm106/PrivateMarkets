@@ -2965,6 +2965,153 @@ type AllocationTrancheResult {
   securityId: ID
 }
 
+# Firm-wide performance (lib/performance.ts). Rates and multiples are decimals: 0.12 is 12 percent.
+input PerformanceWindowInput {
+  key: String!
+  label: String
+  # Null for inception to date. The opening value is read on this day.
+  startDate: Date
+  # Defaults to the As Of date and never passes it.
+  endDate: Date
+}
+
+input PerformanceFilterInput {
+  includeFundIds: [ID!]
+  excludeFundIds: [ID!]
+  includeDealIds: [ID!]
+  excludeDealIds: [ID!]
+  includeSectors: [String!]
+  excludeSectors: [String!]
+}
+
+type PerformanceMetrics {
+  irr: Float
+  moic: Float
+  dpi: Float
+  rvpi: Float
+  paidIn: Float!
+  distributed: Float!
+  opening: Float!
+  closing: Float!
+  gain: Float!
+  legs: Int!
+  # Positions or accounts left out: a value but nothing put in during the window.
+  excluded: Int!
+}
+
+type PerformanceGroup {
+  # TOTAL, FAMILY, FUND, DEAL, DEAL_FUND, SECTOR, POSITION, INVESTOR or INVESTOR_FUND.
+  dimension: String!
+  key: String!
+  label: String!
+  entityId: ID
+  parentKey: String
+  # Asset level, from position cash flows and market values.
+  gross: PerformanceMetrics
+  # LP level, from capital account statements.
+  net: PerformanceMetrics
+  positionIds: [ID!]!
+  accountIds: [String!]!
+}
+
+type PerformanceWindowResult {
+  key: String!
+  label: String!
+  startDate: String
+  endDate: String!
+  # True when a deal or sector filter is set: capital accounts are not held by deal or sector.
+  netExcluded: Boolean!
+  total: PerformanceGroup!
+  groups: [PerformanceGroup!]!
+}
+
+type PerformanceFund {
+  id: ID!
+  code: String!
+  name: String!
+  familyId: ID!
+  isFamily: Boolean!
+  vintage: String
+  strategy: String
+  reportedNetIrr: Float
+  reportedGrossIrr: Float
+  nav: Float
+}
+
+type PerformanceFlow {
+  id: ID!
+  date: String!
+  amount: Float!
+  type: String
+}
+
+type PerformanceMark {
+  date: String!
+  value: Float
+}
+
+type PerformancePosition {
+  id: ID!
+  name: String!
+  fundId: ID!
+  dealId: ID
+  trancheId: ID
+  securityId: ID
+  issuerId: ID
+  issuerName: String
+  sector: String
+  # ISSUER when the sector is the issuer's SECTOR, DEAL when it falls back to DEAL_SECTOR.
+  sectorFrom: String
+  flows: [PerformanceFlow!]!
+  marks: [PerformanceMark!]!
+}
+
+type PerformanceDeal {
+  id: ID!
+  name: String!
+  sector: String
+}
+
+type PerformanceInvestor {
+  id: ID!
+  name: String!
+  type: String
+}
+
+type PerformanceStatement {
+  recordId: ID
+  recordName: String!
+  periodEnd: String!
+  contributions: Float!
+  distributions: Float!
+  closing: Float!
+  commitment: Float
+  contributedItd: Float
+  distributedItd: Float
+  unfunded: Float
+}
+
+type PerformanceAccount {
+  id: String!
+  investorId: ID!
+  fundId: ID!
+  statements: [PerformanceStatement!]!
+}
+
+type PerformanceBook {
+  asOfDate: String!
+  knowledgeDate: String!
+  windows: [PerformanceWindowResult!]!
+  funds: [PerformanceFund!]!
+  positions: [PerformancePosition!]!
+  deals: [PerformanceDeal!]!
+  investors: [PerformanceInvestor!]!
+  accounts: [PerformanceAccount!]!
+  sectors: [String!]!
+  # Positions of these funds with no cash flow and no deal tranche: nothing to measure.
+  unmeasuredPositions: Int!
+}
+
 # IRR or MOIC for one entity over a period, solved from position cash flows and market values.
 type PeriodReturn {
   entityId: ID!
@@ -3589,6 +3736,8 @@ type Query {
   previewAllocation(dealId: ID!, asOfDate: Date, knowledgeDate: DateTime, holds: [AllocationHoldInput!], adjustments: [AllocationAdjustmentInput!]): AllocationPreview!
   # Returns over any period. No start date is inception to date. The codes are series calcs such as DEAL_IRR_ITD.
   periodReturns(entityIds: [ID!]!, attributeCodes: [String!]!, startDate: Date, endDate: Date): [PeriodReturn!]!
+  # Returns pooled across funds, families, deals, sectors, positions and investors, for each window.
+  performanceBook(fundIds: [ID!]!, windows: [PerformanceWindowInput!], filter: PerformanceFilterInput, asOfDate: Date, knowledgeDate: DateTime): PerformanceBook!
   icMemo(dealId: ID!, asOfDate: Date, knowledgeDate: DateTime): IcMemo!
   fundSurface(fundId: ID!, asOfDate: Date, knowledgeDate: DateTime): FundSurface!
   """Close board: every fund with a close calendar, its current close, status, breaks, and what is still open."""

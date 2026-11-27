@@ -9,6 +9,7 @@ import type { SurfaceManifest, SurfaceModule } from '@tapestrai/surface-sdk';
 import { manifest as dealPipeline } from '@surfaces/deal-pipeline/src/manifest';
 import { manifest as fundIndex } from '@surfaces/fund-index/src/manifest';
 import { manifest as ocio } from '@surfaces/ocio/src/manifest';
+import { manifest as performance } from '@surfaces/performance/src/manifest';
 
 export interface SurfaceRegistration {
   manifest: SurfaceManifest;
@@ -19,6 +20,7 @@ export const SURFACES: readonly SurfaceRegistration[] = [
   { manifest: dealPipeline, load: () => import('@surfaces/deal-pipeline/src') },
   { manifest: fundIndex, load: () => import('@surfaces/fund-index/src') },
   { manifest: ocio, load: () => import('@surfaces/ocio/src') },
+  { manifest: performance, load: () => import('@surfaces/performance/src') },
 ];
 
 export function findSurface(code: string): SurfaceRegistration | undefined {

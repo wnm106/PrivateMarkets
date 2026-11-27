@@ -75,6 +75,7 @@ export const resolvers = {
     entityGraph: entityResolutionResolvers.Query.entityGraph,
     previewAllocation: allocationResolvers.Query.previewAllocation,
     periodReturns: allocationResolvers.Query.periodReturns,
+    performanceBook: allocationResolvers.Query.performanceBook,
     icMemo: icMemoResolvers.Query.icMemo,
     fundSurface: fundSurfaceResolvers.Query.fundSurface,
     ...fundRecResolvers.Query,
