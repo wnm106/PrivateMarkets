@@ -51,7 +51,8 @@ END $$;
 -- ---------------------------------------------------------------------------
 -- 4. resolve_rule_version for many rules in one call. It calls the one-rule
 --    function, so the choice of version stays in one place. The caller used to
---    make one request per rule.
+--    make one request per rule. SECURITY INVOKER: it reaches exactly what the
+--    one-rule function already gives the caller, nothing more.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION compliance.resolve_rule_versions(
     p_rule_ids uuid[],
@@ -60,7 +61,7 @@ CREATE OR REPLACE FUNCTION compliance.resolve_rule_versions(
 )
 RETURNS SETOF compliance.rule_versions
 LANGUAGE sql
-STABLE SECURITY DEFINER
+STABLE SECURITY INVOKER
 SET search_path TO 'compliance', 'pg_temp'
 AS $$
     SELECT v.*
@@ -69,5 +70,5 @@ AS $$
     WHERE v.id IS NOT NULL
 $$;
 
-REVOKE ALL ON FUNCTION compliance.resolve_rule_versions(uuid[], date, timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION compliance.resolve_rule_versions(uuid[], date, timestamptz) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION compliance.resolve_rule_versions(uuid[], date, timestamptz) TO authenticated, service_role;

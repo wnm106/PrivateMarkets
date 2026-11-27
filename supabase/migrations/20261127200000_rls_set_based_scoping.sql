@@ -30,7 +30,7 @@ STABLE SECURITY DEFINER
 SET search_path TO 'tenancy', 'pg_temp'
 AS $$ SELECT tenancy.is_tenant_admin() AND tenancy.active_impersonation_client_id() IS NULL $$;
 
-REVOKE ALL ON FUNCTION tenancy.schema_admin_sees_all() FROM PUBLIC;
+REVOKE ALL ON FUNCTION tenancy.schema_admin_sees_all() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION tenancy.schema_admin_sees_all() TO authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
