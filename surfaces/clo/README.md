@@ -52,7 +52,7 @@ The surface tells tests apart by the rule's own data, never by rule code. Its li
 - **The drift tab shows the open CLO only**, not every CLO at once: each CLO costs nine engine snapshots, about eight seconds. Switching CLO loads its history.
 - **Opportunities are capped at 40 offered loans per CLO** (60 at most through the query), because each is a pro forma.
 - **No write-back.** Indenture terms and note figures are read-only by decision 4.
-- **Sample data only.** On the hosted project there is one CLO (the rule-library sample) and it is not enrolled in the CLO rules, so the surface needs the migration and `supabase/seed/clo_book.sql` applied there to show anything. Neither has been applied to the hosted project.
+- **Sample data only.** The CLOs are seeded samples (`cloBookSample`). The migration and `supabase/seed/clo_book.sql` were applied to the hosted project on 2026-11-27 (see `docs/MIGRATIONS.md`).
 
 ## Acceptance (2026-11-27, local stack with the seed applied)
 

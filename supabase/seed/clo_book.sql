@@ -530,7 +530,13 @@ BEGIN
                 THEN NULL ELSE v.hard_limit_value END,
            COALESCE(v.limit_direction, 'MAX'), TRUE, 'CLO book sample: enrolled at the deal''s own limits'
     FROM compliance.rules r
-    JOIN compliance.rule_versions v ON v.rule_id = r.id AND v.is_active
+    -- The version in force today. A rule can carry several active versions.
+    CROSS JOIN LATERAL (
+        SELECT rv.* FROM compliance.rule_versions rv
+        WHERE rv.rule_id = r.id AND rv.is_active AND rv.valid_from <= CURRENT_DATE AND rv.valid_to >= CURRENT_DATE
+        ORDER BY rv.version_number DESC
+        LIMIT 1
+    ) v
     CROSS JOIN (
         SELECT DISTINCT rel.parent_entity_id
         FROM entity_instances.entity_relationships rel

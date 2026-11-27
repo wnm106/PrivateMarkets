@@ -38,6 +38,14 @@ To mark one as applied without running it: `npx supabase migration repair --stat
 2. Apply it: `npx supabase db push` once nothing else is pending, or `npx supabase db query --linked -f <file>` followed by `npx supabase migration repair --status applied <version>`.
 3. A request through `db query --linked` is cut off after about two minutes. A migration that does more than that, such as solving a formula for every record, has to be split, or run over a direct connection with `psql`.
 
+## Applied on 2026-11-27
+
+`20261127120000_blank_fund_row_reads_limit_line` was applied through the Management API after a dry run in a transaction that was rolled back, and recorded in `supabase_migrations.schema_migrations`. The live `compliance.resolve_threshold` was first compared with the `20261121120000` definition the migration starts from, and the two matched: none of the migrations applied here since 2026-11-24 had changed it. Before the change, no enrolled row on the hosted project was blank on a rule with a limit line, so no existing result changed.
+
+`supabase/seed/clo_book.sql` was then run, after a rolled-back dry run that scored Harborview CLO 2021-2 through the engine. The first dry run failed and wrote nothing: `CLO_CONC_CCC` has four active versions here, and the enrollment insert made one row per version. The seed now enrolls each rule from its version in force. The run created 457 `CLOB-*` records with their values and links, and 140 enrollment rows: the five CLO funds of the client that owns `CLOS-FUND`, in every CLO rule, plus each fund's rank-2 industry row. It also added `clo` and the three CLO record types to the Funds module. Afterwards every one of the five CLOs scored on every CLO rule, with no NO_DATA lines.
+
+Note: the hosted history holds 35 migrations from `20261124140000_client_catalog_tree` to `20261127100000_score_rules_once_over_funds` that are not in this repository's master or in any branch on GitHub. Bring them into the repository before the next `db push`.
+
 ## Applied on 2026-11-24
 
 `20261124090000_required_parents` was applied through `db query --linked` after a dry run in a transaction that was not committed, and recorded as applied. It adds `relationship_types.required_unless_attribute_code`, exempts library covenants from needing a deal, and links four sample securities to their sample issuers. `supabase/seed/ocio_harbor_lite.sql` was run again after it: Harbor Lite now has 22 issuer records with its 113 securities linked to them, and the Securities, Market Data and Deals modules turned on. One record on the hosted project still has no required parent, by decision: the cash match `HSCF2-FUND-MATCH-20260930-HSCF2-BTX-11-mw46kev8`.
