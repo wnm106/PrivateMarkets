@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { supabaseServerClient } from '@/lib/supabase-server';
 import { OPEN_SCOPE, parseModuleScope, moduleAllowsSurface, type ModuleScope } from '@/lib/client-modules';
 import { SURFACES } from '@/lib/surface-registry';
@@ -22,10 +23,18 @@ interface SurfaceCaller {
  * who is simulating a client is gated as that client.
  * Fails closed: errors yield no client and no permissions.
  */
-export async function loadSurfaceUser(): Promise<SurfaceUser | null> {
+// The layout and the page both ask who the caller is while rendering one request.
+// React's cache answers the second ask from the first, so each request makes one
+// Auth call and one call to each tenancy function. Outside a render it does not cache.
+const signedInClient = cache(async () => {
   const supabase = await supabaseServerClient();
   const { data } = await supabase.auth.getUser();
-  if (!data.user) return null;
+  return { supabase, user: data.user };
+});
+
+export const loadSurfaceUser = cache(async (): Promise<SurfaceUser | null> => {
+  const { supabase, user } = await signedInClient();
+  if (!user) return null;
 
   const { data: caller, error } = await supabase.schema('tenancy').rpc('surface_caller');
   if (error || !caller) return { clientCode: null, permissions: [], isTenantAdmin: false };
@@ -38,17 +47,16 @@ export async function loadSurfaceUser(): Promise<SurfaceUser | null> {
       : [],
     isTenantAdmin: row.isTenantAdmin === true,
   };
-}
+});
 
 /** Surfaces and tools for this session. A missing function leaves the full catalog in place. */
-export async function loadModuleScope(): Promise<ModuleScope> {
-  const supabase = await supabaseServerClient();
-  const { data: user } = await supabase.auth.getUser();
-  if (!user.user) return OPEN_SCOPE;
+export const loadModuleScope = cache(async (): Promise<ModuleScope> => {
+  const { supabase, user } = await signedInClient();
+  if (!user) return OPEN_SCOPE;
   const { data, error } = await supabase.schema('tenancy').rpc('module_scope');
   if (error) return OPEN_SCOPE;
   return parseModuleScope(data);
-}
+});
 
 export interface AppNav {
   surfaceLinks: SurfaceNavLink[];
@@ -57,7 +65,7 @@ export interface AppNav {
 }
 
 /** Mounted surfaces and tools this caller may open. Empty surfaces when signed out. */
-export async function loadAppNav(): Promise<AppNav> {
+export const loadAppNav = cache(async (): Promise<AppNav> => {
   const [user, scope] = await Promise.all([loadSurfaceUser(), loadModuleScope()]);
   if (!user) return { surfaceLinks: [], enabledToolHrefs: null };
   const manifests = SURFACES.map((entry) => entry.manifest).filter((manifest) => moduleAllowsSurface(scope, manifest.code));
@@ -65,4 +73,4 @@ export async function loadAppNav(): Promise<AppNav> {
     surfaceLinks: surfaceNavLinks(manifests, user),
     enabledToolHrefs: scope.restricted ? [...scope.tools] : null,
   };
-}
+});

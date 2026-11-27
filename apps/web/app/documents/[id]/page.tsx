@@ -11,6 +11,7 @@ import {
   formBox, formRow, hint, sectionHead, sectionTitle, shortDate, splitList, tagLabel,
   type DocumentRow, type DocumentSectionRow, type DocumentTypeRow, type EntityLink, type TemplateRow,
 } from '@/components/documents/shared';
+import { useVisiblePolling } from '@/lib/use-visible-polling';
 
 const DOCUMENT_QUERY = `
   query Document($id: ID!) {
@@ -141,11 +142,7 @@ export default function DocumentPage() {
   }, [document, dirty]);
 
   const busy = document?.status === 'RECEIVED' || document?.status === 'PROCESSING';
-  useEffect(() => {
-    if (!busy) return undefined;
-    const timer = setInterval(load, 5000);
-    return () => clearInterval(timer);
-  }, [busy, load]);
+  useVisiblePolling(load, 5000, busy);
 
   // The template the document's sections are named from.
   const templateId = document?.templateId || null;

@@ -11,6 +11,7 @@ import { graphqlMutation, graphqlQuery } from '@/lib/graphql';
 import { usePublishTabs, usePublishViewContext } from '@/lib/view-context';
 import { newestFirst, runNextStep, runTabs, type Tone } from '@/lib/workflow-run-view';
 import { CANCEL_RUN, RETRY_RUN, WORKFLOW_RUN_QUERY, clock, kindOf, statusOf, when, type EventView, type MutationErrors, type RunDetail } from '@/lib/workflows';
+import { useVisiblePolling } from '@/lib/use-visible-polling';
 
 const ACTOR: Record<EventView['actorType'], { label: string; color: string; tint: string }> = {
   SYSTEM: { label: 'System', color: '#334155', tint: '#f1f5f9' },
@@ -72,11 +73,7 @@ export default function WorkflowRunPage() {
 
   // Follow the run while the worker is moving it.
   const moving = run?.status === 'QUEUED' || run?.status === 'RUNNING';
-  useEffect(() => {
-    if (!moving) return;
-    const timer = setInterval(load, 3000);
-    return () => clearInterval(timer);
-  }, [moving, load]);
+  useVisiblePolling(load, 3000, moving);
 
   const act = async (mutation: string, field: string) => {
     const { data, error } = await graphqlMutation<Record<string, { errors: MutationErrors }>>(mutation, { id });

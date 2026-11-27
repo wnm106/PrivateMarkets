@@ -22,6 +22,7 @@ import {
   type WorkflowSummary,
   type WorkflowTemplateOption,
 } from '@/lib/workflows';
+import { useVisiblePolling } from '@/lib/use-visible-polling';
 
 const cell: CSSProperties = { padding: '9px 10px', borderBottom: '1px solid var(--line)', fontSize: 13, textAlign: 'left', verticalAlign: 'middle' };
 const head: CSSProperties = { ...cell, fontSize: 11, fontWeight: 600, color: 'var(--ink-3)', background: 'var(--bg-alt)' };
@@ -61,11 +62,7 @@ export default function WorkflowsPage() {
 
   // Keep the lists moving while a run is in flight.
   const active = Boolean(hub?.workflowRuns.some((run) => run.status === 'QUEUED' || run.status === 'RUNNING'));
-  useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(load, 5000);
-    return () => clearInterval(timer);
-  }, [active, load]);
+  useVisiblePolling(load, 5000, active);
 
   const createFrom = async (template: WorkflowTemplateOption) => {
     setBusy(true);

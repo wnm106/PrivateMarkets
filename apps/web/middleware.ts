@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { CLIENT_ADMIN_PERMISSIONS, isPlatformAdminPath } from '@/lib/admin-access';
 import { loginPath, NEXT_PATH_COOKIE, nextPathFromCookie, safeNextPath } from '@/lib/safe-next-path';
 import { isPublicPath } from '@/lib/public-paths';
+import { forgetDecision, rememberDecision, sessionKey, wasRecentlyAllowed } from '@/lib/sign-in-cache';
 import { readSignInDecision, REFUSED_SIGN_IN, signInStanding, UNCHECKED_SIGN_IN, uncheckedSignInAction, type SignInDecision } from '@/lib/sign-in-gate';
 
 // Which pages a signed-out visitor may open is in lib/public-paths.ts, shared with the signed-out gate.
@@ -23,6 +24,41 @@ async function signInDecision(supabase: { schema: (name: string) => any }): Prom
     }
   }
   return null;
+}
+
+// Stands in for a decision this session was given moments ago (lib/sign-in-cache.ts).
+const RECENTLY_ALLOWED: SignInDecision = { allowed: true, mfa_required: false, mfa_satisfied: true, matched: true } as SignInDecision;
+
+type AuthClient = { auth: { getUser: () => Promise<any>; getClaims?: () => Promise<any>; getSession: () => Promise<any> } };
+
+/**
+ * Who is signed in. The token's signature is checked here when the project signs
+ * tokens with asymmetric keys (getClaims), which needs no call to Auth; otherwise,
+ * or when that check cannot decide, Auth is asked (getUser), as before.
+ */
+async function verifiedUser(supabase: AuthClient): Promise<{ id: string } | null> {
+  if (typeof supabase.auth.getClaims === 'function') {
+    try {
+      const { data, error } = await supabase.auth.getClaims();
+      const sub = data?.claims?.sub;
+      if (!error && typeof sub === 'string' && sub) return { id: sub };
+      if (!error && !data) return null;
+    } catch {
+      // Asked of Auth below.
+    }
+  }
+  const { data: { user } } = await supabase.auth.getUser();
+  return user ? { id: user.id } : null;
+}
+
+async function currentSessionKey(supabase: AuthClient): Promise<string | null> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    return typeof token === 'string' && token ? await sessionKey(token) : null;
+  } catch {
+    return null;
+  }
 }
 
 function withSessionCookies(next: NextResponse, response: NextResponse) {
@@ -95,7 +131,7 @@ export async function middleware(request: NextRequest) {
   };
 
   // Refreshes the session token if expired -- required for Server Components.
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await verifiedUser(supabase);
 
   const pathname = request.nextUrl.pathname;
 
@@ -133,9 +169,12 @@ export async function middleware(request: NextRequest) {
   // A client's sign-in rules apply after the session exists. Direct data calls
   // are also refused by the Auth access-token hook; this stops the app itself.
   if (user) {
-    const decision = await signInDecision(supabase);
+    const key = await currentSessionKey(supabase);
+    const decision = key && wasRecentlyAllowed(key) ? RECENTLY_ALLOWED : await signInDecision(supabase);
+    if (key && decision !== RECENTLY_ALLOWED) rememberDecision(key, decision);
     const standing = signInStanding(decision);
     if (standing === 'refused') {
+      if (key) forgetDecision(key);
       await supabase.auth.signOut();
       const message = decision?.reason || REFUSED_SIGN_IN;
       if (pathname.startsWith('/api/')) {
