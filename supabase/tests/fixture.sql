@@ -168,7 +168,9 @@ DECLARE
     v_msg text;
 BEGIN
     BEGIN
-        EXECUTE format('WITH q AS (%s) SELECT count(*) FROM q', p_sql) INTO v_count;
+        -- MATERIALIZED: when inlined, count(*) lets the planner drop an unused
+        -- STABLE call, so a function the caller may not EXECUTE yields a row.
+        EXECUTE format('WITH q AS MATERIALIZED (%s) SELECT count(*) FROM q', p_sql) INTO v_count;
     EXCEPTION WHEN OTHERS THEN
         GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
     END;

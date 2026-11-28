@@ -32,8 +32,16 @@ SELECT tests.expect_value('Client A now reads its own name, and the catalog name
       FROM public.domain_types WHERE domain_code = 'FUND'$$, 'Portfolio/true');
 SELECT tests.expect_error('A second type cannot take the same name',
     $$SELECT public.set_client_domain_label('ORDER', 'portfolio')$$, '23505');
-SELECT tests.expect_error('A type cannot take another type''s catalog name',
-    $$SELECT public.set_client_domain_label('ORDER', (SELECT domain_name FROM metadata_register.domain_types WHERE domain_code = 'FUND'))$$, '23505');
+SELECT tests.expect_error('A type cannot take another type''s catalog name while that type keeps it',
+    $$SELECT public.set_client_domain_label('ORDER', (SELECT domain_name FROM metadata_register.domain_types WHERE domain_code = 'DEAL'))$$, '23505');
+-- Once a client renames a type, the old catalog name is free for that client
+-- (alias_words: the catalog name of a renamed type, unless the client uses
+-- that word for something else).
+SELECT tests.expect_value('A type may take the catalog name of a type the client renamed',
+    $$SELECT public.set_client_domain_label('ORDER', (SELECT domain_name FROM metadata_register.domain_types WHERE domain_code = 'FUND')) ->> 'display_name'$$,
+    (SELECT domain_name FROM metadata_register.domain_types WHERE domain_code = 'FUND'));
+SELECT tests.expect_value('The steward clears that name again',
+    $$SELECT (public.set_client_domain_label('ORDER', '') -> 'display_name')::text$$, 'null');
 SELECT tests.expect_error('An unknown type cannot be named',
     $$SELECT public.set_client_domain_label('NO_SUCH_TYPE', 'Thing')$$, 'P0002');
 
