@@ -67,6 +67,7 @@ input:focus-visible, button:focus-visible { outline: 2px solid var(--focus); out
 .results li + li { border-top: 1px solid var(--line); }
 .results .empty, .results .divider { padding: 6px 8px; color: var(--ink-3); font-size: 12px; }
 .results .divider { background: var(--surface); font-weight: 600; }
+.results .group { position: sticky; top: 0; z-index: 1; letter-spacing: 0.02em; }
 .choice {
   display: grid; grid-template-columns: auto 1fr; column-gap: 8px; width: 100%; text-align: left;
   padding: 6px 8px; border: 0; background: var(--surface); color: var(--ink); cursor: pointer; font: inherit;

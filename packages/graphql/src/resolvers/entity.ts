@@ -405,9 +405,9 @@ export const entityResolvers = {
 
     searchEntities: async (
       _: any,
-      args: { query: string; limit?: number },
+      args: { query: string; limit?: number; domainCode?: string | null },
       context: Context,
-    ) => fetchEntitySearchHits(context.supabase, args.query, args.limit),
+    ) => fetchEntitySearchHits(context.supabase, args.query, args.limit, args.domainCode),
     
     // Queries for entity management
     entityIdentifierDefinitions: async (_: any, args: { domainCode?: string }, context: Context) => {

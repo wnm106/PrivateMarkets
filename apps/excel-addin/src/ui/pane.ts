@@ -4,6 +4,7 @@ import type { GraphQLClient } from '../lib/graphql';
 import {
   attributeChoices,
   entityChoices,
+  groupAttributeChoices,
   SEARCH_ATTRIBUTES_QUERY,
   SEARCH_ENTITIES_QUERY,
   type AttributeChoice,
@@ -136,16 +137,22 @@ export function mountPane(root: HTMLElement, services: Services): void {
 
   // ---- Attribute search ----
   const renderAttributeChoices = (choices: AttributeChoice[]) => {
-    attributeResults.replaceChildren(...choices.map((choice) => h('li', {}, [
+    const row = (choice: AttributeChoice) => h('li', {}, [
       h('button', { type: 'button', role: 'option', className: 'choice', onClick: () => pickAttribute(choice) }, [
         h('span', { className: 'code' }, [choice.code]),
         h('span', { className: 'label' }, [choice.label]),
         choice.detail ? h('span', { className: 'detail' }, [choice.detail]) : null,
       ]),
-    ])));
-    if (!choices.length && attributeInput.value.trim().length >= 2) {
-      attributeResults.replaceChildren(h('li', { className: 'empty' }, ['No attribute matches. A code typed here is used as written.']));
+    ]);
+    const items: Node[] = [];
+    for (const group of groupAttributeChoices(choices)) {
+      items.push(h('li', { className: 'divider group', role: 'presentation' }, [group.domainCode || 'No entity type']));
+      items.push(...group.choices.map(row));
     }
+    if (!choices.length && attributeInput.value.trim().length >= 2) {
+      items.push(h('li', { className: 'empty' }, ['No attribute matches. A code typed here is used as written.']));
+    }
+    attributeResults.replaceChildren(...items);
   };
 
   const searchAttributes = debounce(async (query: string) => {
@@ -171,13 +178,21 @@ export function mountPane(root: HTMLElement, services: Services): void {
     attribute = choice;
     attributeInput.value = choice.code;
     attributeResults.replaceChildren();
-    attributePicked.textContent = `${choice.label}${choice.detail ? ` · ${choice.detail}` : ''}`;
+    attributePicked.textContent = [choice.label, choice.domainCode, choice.detail].filter(Boolean).join(' · ');
+    setEntityScope();
     entityInput.focus();
     if (entityInput.value.trim()) void searchEntities(entityInput.value);
     updatePreview();
   };
 
   // ---- Record search ----
+  /** Once an attribute is picked, records are searched within its entity type only. */
+  const entityScope = () => attribute?.domainCode || null;
+  const setEntityScope = () => {
+    const scope = entityScope();
+    entityInput.placeholder = scope ? `Search ${scope} records by code or name` : 'Search records by code or name';
+  };
+
   const renderEntityChoices = (choices: EntityChoice[]) => {
     const fitting = choices.filter((choice) => choice.fitsAttribute);
     const others = choices.filter((choice) => !choice.fitsAttribute);
@@ -193,7 +208,12 @@ export function mountPane(root: HTMLElement, services: Services): void {
       if (attribute?.domainCode && fitting.length) items.push(h('li', { className: 'divider' }, [`Other entity types (no ${attribute.code})`]));
       items.push(...others.map(row));
     }
-    if (!items.length && entityInput.value.trim().length >= 2) items.push(h('li', { className: 'empty' }, ['No record matches. A code typed here is used as written.']));
+    if (!items.length && entityInput.value.trim().length >= 2) {
+      const scope = entityScope();
+      items.push(h('li', { className: 'empty' }, [
+        scope ? `No ${scope} record matches. A code typed here is used as written.` : 'No record matches. A code typed here is used as written.',
+      ]));
+    }
     entityResults.replaceChildren(...items);
   };
 
@@ -203,9 +223,10 @@ export function mountPane(root: HTMLElement, services: Services): void {
       return;
     }
     try {
-      const data = await graphql.request<{ searchEntities: EntityHit[] }>(SEARCH_ENTITIES_QUERY, { query, limit: 30 });
-      if (entityInput.value !== query) return;
-      renderEntityChoices(entityChoices(data.searchEntities, attribute?.domainCode || null));
+      const scope = entityScope();
+      const data = await graphql.request<{ searchEntities: EntityHit[] }>(SEARCH_ENTITIES_QUERY, { query, limit: 30, domainCode: scope });
+      if (entityInput.value !== query || entityScope() !== scope) return;
+      renderEntityChoices(entityChoices(data.searchEntities, scope));
       updatePreview();
     } catch (error) {
       const result = errorResult(error);
@@ -308,6 +329,7 @@ export function mountPane(root: HTMLElement, services: Services): void {
     entityPicked.textContent = '';
     attributeResults.replaceChildren();
     entityResults.replaceChildren();
+    setEntityScope();
     updatePreview();
     attributeInput.focus();
   };
@@ -321,6 +343,7 @@ export function mountPane(root: HTMLElement, services: Services): void {
     asOfInput.value = parsed.asOf?.value || '';
     attributePicked.textContent = parsed.attribute.kind === 'expression' ? 'From a cell or expression' : '';
     entityPicked.textContent = parsed.entity.kind === 'expression' ? 'From a cell or expression' : '';
+    setEntityScope();
     updatePreview();
   };
 
@@ -343,6 +366,8 @@ export function mountPane(root: HTMLElement, services: Services): void {
     if (attribute && attributeInput.value !== attribute.code) {
       attribute = null;
       attributePicked.textContent = '';
+      setEntityScope();
+      if (entityInput.value.trim() && !entity) void searchEntities(entityInput.value);
     }
     void searchAttributes(attributeInput.value);
     updatePreview();

@@ -58,6 +58,13 @@ describe('entity search ranking', () => {
     expect(hits.find((hit) => hit.id === 't1')).toMatchObject({ domainName: 'Tranche', match: 'NAME' });
   });
 
+  it('returns only records of the asked entity type, still matching them through a related name', () => {
+    const securities = rankEntitySearch({ query: 'Brightwater', entities, links, domains, domainCode: 'security' });
+    expect(securities.map((hit) => hit.entityName)).toEqual(['Brightwater TLB']);
+    const positions = rankEntitySearch({ query: 'Brightwater', entities, links, domains, domainCode: 'POSITION' });
+    expect(positions.map((hit) => [hit.entityName, hit.match])).toEqual([['Lane stake', 'PARENT']]);
+  });
+
   it('puts the parent record first when the query matches a child name', () => {
     const hits = rankEntitySearch({ query: 'stake', entities, links, domains });
     expect(hits.map((hit) => [hit.entityName, hit.match, hit.depth])).toEqual([
