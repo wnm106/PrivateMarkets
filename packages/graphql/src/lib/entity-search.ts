@@ -88,6 +88,8 @@ export function rankEntitySearch(input: {
   links: readonly SearchLinkRow[];
   domains: readonly SearchDomainRow[];
   limit?: number;
+  /** When set, only records of this entity type are returned. Records of other types still match through links. */
+  domainCode?: string | null;
 }): EntitySearchHit[] {
   const query = normalize(input.query);
   if (query.length < MIN_QUERY) return [];
@@ -135,7 +137,9 @@ export function rankEntitySearch(input: {
     pushLink(linksByEntity, childId, normalized);
   }
 
+  const onlyDomain = (input.domainCode || '').trim().toUpperCase();
   const candidates = entities.filter((entity) => {
+    if (onlyDomain && entity.domainCode.toUpperCase() !== onlyDomain) return false;
     const id = entity.id.toLowerCase();
     if (directHits.has(id)) return true;
     return (linksByEntity.get(id) || []).some((link) => directHits.has(otherEnd(link, id)));
@@ -222,6 +226,7 @@ export async function fetchEntitySearchHits(
   supabase: SearchClient,
   query: string,
   limit?: number,
+  domainCode?: string | null,
 ): Promise<EntitySearchHit[]> {
   const text = query.trim();
   if (text.length < MIN_QUERY) return [];
@@ -252,6 +257,7 @@ export async function fetchEntitySearchHits(
     links,
     domains,
     limit: capped,
+    domainCode,
   });
 }
 

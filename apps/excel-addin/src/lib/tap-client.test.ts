@@ -99,7 +99,7 @@ describe('builder search results', () => {
       entityNames: [{ attributeCode: 'entity_name', attributeName: 'Name', domainCode: 'ISSUER', matchedAlias: 'Project name', match: 'ENTITY_NAME' }],
     });
     expect(rows.map((row) => row.code)).toEqual(['NAV', 'ENTITY_NAME']);
-    expect(rows[0].detail).toBe('FUND · currency · also "Ending NAV"');
+    expect(rows[0].detail).toBe('currency · also "Ending NAV"');
   });
 
   it('puts records of the attribute’s entity type first', () => {

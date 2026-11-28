@@ -3688,7 +3688,7 @@ type Query {
   entityIdentity(entityId: ID!): EntityIdentity
 
   """Match a record by its name, another stored name, a related name, or a parent name. ALIAS means the other name matched. Parent domains rank before child domains."""
-  searchEntities(query: String!, limit: Int): [EntitySearchHit!]!
+  searchEntities(query: String!, limit: Int, domainCode: String): [EntitySearchHit!]!
 
   """Find a field from the words a person used: code, name, description, or a stored alias (Ending NAV is NAV). Chat's search_attributes reads the same search."""
   searchAttributes(query: String!, limit: Int): AttributeSearchResult!

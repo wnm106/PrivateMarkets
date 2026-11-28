@@ -7,8 +7,9 @@ export const SEARCH_ATTRIBUTES_QUERY = `query SearchAttributes($query: String!, 
   }
 }`;
 
-export const SEARCH_ENTITIES_QUERY = `query SearchEntities($query: String!, $limit: Int) {
-  searchEntities(query: $query, limit: $limit) { id entityCode entityName domainCode domainName match matchedName }
+/** `domainCode` limits the records to one entity type: the type of the attribute already picked. */
+export const SEARCH_ENTITIES_QUERY = `query SearchEntities($query: String!, $limit: Int, $domainCode: String) {
+  searchEntities(query: $query, limit: $limit, domainCode: $domainCode) { id entityCode entityName domainCode domainName match matchedName }
 }`;
 
 export interface AttributeHit {
@@ -52,7 +53,7 @@ export function attributeChoices(result: { attributes: AttributeHit[]; entityNam
   const rows: AttributeChoice[] = result.attributes.map((hit) => ({
     code: hit.attributeCode,
     label: hit.attributeName || hit.attributeCode,
-    detail: [hit.domainCode, hit.dataType?.toLowerCase(), hit.matchedAlias ? `also "${hit.matchedAlias}"` : null].filter(Boolean).join(' · '),
+    detail: [hit.dataType?.toLowerCase(), hit.matchedAlias ? `also "${hit.matchedAlias}"` : null].filter(Boolean).join(' · '),
     domainCode: hit.domainCode,
   }));
   const seen = new Set<string>();
@@ -63,11 +64,37 @@ export function attributeChoices(result: { attributes: AttributeHit[]; entityNam
     rows.push({
       code: 'ENTITY_NAME',
       label: `Record name${hit.matchedAlias ? ` ("${hit.matchedAlias}")` : ''}`,
-      detail: [hit.domainCode, 'the record’s own name'].filter(Boolean).join(' · '),
+      detail: 'the record’s own name',
       domainCode: hit.domainCode,
     });
   }
   return rows;
+}
+
+export interface AttributeGroup {
+  /** The entity type the attributes belong to, or null for attributes with no type. */
+  domainCode: string | null;
+  choices: AttributeChoice[];
+}
+
+/**
+ * Attributes grouped by the entity type they belong to, types in alphabetical order and
+ * attributes with no type last. Within a type the server's ranking is kept.
+ */
+export function groupAttributeChoices(choices: AttributeChoice[]): AttributeGroup[] {
+  const groups = new Map<string, AttributeGroup>();
+  for (const choice of choices) {
+    const key = (choice.domainCode || '').toUpperCase();
+    let group = groups.get(key);
+    if (!group) {
+      group = { domainCode: choice.domainCode || null, choices: [] };
+      groups.set(key, group);
+    }
+    group.choices.push(choice);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => (a ? 0 : 1) - (b ? 0 : 1) || a.localeCompare(b))
+    .map(([, group]) => group);
 }
 
 /** Records of the chosen attribute's entity type come first. */

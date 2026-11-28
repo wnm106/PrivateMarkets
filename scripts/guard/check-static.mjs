@@ -58,7 +58,7 @@ for (const path of (tryGit('ls-files', '--others', '--exclude-standard') || '').
 
 /** Lines added since base for one file (all lines for a new file). */
 function addedLines(path, status) {
-  if (status === 'A' || !tryGit('cat-file', '-e', `${base}:${path}`)) {
+  if (status === 'A' || tryGit('cat-file', '-e', `${base}:${path}`) === null) {
     return readFileSync(path, 'utf8').split('\n').map((text, index) => ({ line: index + 1, text }));
   }
   const diff = tryGit('diff', '-U0', base, '--', path) || '';
