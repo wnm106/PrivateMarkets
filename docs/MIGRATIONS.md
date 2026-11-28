@@ -38,6 +38,10 @@ To mark one as applied without running it: `npx supabase migration repair --stat
 2. Apply it: `npx supabase db push` once nothing else is pending, or `npx supabase db query --linked -f <file>` followed by `npx supabase migration repair --status applied <version>`.
 3. A request through `db query --linked` is cut off after about two minutes. A migration that does more than that, such as solving a formula for every record, has to be split, or run over a direct connection with `psql`.
 
+## Applied on 2026-11-28
+
+`20261128050000_dq_blank_shortcut_again` was applied through `db query --linked` after a dry run in a transaction that was rolled back, and recorded in `supabase_migrations.schema_migrations` with its SQL. `migration repair` could not record it, because the file was on a branch the linked checkout did not have. Before it ran, two hosted functions still treated a rule written "ATTRIBUTE IS NULL OR ..." as passing a blank: `public.data_quality_dashboard` and `public.load_batch_quality`. Both now ask `data_quality.rule_passes_when_blank`, and signed-in users can still run them. `npm run perf -- --apply` showed no case changing by more than 0.1% of its baseline.
+
 ## Applied on 2026-11-24
 
 `20261124090000_required_parents` was applied through `db query --linked` after a dry run in a transaction that was not committed, and recorded as applied. It adds `relationship_types.required_unless_attribute_code`, exempts library covenants from needing a deal, and links four sample securities to their sample issuers. `supabase/seed/ocio_harbor_lite.sql` was run again after it: Harbor Lite now has 22 issuer records with its 113 securities linked to them, and the Securities, Market Data and Deals modules turned on. One record on the hosted project still has no required parent, by decision: the cash match `HSCF2-FUND-MATCH-20260930-HSCF2-BTX-11-mw46kev8`.
